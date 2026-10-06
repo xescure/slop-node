@@ -148,22 +148,27 @@ describe('vote-decision corpus', function() {
 	});
 
 	describe.each(driversUnderTest)('replay on the $name driver', function(driver) {
-		test.each(groups)('the committed $name cases replay from their data alone', async function(group) {
-			const { cases } = decodeVoteCaseFile(await readCommitted(group));
+		/** Replays one case on fresh storage, released before the next case, so a driver backed by a database holds one case's storage at a time. */
+		async function replayOnDriver(voteCase: VoteCase): Promise<readonly ReplayFailure[]> {
 			const created: LedgerStorageDriverBase[] = [];
-			const failures: ReplayFailure[] = [];
 			try {
-				for (const voteCase of cases) {
-					failures.push(...await replayVoteCase(voteCase, async function() {
-						const storage = await driver.create();
-						created.push(storage);
-						return(storage);
-					}));
-				}
+				return(await replayVoteCase(voteCase, async function() {
+					const storage = await driver.create();
+					created.push(storage);
+					return(storage);
+				}));
 			} finally {
 				for (const storage of created) {
 					await driver.destroy(storage);
 				}
+			}
+		}
+
+		test.each(groups)('the committed $name cases replay from their data alone', async function(group) {
+			const { cases } = decodeVoteCaseFile(await readCommitted(group));
+			const failures: ReplayFailure[] = [];
+			for (const voteCase of cases) {
+				failures.push(...await replayOnDriver(voteCase));
 			}
 
 			expect(failures).toEqual([]);
