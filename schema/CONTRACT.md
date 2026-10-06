@@ -634,7 +634,7 @@ getBlockFromPrevious: (transaction: any, block: BlockHash, from: LedgerSelector)
 
 - **Semantics.** The block whose `previous` is the given hash. The hash may be an opening sentinel.
   - `'main'`: the unique confirmed successor.
-  - `'side'`: a side block whose `previous` matches and which an unexpired side vote covers. At most one exists, because voting refuses a competing successor until that vote expires.
+  - `'side'`: of the side blocks whose `previous` matches and which an unexpired side vote covers, the one whose covering vote has the latest `validityFrom`, and of equals the one with the greater hash. When a vote is issued its block is the only such block, because voting refuses a competing successor until this node's vote on another expires. A transaction with a stale moment can still see an expired vote's block beside the block voted on after that vote expired, and the later vote names the current successor. No decision reads the side answer: upstream calls the member only from its public wrappers [Keeta TS] index.js:69482-69486, 70466-70470, and the base calls it only with `'main'`.
   - `'both'`: the main answer, or else the side answer.
   - `null` when absent.
 
@@ -645,8 +645,9 @@ getBlockFromPrevious: (transaction: any, block: BlockHash, from: LedgerSelector)
   - `votes.ts: "publishing promotes the staple and deletes side copies of promoted rows"`
   - `confirmed.ts: "send moves balances and credits the receiver"`
   - `confirmed.ts: "fork in confirmed history is rejected with LEDGER_PREVIOUS_ALREADY_USED"`
+  - `votes.ts: "a stale moment that sees two pending successors reads the newer one"`
 
-  Untested: `'both'` when a main successor and an unexpired side successor coexist.
+  Untested: `'both'` when a main successor and an unexpired side successor coexist, and the tie between two votes issued in the same millisecond.
 
 ### `getAccountRep`
 

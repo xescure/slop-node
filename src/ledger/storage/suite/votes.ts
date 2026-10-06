@@ -8,7 +8,21 @@ import { advanceClock } from '../../../testing/network.js';
 import type { TestLedgerOptions, TestNetwork } from '../../../testing/network.js';
 import { confirmedStaple, feeBlock, sendBlock, setRepresentativeBlock } from '../../../testing/blocks.js';
 import type { LedgerStorageDriverBase } from '../base.js';
-import { DEFAULT_WEIGHTS, advancePastExpiry, advanceToExpiryEdge, blockHashesOf, blocksHashesOf, chainLengthOf, hashOf, headOf, identitiesOf, readStorage, requireAt, useFixtures } from './support.js';
+import {
+	DEFAULT_WEIGHTS,
+	advancePastExpiry,
+	advanceToExpiryEdge,
+	blockHashesOf,
+	blocksHashesOf,
+	chainLengthOf,
+	hashOf,
+	headOf,
+	identitiesOf,
+	readStorage,
+	readStorageAt,
+	requireAt,
+	useFixtures
+} from './support.js';
 import type { FixtureFactory } from './support.js';
 import type { DriverUnderTest, SuiteCase } from './types.js';
 
@@ -288,6 +302,32 @@ export const voteLifecycleCases: readonly SuiteCase[] = [
 			expect(hashOf(await ledger.getBlockFromPrevious(genesisHead, 'side'))).toBe(hashOf(competitor));
 			expect(hashOf(await ledger.getBlockFromPrevious(genesisHead, 'both'))).toBe(hashOf(competitor));
 			expect(await successorVotes(ledger, [genesisHead], 'both', requireAt(network.representatives, 0))).toEqual({ [genesisHead.toString()]: [competing.$uid] });
+		}
+	},
+	{
+		name: 'a stale moment that sees two pending successors reads the newer one',
+		async run(startNetwork: FixtureFactory): Promise<void> {
+			const { network, storage, ledger } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			await ledger.add(network.genesis);
+			const genesisHead = headOf(network.genesis, user);
+			const older = await sendFromFirstUser(network, genesisHead, 5n);
+			const olderVote = await ledger.vote([older]);
+			const staleMoment = new Date();
+			advancePastExpiry(olderVote);
+			const newer = await sendFromFirstUser(network, genesisHead, 7n);
+			const newerVote = await ledger.vote([newer]);
+
+			// The older vote has not expired at the stale moment, and side reads never hide the newer one.
+			const seen = await readStorageAt(storage, staleMoment, async function(transaction) {
+				return({
+					votes: identitiesOf((await storage.getVotesFromMultiplePrevious(transaction, [genesisHead], 'side'))[genesisHead.toString()]),
+					side: hashOf(await storage.getBlockFromPrevious(transaction, genesisHead, 'side')),
+					both: hashOf(await storage.getBlockFromPrevious(transaction, genesisHead, 'both'))
+				});
+			});
+
+			expect(seen).toEqual({ votes: identitiesOf([olderVote, newerVote]), side: hashOf(newer), both: hashOf(newer) });
 		}
 	},
 	{

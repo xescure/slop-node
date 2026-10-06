@@ -295,6 +295,19 @@ function fromSelected<Result>(from: LedgerSelector, readMain: () => Result | nul
 	}
 }
 
+/** A pending successor, with when the vote naming it was issued. */
+type PendingSuccessor = {
+	readonly block: Block;
+	readonly issued: number;
+};
+
+function isIssuedLater(candidate: PendingSuccessor, current: PendingSuccessor): boolean {
+	if (candidate.issued !== current.issued) {
+		return(candidate.issued > current.issued);
+	}
+	return(toBlockHashKey(candidate.block.hash) > toBlockHashKey(current.block.hash));
+}
+
 function nullWhenEmpty<Item>(items: Item[]): Item[] | null {
 	if (items.length === 0) {
 		return(null);
@@ -443,9 +456,12 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	}
 
 	/*
-	 * On the side ledger a previous block can have several pending successors
-	 * over time, but at most one with an unexpired vote of ours: voting
-	 * refuses a competing successor until that vote expires.
+	 * Voting refuses a competing successor while our vote on another is
+	 * unexpired, so when a vote is issued its block is the only pending
+	 * successor. A stale moment can still see an expired vote's block beside
+	 * the block voted on after it expired; the most recently issued vote
+	 * names the successor, and the block hash breaks ties, so the answer
+	 * never depends on storage order.
 	 * [Keeta TS] index.js:69281-69306
 	 */
 	async getBlockFromPrevious(transaction: MemoryTransaction, previous: BlockHash, from: LedgerSelector): Promise<Block | null> {
@@ -458,15 +474,20 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 			}
 			return(this.#confirmedBlock(overlay, successor));
 		}, () => {
+			let newest: PendingSuccessor | null = null;
 			for (const row of this.#unexpiredSideVoteRows(overlay, overlay.sideVotesByPrevious.get(previousKey), transaction.moment)) {
 				for (const block of row.blocks) {
 					const successor = this.#sideBlock(overlay, toBlockHashKey(block.hash), transaction.moment);
-					if (successor !== null && toBlockHashKey(successor.previous) === previousKey) {
-						return(successor);
+					if (successor === null || toBlockHashKey(successor.previous) !== previousKey) {
+						continue;
+					}
+					const candidate = { block: successor, issued: row.vote.validityFrom.getTime() };
+					if (newest === null || isIssuedLater(candidate, newest)) {
+						newest = candidate;
 					}
 				}
 			}
-			return(null);
+			return(newest?.block ?? null);
 		}));
 	}
 
