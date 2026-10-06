@@ -59,18 +59,19 @@ help:
 	jq -rM '"v" + .engines.node' < package.json > .nvmrc.new
 	mv .nvmrc.new .nvmrc
 
+INSTALL_NODE_MODULES = rm -rf node_modules && npm clean-install --ignore-scripts && touch node_modules/.done
+
 node_modules/.done: package.json package-lock.json
-	rm -rf node_modules
-	npm clean-install --ignore-scripts
-	@touch node_modules/.done
+	$(INSTALL_NODE_MODULES)
 
 # Patches are written against one exact release, and patch refuses to apply
 # twice, so a stale stamp or a half-patched tree starts again from a clean
-# install. Everything that runs or type-checks code depends on this stamp.
+# install. Everything that runs or type-checks code depends on this stamp. The
+# reinstall runs inline: a recipe line naming $(MAKE) runs even under make -n,
+# and would delete the stamps of a dry run.
 node_modules/.patched: node_modules/.done $(wildcard patches/keetanet-client@*/*.patch) utils/apply-patches
-	@if [ -e node_modules/.patched ]; then \
-		rm -f node_modules/.done node_modules/.patched; \
-		$(MAKE) node_modules/.done; \
+	if [ -e node_modules/.patched ]; then \
+		$(INSTALL_NODE_MODULES); \
 	fi
 	utils/apply-patches node_modules/@keetanetwork/keetanet-client patches || { rm -f node_modules/.done; exit 1; }
 	@touch node_modules/.patched
