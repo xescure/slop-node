@@ -12,10 +12,11 @@ export default {
 		'nixpkgs',
 		'jaccard',
 		'nvmrc',
-		'vitest'
+		'vitest',
+		'retval'
 	],
 	ignorePaths: [
-		'reference/',
+		'/reference/',
 		'node_modules/',
 		'dist/',
 		'build/',
