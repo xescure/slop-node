@@ -21,6 +21,11 @@ else
 
 KEETANET_CLIENT_VERSION := $(shell jq -r '.dependencies["@keetanetwork/keetanet-client"]' package.json)
 
+# A missing jq or a missing field would otherwise name the tree reference/null.
+ifeq ($(filter-out null,$(KEETANET_CLIENT_VERSION)),)
+$(error cannot read the keetanet-client version from package.json)
+endif
+
 all: dist .nvmrc
 
 help:
@@ -33,6 +38,8 @@ help:
 	@echo "                  Specify extra flags with SLOP_NODE_TEST_EXTRA_ARGS"
 	@echo "  do-lint       - Runs the ASCII check, eslint and cspell"
 	@echo "  reference     - Extracts the reference tree for the installed keetanet-client"
+	@echo "  reference-diff - Diffs the reference trees of two versions"
+	@echo "                  Specify FROM=<version> TO=<version>"
 	@echo "  clean         - Removes build artifacts"
 	@echo "  distclean     - Removes all build artifacts and dependencies"
 
@@ -77,14 +84,38 @@ do-lint: node_modules/.done
 	npm run cspell -- --config .cspell.config.mjs --no-progress 'src/**/*.ts' 'utils/**/*.ts' Makefile
 
 # The tree is built beside its final name and renamed, so an interrupted run
-# never leaves a partial directory that looks complete.
-reference/$(KEETANET_CLIENT_VERSION)/.done: node_modules/.done build/utils/.done
-	rm -rf reference/$(KEETANET_CLIENT_VERSION) reference/$(KEETANET_CLIENT_VERSION).tmp
-	node build/utils/reference/main.js --package node_modules/@keetanetwork/keetanet-client --out reference/$(KEETANET_CLIENT_VERSION).tmp
-	mv reference/$(KEETANET_CLIENT_VERSION).tmp reference/$(KEETANET_CLIENT_VERSION)
-	@touch reference/$(KEETANET_CLIENT_VERSION)/.done
+# never leaves a partial directory that looks complete. Versions other than the
+# installed one come from the registry, each into its own directory so that
+# parallel runs do not collide.
+reference/%/.done: node_modules/.done build/utils/.done utils/fetch-keetanet-client
+	rm -rf reference/$* reference/$*.tmp
+	@package=node_modules/@keetanetwork/keetanet-client; \
+	if [ "$*" != "$(KEETANET_CLIENT_VERSION)" ]; then \
+		package=reference/.packages/$*; \
+		rm -rf $$package; \
+		utils/fetch-keetanet-client $* $$package || exit 1; \
+	fi; \
+	node build/utils/reference/main.js --package $$package --out reference/$*.tmp
+	mv reference/$*.tmp reference/$*
+	@touch reference/$*/.done
 
 reference: reference/$(KEETANET_CLIENT_VERSION)/.done
+
+reference-diff-usage:
+	@echo "Usage: make reference-diff FROM=<version> TO=<version>" >&2
+	@exit 2
+
+# Review aid for upstream releases, so differences are not a failure.
+reference-diff: $(if $(and $(FROM),$(TO)),reference/$(FROM)/.done reference/$(TO)/.done,reference-diff-usage)
+	@changed=0; \
+	for tree in modules lib api; do \
+		diff -ruN reference/$(FROM)/$$tree reference/$(TO)/$$tree || { \
+			status=$$?; \
+			[ $$status -eq 1 ] || exit $$status; \
+			changed=1; \
+		}; \
+	done; \
+	[ $$changed -eq 1 ] || echo "no differences"
 
 clean:
 	rm -rf dist build .coverage .tsbuildinfo
@@ -92,6 +123,6 @@ clean:
 distclean: clean
 	rm -rf node_modules .nvmrc reference
 
-.PHONY: all help test do-lint reference clean distclean
+.PHONY: all help test do-lint reference reference-diff reference-diff-usage clean distclean
 
 endif

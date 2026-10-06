@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+package='@keetanetwork/keetanet-client'
+
+fail() {
+	echo "fetch-keetanet-client: $*" >&2
+	exit 1
+}
+
+if [ "$#" -ne 2 ]; then
+	echo "usage: fetch-keetanet-client <version> <destination>" >&2
+	exit 2
+fi
+version=$1
+destination=$2
+
+[[ $version =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]] || fail "invalid version: $version"
+[ ! -e "$destination" ] || fail "destination already exists: $destination"
+
+mkdir -p "$(dirname "$destination")"
+# Beside the destination so the final rename stays on one filesystem.
+work=$(mktemp -d "$destination.fetch.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+
+expected=$(npm view "$package@$version" dist.integrity 2>/dev/null) || expected=''
+[ -n "$expected" ] || fail "cannot resolve $package@$version on the npm registry"
+
+mkdir "$work/pack" "$work/extract"
+npm pack "$package@$version" --json --pack-destination "$work/pack" >"$work/pack.json" 2>/dev/null ||
+	fail "cannot download $package@$version"
+
+actual=$(jq -r '.[0].integrity' "$work/pack.json")
+[ "$actual" = "$expected" ] || fail "integrity mismatch for $package@$version"
+
+# The tarball is only ever read by our extractor, never run.
+tar -xzf "$work"/pack/*.tgz \
+	-C "$work/extract" --strip-components=1 --no-same-owner --no-same-permissions package ||
+	fail "cannot extract $package@$version"
+
+mv "$work/extract" "$destination"
