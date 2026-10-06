@@ -21,6 +21,7 @@ import {
 import {
 	ChainCursor,
 	GENESIS_MOMENT,
+	certificateFor,
 	blockHashesOf,
 	blocksHashesOf,
 	chainLengthOf,
@@ -116,16 +117,6 @@ function rowFor(principal: GenericAccount, entity: GenericAccount, target: Gener
 		target: target.publicKeyString.get(),
 		permissions: permissionsOf(flags)
 	});
-}
-
-async function certificateFor(subject: Account, serial: number): Promise<InstanceType<typeof lib.Utils.Certificate.Certificate>> {
-	const day = 24 * 60 * 60 * 1000;
-	return(await new lib.Utils.Certificate.CertificateBuilder({
-		issuer: subject,
-		validFrom: new Date(GENESIS_MOMENT.getTime() - day),
-		validTo: new Date(GENESIS_MOMENT.getTime() + day),
-		serial
-	}).build({ subjectPublicKey: subject }));
 }
 
 export function defineConfirmedCases(driver: DriverUnderTest): void {

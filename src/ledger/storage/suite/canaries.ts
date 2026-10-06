@@ -17,34 +17,32 @@ import type { DriverUnderTest } from './types.js';
 
 const lib = KeetaNet.lib;
 
-type AdjustMethod = Parameters<typeof modifyPermissionsBlock>[0]['method'];
-
-/** A thief's change to its own permissions, followed by a send it signs from the victim's account. */
+/** A thief's grant of SEND_ON_BEHALF to itself, followed by a send it signs from the victim's account. */
 type DrainAttempt = {
-	readonly ownChange: Block;
+	readonly selfGrant: Block;
 	readonly drain: Block;
 };
 
 /*
- * The thief changes SEND_ON_BEHALF for itself, on its own account, and in the
- * same request signs a send from the victim. A grant is satisfied only by the
- * victim granting it on the victim's account.
+ * The thief grants SEND_ON_BEHALF to itself, on its own account, and in the
+ * same request signs a send from the victim. A grant satisfies a requirement
+ * only when it is on the account the requirement is for.
  * [Keeta TS] index.js:68032-68061
  */
-async function drainAttempt(network: TestNetwork, cursor: ChainCursor, method: AdjustMethod): Promise<DrainAttempt> {
+async function drainAttempt(network: TestNetwork, cursor: ChainCursor): Promise<DrainAttempt> {
 	const victim = requireAt(network.users, 0);
 	const thief = requireAt(network.users, 1);
-	const ownChange = await modifyPermissionsBlock({
+	const selfGrant = await modifyPermissionsBlock({
 		account: thief,
 		previous: cursor.previous(thief),
 		network: network.network,
 		principal: thief,
-		method,
+		method: lib.Block.AdjustMethod.ADD,
 		permissions: new lib.Permissions(['SEND_ON_BEHALF']),
 		target: network.baseToken
 	});
 	const drain = await sendBlock({ from: victim, signer: thief, previous: cursor.previous(victim), to: thief, amount: 100n, token: network.baseToken, network: network.network });
-	return({ ownChange, drain });
+	return({ selfGrant, drain });
 }
 
 async function expectNothingPending(ledger: Ledger, blocks: readonly Block[]): Promise<void> {
@@ -66,13 +64,13 @@ export function defineCanaryCases(driver: DriverUnderTest): void {
 			const { network, ledger } = await startNetwork();
 			await ledger.add(network.genesis);
 			const cursor = new ChainCursor(network.genesis);
-			const { ownChange, drain } = await drainAttempt(network, cursor, lib.Block.AdjustMethod.ADD);
+			const { selfGrant, drain } = await drainAttempt(network, cursor);
 
-			await expect(ledger.vote([ownChange, drain])).rejects.toMatchObject({ code: 'LEDGER_INVALID_PERMISSIONS', shouldRetry: false });
+			await expect(ledger.vote([selfGrant, drain])).rejects.toMatchObject({ code: 'LEDGER_INVALID_PERMISSIONS', shouldRetry: false });
 
-			await expectNothingPending(ledger, [ownChange, drain]);
+			await expectNothingPending(ledger, [selfGrant, drain]);
 			// The self-grant alone is acceptable, so the refusal is the drain's.
-			expect((await ledger.vote([ownChange])).$permanent).toBe(false);
+			expect((await ledger.vote([selfGrant])).$permanent).toBe(false);
 			// The same drain with the victim's own grant in the request is authorized.
 			const victim = requireAt(network.users, 0);
 			const thief = requireAt(network.users, 1);
@@ -89,16 +87,34 @@ export function defineCanaryCases(driver: DriverUnderTest): void {
 			expect((await ledger.vote([grant, authorized])).$permanent).toBe(false);
 		});
 
+		/*
+		 * The victim's removal of a flag from the thief, on the victim's own
+		 * account, matches the drain's requirement in everything but its
+		 * method, so only the method check refuses it.
+		 * [Keeta TS] index.js:68035-68043
+		 */
 		test('subtract does not satisfy a grant requirement', async function() {
 			const { network, ledger } = await startNetwork();
 			await ledger.add(network.genesis);
+			const victim = requireAt(network.users, 0);
+			const thief = requireAt(network.users, 1);
 			const cursor = new ChainCursor(network.genesis);
-			const { ownChange, drain } = await drainAttempt(network, cursor, lib.Block.AdjustMethod.SUBTRACT);
+			const removal = cursor.append(await modifyPermissionsBlock({
+				account: victim,
+				previous: cursor.previous(victim),
+				network: network.network,
+				principal: thief,
+				method: lib.Block.AdjustMethod.SUBTRACT,
+				permissions: new lib.Permissions(['SEND_ON_BEHALF']),
+				target: network.baseToken
+			}));
+			const drain = await sendBlock({ from: victim, signer: thief, previous: removal.hash, to: thief, amount: 100n, token: network.baseToken, network: network.network });
 
-			await expect(ledger.vote([ownChange, drain])).rejects.toMatchObject({ code: 'LEDGER_INVALID_PERMISSIONS', shouldRetry: false });
+			await expect(ledger.vote([removal, drain])).rejects.toMatchObject({ code: 'LEDGER_INVALID_PERMISSIONS', shouldRetry: false });
 
-			await expectNothingPending(ledger, [ownChange, drain]);
-			expect((await ledger.vote([ownChange])).$permanent).toBe(false);
+			await expectNothingPending(ledger, [removal, drain]);
+			// The removal alone is acceptable, so the refusal is the drain's.
+			expect((await ledger.vote([removal])).$permanent).toBe(false);
 		});
 
 		/*

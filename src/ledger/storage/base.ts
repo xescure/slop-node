@@ -267,10 +267,11 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	protected abstract removeDeferredStaple(transaction: Transaction, blocksHash: StapleKey): Promise<void>;
 
 	/**
-	 * Deferred staples whose every awaited block is now on the main ledger.
-	 * Arrival normally replays them at once; these are the ones it missed.
+	 * Up to limit deferred staples, other than those excluded, whose every
+	 * awaited block is now on the main ledger. Arrival normally replays them at
+	 * once; these are the ones it missed.
 	 */
-	protected abstract listReleasedDeferredStaples(transaction: Transaction): Promise<readonly VoteStaple[]>;
+	protected abstract listReleasedDeferredStaples(transaction: Transaction, limit: number, exclude: ReadonlySet<StapleKey>): Promise<readonly VoteStaple[]>;
 
 	/**
 	 * Removes up to limit side votes that no longer matter, with the side
@@ -408,17 +409,12 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 		const { config, ledger } = this.initialized;
 		const retried = this.#retriedByGc.get(transaction) ?? new Set<StapleKey>();
 		this.#retriedByGc.set(transaction, retried);
-		const notRetried = async (): Promise<VoteStaple[]> => {
-			return((await this.listReleasedDeferredStaples(transaction)).filter(function(staple): boolean {
-				return(!retried.has(toStapleKey(staple.blocksHash)));
-			}));
-		};
 		const replay: ReplayState = {
 			mayDefer: false,
 			completed: new Set(),
 			deadline: Date.now() + (config.heapProcessWindowMs ?? DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS)
 		};
-		for (const staple of (await notRetried()).slice(0, limit)) {
+		for (const staple of await this.listReleasedDeferredStaples(transaction, limit, retried)) {
 			const stapleKey = toStapleKey(staple.blocksHash);
 			retried.add(stapleKey);
 			try {
@@ -428,7 +424,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 				config.log?.error(LOG_SOURCE, `retrying deferred staple ${stapleKey} failed; it stays deferred`, error);
 			}
 		}
-		return((await notRetried()).length > 0);
+		return((await this.listReleasedDeferredStaples(transaction, 1, retried)).length > 0);
 	}
 
 	/*

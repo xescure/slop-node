@@ -182,6 +182,17 @@ export class ChainCursor {
 	}
 }
 
+/** A self-signed certificate valid for a day either side of genesis. */
+export async function certificateFor(subject: Account, serial: number): Promise<InstanceType<typeof KeetaNet.lib.Utils.Certificate.Certificate>> {
+	const day = 24 * 60 * 60 * 1000;
+	return(await new lib.Utils.Certificate.CertificateBuilder({
+		issuer: subject,
+		validFrom: new Date(GENESIS_MOMENT.getTime() - day),
+		validTo: new Date(GENESIS_MOMENT.getTime() + day),
+		serial
+	}).build({ subjectPublicKey: subject }));
+}
+
 /** Moves the clock to the last moment the vote is still live. */
 export function advanceToExpiryEdge(vote: Vote): void {
 	advanceClock(vote.validityTo.getTime() + voteExpirySlopMilliseconds - Date.now());

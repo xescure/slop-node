@@ -1,17 +1,20 @@
 import { describe, expect, test } from 'vitest';
+import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { Vote, VoteBlockHash } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerInternals } from '../../../upstream/internals.js';
-import { confirmedStaple, feeBlock, sendBlock } from '../../../testing/blocks.js';
+import { confirmedStaple, feeBlock, manageCertificateBlock, modifyPermissionsBlock, sendBlock } from '../../../testing/blocks.js';
 import type { TestLedgerOptions, TestNetwork } from '../../../testing/network.js';
 import type { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
 import {
+	ChainCursor,
 	DEFAULT_WEIGHTS,
 	TESTING_KEY,
 	advancePastExpiry,
 	blocksHashesOf,
+	certificateFor,
 	checksumOf,
 	hashOf,
 	headOf,
@@ -24,6 +27,8 @@ import {
 	writeStorage
 } from './support.js';
 import type { DriverUnderTest } from './types.js';
+
+const lib = KeetaNet.lib;
 
 const FEE_AMOUNT = 1n;
 
@@ -240,6 +245,46 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			expect(await node.ledger.gc()).toBe(false);
 			expect(await ledgerChecksumOf(node)).toBe(checksumOf([network.genesis, firstStaple, secondStaple]));
 			await expect(node.ledger.add(secondStaple)).rejects.toMatchObject({ code: 'LEDGER_BLOCK_ALREADY_EXISTS' });
+		});
+
+		test('gc counts a deferred chain its retry releases in the checksum', async function() {
+			const { network, startNode } = await startNetwork();
+			const entity = requireAt(network.users, 0);
+			const holder = requireAt(network.users, 1);
+			const cursor = new ChainCursor(network.genesis);
+			const node = await startNode(0);
+			const certificate = await certificateFor(holder, 11);
+			const trigger = cursor.append(await sendFrom(network, 0, headOf(network.genesis, entity), 1n));
+			// Granting to a certificate the node lacks fails until the holder adds it (D15).
+			const grant = cursor.append(await modifyPermissionsBlock({
+				account: entity,
+				previous: cursor.previous(entity),
+				network: network.network,
+				principal: { usingCertificate: true, certificateHash: certificate.hash(), certificateAccount: holder },
+				method: lib.Block.AdjustMethod.ADD,
+				permissions: new lib.Permissions(['ACCESS'])
+			}));
+			const after = cursor.append(await sendFrom(network, 0, grant.hash, 2n));
+			const [triggerStaple, grantStaple, afterStaple] = await Promise.all([trigger, grant, after].map(function(block) {
+				return(confirmedStaple([block], network.representatives));
+			}));
+			if (triggerStaple === undefined || grantStaple === undefined || afterStaple === undefined) {
+				throw(new Error('three staples expected'));
+			}
+			expect(await node.ledger.add(afterStaple)).toEqual([]);
+			expect(await node.ledger.add(grantStaple)).toEqual([]);
+			// The grant's replay fails, so it stays deferred, and the send after it keeps waiting on it.
+			expect(blocksHashesOf(await node.ledger.add(triggerStaple))).toEqual(blocksHashesOf([triggerStaple]));
+			const heldStaple = await confirmedStaple([cursor.append(await manageCertificateBlock({ account: holder, previous: cursor.previous(holder), network: network.network, method: lib.Block.AdjustMethod.ADD, certificateOrHash: certificate }))], network.representatives);
+			await node.ledger.add(heldStaple);
+			expect(await ledgerChecksumOf(node)).toBe(checksumOf([network.genesis, triggerStaple, heldStaple]));
+
+			// One retry applies the grant, and the default window replays the send waiting on it.
+			expect(await node.ledger.gc()).toBe(false);
+
+			expect(hashOf(await node.ledger.getHeadBlock(entity, 'main'))).toBe(hashOf(after));
+			expect(await node.ledger.getBalance(entity, network.baseToken)).toBe(397n);
+			expect(await ledgerChecksumOf(node)).toBe(checksumOf([network.genesis, triggerStaple, heldStaple, grantStaple, afterStaple]));
 		});
 
 		test('gc reports whether more work remains', async function() {

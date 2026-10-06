@@ -722,10 +722,16 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		this.#forgetDeferredStaple(await transaction.view(), blocksHash);
 	}
 
-	protected async listReleasedDeferredStaples(transaction: MemoryTransaction): Promise<readonly VoteStaple[]> {
+	protected async listReleasedDeferredStaples(transaction: MemoryTransaction, limit: number, exclude: ReadonlySet<StapleKey>): Promise<readonly VoteStaple[]> {
 		const overlay = await transaction.view();
 		const released: VoteStaple[] = [];
-		for (const [, row] of overlay.deferredStaples.entries()) {
+		for (const [key, row] of overlay.deferredStaples.entries()) {
+			if (released.length >= limit) {
+				break;
+			}
+			if (exclude.has(key)) {
+				continue;
+			}
 			if (row.waitingOn.every(function(blockKey): boolean {
 				return(overlay.blocks.get(blockKey) !== undefined);
 			})) {
