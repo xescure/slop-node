@@ -98,8 +98,9 @@ build/utils/.done: $(shell find utils -type f -name '*.ts' -not -path 'utils/lin
 	@touch build/utils/.done
 
 # The type checks cover the tests that the builds exclude, so they must not
-# write the build info that the builds read.
-test: dist/.done build/utils/.done
+# write the build info that the builds read. Asked for together, the corpus is
+# regenerated before the tests read it.
+test: dist/.done build/utils/.done | $(filter conformance,$(MAKECMDGOALS))
 	npm run tsc -- --noEmit --incremental false
 	npm run tsc -- --noEmit --incremental false -p utils
 	npm run vitest -- run --config .vitest.config.js $(SLOP_NODE_TEST_EXTRA_ARGS)
@@ -123,7 +124,7 @@ do-lint: node_modules/.patched
 		exit $$status; \
 	fi
 	npm run eslint -- --config .eslint.config.mjs src utils
-	npm run cspell -- --config .cspell.config.mjs --no-progress 'src/**/*.ts' 'utils/**/*.ts' 'schema/*.md' Makefile
+	npm run cspell -- --config .cspell.config.mjs --no-progress 'src/**/*.ts' 'utils/**/*.ts' 'schema/*.md' 'conformance/*.md' Makefile
 
 # The tree is built beside its final name and renamed, so an interrupted run
 # never leaves a partial directory that looks complete. Every version, the

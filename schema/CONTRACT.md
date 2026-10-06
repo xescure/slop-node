@@ -340,7 +340,7 @@ getAccountInfo: <T extends AccountKeyAlgorithm = AccountKeyAlgorithm>(transactio
   - Tokens carry `supply`, which defaults to `0n`.
   - Multisig identifiers carry `multisigQuorum`, which defaults to `null`.
 
-  The answer is never `null`: an account with no row gets the defaults. That case is untested. A string is converted to an account first. The supply is the sum of the supply deltas applied. Fields merge as D11 states.
+  The answer is never `null`: an account with no row gets the defaults. The vote cases T1 and T7 (`conformance/vote-cases/`), which `src/conformance/corpus.test.ts` replays on every driver, test it for a token that has no row yet when its creation is voted on. A string is converted to an account first. The supply is the sum of the supply deltas applied. Fields merge as D11 states.
 - **Selector.** Main only.
 - **Errors.** The formatter throws for an unsupported key type.
 - **Tested by**:
@@ -1006,7 +1006,7 @@ The order key of a main staple is the moment this node applied it, which is the 
 
 - Balances and weights are returned as stored, without clamping, negative values included.
 - `getAllBalances` omits zero balances (provisional: confirmed by the live parity checks). Untested.
-- `getAccountInfo` never returns `null`. Untested for an account with no stored info.
+- `getAccountInfo` never returns `null`. Only the vote cases T1 and T7 test it for an account with no stored info (see `getAccountInfo`).
 
 **Reason.**
 - A confirmed staple can spend funds whose incoming staple this node has not yet applied, because deferral covers only the account's own chain [Keeta TS] index.js:67717-67729. The stored balance is negative until the funding arrives.
