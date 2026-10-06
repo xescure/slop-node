@@ -16,6 +16,7 @@ import {
 	blocksHashesOf,
 	certificateFor,
 	checksumOf,
+	failAfterPersisting,
 	hashOf,
 	headOf,
 	identitiesOf,
@@ -299,7 +300,7 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			const { network, startNode } = await startNetwork();
 			const user = requireAt(network.users, 0);
 			// A zero window leaves every waiter in the heap, as an exhausted window would.
-			const node = await startNode(0, { heapProcessWindowMs: 0 });
+			const { node } = await startNode(0, { heapProcessWindowMs: 0 });
 			const first = await sendFromGenesis(network, 0, 5n);
 			const second = await sendFrom(network, 0, first.hash, 7n);
 			const firstStaple = await confirmedStaple([first], network.representatives);
@@ -320,12 +321,34 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			await expect(node.ledger.add(secondStaple)).rejects.toMatchObject({ code: 'LEDGER_BLOCK_ALREADY_EXISTS' });
 		});
 
+		test('a gc retry that fails after its write leaves nothing behind and stays deferred', async function() {
+			const { network, startNode } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			// A zero window leaves every waiter in the heap, as an exhausted window would.
+			const { node, storage } = await startNode(0, { heapProcessWindowMs: 0 });
+			const first = await sendFromGenesis(network, 0, 5n);
+			const second = await sendFrom(network, 0, first.hash, 7n);
+			const firstStaple = await confirmedStaple([first], network.representatives);
+			const secondStaple = await confirmedStaple([second], network.representatives);
+			expect(await node.ledger.add(secondStaple)).toEqual([]);
+			expect(blocksHashesOf(await node.ledger.add(firstStaple))).toEqual(blocksHashesOf([firstStaple]));
+			failAfterPersisting(storage, secondStaple);
+
+			expect(await node.ledger.gc()).toBe(false);
+
+			expect(await node.ledger.getBlock(second.hash, 'main')).toBeNull();
+			expect(hashOf(await node.ledger.getHeadBlock(user, 'main'))).toBe(hashOf(first));
+			expect(await node.ledger.getBalance(user, network.baseToken)).toBe(395n);
+			expect(await deferredWaitingOn(storage, first.hash)).toEqual(blocksHashesOf([secondStaple]));
+			expect(await ledgerChecksumOf(node)).toBe(checksumOf([network.genesis, firstStaple]));
+		});
+
 		test('gc counts a deferred chain its retry releases in the checksum', async function() {
 			const { network, startNode } = await startNetwork();
 			const entity = requireAt(network.users, 0);
 			const holder = requireAt(network.users, 1);
 			const cursor = new ChainCursor(network.genesis);
-			const node = await startNode(0);
+			const { node } = await startNode(0);
 			const certificate = await certificateFor(holder, 11);
 			const trigger = cursor.append(await sendFrom(network, 0, headOf(network.genesis, entity), 1n));
 			// Granting to a certificate the node lacks fails until the holder adds it (D15).

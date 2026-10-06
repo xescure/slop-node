@@ -93,7 +93,7 @@ export function defineStatsCases(driver: DriverUnderTest): void {
 		test('stats reads settlement times and retries from the node', async function() {
 			const { network, startNode } = await startNetwork();
 			const user = requireAt(network.users, 0);
-			const node = await startNode(0);
+			const { node } = await startNode(0);
 			const send = await sendBlock({ from: user, previous: headOf(network.genesis, user), to: requireAt(network.users, 1), amount: 5n, token: network.baseToken, network: network.network });
 			await node.ledger.vote([send]);
 			advanceClock(SETTLEMENT_MILLISECONDS);

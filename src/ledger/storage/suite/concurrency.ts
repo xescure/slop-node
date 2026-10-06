@@ -177,7 +177,7 @@ export function defineConcurrencyCases(driver: DriverUnderTest): void {
 		test('concurrent adds of one staple apply it once', async function() {
 			const { network, startNode } = await startNetwork();
 			const user = requireAt(network.users, 0);
-			const node = await startNode(0);
+			const { node } = await startNode(0);
 			const send = await sendBlock({ from: user, previous: headOf(network.genesis, user), to: requireAt(network.users, 1), amount: 5n, token: network.baseToken, network: network.network });
 			const staple = await confirmedStaple([send], network.representatives);
 

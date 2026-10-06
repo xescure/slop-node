@@ -3,7 +3,19 @@ import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/i
 import { confirmedStaple, sendBlock } from '../../../testing/blocks.js';
 import type { TestNetwork } from '../../../testing/network.js';
 import type { LedgerStorageDriverBase } from '../base.js';
-import { TESTING_KEY, blockHashesOf, blocksHashesOf, headOf, readStorage, requireAt, useFixtures } from './support.js';
+import {
+	TESTING_KEY,
+	blockHashesOf,
+	blocksHashesOf,
+	checksumOf,
+	failAfterPersisting,
+	hashOf,
+	headOf,
+	ledgerChecksumOf,
+	readStorage,
+	requireAt,
+	useFixtures
+} from './support.js';
 import type { DriverUnderTest } from './types.js';
 
 type UserChain = {
@@ -204,6 +216,36 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			for (const block of blocks) {
 				expect(await deferredWaitingOn(storage, block.hash)).toEqual([]);
 			}
+		});
+
+		test('a replayed staple that fails after its write leaves nothing behind and stays deferred', async function() {
+			const { network, startNode } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			const { node, storage } = await startNode(0);
+			const blocks = await sendsAfter(network, headOf(network.genesis, user), [5n, 7n, 9n]);
+			const [firstStaple, secondStaple, thirdStaple] = await Promise.all(blocks.map(function(block) {
+				return(confirmedStaple([block], network.representatives));
+			}));
+			if (firstStaple === undefined || secondStaple === undefined || thirdStaple === undefined) {
+				throw(new Error('three staples expected'));
+			}
+			const second = requireAt(blocks, 1);
+			const third = requireAt(blocks, 2);
+			expect(await node.ledger.add(thirdStaple)).toEqual([]);
+			expect(await node.ledger.add(secondStaple)).toEqual([]);
+			failAfterPersisting(storage, thirdStaple);
+
+			// The third staple replays within the second's replay, and only the third's is undone.
+			const applied = await node.ledger.add(firstStaple);
+
+			expect(blocksHashesOf(applied)).toEqual(blocksHashesOf([firstStaple, secondStaple]));
+			expect(await node.ledger.getBlock(third.hash, 'main')).toBeNull();
+			expect((await node.ledger.getVoteStaples([thirdStaple.blocksHash], 'main')).get(thirdStaple.blocksHash)).toBeNull();
+			expect(hashOf(await node.ledger.getHeadBlock(user, 'main'))).toBe(hashOf(second));
+			expect(await node.ledger.getBalance(user, network.baseToken)).toBe(388n);
+			expect(blocksHashesOf(await node.ledger.getHistory(user, null))).toEqual(blocksHashesOf([secondStaple, firstStaple, network.genesis]));
+			expect(await deferredWaitingOn(storage, second.hash)).toEqual(blocksHashesOf([thirdStaple]));
+			expect(await ledgerChecksumOf(node)).toBe(checksumOf([network.genesis, firstStaple, secondStaple]));
 		});
 
 		test('a replayed staple that conflicts stays deferred while its trigger applies', async function() {

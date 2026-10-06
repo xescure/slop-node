@@ -9,6 +9,8 @@ import { advanceClock, createTestNetwork, freezeClock } from '../../../testing/n
 import type { TestLedgerOptions, TestNetwork } from '../../../testing/network.js';
 import type { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
 import { voteExpirySlopMilliseconds } from '../expiry.js';
+import { toStapleKey } from '../keys.js';
+import type { StapleKey } from '../keys.js';
 import type { DriverUnderTest } from './types.js';
 
 const lib = KeetaNet.lib;
@@ -25,7 +27,12 @@ export type NetworkFixture = {
 	/** Another representative's ledger on a driver of its own, with genesis added. */
 	readonly startPeer: (representative: number, options?: TestLedgerOptions) => Promise<Ledger>;
 	/** A node for a representative on a driver of its own, with genesis added. */
-	readonly startNode: (representative: number, options?: TestLedgerOptions) => Promise<Node>;
+	readonly startNode: (representative: number, options?: TestLedgerOptions) => Promise<NodeFixture>;
+};
+
+export type NodeFixture = {
+	readonly node: Node;
+	readonly storage: LedgerStorageDriverBase;
 };
 
 export type FixtureFactory = (weights?: readonly bigint[], ledgerOptions?: TestLedgerOptions) => Promise<NetworkFixture>;
@@ -66,9 +73,10 @@ export function useFixtures(driver: DriverUnderTest): FixtureFactory {
 				return(peer);
 			},
 			async startNode(representative, options = {}) {
-				const node = network.createNode(await createStorage(), requireAt(network.representatives, representative), options);
+				const nodeStorage = await createStorage();
+				const node = network.createNode(nodeStorage, requireAt(network.representatives, representative), options);
 				await node.ledger.add(network.genesis);
-				return(node);
+				return({ node, storage: nodeStorage });
 			}
 		});
 	});
@@ -134,6 +142,27 @@ export async function writeStorage<Result>(storage: LedgerStorageDriverBase, wri
 	}
 	await storage.commitTransaction(transaction);
 	return(result);
+}
+
+/**
+ * Makes the driver fail just after it has written the staple, when the base
+ * stops it waiting as a deferred staple, the way a lost connection could. The
+ * base calls its primitives through the instance, so a method set on the
+ * instance reaches every driver without knowing its class.
+ */
+export function failAfterPersisting(storage: LedgerStorageDriverBase, staple: VoteStaple): void {
+	const removeDeferredStaple: unknown = Reflect.get(storage, 'removeDeferredStaple');
+	if (typeof removeDeferredStaple !== 'function') {
+		throw(new Error('the driver has no removeDeferredStaple primitive'));
+	}
+	const failing = toStapleKey(staple.blocksHash);
+	Reflect.set(storage, 'removeDeferredStaple', async function(transaction: LedgerDriverTransaction, blocksHash: StapleKey): Promise<void> {
+		if (blocksHash === failing) {
+			throw(new Error(`injected failure after persisting ${blocksHash}`));
+		}
+		const removed: unknown = Reflect.apply(removeDeferredStaple, storage, [transaction, blocksHash]);
+		await removed;
+	});
 }
 
 /** The checksum a node keeps over every block its ledger applied. */

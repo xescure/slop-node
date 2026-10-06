@@ -96,7 +96,7 @@ From now on, `getVotesFromMultiplePrevious(tx, [A], 'both', R)` returns two vote
 2. `adjust(tx, S, effects)`:
    1. Base, `preAdjust`: B and FEE have no height, because side blocks never have one (D5). B gets A's height plus one, and FEE, whose previous is B, gets B's height plus one.
    2. Base, the confirmed-history check: A has no main successor.
-   3. Base, settlement statistics: `getVotes(tx, B.hash, 'side')` finds R's temporary vote, and the time since its `validityFrom` is recorded. The increments are held until the staple is persisted [Keeta TS] index.js:67593-67632.
+   3. Base, settlement statistics: `getVotes(tx, B.hash, 'side')` finds R's temporary vote, and the time since its `validityFrom` is recorded. The increments are held until `adjust` returns [Keeta TS] index.js:67593-67632.
    4. `persistConfirmedStaple(tx, change)` writes the main rows. In the same write it removes the side copies of the staple's votes that are R's own, the side copies of B and FEE, and their side idempotent claims. R's temporary vote on B stays on the side until it expires or gc collects it (D6, D20).
    5. `removeDeferredStaple`, then `listDeferredStaplesWaitingOn(tx, [B, FEE])`.
    6. `adjust` returns `[S]`.
@@ -107,19 +107,19 @@ From now on, `getVotesFromMultiplePrevious(tx, [A], 'both', R)` returns two vote
 Node N lacks A and receives S.
 
 1. In `adjust(tx, S, effects)`, `preAdjust` finds no height for A and calls the base's `adjustDefer`. That calls `getBlockHeights` for S's previous blocks outside the staple, then `storeDeferredStaple(tx, S, [A])`. `preAdjust` returns an empty result, and `adjust` returns `[]`. Nothing enters the checksum, and the commit persists the deferred staple [Keeta TS] index.js:67717-67729.
-2. Later, staple T containing A arrives. `adjust(tx, T, ...)` applies T. Then `listDeferredStaplesWaitingOn(tx, hashes of T's blocks)` finds S, and S runs through the same template in the same transaction, with deferral disabled:
+2. Later, staple T containing A arrives. `adjust(tx, T, ...)` applies T. Then `listDeferredStaplesWaitingOn(tx, hashes of T's blocks)` finds S, and S runs through the same template in the same transaction, with deferral disabled, inside `runIsolated(tx, unit)`:
    - `preAdjust` now sees A's height, which T wrote earlier in the transaction.
    - S is persisted, and `removeDeferredStaple(tx, S.blocksHash)` runs.
-   - The staples waiting on S's blocks are looked up in turn.
+   - The staples waiting on S's blocks are looked up in turn, each in a unit nested in S's.
 
    `adjust` returns `[T, S]`, and each enters the checksum once.
-3. Replay stops when `heapProcessWindowMs` (default 5000 ms) has elapsed since the `adjust` began, and the remaining waiters stay deferred. A waiter whose replay throws is logged and stays deferred. T still commits (D13).
+3. Replay stops when `heapProcessWindowMs` (default 5000 ms) has elapsed since the `adjust` began, and the remaining waiters stay deferred. A waiter whose replay throws is logged, its unit is undone, and it stays deferred. T still commits (D13).
 
 ### 2.6 Garbage collection
 
 `Ledger.gc(timeLimitMS)` runs upstream's loop in one read-write transaction (`'db-gc'`). The loop calls `gcBatch` until a batch reports that no work remains, or until `timeLimitMS` (default 280000 ms) has elapsed [Keeta TS] index.js:70517-70521, 67852-67862. Each base batch makes these calls:
 
-1. `listReleasedDeferredStaples(tx, 100, retried)`: deferred staples whose awaited blocks are all on the main ledger. Each is retried through the `adjust` template with deferral disabled. The staples it applies, chained replays included, are folded into `ledgerChecksum`. A failed retry is logged and stays deferred, and the same gc transaction does not retry it again.
+1. `listReleasedDeferredStaples(tx, 100, retried)`: deferred staples whose awaited blocks are all on the main ledger. Each is retried through the `adjust` template with deferral disabled, inside `runIsolated(tx, unit)`. The staples it applies, chained replays included, are folded into `ledgerChecksum`. A failed retry is logged, its unit is undone, and it stays deferred; the same gc transaction does not retry it again.
 2. `listReleasedDeferredStaples(tx, 1, retried)`: whether a released staple not yet retried in this transaction remains, counting staples released by this batch's retries.
 3. `collectObsoleteSideVotes(tx, 100)`: removes side votes that have expired at the transaction moment, or that cover a block whose `previous` has a confirmed successor, together with the side blocks and side idempotent claims that only they held.
 4. The batch reports whether either kind of work remains.
@@ -159,10 +159,19 @@ A driver must provide the following.
    - `add` reads heights in `preAdjust`, then persists. Two concurrent adds of one staple must apply it once. Tested by `concurrency.ts: "concurrent adds of one staple apply it once"`.
    - One transaction defers S on A while another applies A. Under weaker isolation each misses the other's write, and S waits until a gc retry. Untested.
 2. **Read-your-writes.** Every read in a transaction sees that transaction's earlier writes. Replay depends on this, because a replayed staple reads the heights, balances and representatives its trigger has just written. Tested by `transactions.ts: "reads see the transaction's own writes"`, and by every replay case in `deferral.ts`.
-3. **Concurrent calls within one transaction.** Upstream issues reads on one transaction concurrently [Keeta TS] index.js:67332-67339, 67638-67646, 69935-69945, and `Promise.all` over `add` within one transaction is legal. A driver must accept overlapping calls on one transaction and lose no write. Tested by `transactions.ts: "concurrent calls within one transaction keep every write"`.
-4. **Atomic staple application.** `persistConfirmedStaple` applies a whole change or nothing, even inside a transaction that continues afterwards: a replayed staple that fails is skipped while its trigger commits. In a database where a failed statement aborts the enclosing transaction, each replayed staple's statements need a savepoint of their own, or one failing waiter prevents its trigger from committing. Tested by `deferral.ts: "a replayed staple whose idempotent key is taken stays deferred while its trigger applies"`, where the replay fails inside `persistConfirmedStaple`; by `deferral.ts: "a replayed staple that conflicts stays deferred while its trigger applies"`, where it fails before the write; and by `confirmed.ts: "persisting never overwrites a confirmed block or successor"`, which calls the primitive directly.
+3. **Concurrent calls within one transaction.** Upstream issues reads on one transaction concurrently [Keeta TS] index.js:67332-67339, 67638-67646, 69935-69945, and `Promise.all` over `add` within one transaction is legal. A driver must accept overlapping calls on one transaction and lose no write. The base runs overlapping `adjust` calls, and gc batches, on one transaction one after another (item 4). Tested by `transactions.ts: "concurrent calls within one transaction keep every write"`.
+4. **Per-staple isolation.** `runIsolated(tx, unit)` (section 4.2) is the isolation boundary of a deferred staple. The base runs each replayed staple, and each staple a gc pass retries, as one unit, together with everything that staple releases in turn, so units nest. If a unit throws at any point, none of its writes may remain while the transaction continues: before the write, in `persistConfirmedStaple`, or after it, in `removeDeferredStaple` or a nested replay. The staple then stays deferred. It is neither returned by `adjust` nor folded into `ledgerChecksum`, and its settlement statistics are not recorded. Its trigger still commits. A database driver implements `runIsolated` with a savepoint, released when the unit succeeds and rolled back when it fails. Without one, a failed statement aborts the whole transaction, or a staple that failed after its write stays half-applied.
+   - `persistConfirmedStaple` must still apply a whole change or nothing, because the staple at the top of `adjust` runs in no unit, and the base's default `runIsolated` adds no isolation.
+   - Rolling a unit back undoes every write made while it was open. The base therefore runs `adjust` and gc batches one at a time per transaction, so no other `adjust` writes into an open unit. Other calls on the same transaction are not held back: while a unit is open they see its writes, and an `addPendingVote` overlapping it would be undone with it. Untested: the overlap needs a particular interleaving, which no case can force on every driver.
 
-The memory driver meets 1 by holding one first-come, first-served lock from `beginTransaction` until commit or abort. It meets 2 and 4 with a copy-on-write overlay per transaction, applied on commit and dropped on abort, and with a nested overlay for each staged group of writes. It meets 3 by keeping every overlay operation synchronous. It records a commit as done only after the overlay has been applied, and a failed commit leaves the transaction finished with a non-retryable error (untested).
+   Tested by:
+   - `deferral.ts: "a replayed staple that fails after its write leaves nothing behind and stays deferred"`, where a nested unit fails after its write and only it is undone
+   - `gc.ts: "a gc retry that fails after its write leaves nothing behind and stays deferred"`
+   - `deferral.ts: "a replayed staple whose idempotent key is taken stays deferred while its trigger applies"`, where the replay fails inside `persistConfirmedStaple`
+   - `deferral.ts: "a replayed staple that conflicts stays deferred while its trigger applies"`, where it fails before the write
+   - `confirmed.ts: "persisting never overwrites a confirmed block or successor"`, which calls the primitive directly
+
+The memory driver meets 1 by holding one first-come, first-served lock from `beginTransaction` until commit or abort. It meets 2 and 4 with a copy-on-write overlay per transaction, applied on commit and dropped on abort, and with a nested overlay for each staged group of writes and for each isolated unit. While a unit is open, the transaction reads and writes through the unit's overlay, which is applied to the enclosing view when the unit succeeds and dropped when it fails. It meets 3 by keeping every overlay operation synchronous. It records a commit as done only after the overlay has been applied, and a failed commit leaves the transaction finished with a non-retryable error (untested).
 
 ### 3.4 `evaluateError` mapping
 
@@ -399,8 +408,10 @@ adjust: (transaction: any, input: VoteStaple, changes: ComputedEffectOfBlocks) =
   2. Run `preAdjust`. It refuses the staple if any block has a main height, and otherwise assigns heights or defers. An empty result returns `[]` [Keeta TS] index.js:67678-67732.
   3. Refuse a staple that would overwrite confirmed history (D14).
   4. Compute the settlement statistics while R's temporary side vote is still readable [Keeta TS] index.js:67593-67632.
-  5. Compute the change through upstream's `computeLedgerEffect`, then call `persistConfirmedStaple` and `removeDeferredStaple`. The statistics increments enter `statsPending` only after the persist.
-  6. Replay the staples waiting on the applied blocks, with deferral disabled, within the replay window (D13).
+  5. Compute the change through upstream's `computeLedgerEffect`, then call `persistConfirmedStaple` and `removeDeferredStaple`.
+  6. Replay the staples waiting on the applied blocks, with deferral disabled, within the replay window, each in its own isolated unit (section 3.3, item 4; D13).
+
+  The settlement statistics of every applied staple enter `statsPending` when `adjust` returns, once no unit can still undo the staple. Calls to `adjust` on one transaction run one at a time.
 - **Return value.** Each applied staple exactly once: the input first, then replayed staples in the order they applied. `[]` when the input was deferred, or was already deferred. `Ledger.add` folds every returned block into `ledgerChecksum` by XOR, so a staple returned twice would cancel itself out [Keeta TS] index.js:69404-69417.
 - **Errors.** All non-retryable:
   - `LEDGER_PREVIOUS_NOT_SEEN` for an out-of-order staple
@@ -410,7 +421,7 @@ adjust: (transaction: any, input: VoteStaple, changes: ComputedEffectOfBlocks) =
   - `LEDGER_CERTIFICATE_NOT_FOUND` (D15)
   - `StorageDriverNotInitializedError` before `init`
 
-  Errors of replayed staples are logged and do not fail the call.
+  Errors of replayed staples are logged, leave none of their writes, and do not fail the call.
 - **Tested by** every case of `genesis.ts`, `confirmed.ts` and `deferral.ts`; `votes.ts: "publishing promotes the staple and deletes side copies of promoted rows"`; `concurrency.ts: "concurrent adds of one staple apply it once"`.
 
 ### `addPendingVote`
@@ -804,6 +815,14 @@ Writes everything that one confirmed staple changes, all of it or none of it (se
 
   Every other side vote stays, including this node's temporary vote on these blocks and its votes on competing blocks (D6).
 
+#### `runIsolated`
+
+```ts
+protected runIsolated<Result>(transaction: Transaction, unit: () => Promise<Result>): Promise<Result>;
+```
+
+Runs `unit` so that its writes join the transaction if it succeeds, and none of them remain if it throws, after which the transaction carries on as it was before the unit. Units nest, and the base never runs two at once on one transaction. The base's default calls `unit` and adds no isolation. Every driver whose writes can fail part-way through a unit must override it. The memory driver opens a nested overlay, and a database driver uses a savepoint (section 3.3, item 4). Tested by `deferral.ts: "a replayed staple that fails after its write leaves nothing behind and stays deferred"` and `gc.ts: "a gc retry that fails after its write leaves nothing behind and stays deferred"`.
+
 #### `storeDeferredStaple`
 
 ```ts
@@ -1025,7 +1044,7 @@ Only partly testable through blocks. SET_INFO on an identifier must carry `defau
 
 - A deferred staple is indexed by each missing previous block, so one block can release several waiters.
 - Replay runs inside the transaction that supplied the missing block, with deferral disabled. A waiter that still lacks another previous block stays deferred.
-- A replayed staple that fails stays deferred, and the failure is logged. The staple that released it still applies, and its transaction commits.
+- A replayed staple that fails stays deferred, none of its writes remain, and the failure is logged. The staple that released it still applies, and its transaction commits. Each replayed staple runs in an isolated unit of its own (section 3.3, item 4).
 - Replay stops once `heapProcessWindowMs` (default 5000 ms) has elapsed since the `adjust` began, measured on the wall clock. A window of 0 replays nothing, which the deferral and gc cases use to leave waiters deferred. Whether a waiter reached exactly at the window's end still replays cannot be checked against upstream's own drivers, which the package does not include; that boundary is provisional and untested.
 - gc retries deferred staples whose awaited blocks are all on the main ledger. A retry that fails is not retried again in the same gc transaction, and is never dropped. Deferred staples never expire, because they are confirmed.
 - `adjust` returns each applied staple exactly once.
@@ -1044,7 +1063,9 @@ Only partly testable through blocks. SET_INFO on an identifier must carry `defau
 - `deferral.ts: "a deferred staple applied on its own stops waiting"`
 - `deferral.ts: "a deferred staple added again stays deferred once"`
 - `deferral.ts: "a replayed staple whose idempotent key is taken stays deferred while its trigger applies"`
+- `deferral.ts: "a replayed staple that fails after its write leaves nothing behind and stays deferred"`
 - `gc.ts: "gc retries deferred staples whose previous is now on main"`
+- `gc.ts: "a gc retry that fails after its write leaves nothing behind and stays deferred"`
 - `gc.ts: "gc reports whether more work remains"`
 
 ### D14. Conflicting confirmed history

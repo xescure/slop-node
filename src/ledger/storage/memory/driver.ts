@@ -65,17 +65,44 @@ type TransactionState =
 /** A memory transaction: its own view of the ledger, valid until commit or abort. */
 export class MemoryTransaction extends LedgerDriverTransaction {
 	#state: TransactionState;
+	// The overlays of the isolated units now open, innermost last.
+	readonly #units: LedgerOverlay[] = [];
 
 	constructor(options: TransactionOptions, overlay: LedgerOverlay, release: Release) {
 		super(options);
 		this.#state = { status: 'open', overlay, release };
 	}
 
-	/** The transaction's view of the ledger; rejects once the transaction has ended. */
+	/**
+	 * The transaction's view of the ledger, through the innermost open unit;
+	 * rejects once the transaction has ended.
+	 */
 	view(): Promise<LedgerOverlay> {
 		return(new Promise((resolve) => {
-			resolve(this.#open().overlay);
+			const { overlay } = this.#open();
+			resolve(this.#units.at(-1) ?? overlay);
 		}));
+	}
+
+	/**
+	 * Runs a unit over an overlay of its own, which reaches the enclosing view
+	 * only if the unit succeeds. The base runs one unit at a time per
+	 * transaction, so the innermost overlay always belongs to the unit that
+	 * is running.
+	 */
+	async isolate<Result>(unit: () => Promise<Result>): Promise<Result> {
+		const overlay = openOverlay(await this.view());
+		this.#units.push(overlay);
+		let result: Result;
+		try {
+			result = await unit();
+		} catch (error: unknown) {
+			this.#closeUnit(overlay);
+			throw(error);
+		}
+		this.#closeUnit(overlay);
+		commitOverlay(overlay);
+		return(result);
 	}
 
 	/**
@@ -96,6 +123,12 @@ export class MemoryTransaction extends LedgerDriverTransaction {
 			}
 			resolve();
 		}));
+	}
+
+	#closeUnit(overlay: LedgerOverlay): void {
+		if (this.#units.pop() !== overlay) {
+			throw(new Error(`internal error: isolated units of transaction ${this.identifier} closed out of order`));
+		}
 	}
 
 	#open(): Extract<TransactionState, { status: 'open' }> {
@@ -302,6 +335,10 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		return(transaction.end('aborted', function() {
 			// Dropping the overlay is the whole of an abort.
 		}));
+	}
+
+	protected override runIsolated<Result>(transaction: MemoryTransaction, unit: () => Promise<Result>): Promise<Result> {
+		return(transaction.isolate(unit));
 	}
 
 	getNextSerialNumber(_transaction?: MemoryTransaction): Promise<bigint> {

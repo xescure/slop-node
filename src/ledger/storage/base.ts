@@ -74,6 +74,17 @@ type ReplayState = {
 	readonly deadline: number;
 };
 
+type SettlementIncrease = Awaited<ReturnType<typeof LedgerInternals.addTimeStatistic>>[number];
+
+/**
+ * A staple the template applied, with the settlement statistics it earned;
+ * they are recorded only once no enclosing unit can still undo the staple.
+ */
+type AppliedStaple = {
+	readonly staple: VoteStaple;
+	readonly settlement: readonly SettlementIncrease[];
+};
+
 /**
  * What a driver counts for stats(), and when: the moment its snapshot
  * describes, and how many milliseconds either side of it the snapshot may
@@ -109,6 +120,8 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	#driver: DriverState = { state: 'uninitialized' };
 	// Deferred staples each gc transaction has already retried; one that fails is not retried again in the same pass.
 	readonly #retriedByGc = new WeakMap<Transaction, Set<StapleKey>>();
+	// The tail of the work queued on each transaction that may open isolated units; it never rejects.
+	readonly #exclusiveWork = new WeakMap<Transaction, Promise<void>>();
 
 	/**
 	 * Called once, synchronously, by the Ledger constructor; Ledger.copy shares
@@ -146,10 +159,16 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 */
 	async adjust(transaction: Transaction, input: VoteStaple, changes: ComputedEffectOfBlocks): Promise<VoteStaple[]> {
 		const windowMilliseconds = this.initialized.config.heapProcessWindowMs ?? DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS;
-		return(await this.#applyConfirmedStaple(transaction, input, changes, {
-			mayDefer: true,
-			completed: new Set(),
-			deadline: Date.now() + windowMilliseconds
+		const applied = await this.#exclusively(transaction, () => {
+			return(this.#applyConfirmedStaple(transaction, input, changes, {
+				mayDefer: true,
+				completed: new Set(),
+				deadline: Date.now() + windowMilliseconds
+			}));
+		});
+		recordSettlement(transaction, applied);
+		return(applied.map(function({ staple }): VoteStaple {
+			return(staple);
 		}));
 	}
 
@@ -255,9 +274,22 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	}
 
 	/**
+	 * Runs one unit of a transaction's work so that, if the unit fails, none
+	 * of its writes remain and the transaction carries on as it was before the
+	 * unit; if it succeeds, its writes join the transaction. Units nest. The
+	 * base makes each replayed and each gc-retried deferred staple a unit,
+	 * including everything that staple releases in turn. This default adds no
+	 * isolation, which is enough only for a driver in which nothing can fail
+	 * once a unit has written; a database driver overrides it with a savepoint.
+	 */
+	protected runIsolated<Result>(_transaction: Transaction, unit: () => Promise<Result>): Promise<Result> {
+		return(unit());
+	}
+
+	/**
 	 * Writes everything a confirmed staple changes. It must apply the whole
-	 * change or nothing, because a deferred staple that fails during replay is
-	 * skipped while the transaction carries on.
+	 * change or nothing: the staple at the top of adjust runs in no isolated
+	 * unit, and the default runIsolated isolates nothing.
 	 */
 	protected abstract persistConfirmedStaple(transaction: Transaction, change: ConfirmedStapleChange): Promise<void>;
 
@@ -323,7 +355,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * defers, the driver refuses forks, and only a fully computed change is
 	 * written.
 	 */
-	async #applyConfirmedStaple(transaction: Transaction, staple: VoteStaple, effects: ComputedEffectOfBlocks, replay: ReplayState): Promise<VoteStaple[]> {
+	async #applyConfirmedStaple(transaction: Transaction, staple: VoteStaple, effects: ComputedEffectOfBlocks, replay: ReplayState): Promise<AppliedStaple[]> {
 		this.#assertChainOrder(staple);
 		this.#assertDistinctPrevious(staple);
 		const heights = await this.preAdjust(staple, replay.mayDefer, transaction);
@@ -335,10 +367,9 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 
 		const { config, ledger } = this.initialized;
 		// Our temporary side vote is still in place here, which the settlement
-		// time is measured from; the increments are kept until the staple
-		// applies. The node is the transaction's, because Ledger.copy shares one
-		// driver between nodes.
-		const settlementStatistics = await LedgerInternals.addTimeStatistic(transaction.node, staple.blocks, 'main', this, transaction, true);
+		// time is measured from. The node is the transaction's, because
+		// Ledger.copy shares one driver between nodes.
+		const settlement = await LedgerInternals.addTimeStatistic(transaction.node, staple.blocks, 'main', this, transaction, true);
 		const change = await computeConfirmedStapleChange({
 			transaction,
 			staple,
@@ -354,13 +385,39 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 		// A staple can arrive again on its own after it was deferred, for example
 		// when its replay was cut short; once applied it must stop waiting.
 		await this.removeDeferredStaple(transaction, stapleKey);
-		for (const increase of settlementStatistics) {
-			transaction.statsPending.incr(...increase);
-		}
 		replay.completed.add(stapleKey);
 
 		const replayed = await this.#replayWaiters(transaction, staple, replay);
-		return([staple, ...replayed]);
+		return([{ staple, settlement }, ...replayed]);
+	}
+
+	/*
+	 * A deferred staple and everything it releases apply as one unit. A
+	 * failure anywhere in it, even after the staple's own write, undoes the
+	 * unit, so the staple stays deferred and is reported as not applied.
+	 */
+	async #applyIsolated(transaction: Transaction, staple: VoteStaple, replay: ReplayState): Promise<AppliedStaple[]> {
+		const { ledger } = this.initialized;
+		const completed = new Set(replay.completed);
+		const applied = await this.runIsolated(transaction, async () => {
+			const effects = LedgerInternals.computeEffectOfBlocks(staple.blocks, ledger);
+			return(await this.#applyConfirmedStaple(transaction, staple, effects, { ...replay, mayDefer: false, completed }));
+		});
+		for (const stapleKey of completed) {
+			replay.completed.add(stapleKey);
+		}
+		return(applied);
+	}
+
+	/*
+	 * Work that may open isolated units runs one piece at a time per
+	 * transaction. Undoing a unit undoes every write made while it was open,
+	 * so a concurrent adjust on the same transaction must not write then.
+	 */
+	async #exclusively<Result>(transaction: Transaction, work: () => Promise<Result>): Promise<Result> {
+		const turn = (this.#exclusiveWork.get(transaction) ?? Promise.resolve()).then(work);
+		this.#exclusiveWork.set(transaction, turn.then(ignoreOutcome, ignoreOutcome));
+		return(await turn);
 	}
 
 	/*
@@ -369,12 +426,12 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * the staple that released it still applies.
 	 * [Keeta TS] index.js:67722-67725
 	 */
-	async #replayWaiters(transaction: Transaction, released: VoteStaple, replay: ReplayState): Promise<VoteStaple[]> {
-		const { config, ledger } = this.initialized;
+	async #replayWaiters(transaction: Transaction, released: VoteStaple, replay: ReplayState): Promise<AppliedStaple[]> {
+		const { config } = this.initialized;
 		const waiters = await this.listDeferredStaplesWaitingOn(transaction, released.blocks.map(function(block): BlockHash {
 			return(block.hash);
 		}));
-		const applied: VoteStaple[] = [];
+		const applied: AppliedStaple[] = [];
 		for (const waiter of waiters) {
 			const waiterKey = toStapleKey(waiter.blocksHash);
 			if (replay.completed.has(waiterKey)) {
@@ -386,8 +443,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 				break;
 			}
 			try {
-				const effects = LedgerInternals.computeEffectOfBlocks(waiter.blocks, ledger);
-				applied.push(...await this.#applyConfirmedStaple(transaction, waiter, effects, { ...replay, mayDefer: false }));
+				applied.push(...await this.#applyIsolated(transaction, waiter, replay));
 			} catch (error: unknown) {
 				config.log?.error(LOG_SOURCE, `replaying deferred staple ${waiterKey} failed; it stays deferred`, error);
 			}
@@ -400,9 +456,11 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * side votes with a block on main.
 	 */
 	async #gcBatch(transaction: Transaction, limit: number): Promise<boolean> {
-		const moreDeferred = await this.#retryReleasedDeferredStaples(transaction, limit);
-		const moreSideVotes = await this.collectObsoleteSideVotes(transaction, limit);
-		return(moreDeferred || moreSideVotes);
+		return(await this.#exclusively(transaction, async () => {
+			const moreDeferred = await this.#retryReleasedDeferredStaples(transaction, limit);
+			const moreSideVotes = await this.collectObsoleteSideVotes(transaction, limit);
+			return(moreDeferred || moreSideVotes);
+		}));
 	}
 
 	/*
@@ -413,7 +471,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * again by the same gc pass, so it never keeps the pass going.
 	 */
 	async #retryReleasedDeferredStaples(transaction: Transaction, limit: number): Promise<boolean> {
-		const { config, ledger } = this.initialized;
+		const { config } = this.initialized;
 		const retried = this.#retriedByGc.get(transaction) ?? new Set<StapleKey>();
 		this.#retriedByGc.set(transaction, retried);
 		const replay: ReplayState = {
@@ -425,7 +483,8 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			const stapleKey = toStapleKey(staple.blocksHash);
 			retried.add(stapleKey);
 			try {
-				const applied = await this.#applyConfirmedStaple(transaction, staple, LedgerInternals.computeEffectOfBlocks(staple.blocks, ledger), replay);
+				const applied = await this.#applyIsolated(transaction, staple, replay);
+				recordSettlement(transaction, applied);
 				foldIntoLedgerChecksum(transaction, applied);
 			} catch (error: unknown) {
 				config.log?.error(LOG_SOURCE, `retrying deferred staple ${stapleKey} failed; it stays deferred`, error);
@@ -512,12 +571,29 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
  * applies are folded in the same way.
  * [Keeta TS] index.js:69413-69417, 69001-69006
  */
-function foldIntoLedgerChecksum(transaction: LedgerDriverTransaction, staples: readonly VoteStaple[]): void {
-	for (const staple of staples) {
+function foldIntoLedgerChecksum(transaction: LedgerDriverTransaction, applied: readonly AppliedStaple[]): void {
+	for (const { staple } of applied) {
 		for (const block of staple.blocks) {
 			transaction.statsPending.xor(LEDGER_CHECKSUM_KEY, block.hash);
 		}
 	}
+}
+
+/*
+ * Like the checksum, the settlement statistics reach the node only when the
+ * transaction commits.
+ * [Keeta TS] index.js:67593-67632, 69001-69006
+ */
+function recordSettlement(transaction: LedgerDriverTransaction, applied: readonly AppliedStaple[]): void {
+	for (const { settlement } of applied) {
+		for (const increase of settlement) {
+			transaction.statsPending.incr(...increase);
+		}
+	}
+}
+
+function ignoreOutcome(): void {
+	// The queue only orders work; each caller sees its own outcome.
 }
 
 function blocksWithExternalPrevious(staple: VoteStaple): Block[] {
