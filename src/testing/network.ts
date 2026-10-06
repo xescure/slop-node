@@ -3,6 +3,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, NetworkAddress, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { Ledger, LedgerConfig, LedgerStorageAPI } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
+import type { Node, NodeConfig } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 
 const lib = KeetaNet.lib;
@@ -29,7 +30,8 @@ const GENESIS_VOTE_SERIAL = 0n;
 
 export type TestNetworkOptions = { readonly representativeWeights: readonly bigint[] };
 
-export type TestFeePolicy = { readonly kind: 'free' } | { readonly kind: 'flat'; readonly amount: bigint; readonly payTo: Account };
+/** A flat fee without a payee is paid to the issuer of each vote. */
+export type TestFeePolicy = { readonly kind: 'free' } | { readonly kind: 'flat'; readonly amount: bigint; readonly payTo?: Account };
 
 export type TestLedgerOptions = {
 	readonly fee?: TestFeePolicy;
@@ -46,6 +48,11 @@ export type TestNetwork = {
 	readonly networkAddress: NetworkAddress;
 	readonly genesis: VoteStaple;
 	createLedger(storageDriver: LedgerStorageAPI, representative: Account, options?: TestLedgerOptions): Ledger;
+	/**
+	 * A representative node that owns its ledger, so the ledger records the
+	 * statistics that upstream gathers only when a node is attached.
+	 */
+	createNode(storageDriver: LedgerStorageAPI, representative: Account, options?: TestLedgerOptions): Node;
 };
 
 type Holder = {
@@ -66,13 +73,29 @@ function computeFeeFor(policy: TestFeePolicy): ComputeFee {
 			return(function() {
 				return(null);
 			});
-		case 'flat':
+		case 'flat': {
+			const { amount, payTo } = policy;
 			return(function() {
-				return({ amount: policy.amount, payTo: policy.payTo });
+				if (payTo === undefined) {
+					return({ amount });
+				}
+				return({ amount, payTo });
 			});
+		}
 		default:
 			return(assertNever(policy));
 	}
+}
+
+function ledgerSettings(storageDriver: LedgerStorageAPI, options: TestLedgerOptions): NodeConfig['ledger'] {
+	const settings: NodeConfig['ledger'] = {
+		computeFeeFromBlocks: computeFeeFor(options.fee ?? { kind: 'free' }),
+		storageDriver
+	};
+	if (options.heapProcessWindowMs !== undefined) {
+		settings.heapProcessWindowMs = options.heapProcessWindowMs;
+	}
+	return(settings);
 }
 
 function networkInfo(): { defaultPermission: InstanceType<typeof lib.Permissions> } {
@@ -226,17 +249,27 @@ export async function createTestNetwork(options: TestNetworkOptions): Promise<Te
 		genesis,
 		createLedger(storageDriver, representative, ledgerOptions = {}) {
 			const config: LedgerConfig = {
+				...ledgerSettings(storageDriver, ledgerOptions),
 				kind: lib.Ledger.Kind.REPRESENTATIVE,
 				privateKey: representative,
 				initialTrustedAccount: trustedRoot,
-				network: NETWORK,
-				computeFeeFromBlocks: computeFeeFor(ledgerOptions.fee ?? { kind: 'free' }),
-				storageDriver
+				network: NETWORK
 			};
-			if (ledgerOptions.heapProcessWindowMs !== undefined) {
-				config.heapProcessWindowMs = ledgerOptions.heapProcessWindowMs;
-			}
 			return(new lib.Ledger(config));
+		},
+		createNode(storageDriver, representative, ledgerOptions = {}) {
+			// Peers are never connected, so the node only ever talks to its own ledger.
+			return(new lib.Node({
+				kind: lib.Node.Kind.REPRESENTATIVE,
+				// A log without targets discards everything.
+				log: new lib.Log(),
+				initialTrustedAccount: trustedRoot,
+				ledgerPrivateKey: representative,
+				network: NETWORK,
+				networkAlias: 'test',
+				ledger: ledgerSettings(storageDriver, ledgerOptions),
+				stats: { kv: null }
+			}));
 		}
 	});
 }

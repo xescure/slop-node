@@ -5,6 +5,7 @@ import { defineDeferralCases } from './suite/deferral.js';
 import { defineGenesisCases } from './suite/genesis.js';
 import { defineTransactionCases } from './suite/transactions.js';
 import type { DriverUnderTest } from './suite/types.js';
+import { defineVoteCases } from './suite/votes.js';
 
 const drivers = [
 	{
@@ -23,4 +24,5 @@ describe.each(drivers)('$name driver', function(driver) {
 	defineGenesisCases(driver);
 	defineConfirmedCases(driver);
 	defineDeferralCases(driver);
+	defineVoteCases(driver);
 });

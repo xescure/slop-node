@@ -2,6 +2,7 @@ import { afterEach, vi } from 'vitest';
 import type { Account, GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
+import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { createTestNetwork, freezeClock } from '../../../testing/network.js';
 import type { TestLedgerOptions, TestNetwork } from '../../../testing/network.js';
@@ -17,6 +18,10 @@ export type NetworkFixture = {
 	readonly network: TestNetwork;
 	readonly storage: LedgerStorageDriverBase;
 	readonly ledger: Ledger;
+	/** Another representative's ledger on a driver of its own, with genesis added. */
+	readonly startPeer: (representative: number, options?: TestLedgerOptions) => Promise<Ledger>;
+	/** A node for a representative on a driver of its own, with genesis added. */
+	readonly startNode: (representative: number, options?: TestLedgerOptions) => Promise<Node>;
 };
 
 export type FixtureFactory = (weights?: readonly bigint[], ledgerOptions?: TestLedgerOptions) => Promise<NetworkFixture>;
@@ -36,13 +41,32 @@ export function useFixtures(driver: DriverUnderTest): FixtureFactory {
 		}
 	});
 
+	function createStorage(): LedgerStorageDriverBase {
+		const storage = driver.create();
+		created.push(storage);
+		return(storage);
+	}
+
 	return(async function(weights = DEFAULT_WEIGHTS, ledgerOptions = {}) {
 		freezeClock(GENESIS_MOMENT);
 		const network = await createTestNetwork({ representativeWeights: weights });
-		const storage = driver.create();
-		created.push(storage);
+		const storage = createStorage();
 		const ledger = network.createLedger(storage, requireAt(network.representatives, 0), ledgerOptions);
-		return({ network, storage, ledger });
+		return({
+			network,
+			storage,
+			ledger,
+			async startPeer(representative, options = {}) {
+				const peer = network.createLedger(createStorage(), requireAt(network.representatives, representative), options);
+				await peer.add(network.genesis);
+				return(peer);
+			},
+			async startNode(representative, options = {}) {
+				const node = network.createNode(createStorage(), requireAt(network.representatives, representative), options);
+				await node.ledger.add(network.genesis);
+				return(node);
+			}
+		});
 	});
 }
 

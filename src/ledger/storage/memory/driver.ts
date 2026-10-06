@@ -4,11 +4,13 @@ import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/i
 import type { GetVotesAfterOptions, IdempotentKey, LedgerSelector, LedgerStorageAPI, ListACLsByEntityFilters, PaginatedVotes } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { ACLRow, ACLUpdate, AccountInfoForType, CertificateWithIntermediates, GetAllBalancesResponse } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
 import type { Vote, VoteBlockHash, VoteBlockHashMap, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import { LedgerInternals } from '../../../upstream/internals.js';
 import { assertNever } from '../../../util/assert-never.js';
 import { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
 import type { TransactionOptions } from '../base.js';
 import type { AccountInfoUpdate, ConfirmedStapleChange } from '../confirmed.js';
 import { createIdempotentKeyError, createLedgerError } from '../errors.js';
+import { isVoteLive } from '../expiry.js';
 import {
 	toACLScopeKey,
 	toAccountKey,
@@ -21,7 +23,7 @@ import {
 } from '../keys.js';
 import type { AccountKey, BlockHashKey, IdempotentKeyString, StapleKey, VoteKey } from '../keys.js';
 import { commitOverlay, createCommittedLedger, openOverlay } from './state.js';
-import type { AccountInfoRow, BalanceRow, CommittedLedger, LedgerOverlay, StapleRow, TableOverlay } from './state.js';
+import type { AccountInfoRow, BalanceRow, CommittedLedger, LedgerOverlay, SideVoteRow, StapleRow, TableOverlay } from './state.js';
 
 const lib = KeetaNet.lib;
 
@@ -231,6 +233,56 @@ function setOrDeleteEntries<TableKey extends string, Key, Value>(table: TableOve
 	table.set(key, entries);
 }
 
+function addMember<TableKey extends string, Member>(table: TableOverlay<TableKey, ReadonlySet<Member>>, key: TableKey, member: Member): void {
+	const members = new Set(table.get(key));
+	members.add(member);
+	table.set(key, members);
+}
+
+/** Removes the row once its last member is gone. */
+function removeMember<TableKey extends string, Member>(table: TableOverlay<TableKey, ReadonlySet<Member>>, key: TableKey, member: Member): void {
+	const members = new Set(table.get(key));
+	members.delete(member);
+	if (members.size === 0) {
+		table.delete(key);
+		return;
+	}
+	table.set(key, members);
+}
+
+/*
+ * Under 'both' the main ledger answers whenever it has an answer, so whatever
+ * has been confirmed reads as confirmed; the side ledger answers only for
+ * what is still pending.
+ */
+function fromSelected<Result>(from: LedgerSelector, readMain: () => Result | null, readSide: () => Result | null): Result | null {
+	switch (from) {
+		case 'main':
+			return(readMain());
+		case 'side':
+			return(readSide());
+		case 'both':
+			return(readMain() ?? readSide());
+		default:
+			return(assertNever(from));
+	}
+}
+
+function nullWhenEmpty<Item>(items: Item[]): Item[] | null {
+	if (items.length === 0) {
+		return(null);
+	}
+	return(items);
+}
+
+/** [Keeta TS] index.js:68920-68951 */
+function idempotentKeyOf(block: Block): IdempotentKeyString | undefined {
+	if (block.idempotent === undefined) {
+		return(undefined);
+	}
+	return(toIdempotentKeyString(LedgerInternals.IdempotentKey.fromAccountAndIdempotent(block.account, block.idempotent)));
+}
+
 /**
  * The reference driver: the whole ledger in memory, with transactions
  * serialized by one lock and isolated by a copy-on-write overlay. Nothing
@@ -326,16 +378,13 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	}
 
 	async getBlock(transaction: MemoryTransaction, hash: BlockHash, from: LedgerSelector): Promise<Block | null> {
-		const { blocks } = await transaction.view();
-		switch (from) {
-			case 'main':
-				return(blocks.get(toBlockHashKey(hash))?.block ?? null);
-			case 'side':
-			case 'both':
-				return(await rejectNotImplemented(`getBlock('${from}')`));
-			default:
-				return(assertNever(from));
-		}
+		const overlay = await transaction.view();
+		const key = toBlockHashKey(hash);
+		return(fromSelected(from, function() {
+			return(overlay.blocks.get(key)?.block ?? null);
+		}, () => {
+			return(this.#sideBlock(overlay, key, transaction.moment));
+		}));
 	}
 
 	async getBlockHeight(transaction: MemoryTransaction, hash: BlockHash, account: GenericAccount): Promise<bigint | null> {
@@ -362,22 +411,32 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		return(heads);
 	}
 
+	/*
+	 * On the side ledger a previous block can have several pending successors
+	 * over time, but at most one with a live vote of ours: voting refuses a
+	 * competing successor while one is live.
+	 * [Keeta TS] index.js:69281-69306
+	 */
 	async getBlockFromPrevious(transaction: MemoryTransaction, previous: BlockHash, from: LedgerSelector): Promise<Block | null> {
 		const overlay = await transaction.view();
-		switch (from) {
-			case 'main': {
-				const successor = overlay.successors.get(toBlockHashKey(previous));
-				if (successor === undefined) {
-					return(null);
-				}
-				return(this.#confirmedBlock(overlay, successor));
+		const previousKey = toBlockHashKey(previous);
+		return(fromSelected(from, () => {
+			const successor = overlay.successors.get(previousKey);
+			if (successor === undefined) {
+				return(null);
 			}
-			case 'side':
-			case 'both':
-				return(await rejectNotImplemented(`getBlockFromPrevious('${from}')`));
-			default:
-				return(assertNever(from));
-		}
+			return(this.#confirmedBlock(overlay, successor));
+		}, () => {
+			for (const row of this.#liveSideVoteRows(overlay, overlay.sideVotesByPrevious.get(previousKey), transaction.moment)) {
+				for (const block of row.blocks) {
+					const successor = this.#sideBlock(overlay, toBlockHashKey(block.hash), transaction.moment);
+					if (successor !== null && toBlockHashKey(successor.previous) === previousKey) {
+						return(successor);
+					}
+				}
+			}
+			return(null);
+		}));
 	}
 
 	/*
@@ -387,38 +446,42 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	 */
 	async getVotes(transaction: MemoryTransaction, hash: BlockHash, from: LedgerSelector): Promise<Vote[] | null> {
 		const overlay = await transaction.view();
-		switch (from) {
-			case 'main': {
-				const row = overlay.blocks.get(toBlockHashKey(hash));
-				if (row === undefined) {
-					return(null);
-				}
-				return(Array.from(this.#confirmedStaple(overlay, row.staple).votes.values()));
+		const key = toBlockHashKey(hash);
+		return(fromSelected(from, () => {
+			const row = overlay.blocks.get(key);
+			if (row === undefined) {
+				return(null);
 			}
-			case 'side':
-			case 'both':
-				return(await rejectNotImplemented(`getVotes('${from}')`));
-			default:
-				return(assertNever(from));
-		}
+			return(Array.from(this.#confirmedStaple(overlay, row.staple).votes.values()));
+		}, () => {
+			return(nullWhenEmpty(this.#liveSideVoteRows(overlay, overlay.sideVotesByBlock.get(key), transaction.moment).map(function(row): Vote {
+				return(row.vote);
+			})));
+		}));
 	}
 
+	/*
+	 * Voting reads this under 'both' with its own key as the issuer, and may
+	 * replace only a single live temporary vote of its own; an expired vote
+	 * left in the answer would block the account until it is collected.
+	 * [Keeta TS] index.js:69281-69306
+	 */
 	async getVotesFromMultiplePrevious(transaction: MemoryTransaction, previousBlocks: BlockHash[], from: LedgerSelector, issuer?: Account): Promise<{ [hash: string]: Vote[] | null }> {
 		const overlay = await transaction.view();
-		switch (from) {
-			case 'main': {
-				const votes: { [hash: string]: Vote[] | null } = {};
-				for (const previous of previousBlocks) {
-					votes[toBlockHashKey(previous)] = this.#successorVotes(overlay, previous, issuer);
-				}
-				return(votes);
-			}
-			case 'side':
-			case 'both':
-				return(await rejectNotImplemented(`getVotesFromMultiplePrevious('${from}')`));
-			default:
-				return(assertNever(from));
+		const votes: { [hash: string]: Vote[] | null } = {};
+		for (const previous of previousBlocks) {
+			const previousKey = toBlockHashKey(previous);
+			votes[previousKey] = fromSelected(from, () => {
+				return(this.#successorVotes(overlay, previous, issuer));
+			}, () => {
+				return(nullWhenEmpty(this.#liveSideVoteRows(overlay, overlay.sideVotesByPrevious.get(previousKey), transaction.moment).map(function(row): Vote {
+					return(row.vote);
+				}).filter(function(vote): boolean {
+					return(issuer === undefined || vote.issuer.comparePublicKey(issuer));
+				})));
+			});
 		}
+		return(votes);
 	}
 
 	/*
@@ -429,25 +492,20 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	 */
 	async getVoteStaples(transaction: MemoryTransaction, voteBlockHashes: VoteBlockHash[], from: LedgerSelector): Promise<VoteBlockHashMap<VoteStaple | null>> {
 		const overlay = await transaction.view();
-		switch (from) {
-			case 'main': {
-				const staples = new lib.Vote.VoteBlocksHash.Map<VoteStaple | null>();
-				for (const voteBlockHash of voteBlockHashes) {
-					const row = overlay.staples.get(toStapleKey(voteBlockHash));
-					if (row === undefined) {
-						staples.set(voteBlockHash, null);
-					} else {
-						staples.set(voteBlockHash, this.#voteStapleOf(overlay, row));
-					}
+		const staples = new lib.Vote.VoteBlocksHash.Map<VoteStaple | null>();
+		for (const voteBlockHash of voteBlockHashes) {
+			const key = toStapleKey(voteBlockHash);
+			staples.set(voteBlockHash, fromSelected(from, () => {
+				const row = overlay.staples.get(key);
+				if (row === undefined) {
+					return(null);
 				}
-				return(staples);
-			}
-			case 'side':
-			case 'both':
-				return(await rejectNotImplemented(`getVoteStaples('${from}')`));
-			default:
-				return(assertNever(from));
+				return(this.#voteStapleOf(overlay, row));
+			}, () => {
+				return(this.#sideStaple(overlay, key, transaction.moment));
+			}));
 		}
+		return(staples);
 	}
 
 	/*
@@ -517,26 +575,33 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	}
 
 	/*
-	 * The confirmed holder of a key, unless it is the block the caller asked
-	 * to exclude.
+	 * The holder of a key other than the block the caller asked to exclude:
+	 * voting excludes the block it is voting on, so a permanent vote can
+	 * follow the temporary vote that put the key on the side ledger. A side
+	 * block holds its key only while a vote of ours on it is live.
 	 * [Keeta TS] index.js:69254-69259, 69711-69716
 	 */
 	async getIdempotentBlockHash(transaction: MemoryTransaction, idempotent: IdempotentKey, from: LedgerSelector, excludeBlockHash?: BlockHash): Promise<BlockHash | null> {
 		const overlay = await transaction.view();
-		switch (from) {
-			case 'main': {
-				const holder = overlay.idempotentKeys.get(toIdempotentKeyString(idempotent));
-				if (holder === undefined || (excludeBlockHash !== undefined && holder.compare(excludeBlockHash))) {
-					return(null);
-				}
-				return(holder);
-			}
-			case 'side':
-			case 'both':
-				return(await rejectNotImplemented(`getIdempotentBlockHash('${from}')`));
-			default:
-				return(assertNever(from));
+		const key = toIdempotentKeyString(idempotent);
+		function isExcluded(hash: BlockHash): boolean {
+			return(excludeBlockHash !== undefined && hash.compare(excludeBlockHash));
 		}
+		return(fromSelected(from, function() {
+			const holder = overlay.idempotentKeys.get(key);
+			if (holder === undefined || isExcluded(holder)) {
+				return(null);
+			}
+			return(holder);
+		}, () => {
+			for (const blockKey of overlay.sideIdempotentKeys.get(key) ?? []) {
+				const holder = this.#sideBlock(overlay, blockKey, transaction.moment);
+				if (holder !== null && !isExcluded(holder.hash)) {
+					return(holder.hash);
+				}
+			}
+			return(null);
+		}));
 	}
 
 	/*
@@ -573,8 +638,19 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		return(Array.from(certificates.get(toAccountKey(account))?.values() ?? []));
 	}
 
-	addPendingVote(..._args: Parameters<LedgerStorageAPI['addPendingVote']>): ReturnType<LedgerStorageAPI['addPendingVote']> {
-		return(rejectNotImplemented('addPendingVote'));
+	/*
+	 * Voting stores each vote it issues here, a temporary vote and later the
+	 * permanent one for the same blocks plus a fee block; the permanent vote
+	 * is added beside the temporary vote, which stays until it expires. The
+	 * writes are staged so the vote and its indexes land together.
+	 * [Keeta TS] index.js:69310-69316, 69342-69354
+	 */
+	async addPendingVote(transaction: MemoryTransaction, staple: VoteStaple): Promise<void> {
+		const overlay = openOverlay(await transaction.view());
+		for (const vote of staple.votes) {
+			this.#writeSideVote(overlay, vote, staple.blocks);
+		}
+		commitOverlay(overlay);
 	}
 
 	stats(): ReturnType<LedgerStorageAPI['stats']> {
@@ -602,6 +678,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		this.#writeCertificates(overlay, change);
 		this.#writeIdempotentKeys(overlay, change);
 		this.#writeAccountsAndHistory(overlay, change, stapleKey);
+		this.#promoteSideRows(overlay, change);
 		commitOverlay(overlay);
 	}
 
@@ -612,9 +689,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		const waitingKeys = waitingOn.map(toBlockHashKey);
 		overlay.deferredStaples.set(key, { staple, waitingOn: waitingKeys });
 		for (const blockKey of waitingKeys) {
-			const waiters = new Set(overlay.deferredWaiters.get(blockKey));
-			waiters.add(key);
-			overlay.deferredWaiters.set(blockKey, waiters);
+			addMember(overlay.deferredWaiters, blockKey, key);
 		}
 	}
 
@@ -643,14 +718,117 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		}
 		overlay.deferredStaples.delete(key);
 		for (const blockKey of row.waitingOn) {
-			const waiters = new Set(overlay.deferredWaiters.get(blockKey));
-			waiters.delete(key);
-			if (waiters.size === 0) {
-				overlay.deferredWaiters.delete(blockKey);
-			} else {
-				overlay.deferredWaiters.set(blockKey, waiters);
+			removeMember(overlay.deferredWaiters, blockKey, key);
+		}
+	}
+
+	/*
+	 * A block already on main gets no side copy: main answers for it, and its
+	 * idempotent key is already held there.
+	 */
+	#writeSideVote(overlay: LedgerOverlay, vote: Vote, blocks: readonly Block[]): void {
+		const key = toVoteKey(vote);
+		this.#forgetSideVote(overlay, key);
+		overlay.sideVotes.set(key, { vote, blocks });
+		addMember(overlay.sideVotesByStaple, toStapleKey(vote.blocksHash), key);
+		for (const block of blocks) {
+			const blockKey = toBlockHashKey(block.hash);
+			addMember(overlay.sideVotesByBlock, blockKey, key);
+			addMember(overlay.sideVotesByPrevious, toBlockHashKey(block.previous), key);
+			if (overlay.blocks.get(blockKey) !== undefined) {
+				continue;
+			}
+			overlay.sideBlocks.set(blockKey, block);
+			const idempotentKey = idempotentKeyOf(block);
+			if (idempotentKey !== undefined) {
+				addMember(overlay.sideIdempotentKeys, idempotentKey, blockKey);
 			}
 		}
+	}
+
+	/** Drops a pending vote and its links; the side blocks it covered stay. */
+	#forgetSideVote(overlay: LedgerOverlay, key: VoteKey): void {
+		const row = overlay.sideVotes.get(key);
+		if (row === undefined) {
+			return;
+		}
+		overlay.sideVotes.delete(key);
+		removeMember(overlay.sideVotesByStaple, toStapleKey(row.vote.blocksHash), key);
+		for (const block of row.blocks) {
+			removeMember(overlay.sideVotesByBlock, toBlockHashKey(block.hash), key);
+			removeMember(overlay.sideVotesByPrevious, toBlockHashKey(block.previous), key);
+		}
+	}
+
+	/*
+	 * A confirmed row exists once, on main, so the side copies of the staple's
+	 * blocks and of any of its votes that we issued are dropped. Every other
+	 * pending vote stays until it expires: our temporary vote on these blocks,
+	 * which settlement statistics were measured from, and our votes on blocks
+	 * that compete with them.
+	 */
+	#promoteSideRows(overlay: LedgerOverlay, change: ConfirmedStapleChange): void {
+		for (const vote of change.staple.votes) {
+			this.#forgetSideVote(overlay, toVoteKey(vote));
+		}
+		for (const block of change.staple.blocks) {
+			const blockKey = toBlockHashKey(block.hash);
+			overlay.sideBlocks.delete(blockKey);
+			const idempotentKey = idempotentKeyOf(block);
+			if (idempotentKey !== undefined) {
+				removeMember(overlay.sideIdempotentKeys, idempotentKey, blockKey);
+			}
+		}
+	}
+
+	/*
+	 * Liveness is judged at the transaction's moment, so every read in one
+	 * transaction agrees, and nothing depends on expired votes having been
+	 * collected.
+	 */
+	#liveSideVoteRows(overlay: LedgerOverlay, keys: Iterable<VoteKey> | undefined, moment: Date): SideVoteRow[] {
+		const rows: SideVoteRow[] = [];
+		for (const key of keys ?? []) {
+			const row = overlay.sideVotes.get(key);
+			if (row === undefined) {
+				throw(new Error(`internal error: pending vote ${key} is indexed but not stored`));
+			}
+			if (isVoteLive(row.vote, moment)) {
+				rows.push(row);
+			}
+		}
+		return(rows);
+	}
+
+	/** A side block counts only while a vote of ours on it is live. */
+	#sideBlock(overlay: LedgerOverlay, key: BlockHashKey, moment: Date): Block | null {
+		const block = overlay.sideBlocks.get(key);
+		if (block === undefined || this.#liveSideVoteRows(overlay, overlay.sideVotesByBlock.get(key), moment).length === 0) {
+			return(null);
+		}
+		return(block);
+	}
+
+	/*
+	 * A staple holds votes of one permanence only, so permanent votes, when
+	 * there are any, are preferred over temporary ones for the same blocks.
+	 * [Keeta TS] index.js:80795-80827
+	 */
+	#sideStaple(overlay: LedgerOverlay, key: StapleKey, moment: Date): VoteStaple | null {
+		const live = this.#liveSideVoteRows(overlay, overlay.sideVotesByStaple.get(key), moment);
+		let chosen = live.filter(function(row): boolean {
+			return(row.vote.$permanent);
+		});
+		if (chosen.length === 0) {
+			chosen = live;
+		}
+		const [first] = chosen;
+		if (first === undefined) {
+			return(null);
+		}
+		return(lib.Vote.Staple.fromVotesAndBlocks(chosen.map(function(row): Vote {
+			return(row.vote);
+		}), [...first.blocks]));
 	}
 
 	#successorVotes(overlay: LedgerOverlay, previous: BlockHash, issuer: Account | undefined): Vote[] | null {

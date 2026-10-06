@@ -59,6 +59,16 @@ export type AccountRow = {
 	readonly firstStaple: StapleKey;
 };
 
+/**
+ * One of this node's own pending votes with the blocks it covers, in vote
+ * order. The row keeps the blocks itself, so the vote can still be read as a
+ * staple after its blocks have moved to main.
+ */
+export type SideVoteRow = {
+	readonly vote: Vote;
+	readonly blocks: readonly Block[];
+};
+
 export type DeferredStapleRow = {
 	readonly staple: VoteStaple;
 	readonly waitingOn: readonly BlockHashKey[];
@@ -92,6 +102,17 @@ export type LedgerTables = {
 	readonly history: Table<AccountKey, readonly StapleKey[]>;
 	readonly deferredStaples: Table<StapleKey, DeferredStapleRow>;
 	readonly deferredWaiters: Table<BlockHashKey, ReadonlySet<StapleKey>>;
+	/** This node's own pending votes, expired ones included until they are collected. */
+	readonly sideVotes: Table<VoteKey, SideVoteRow>;
+	/** Side copies of the blocks our pending votes cover, until those blocks move to main. */
+	readonly sideBlocks: Table<BlockHashKey, Block>;
+	/** The pending votes covering each block. */
+	readonly sideVotesByBlock: Table<BlockHashKey, ReadonlySet<VoteKey>>;
+	/** The pending votes covering a block whose previous is the key, including the opening sentinel. */
+	readonly sideVotesByPrevious: Table<BlockHashKey, ReadonlySet<VoteKey>>;
+	readonly sideVotesByStaple: Table<StapleKey, ReadonlySet<VoteKey>>;
+	/** The side blocks claiming each idempotent key. */
+	readonly sideIdempotentKeys: Table<IdempotentKeyString, ReadonlySet<BlockHashKey>>;
 };
 
 type TableName = keyof LedgerTables;
@@ -201,7 +222,13 @@ export function createCommittedLedger(): CommittedLedger {
 		accounts: new Map(),
 		history: new Map(),
 		deferredStaples: new Map(),
-		deferredWaiters: new Map()
+		deferredWaiters: new Map(),
+		sideVotes: new Map(),
+		sideBlocks: new Map(),
+		sideVotesByBlock: new Map(),
+		sideVotesByPrevious: new Map(),
+		sideVotesByStaple: new Map(),
+		sideIdempotentKeys: new Map()
 	});
 }
 
@@ -221,7 +248,13 @@ export function openOverlay(underlying: LedgerStores): LedgerOverlay {
 		accounts: new TableOverlay(underlying.accounts),
 		history: new TableOverlay(underlying.history),
 		deferredStaples: new TableOverlay(underlying.deferredStaples),
-		deferredWaiters: new TableOverlay(underlying.deferredWaiters)
+		deferredWaiters: new TableOverlay(underlying.deferredWaiters),
+		sideVotes: new TableOverlay(underlying.sideVotes),
+		sideBlocks: new TableOverlay(underlying.sideBlocks),
+		sideVotesByBlock: new TableOverlay(underlying.sideVotesByBlock),
+		sideVotesByPrevious: new TableOverlay(underlying.sideVotesByPrevious),
+		sideVotesByStaple: new TableOverlay(underlying.sideVotesByStaple),
+		sideIdempotentKeys: new TableOverlay(underlying.sideIdempotentKeys)
 	});
 }
 
