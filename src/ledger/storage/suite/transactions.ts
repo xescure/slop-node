@@ -51,7 +51,7 @@ export function defineTransactionCases(driver: DriverUnderTest): void {
 		test('a driver serves exactly one ledger', async function() {
 			const { network, storage, ledger } = await startNetwork();
 			const effects = LedgerInternals.computeEffectOfBlocks(network.genesis.blocks, ledger);
-			const unbound = driver.create();
+			const unbound = await driver.create();
 			try {
 				const transaction = await unbound.beginTransaction({ identifier: 'suite-unbound', readOnly: false });
 				await expect(unbound.adjust(transaction, network.genesis, effects)).rejects.toThrow('storage driver used before Ledger called init()');

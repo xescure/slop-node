@@ -15,7 +15,7 @@ const drivers = [
 	{
 		name: 'memory',
 		create: function() {
-			return(new MemoryLedgerStorage());
+			return(Promise.resolve(new MemoryLedgerStorage()));
 		},
 		destroy: function() {
 			return(Promise.resolve());

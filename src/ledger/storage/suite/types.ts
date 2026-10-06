@@ -4,12 +4,13 @@ import type { FixtureFactory } from './support.js';
 /**
  * One entry of the shared driver suite. Every driver runs the same cases, so a
  * driver is described only by how to create a fresh, empty instance and how to
- * release it afterwards. Every driver builds on the shared base, whose test
- * seams the suite may use.
+ * release it afterwards. Creation may need to reach a database, so it is
+ * asynchronous. Every driver builds on the shared base, whose test seams the
+ * suite may use.
  */
 export type DriverUnderTest = {
 	readonly name: string;
-	create(): LedgerStorageDriverBase;
+	create(): Promise<LedgerStorageDriverBase>;
 	destroy(storage: LedgerStorageDriverBase): Promise<void>;
 };
 

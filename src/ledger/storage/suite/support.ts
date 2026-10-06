@@ -45,8 +45,8 @@ export function useFixtures(driver: DriverUnderTest): FixtureFactory {
 		}
 	});
 
-	function createStorage(): LedgerStorageDriverBase {
-		const storage = driver.create();
+	async function createStorage(): Promise<LedgerStorageDriverBase> {
+		const storage = await driver.create();
 		created.push(storage);
 		return(storage);
 	}
@@ -54,19 +54,19 @@ export function useFixtures(driver: DriverUnderTest): FixtureFactory {
 	return(async function(weights = DEFAULT_WEIGHTS, ledgerOptions = {}) {
 		freezeClock(GENESIS_MOMENT);
 		const network = await createTestNetwork({ representativeWeights: weights });
-		const storage = createStorage();
+		const storage = await createStorage();
 		const ledger = network.createLedger(storage, requireAt(network.representatives, 0), ledgerOptions);
 		return({
 			network,
 			storage,
 			ledger,
 			async startPeer(representative, options = {}) {
-				const peer = network.createLedger(createStorage(), requireAt(network.representatives, representative), options);
+				const peer = network.createLedger(await createStorage(), requireAt(network.representatives, representative), options);
 				await peer.add(network.genesis);
 				return(peer);
 			},
 			async startNode(representative, options = {}) {
-				const node = network.createNode(createStorage(), requireAt(network.representatives, representative), options);
+				const node = network.createNode(await createStorage(), requireAt(network.representatives, representative), options);
 				await node.ledger.add(network.genesis);
 				return(node);
 			}
