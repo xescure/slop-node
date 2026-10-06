@@ -27,7 +27,7 @@ async function competing(recorder: CaseRecorder): Promise<readonly [Block, Block
 }
 
 export const conflictScenarios: readonly Scenario[] = [
-	scenario('K1', 'a block competing with the one we gave a temporary vote is refused', {}, async function(recorder) {
+	scenario('K1', 'a block competing with one this node gave a temporary vote is refused', {}, async function(recorder) {
 		await recorder.addGenesis(0);
 		const [block, competitor] = await competing(recorder);
 		await recorder.vote(0, [block]);
@@ -39,28 +39,28 @@ export const conflictScenarios: readonly Scenario[] = [
 		await recorder.vote(0, [block]);
 		await recorder.vote(1, [competitor]);
 	}),
-	scenario('K1c', 'a block competing with the one we gave a permanent vote is refused', {}, async function(recorder) {
+	scenario('K1c', 'a block competing with one this node gave a permanent vote is refused', {}, async function(recorder) {
 		await recorder.addGenesis(0, 1);
 		const [block, competitor] = await competing(recorder);
 		const temporary = [await recorder.vote(0, [block]), await recorder.vote(1, [block])];
 		await recorder.vote(0, [block], temporary);
 		await recorder.vote(0, [competitor]);
 	}),
-	scenario('K1d', 'a second permanent request for a block we gave a permanent vote is refused', {}, async function(recorder) {
+	scenario('K1d', 'a second permanent request for a block this node gave a permanent vote is refused', {}, async function(recorder) {
 		await recorder.addGenesis(0, 1);
 		const block = await send(recorder, 0);
 		const temporary = [await recorder.vote(0, [block]), await recorder.vote(1, [block])];
 		await recorder.vote(0, [block], temporary);
 		await recorder.vote(0, [block], temporary);
 	}),
-	scenario('K1e', 'a block competing with one already added is no successor, even while we hold a vote for the added one', {}, async function(recorder) {
+	scenario('K1e', 'a block competing with one already added is no successor, even while this node holds a vote for the added one', {}, async function(recorder) {
 		await recorder.addGenesis(0);
 		const [block, competitor] = await competing(recorder);
 		await recorder.vote(0, [block]);
 		await recorder.add(0, await confirmed(recorder, [block]));
 		await recorder.vote(0, [competitor]);
 	}),
-	scenario('K1f', 'a permanent request replaces our temporary vote on the same block', {}, async function(recorder) {
+	scenario('K1f', 'a permanent request replaces this node\'s temporary vote on the same block', {}, async function(recorder) {
 		await recorder.addGenesis(0, 1);
 		const block = await send(recorder, 0);
 		const temporary = [await recorder.vote(0, [block]), await recorder.vote(1, [block])];
@@ -134,7 +134,7 @@ export const conflictScenarios: readonly Scenario[] = [
 		const { hash } = beforeHead(recorder);
 		await recorder.vote(0, [await send(recorder, 0, { previous: hash }), await send(recorder, 0, { previous: hash, amount: 2n })]);
 	}),
-	scenario('EO10', 'an overspending block competing with one we voted for is refused for the competition before its balance', {}, async function(recorder) {
+	scenario('EO10', 'an overspending block competing with one this node voted for is refused for the competition before its balance', {}, async function(recorder) {
 		await recorder.addGenesis(0);
 		await recorder.vote(0, [await send(recorder, 0)]);
 		await recorder.vote(0, [await send(recorder, 0, { amount: 401n })]);

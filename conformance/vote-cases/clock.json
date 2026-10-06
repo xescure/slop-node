@@ -1188,7 +1188,7 @@
     },
     {
       "id": "C11",
-      "title": "a second request for a block is refused while our temporary vote is valid, and given once it has expired with its minute of slop",
+      "title": "a second request for a block is refused while this node's temporary vote is valid, and given once it has expired with its minute of slop",
       "basis": "upstream",
       "network": {
         "id": "0",
@@ -1305,7 +1305,7 @@
     },
     {
       "id": "C11-D4",
-      "title": "storage contract D4: our temporary side vote keeps refusing a competing request until a minute past its validity",
+      "title": "storage contract D4: this node's temporary side vote keeps refusing a competing request until a minute past its validity",
       "basis": "contract",
       "network": {
         "id": "0",
@@ -1405,7 +1405,7 @@
     },
     {
       "id": "EO3",
-      "title": "a permanent request without our temporary vote is refused for that, however old its block",
+      "title": "a permanent request without this node's temporary vote is refused for that, however old its block",
       "basis": "upstream",
       "network": {
         "id": "0",
@@ -1630,7 +1630,7 @@
     },
     {
       "id": "EO5",
-      "title": "a stale block whose sibling holds our permanent vote is refused for the sibling before its age",
+      "title": "a stale block whose sibling holds this node's permanent vote is refused for the sibling before its age",
       "basis": "upstream",
       "network": {
         "id": "0",

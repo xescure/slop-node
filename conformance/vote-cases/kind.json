@@ -1784,7 +1784,7 @@
     },
     {
       "id": "P2",
-      "title": "a permanent request that offers our own permanent vote is refused",
+      "title": "a permanent request that offers this node's own permanent vote is refused",
       "basis": "upstream",
       "network": {
         "id": "0",
@@ -1985,7 +1985,7 @@
     },
     {
       "id": "P3",
-      "title": "a recovery request that includes our own permanent vote is refused",
+      "title": "a recovery request that includes this node's own permanent vote is refused",
       "basis": "upstream",
       "network": {
         "id": "0",

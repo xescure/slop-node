@@ -172,7 +172,7 @@ export const quorumScenarios: readonly Scenario[] = [
 		await recorder.vote(1, [delegation]);
 		await recorder.vote(1, [block], [temporary]);
 	}),
-	scenario('EO1', 'a recovery request that includes our own permanent vote is refused for that before its weight is counted', { representativeWeights: QUARTERS }, async function(recorder) {
+	scenario('EO1', 'a recovery request that includes this node\'s own permanent vote is refused for that before its weight is counted', { representativeWeights: QUARTERS }, async function(recorder) {
 		await recorder.addGenesis(0, 1, 2);
 		const block = await send(recorder, 0);
 		const temporary = [await recorder.vote(0, [block]), await recorder.vote(1, [block]), await recorder.vote(2, [block])];

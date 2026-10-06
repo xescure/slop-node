@@ -4,7 +4,7 @@
   "cases": [
     {
       "id": "K1",
-      "title": "a block competing with the one we gave a temporary vote is refused",
+      "title": "a block competing with one this node gave a temporary vote is refused",
       "basis": "upstream",
       "network": {
         "id": "0",
@@ -187,7 +187,7 @@
     },
     {
       "id": "K1c",
-      "title": "a block competing with the one we gave a permanent vote is refused",
+      "title": "a block competing with one this node gave a permanent vote is refused",
       "basis": "upstream",
       "network": {
         "id": "0",
@@ -334,7 +334,7 @@
     },
     {
       "id": "K1d",
-      "title": "a second permanent request for a block we gave a permanent vote is refused",
+      "title": "a second permanent request for a block this node gave a permanent vote is refused",
       "basis": "upstream",
       "network": {
         "id": "0",
@@ -489,7 +489,7 @@
     },
     {
       "id": "K1e",
-      "title": "a block competing with one already added is no successor, even while we hold a vote for the added one",
+      "title": "a block competing with one already added is no successor, even while this node holds a vote for the added one",
       "basis": "upstream",
       "network": {
         "id": "0",
@@ -586,7 +586,7 @@
     },
     {
       "id": "K1f",
-      "title": "a permanent request replaces our temporary vote on the same block",
+      "title": "a permanent request replaces this node's temporary vote on the same block",
       "basis": "upstream",
       "network": {
         "id": "0",
@@ -1577,7 +1577,7 @@
     },
     {
       "id": "EO10",
-      "title": "an overspending block competing with one we voted for is refused for the competition before its balance",
+      "title": "an overspending block competing with one this node voted for is refused for the competition before its balance",
       "basis": "upstream",
       "network": {
         "id": "0",

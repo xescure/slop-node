@@ -529,7 +529,7 @@
     },
     {
       "id": "I3",
-      "title": "storage contract D6 and D12: a block with the idempotent key of a block we voted for is refused for the key the side ledger claims for it, before the competition, which alone refuses a block without it",
+      "title": "storage contract D6 and D12: a block with the idempotent key of a block this node voted for is refused for the key the side ledger claims for it, before the competition, which alone refuses a block without it",
       "basis": "contract",
       "network": {
         "id": "0",
@@ -801,7 +801,7 @@
     },
     {
       "id": "I3-D12",
-      "title": "storage contract D4 and D12: the idempotent key of a block we voted for refuses another block until a minute past the vote's validity",
+      "title": "storage contract D4 and D12: the idempotent key of a block this node voted for refuses another block until a minute past the vote's validity",
       "basis": "contract",
       "network": {
         "id": "0",
@@ -903,7 +903,7 @@
     },
     {
       "id": "I3c-D12",
-      "title": "storage contract D12: a key held on the main ledger is reported over our live side claim of it",
+      "title": "storage contract D12: a key held on the main ledger is reported over this node's live side claim of it",
       "basis": "contract",
       "network": {
         "id": "0",
@@ -1537,7 +1537,7 @@
     },
     {
       "id": "EO31",
-      "title": "a successor of a published block, carrying that block's idempotent key, is refused for the key though we voted for a competing successor",
+      "title": "a successor of a published block, carrying that block's idempotent key, is refused for the key though this node voted for a competing successor",
       "basis": "upstream",
       "network": {
         "id": "0",

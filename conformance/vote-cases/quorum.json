@@ -1589,7 +1589,7 @@
     },
     {
       "id": "EO1",
-      "title": "a recovery request that includes our own permanent vote is refused for that before its weight is counted",
+      "title": "a recovery request that includes this node's own permanent vote is refused for that before its weight is counted",
       "basis": "upstream",
       "network": {
         "id": "0",

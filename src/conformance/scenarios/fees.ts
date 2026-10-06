@@ -319,14 +319,14 @@ export const feeScenarios: readonly Scenario[] = [
 		await recorder.quote(0, [repeated]);
 		await recorder.vote(0, [repeated]);
 	}),
-	scenario('QT1c', 'a quote on a block competing with one we voted for is given, though a vote is refused', {}, async function(recorder) {
+	scenario('QT1c', 'a quote on a block competing with one this node voted for is given, though a vote is refused', {}, async function(recorder) {
 		await recorder.addGenesis(0);
 		await recorder.vote(0, [await send(recorder, 0)]);
 		const competing = await send(recorder, 0, { amount: 2n });
 		await recorder.quote(0, [competing]);
 		await recorder.vote(0, [competing]);
 	}),
-	scenario('EO19', 'a permanent request without our temporary vote and without the fee block its votes require is refused for the fee block', CHARGING, async function(recorder) {
+	scenario('EO19', 'a permanent request without this node\'s temporary vote and without the fee block its votes require is refused for the fee block', CHARGING, async function(recorder) {
 		await recorder.addGenesis(0, 1, 2);
 		const block = await send(recorder, 0);
 		await recorder.vote(0, [block], await temporaryVotes(recorder, [block], [1, 2]));

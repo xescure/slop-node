@@ -107,7 +107,7 @@ export const clockScenarios: readonly Scenario[] = [
 		await recorder.vote(0, [block], [ours, ahead]);
 		await recorder.vote(0, [block], [ours, inSlop]);
 	}),
-	scenario('C11', 'a second request for a block is refused while our temporary vote is valid, and given once it has expired with its minute of slop', {}, async function(recorder) {
+	scenario('C11', 'a second request for a block is refused while this node\'s temporary vote is valid, and given once it has expired with its minute of slop', {}, async function(recorder) {
 		await recorder.addGenesis(0);
 		// Dated ahead, so the block is still fresh once the vote has expired.
 		const block = await send(recorder, 0, { date: new Date(Date.now() + BLOCK_WINDOW) });
@@ -118,7 +118,7 @@ export const clockScenarios: readonly Scenario[] = [
 		recorder.advance(VOTE_SLOP + 1);
 		await recorder.vote(0, [block]);
 	}),
-	scenario('C11-D4', 'storage contract D4: our temporary side vote keeps refusing a competing request until a minute past its validity', { basis: 'contract' }, async function(recorder) {
+	scenario('C11-D4', 'storage contract D4: this node\'s temporary side vote keeps refusing a competing request until a minute past its validity', { basis: 'contract' }, async function(recorder) {
 		await recorder.addGenesis(0);
 		const block = await send(recorder, 0, { date: new Date(Date.now() + BLOCK_WINDOW) });
 		await recorder.vote(0, [block]);
@@ -133,7 +133,7 @@ export const clockScenarios: readonly Scenario[] = [
 		recorder.advance(1);
 		await recorder.vote(0, [block]);
 	}),
-	scenario('EO3', 'a permanent request without our temporary vote is refused for that, however old its block', {}, async function(recorder) {
+	scenario('EO3', 'a permanent request without this node\'s temporary vote is refused for that, however old its block', {}, async function(recorder) {
 		await recorder.addGenesis(0, 1, 2);
 		const block = await send(recorder, 0);
 		const theirs = [await recorder.vote(1, [block]), await recorder.vote(2, [block])];
@@ -147,7 +147,7 @@ export const clockScenarios: readonly Scenario[] = [
 		recorder.advance(BLOCK_WINDOW + 1);
 		await recorder.vote(0, [overspend]);
 	}),
-	scenario('EO5', 'a stale block whose sibling holds our permanent vote is refused for the sibling before its age', {}, async function(recorder) {
+	scenario('EO5', 'a stale block whose sibling holds this node\'s permanent vote is refused for the sibling before its age', {}, async function(recorder) {
 		await recorder.addGenesis(0, 1);
 		const block = await send(recorder, 0);
 		const sibling = await send(recorder, 0, { amount: 2n });

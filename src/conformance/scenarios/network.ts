@@ -87,7 +87,7 @@ export const networkScenarios: readonly Scenario[] = [
 	 * they store the node's temporary vote, so that a pending block's key
 	 * refuses others while the vote is unexpired.
 	 */
-	scenario('I3', 'storage contract D6 and D12: a block with the idempotent key of a block we voted for is refused for the key the side ledger claims for it, before the competition, which alone refuses a block without it', { basis: 'contract' }, async function(recorder) {
+	scenario('I3', 'storage contract D6 and D12: a block with the idempotent key of a block this node voted for is refused for the key the side ledger claims for it, before the competition, which alone refuses a block without it', { basis: 'contract' }, async function(recorder) {
 		await recorder.addGenesis(0);
 		await recorder.vote(0, [await keyed(recorder)]);
 		await recorder.vote(0, [await keyed(recorder, { amount: 2n })]);
@@ -99,7 +99,7 @@ export const networkScenarios: readonly Scenario[] = [
 		const temporary = [await recorder.vote(0, [block]), await recorder.vote(1, [block]), await recorder.vote(2, [block])];
 		await recorder.vote(0, [block], temporary);
 	}),
-	scenario('I3-D12', 'storage contract D4 and D12: the idempotent key of a block we voted for refuses another block until a minute past the vote\'s validity', { basis: 'contract' }, async function(recorder) {
+	scenario('I3-D12', 'storage contract D4 and D12: the idempotent key of a block this node voted for refuses another block until a minute past the vote\'s validity', { basis: 'contract' }, async function(recorder) {
 		await recorder.addGenesis(0);
 		await recorder.vote(0, [await keyed(recorder)]);
 		recorder.advance(TEMPORARY_VALIDITY + VOTE_SLOP);
@@ -107,7 +107,7 @@ export const networkScenarios: readonly Scenario[] = [
 		recorder.advance(1);
 		await recorder.vote(0, [await keyed(recorder, { amount: 3n })]);
 	}),
-	scenario('I3c-D12', 'storage contract D12: a key held on the main ledger is reported over our live side claim of it', { basis: 'contract' }, async function(recorder) {
+	scenario('I3c-D12', 'storage contract D12: a key held on the main ledger is reported over this node\'s live side claim of it', { basis: 'contract' }, async function(recorder) {
 		await recorder.addGenesis(0);
 		await recorder.vote(0, [await keyed(recorder)]);
 		const winner = await published(recorder, await keyed(recorder, { amount: 2n }));
@@ -152,7 +152,7 @@ export const networkScenarios: readonly Scenario[] = [
 		const first = await published(recorder, await keyed(recorder));
 		await recorder.vote(0, [await keyed(recorder, { previous: first.hash }), await send(recorder, 1, { network: DEV_NETWORK })]);
 	}),
-	scenario('EO31', 'a successor of a published block, carrying that block\'s idempotent key, is refused for the key though we voted for a competing successor', {}, async function(recorder) {
+	scenario('EO31', 'a successor of a published block, carrying that block\'s idempotent key, is refused for the key though this node voted for a competing successor', {}, async function(recorder) {
 		await recorder.addGenesis(0);
 		const holder = await published(recorder, await keyed(recorder));
 		await recorder.vote(0, [await send(recorder, 0, { previous: holder.hash })]);

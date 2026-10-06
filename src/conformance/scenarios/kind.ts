@@ -112,7 +112,7 @@ export const kindScenarios: readonly Scenario[] = [
 		const temporary = [await recorder.vote(1, [block]), await recorder.vote(2, [block])];
 		await recorder.vote(0, [block], temporary);
 	}),
-	scenario('P2', 'a permanent request that offers our own permanent vote is refused', {}, async function(recorder) {
+	scenario('P2', 'a permanent request that offers this node\'s own permanent vote is refused', {}, async function(recorder) {
 		await recorder.addGenesis(0, 1, 2);
 		const block = await send(recorder, 0);
 		const ours = await recorder.vote(0, [block]);
@@ -120,7 +120,7 @@ export const kindScenarios: readonly Scenario[] = [
 		const permanent = await recorder.vote(0, [block], [ours, ...theirs]);
 		await recorder.vote(0, [block], [permanent, ...theirs]);
 	}),
-	scenario('P3', 'a recovery request that includes our own permanent vote is refused', {}, async function(recorder) {
+	scenario('P3', 'a recovery request that includes this node\'s own permanent vote is refused', {}, async function(recorder) {
 		await recorder.addGenesis(0, 1);
 		const block = await send(recorder, 0);
 		const temporary = [await recorder.vote(0, [block]), await recorder.vote(1, [block])];

@@ -4824,7 +4824,7 @@
     },
     {
       "id": "QT1c",
-      "title": "a quote on a block competing with one we voted for is given, though a vote is refused",
+      "title": "a quote on a block competing with one this node voted for is given, though a vote is refused",
       "basis": "upstream",
       "network": {
         "id": "0",
@@ -4924,7 +4924,7 @@
     },
     {
       "id": "EO19",
-      "title": "a permanent request without our temporary vote and without the fee block its votes require is refused for the fee block",
+      "title": "a permanent request without this node's temporary vote and without the fee block its votes require is refused for the fee block",
       "basis": "upstream",
       "network": {
         "id": "0",
