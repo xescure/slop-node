@@ -7,7 +7,7 @@ import type { Vote, VoteBlockHash, VoteBlockHashMap, VoteStaple } from '@keetane
 import { LedgerInternals } from '../../../upstream/internals.js';
 import { assertNever } from '../../../util/assert-never.js';
 import { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
-import type { LedgerCountsSnapshot, TransactionOptions } from '../base.js';
+import type { CollectedDeferredStaples, LedgerCountsSnapshot, TransactionOptions } from '../base.js';
 import type { AccountInfoUpdate, ConfirmedStapleChange } from '../confirmed.js';
 import { createIdempotentKeyError, createLedgerError } from '../errors.js';
 import { isVoteUnexpired } from '../expiry.js';
@@ -776,6 +776,28 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 			}
 		}
 		return(released);
+	}
+
+	protected async collectDeadDeferredStaples(transaction: MemoryTransaction, limit: number): Promise<CollectedDeferredStaples> {
+		const overlay = await transaction.view();
+		const dead: [StapleKey, VoteStaple][] = [];
+		for (const [key, row] of overlay.deferredStaples.entries()) {
+			if (row.staple.blocks.some(function(block): boolean {
+				return(overlay.successors.get(toBlockHashKey(block.previous)) !== undefined);
+			})) {
+				dead.push([key, row.staple]);
+			}
+		}
+		const collected = dead.slice(0, limit);
+		for (const [key] of collected) {
+			this.#forgetDeferredStaple(overlay, key);
+		}
+		return({
+			collected: collected.map(function([, staple]): VoteStaple {
+				return(staple);
+			}),
+			more: dead.length > limit
+		});
 	}
 
 	protected async collectObsoleteSideVotes(transaction: MemoryTransaction, limit: number): Promise<boolean> {

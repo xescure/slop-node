@@ -3,7 +3,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
-import type { Vote, VoteBlockHash } from '@keetanetwork/keetanet-client/lib/vote.js';
+import type { Vote, VoteBlockHash, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerInternals } from '../../../upstream/internals.js';
 import { confirmedStaple, feeBlock, manageCertificateBlock, modifyPermissionsBlock, sendBlock } from '../../../testing/blocks.js';
 import type { TestLedgerOptions, TestNetwork } from '../../../testing/network.js';
@@ -11,6 +11,7 @@ import type { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.j
 import {
 	ChainCursor,
 	DEFAULT_WEIGHTS,
+	RecordingLog,
 	TESTING_KEY,
 	advancePastExpiry,
 	blocksHashesOf,
@@ -383,6 +384,52 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			expect(await ledgerChecksumOf(node)).toBe(checksumOf([network.genesis, triggerStaple, heldStaple, grantStaple, afterStaple]));
 		});
 
+		test('gc drops deferred staples that can never apply and reports each once', async function() {
+			const log = new RecordingLog();
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0, log });
+			await ledger.add(network.genesis);
+			// Two forks wait on one trigger; once one of them applies, the other never can.
+			const trigger = await sendFromGenesis(network, 0, 1n);
+			const forks = await Promise.all([5n, 7n].map(async function(amount) {
+				return(await confirmedStaple([await sendFrom(network, 0, trigger.hash, amount)], network.representatives));
+			}));
+			for (const fork of forks) {
+				expect(await ledger.add(fork)).toEqual([]);
+			}
+			// This staple waits on a missing block, and one of its blocks is then confirmed in another staple.
+			const shared = await sendFromGenesis(network, 1, 3n);
+			const missing = await sendFromGenesis(network, 2, 1n);
+			const overlapping = await confirmedStaple([shared, await sendFrom(network, 2, missing.hash, 2n)], network.representatives);
+			expect(await ledger.add(overlapping)).toEqual([]);
+			await ledger.add(await confirmedStaple([shared], network.representatives));
+			await ledger.add(await confirmedStaple([trigger], network.representatives));
+
+			expect(await ledger.gc()).toBe(false);
+			expect(await ledger.gc()).toBe(false);
+
+			const applied: VoteStaple[] = [];
+			const dropped: VoteStaple[] = [];
+			for (const fork of forks) {
+				if (await ledger.getBlock(requireAt(fork.blocks, 0).hash, 'main') === null) {
+					dropped.push(fork);
+				} else {
+					applied.push(fork);
+				}
+			}
+			expect([applied.length, dropped.length]).toEqual([1, 1]);
+			expect(await deferredWaitingOn(storage, trigger.hash)).toEqual([]);
+			expect(await deferredWaitingOn(storage, missing.hash)).toEqual([]);
+			expect([...dropped, overlapping].map(function(staple): number {
+				return(log.errorsMentioning(staple).length);
+			})).toEqual([1, 1]);
+			expect(applied.flatMap(function(staple): string[] {
+				return(log.errorsMentioning(staple));
+			})).toEqual([]);
+			// The missing block now releases nothing.
+			const missingStaple = await confirmedStaple([missing], network.representatives);
+			expect(blocksHashesOf(await ledger.add(missingStaple))).toEqual(blocksHashesOf([missingStaple]));
+		});
+
 		test('gc reports whether more work remains', async function() {
 			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0 });
 			const user = requireAt(network.users, 0);
@@ -406,7 +453,7 @@ export function defineGcCases(driver: DriverUnderTest): void {
 				}));
 			};
 
-			// The second fork is still to be retried after the first batch; its retry fails, and that is not work that remains.
+			// The second fork is still to be retried after the first batch; the second batch drops it, because it can never apply.
 			expect(await batchesOfOne(3)).toEqual([true, false, false]);
 			const balance = await ledger.getBalance(user, network.baseToken);
 			const applied = forks.find(function({ amount }): boolean {
@@ -418,7 +465,7 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			if (applied === undefined || loser === undefined) {
 				throw(new Error('exactly one fork should have applied'));
 			}
-			expect(await deferredWaitingOn(storage, trigger.hash)).toEqual(blocksHashesOf([loser.staple]));
+			expect(await deferredWaitingOn(storage, trigger.hash)).toEqual([]);
 
 			const votedAt = new Date();
 			const expiring = [await ledger.vote([await sendFromGenesis(network, 1, 1n)]), await ledger.vote([await sendFromGenesis(network, 2, 1n)])];
@@ -430,9 +477,8 @@ export function defineGcCases(driver: DriverUnderTest): void {
 				})));
 			})).toEqual([null, null]);
 
-			// A fresh pass retries the failing fork once more, and still finishes.
 			expect(await ledger.gc()).toBe(false);
-			expect(await deferredWaitingOn(storage, trigger.hash)).toEqual(blocksHashesOf([loser.staple]));
+			expect(await deferredWaitingOn(storage, trigger.hash)).toEqual([]);
 		});
 	});
 }

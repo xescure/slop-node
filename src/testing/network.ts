@@ -36,6 +36,8 @@ export type TestFeePolicy = { readonly kind: 'free' } | { readonly kind: 'flat';
 export type TestLedgerOptions = {
 	readonly fee?: TestFeePolicy;
 	readonly heapProcessWindowMs?: LedgerConfig['heapProcessWindowMs'];
+	/** Where a ledger without a node logs; a node keeps its own log. */
+	readonly log?: LedgerConfig['log'];
 };
 
 export type TestNetwork = {
@@ -255,6 +257,9 @@ export async function createTestNetwork(options: TestNetworkOptions): Promise<Te
 				initialTrustedAccount: trustedRoot,
 				network: NETWORK
 			};
+			if (ledgerOptions.log !== undefined) {
+				config.log = ledgerOptions.log;
+			}
 			return(new lib.Ledger(config));
 		},
 		createNode(storageDriver, representative, ledgerOptions = {}) {

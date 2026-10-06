@@ -165,6 +165,40 @@ export function failAfterPersisting(storage: LedgerStorageDriverBase, staple: Vo
 	});
 }
 
+type Logger = NonNullable<TestLedgerOptions['log']>;
+
+/** Keeps the error lines a ledger logs, so a case can count them. */
+export class RecordingLog implements Logger {
+	readonly errors: string[] = [];
+
+	log(..._input: unknown[]): void {
+		// Only errors are kept.
+	}
+
+	debug(..._input: unknown[]): void {
+		// Only errors are kept.
+	}
+
+	info(..._input: unknown[]): void {
+		// Only errors are kept.
+	}
+
+	warn(..._input: unknown[]): void {
+		// Only errors are kept.
+	}
+
+	error(...input: unknown[]): void {
+		this.errors.push(input.map(String).join(' '));
+	}
+
+	errorsMentioning(staple: VoteStaple): string[] {
+		const key = staple.blocksHash.toString();
+		return(this.errors.filter(function(line): boolean {
+			return(line.includes(key));
+		}));
+	}
+}
+
 /** The checksum a node keeps over every block its ledger applied. */
 export async function ledgerChecksumOf(node: Node): Promise<bigint> {
 	return((await node.stats.getXor('ledgerChecksum')).toBigInt());

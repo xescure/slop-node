@@ -94,6 +94,12 @@ export type LedgerCountsSnapshot = Pick<LedgerStatistics, 'momentRange' | 'block
 	readonly moment: Date;
 };
 
+/** The deferred staples one call removed, and whether more such staples remain. */
+export type CollectedDeferredStaples = {
+	readonly collected: readonly VoteStaple[];
+	readonly more: boolean;
+};
+
 /** Documented default of LedgerConfig.heapProcessWindowMs. */
 const DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS = 5000;
 
@@ -303,6 +309,15 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	protected abstract removeDeferredStaple(transaction: Transaction, blocksHash: StapleKey): Promise<void>;
 
 	/**
+	 * Removes up to limit deferred staples that can never apply, and reports
+	 * whether more remain. A staple can never apply once the previous of any
+	 * of its blocks has a confirmed successor: that block is then on the main
+	 * ledger, or competes with one that is. This is the rule that makes a side
+	 * vote obsolete, and it holds whether or not the staple is still waiting.
+	 */
+	protected abstract collectDeadDeferredStaples(transaction: Transaction, limit: number): Promise<CollectedDeferredStaples>;
+
+	/**
 	 * Up to limit deferred staples, other than those excluded, whose every
 	 * awaited block is now on the main ledger. Arrival normally replays them at
 	 * once; these are the ones it missed.
@@ -452,14 +467,46 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	}
 
 	/*
-	 * Deferred staples are retried first, because applying one can leave more
-	 * side votes with a block on main.
+	 * Dead deferred staples go first, so none of them is retried. Deferred
+	 * staples are retried before side votes are collected, because applying
+	 * one can leave more side votes with a block on main.
 	 */
 	async #gcBatch(transaction: Transaction, limit: number): Promise<boolean> {
 		return(await this.#exclusively(transaction, async () => {
+			const moreDead = await this.#dropDeadDeferredStaples(transaction, limit);
 			const moreDeferred = await this.#retryReleasedDeferredStaples(transaction, limit);
 			const moreSideVotes = await this.collectObsoleteSideVotes(transaction, limit);
-			return(moreDeferred || moreSideVotes);
+			return(moreDead || moreDeferred || moreSideVotes);
+		}));
+	}
+
+	/*
+	 * A deferred staple carries a quorum, so one that conflicts with confirmed
+	 * history means the network confirmed a fork. It is reported once, as it
+	 * is dropped, instead of failing on every replay and every gc pass.
+	 */
+	async #dropDeadDeferredStaples(transaction: Transaction, limit: number): Promise<boolean> {
+		const { collected, more } = await this.collectDeadDeferredStaples(transaction, limit);
+		for (const staple of collected) {
+			this.#reportDeadDeferredStaple(staple);
+		}
+		return(more);
+	}
+
+	#reportDeadDeferredStaple(staple: VoteStaple): void {
+		this.initialized.config.log?.error(LOG_SOURCE, `network integrity alarm: dropped deferred staple ${toStapleKey(staple.blocksHash)}, which conflicts with confirmed history and can never apply`);
+	}
+
+	/*
+	 * The rule collectDeadDeferredStaples applies, for one staple: a retry can
+	 * apply one staple and so kill another later in the same batch.
+	 */
+	async #isDead(transaction: Transaction, staple: VoteStaple): Promise<boolean> {
+		const successors = await Promise.all(staple.blocks.map((block) => {
+			return(this.getBlockFromPrevious(transaction, block.previous, 'main'));
+		}));
+		return(successors.some(function(successor): boolean {
+			return(successor !== null);
 		}));
 	}
 
@@ -482,6 +529,11 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 		for (const staple of await this.listReleasedDeferredStaples(transaction, limit, retried)) {
 			const stapleKey = toStapleKey(staple.blocksHash);
 			retried.add(stapleKey);
+			if (await this.#isDead(transaction, staple)) {
+				await this.removeDeferredStaple(transaction, stapleKey);
+				this.#reportDeadDeferredStaple(staple);
+				continue;
+			}
 			try {
 				const applied = await this.#applyIsolated(transaction, staple, replay);
 				recordSettlement(transaction, applied);

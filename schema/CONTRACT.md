@@ -119,10 +119,11 @@ Node N lacks A and receives S.
 
 `Ledger.gc(timeLimitMS)` runs upstream's loop in one read-write transaction (`'db-gc'`). The loop calls `gcBatch` until a batch reports that no work remains, or until `timeLimitMS` (default 280000 ms) has elapsed [Keeta TS] index.js:70517-70521, 67852-67862. Each base batch makes these calls:
 
-1. `listReleasedDeferredStaples(tx, 100, retried)`: deferred staples whose awaited blocks are all on the main ledger. Each is retried through the `adjust` template with deferral disabled, inside `runIsolated(tx, unit)`. The staples it applies, chained replays included, are folded into `ledgerChecksum`. A failed retry is logged, its unit is undone, and it stays deferred; the same gc transaction does not retry it again.
-2. `listReleasedDeferredStaples(tx, 1, retried)`: whether a released staple not yet retried in this transaction remains, counting staples released by this batch's retries.
-3. `collectObsoleteSideVotes(tx, 100)`: removes side votes that have expired at the transaction moment, or that cover a block whose `previous` has a confirmed successor, together with the side blocks and side idempotent claims that only they held.
-4. The batch reports whether either kind of work remains.
+1. `collectDeadDeferredStaples(tx, 100)`: removes deferred staples that can never apply, because the `previous` of one of their blocks has a confirmed successor. Each is logged once, as a network integrity alarm.
+2. `listReleasedDeferredStaples(tx, 100, retried)`: deferred staples whose awaited blocks are all on the main ledger. A staple that an earlier retry of the batch has made dead is dropped and logged in the same way, through `getBlockFromPrevious(tx, previous, 'main')` and `removeDeferredStaple`. Each other staple is retried through the `adjust` template with deferral disabled, inside `runIsolated(tx, unit)`. The staples it applies, chained replays included, are folded into `ledgerChecksum`. A failed retry is logged, its unit is undone, and it stays deferred; the same gc transaction does not retry it again.
+3. `listReleasedDeferredStaples(tx, 1, retried)`: whether a released staple not yet retried in this transaction remains, counting staples released by this batch's retries.
+4. `collectObsoleteSideVotes(tx, 100)`: removes side votes that have expired at the transaction moment, or that cover a block whose `previous` has a confirmed successor, together with the side blocks and side idempotent claims that only they held.
+5. The batch reports whether any kind of work remains.
 
 After 2.4, gc collects R's temporary vote on B, because B is on the main ledger. It also collects R's votes on a competitor C of B, temporary or permanent, because C's previous A now has the confirmed successor B. A permanent side vote whose staple can still be published stays.
 
@@ -847,6 +848,14 @@ protected abstract removeDeferredStaple(transaction: Transaction, blocksHash: St
 
 Forgets a deferred staple and its index entries. A staple that is not deferred is not an error. The base calls it after every successful persist, so a staple that arrives again on its own after deferral stops waiting. Tested by `deferral.ts: "a deferred staple applied on its own stops waiting"`.
 
+#### `collectDeadDeferredStaples`
+
+```ts
+protected abstract collectDeadDeferredStaples(transaction: Transaction, limit: number): Promise<CollectedDeferredStaples>;
+```
+
+Removes up to `limit` deferred staples that can never apply, with their index entries, and returns them as `collected`, with `more` reporting whether more such staples remain. A deferred staple can never apply once the `previous` of any of its blocks has a confirmed successor: the block itself is on the main ledger, or it competes with a block that is. This is the rule of D6, and it applies whether or not the staple still waits on a missing block. The base logs each collected staple once (D20). Tested by `gc.ts: "gc drops deferred staples that can never apply and reports each once"` and `gc.ts: "gc reports whether more work remains"`.
+
 #### `listReleasedDeferredStaples`
 
 ```ts
@@ -1046,7 +1055,7 @@ Only partly testable through blocks. SET_INFO on an identifier must carry `defau
 - Replay runs inside the transaction that supplied the missing block, with deferral disabled. A waiter that still lacks another previous block stays deferred.
 - A replayed staple that fails stays deferred, none of its writes remain, and the failure is logged. The staple that released it still applies, and its transaction commits. Each replayed staple runs in an isolated unit of its own (section 3.3, item 4).
 - Replay stops once `heapProcessWindowMs` (default 5000 ms) has elapsed since the `adjust` began, measured on the wall clock. A window of 0 replays nothing, which the deferral and gc cases use to leave waiters deferred. Whether a waiter reached exactly at the window's end still replays cannot be checked against upstream's own drivers, which the package does not include; that boundary is provisional and untested.
-- gc retries deferred staples whose awaited blocks are all on the main ledger. A retry that fails is not retried again in the same gc transaction, and is never dropped. Deferred staples never expire, because they are confirmed.
+- gc retries deferred staples whose awaited blocks are all on the main ledger. A retry that fails is not retried again in the same gc transaction, and stays deferred. Deferred staples never expire, because they are confirmed. gc drops only a deferred staple that can never apply, by the rule of D6, and logs it once (D20).
 - `adjust` returns each applied staple exactly once.
 - A staple applied on its own after it was deferred stops waiting.
 
@@ -1066,6 +1075,7 @@ Only partly testable through blocks. SET_INFO on an identifier must carry `defau
 - `deferral.ts: "a replayed staple that fails after its write leaves nothing behind and stays deferred"`
 - `gc.ts: "gc retries deferred staples whose previous is now on main"`
 - `gc.ts: "a gc retry that fails after its write leaves nothing behind and stays deferred"`
+- `gc.ts: "gc drops deferred staples that can never apply and reports each once"`
 - `gc.ts: "gc reports whether more work remains"`
 
 ### D14. Conflicting confirmed history
@@ -1148,9 +1158,10 @@ No member reads account rows, so their creation is untested.
 
 ### D20. Garbage collection
 
-`gc` follows upstream's loop, and each batch of the base does two things, at most 100 items of each kind:
-1. It retries the released deferred staples (D13). It folds every staple it applies, chained replays included, into `ledgerChecksum`, as `Ledger.add` does for what `adjust` returns.
-2. It collects obsolete side votes through `collectObsoleteSideVotes` (section 4.2).
+`gc` follows upstream's loop, and each batch of the base does three things, at most 100 items of each kind:
+1. It drops the deferred staples that can never apply, through `collectDeadDeferredStaples` (section 4.2), and logs each once as a network integrity alarm. A deferred staple can never apply once the `previous` of any of its blocks has a confirmed successor, the rule of D6.
+2. It retries the released deferred staples (D13), each in an isolated unit (section 3.3, item 4). A released staple that an earlier retry in the batch has made dead is dropped and logged once instead. It folds every staple it applies, chained replays included, into `ledgerChecksum`, as `Ledger.add` does for what `adjust` returns.
+3. It collects obsolete side votes through `collectObsoleteSideVotes` (section 4.2).
 
 A batch reports whether work remains. A deferred retry that failed in this transaction does not count as remaining work. Scheduling gc is left to the application running the node; nothing in the upstream package calls `Ledger.gc`.
 
@@ -1158,6 +1169,7 @@ A batch reports whether work remains. A deferred retry that failed in this trans
 - Upstream's loop checks its time budget only between batches, so batches stay small [Keeta TS] index.js:67852-67862.
 - A staple applied by gc would otherwise never enter the node's checksum, which `Ledger.add` maintains only for the staples it receives [Keeta TS] index.js:69413-69417.
 - A side vote that can never be published only holds idempotent keys and storage (D6).
+- A deferred staple that can never apply would fail, and raise the integrity alarm, on every replay and every gc pass. It carries a quorum, so the conflict is reported, once, when it is dropped.
 - Reporting a failing retry as remaining work would keep the loop, and its transaction, running until the time budget ran out.
 
 **Tested by** every case in `gc.ts`, and by `concurrency.ts: "gc queued behind a long transaction keeps a vote committed meanwhile"`.
