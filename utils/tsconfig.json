@@ -1,0 +1,14 @@
+{
+	"extends": "../tsconfig.json",
+	"compilerOptions": {
+		"rootDir": ".",
+		"outDir": "../build/utils",
+		"tsBuildInfoFile": "../build/utils/.tsbuildinfo"
+	},
+	"include": [
+		"**/*.ts"
+	],
+	"exclude": [
+		"lint-fixtures/**"
+	]
+}
