@@ -4,7 +4,7 @@ import type { BlockJSONOperationTOKEN_ADMIN_SUPPLY } from '@keetanetwork/keetane
 import { receiveBlock, sendBlock, tokenSupplyBlock } from '../../testing/blocks.js';
 import { scenario } from '../record.js';
 import type { CaseRecorder, Scenario } from '../record.js';
-import { NEGATIVE_AMOUNTS_REFUSED_FROM, chainsOf, confirmed, issueToken, send } from './support.js';
+import { MAXIMUM_SUPPLY, NEGATIVE_AMOUNTS_REFUSED_FROM, chainsOf, confirmed, issueToken, send } from './support.js';
 import type { PublishedToken } from './support.js';
 
 /*
@@ -17,11 +17,8 @@ import type { PublishedToken } from './support.js';
 
 const lib = KeetaNet.lib;
 
-// The largest supply a token may have. [Keeta TS] index.js:61315
-const MAXIMUM_SUPPLY = (10n ** 200n) - 1n;
-
 /** User 0 owns a token with the supply given, added on node 0 together with genesis. */
-async function publishedToken(recorder: CaseRecorder, supply: bigint): Promise<PublishedToken> {
+async function tokenWithSupply(recorder: CaseRecorder, supply: bigint): Promise<PublishedToken> {
 	await recorder.addGenesis(0);
 	const chains = chainsOf(recorder);
 	const { token, blocks } = await issueToken(recorder, chains, recorder.user(0), { supply, defaultPermission: ['ACCESS'] });
@@ -34,7 +31,7 @@ function adjustSupply(recorder: CaseRecorder, { token, chains }: PublishedToken,
 	return(tokenSupplyBlock({ owner: recorder.user(0), token, amount, method, previous: chains.previous(token), network: recorder.network.network }));
 }
 
-/** User 1 requires that user 0 sent it, earlier in the request, at least the amount given, or exactly that amount. */
+/** User 1, after its genesis head, requires that user 0 sent it, earlier in the request, at least the amount given, or exactly that amount. */
 function receiveFromUser0(recorder: CaseRecorder, amount: bigint, exact: boolean): Promise<Block> {
 	const account = recorder.user(1);
 	return(receiveBlock({ account, previous: recorder.genesisHead(account), network: recorder.network.network, from: recorder.user(0), token: recorder.network.baseToken, amount, exact }));
@@ -97,7 +94,7 @@ export const balanceScenarios: readonly Scenario[] = [
 		await recorder.vote(0, [await send(recorder, 0, { amount: -1n, date: new Date(NEGATIVE_AMOUNTS_REFUSED_FROM.getTime() - 1) })]);
 	}),
 	scenario('T5', 'burning more than the token holds unallocated is refused, though the supply covers it; burning exactly that is given', {}, async function(recorder) {
-		const published = await publishedToken(recorder, 100n);
+		const published = await tokenWithSupply(recorder, 100n);
 		const { token, chains } = published;
 		const allocation = chains.append(await sendBlock({ from: token, signer: recorder.user(0), to: recorder.user(0), amount: 60n, token, previous: chains.previous(token), network: recorder.network.network }));
 		await recorder.add(0, await confirmed(recorder, [allocation]));
@@ -105,7 +102,7 @@ export const balanceScenarios: readonly Scenario[] = [
 		await recorder.vote(0, [await adjustSupply(recorder, published, 40n, lib.Block.AdjustMethod.SUBTRACT)]);
 	}),
 	scenario('T6', 'a mint that takes the supply past its maximum is refused', {}, async function(recorder) {
-		const published = await publishedToken(recorder, MAXIMUM_SUPPLY);
+		const published = await tokenWithSupply(recorder, MAXIMUM_SUPPLY);
 		await recorder.vote(0, [await adjustSupply(recorder, published, 1n, lib.Block.AdjustMethod.ADD)]);
 	}),
 	scenario('T7', 'a token created with the maximum supply gets a temporary vote', {}, async function(recorder) {
@@ -114,8 +111,18 @@ export const balanceScenarios: readonly Scenario[] = [
 		await recorder.vote(0, [...blocks]);
 	}),
 	scenario('EO16', 'an overspend and a mint past the maximum supply are refused for the supply, which is checked before any balance', {}, async function(recorder) {
-		const published = await publishedToken(recorder, MAXIMUM_SUPPLY);
+		const published = await tokenWithSupply(recorder, MAXIMUM_SUPPLY);
 		const overspend = await send(recorder, 0, { amount: 401n, previous: published.chains.previous(recorder.user(0)) });
 		await recorder.vote(0, [overspend, await adjustSupply(recorder, published, 1n, lib.Block.AdjustMethod.ADD)]);
+	}),
+	/*
+	 * Each account's balance of each token is checked for falling negative
+	 * before its receives are.
+	 * [Keeta TS] index.js:70084-70093
+	 */
+	scenario('EO17', 'an account whose receive is not met and that overspends is refused for the balance', {}, async function(recorder) {
+		await recorder.addGenesis(0);
+		const received = await receiveFromUser0(recorder, 11n, false);
+		await recorder.vote(0, [received, await send(recorder, 1, { amount: 301n, previous: received.hash })]);
 	})
 ];

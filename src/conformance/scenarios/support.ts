@@ -21,6 +21,9 @@ export const TEMPORARY_VALIDITY: number = 5 * MINUTE;
 /** How far a vote's validity may be off the clock when its bytes are parsed. [Keeta TS] index.js:80653 */
 export const VOTE_SLOP: number = MINUTE;
 
+/** The largest supply a token may have. [Keeta TS] index.js:61315 */
+export const MAXIMUM_SUPPLY: bigint = (10n ** 200n) - 1n;
+
 /** Blocks dated from this moment on may not carry a negative amount. [Keeta TS] index.js:61330 */
 export const NEGATIVE_AMOUNTS_REFUSED_FROM: Date = new Date(Date.UTC(2025, 10, 21));
 

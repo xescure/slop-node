@@ -20,7 +20,7 @@ import { TEST_NETWORK_SEEDS } from '../../testing/network.js';
 import { toDecimal } from '../case.js';
 import { scenario } from '../record.js';
 import type { CaseRecorder, RecordingOptions, Scenario } from '../record.js';
-import { HOUR, NEGATIVE_AMOUNTS_REFUSED_FROM, chainsOf, confirmed, issueToken } from './support.js';
+import { HOUR, MAXIMUM_SUPPLY, NEGATIVE_AMOUNTS_REFUSED_FROM, chainsOf, confirmed, issueToken } from './support.js';
 import type { PublishedToken, TokenOptions } from './support.js';
 
 /*
@@ -50,9 +50,9 @@ const CHARGING: RecordingOptions = { fee: { type: 'flat', amount: toDecimal(FLAT
 // The network's default once T3 narrows it, without TOKEN_ADMIN_CREATE.
 const NARROWED_NETWORK_DEFAULT: PermissionFlags = ['ACCESS', 'STORAGE_CREATE'];
 
-/** Keys beyond the network's own, from the same seed, that only ever sign for a multisig. */
-function extraKey(index: number): Account {
-	return(lib.Account.fromSeed(TEST_NETWORK_SEEDS.user, 3 + index));
+/** Keys after the network's own users, from the same seed, that only ever sign for a multisig. */
+function extraKey(recorder: CaseRecorder, index: number): Account {
+	return(lib.Account.fromSeed(TEST_NETWORK_SEEDS.user, recorder.network.users.length + index));
 }
 
 /** `account` changes the permissions of `principal` on itself; an identifier's owner, user 0, signs for it. */
@@ -64,17 +64,19 @@ function permissionChange(recorder: CaseRecorder, chains: ChainCursor, account: 
 	return(modifyPermissionsBlock(input));
 }
 
-/** `from` sends one unit of the base token unless stated, signed by `signer` when given and a token by its owner, user 0. */
+/** `from` sends one unit of the base token unless stated, signed by `signer` when given and by its own key otherwise. */
 function sendAfter(recorder: CaseRecorder, chains: ChainCursor, from: GenericAccount, options: { readonly to: GenericAccount; readonly amount?: bigint; readonly token?: TokenAddress; readonly signer?: Account }): Promise<Block> {
 	const { to, amount = 1n, token = recorder.network.baseToken, signer } = options;
 	const input = { from, to, amount, token, previous: chains.previous(from), network: recorder.network.network };
 	if (signer !== undefined) {
 		return(sendBlock({ ...input, signer }));
 	}
-	if (from.isToken()) {
-		return(sendBlock({ ...input, signer: recorder.user(0) }));
-	}
 	return(sendBlock(input));
+}
+
+/** The victim grants the principal SEND_ON_BEHALF of every token, with no target. */
+function wildcardSendOnBehalf(recorder: CaseRecorder, chains: ChainCursor, victim: GenericAccount, principal: GenericAccount): Promise<Block> {
+	return(permissionChange(recorder, chains, victim, { principal, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['SEND_ON_BEHALF']) }));
 }
 
 /** The victim adds or removes the principal's SEND_ON_BEHALF of a token, by default the base token, on its own account. */
@@ -87,12 +89,13 @@ function sendOnBehalf(recorder: CaseRecorder, chains: ChainCursor, victim: Gener
  * and the token sends user 0 half of it; all of it, and any further blocks,
  * added on each node given together with genesis.
  */
-async function publishedToken(recorder: CaseRecorder, nodes: readonly number[], defaultPermission: TokenOptions['defaultPermission'], further?: (published: PublishedToken) => Promise<readonly Block[]>): Promise<PublishedToken> {
+async function heldToken(recorder: CaseRecorder, nodes: readonly number[], defaultPermission: TokenOptions['defaultPermission'], further?: (published: PublishedToken) => Promise<readonly Block[]>): Promise<PublishedToken> {
 	await recorder.addGenesis(...nodes);
 	const chains = chainsOf(recorder);
 	const { token, blocks } = await issueToken(recorder, chains, recorder.user(0), { supply: 100n, defaultPermission });
 	const published = { token, chains };
-	const allocation = chains.append(await sendAfter(recorder, chains, token, { to: recorder.user(0), amount: 50n, token }));
+	const owner = recorder.user(0);
+	const allocation = chains.append(await sendAfter(recorder, chains, token, { to: owner, amount: 50n, token, signer: owner }));
 	const more = await further?.(published) ?? [];
 	const staple = await confirmed(recorder, [...blocks, allocation, ...more]);
 	for (const node of nodes) {
@@ -111,12 +114,23 @@ async function publishedStorage(recorder: CaseRecorder): Promise<{ readonly stor
 	return({ storage, chains });
 }
 
+/** The storage account admits holding a token. */
+function canHold(recorder: CaseRecorder, chains: ChainCursor, storage: StorageAddress, token: TokenAddress): Promise<Block> {
+	return(permissionChange(recorder, chains, storage, { principal: token, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['STORAGE_CAN_HOLD']) }));
+}
+
+/** The storage account admits a depositor's deposits of a token. */
+function mayDeposit(recorder: CaseRecorder, chains: ChainCursor, storage: StorageAddress, depositor: GenericAccount, token: TokenAddress): Promise<Block> {
+	return(permissionChange(recorder, chains, storage, { principal: depositor, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['STORAGE_DEPOSIT']), target: token }));
+}
+
 /** The storage account admits the base token, and user 1's deposits of it. */
 async function storageGrants(recorder: CaseRecorder, chains: ChainCursor, storage: StorageAddress): Promise<readonly Block[]> {
 	const { baseToken } = recorder.network;
-	const canHold = chains.append(await permissionChange(recorder, chains, storage, { principal: baseToken, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['STORAGE_CAN_HOLD']) }));
-	const mayDeposit = chains.append(await permissionChange(recorder, chains, storage, { principal: recorder.user(1), method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['STORAGE_DEPOSIT']), target: baseToken }));
-	return([canHold, mayDeposit]);
+	return([
+		chains.append(await canHold(recorder, chains, storage, baseToken)),
+		chains.append(await mayDeposit(recorder, chains, storage, recorder.user(1), baseToken))
+	]);
 }
 
 /** A change of the token's owners, signed by user 0, its owner. */
@@ -170,22 +184,27 @@ function certificateGrant(recorder: CaseRecorder, { token, chains }: PublishedTo
 	}));
 }
 
+/** An account that holds a certificate the authority issued, valid for the days given. */
+type CertifiedHolder = {
+	readonly holder: Account;
+	readonly days: number;
+};
+
 /**
- * User 2 is a certificate authority, user 1 holds a certificate it issued,
- * and a token without a default permission admits that certificate's
- * holders; added on each node given.
+ * User 2 is a certificate authority, each holder holds a certificate it
+ * issued, and a token without a default permission admits that
+ * certificate's holders; added on each node given.
  */
-async function certifiedHolders(recorder: CaseRecorder, nodes: readonly number[], holderDays: number): Promise<PublishedToken> {
+async function certifiedHolders(recorder: CaseRecorder, nodes: readonly number[], holders: readonly CertifiedHolder[]): Promise<PublishedToken> {
 	const authorityKey = recorder.user(2);
-	const holder = recorder.user(1);
 	const authority = await certificate(authorityKey, authorityKey, 1, 3650);
-	const issued = await certificate(authorityKey, holder, 2, holderDays);
-	const published = await publishedToken(recorder, nodes, []);
+	const published = await heldToken(recorder, nodes, []);
 	const { chains } = published;
-	const held = await confirmed(recorder, [
-		chains.append(await storeCertificate(recorder, chains, authorityKey, authority)),
-		chains.append(await storeCertificate(recorder, chains, holder, issued))
-	]);
+	const stored = [chains.append(await storeCertificate(recorder, chains, authorityKey, authority))];
+	for (const [index, { holder, days }] of holders.entries()) {
+		stored.push(chains.append(await storeCertificate(recorder, chains, holder, await certificate(authorityKey, holder, 2 + index, days))));
+	}
+	const held = await confirmed(recorder, stored);
 	/*
 	 * The effect of an ACL for a certificate looks the certificate up in
 	 * storage, so the certificate is stored by an earlier staple.
@@ -204,7 +223,7 @@ async function multisigOf(recorder: CaseRecorder, chains: ChainCursor): Promise<
 	const creator = recorder.user(2);
 	const { block, multisig } = await createMultisigBlock({
 		owner: creator,
-		signers: [extraKey(0), extraKey(1), extraKey(2)],
+		signers: [extraKey(recorder, 0), extraKey(recorder, 1), extraKey(recorder, 2)],
 		quorum: 2n,
 		previous: chains.previous(creator),
 		network: recorder.network.network
@@ -246,7 +265,7 @@ async function multisigSend(recorder: CaseRecorder, granted: boolean, signers: r
  */
 async function revokedBetweenVotes(recorder: CaseRecorder, withFee: boolean): Promise<void> {
 	const recipient = recorder.user(1);
-	const published = await publishedToken(recorder, [0, 1], [], async function({ token, chains }) {
+	const published = await heldToken(recorder, [0, 1], [], async function({ token, chains }) {
 		return([chains.append(await permissionChange(recorder, chains, token, { principal: recipient, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['ACCESS']) }))]);
 	});
 	const { token, chains } = published;
@@ -324,6 +343,18 @@ export const permissionScenarios: readonly Scenario[] = [
 		await recorder.add(0, await confirmed(recorder, [chains.append(await sendOnBehalf(recorder, chains, victim, thief, lib.Block.AdjustMethod.ADD))]));
 		await recorder.vote(0, [await sendAfter(recorder, chains, victim, { to: thief, amount: 100n, signer: thief })]);
 	}),
+	/*
+	 * A row without a target covers every token: an exact target match is
+	 * preferred, and a row whose target is the account itself is the fallback.
+	 * [Keeta TS] index.js:67109-67132
+	 */
+	scenario('PM2b', 'SEND_ON_BEHALF granted without a target covers a send of the base token', {}, async function(recorder) {
+		await recorder.addGenesis(0);
+		const chains = chainsOf(recorder);
+		const [victim, thief] = [recorder.user(0), recorder.user(1)];
+		await recorder.add(0, await confirmed(recorder, [chains.append(await wildcardSendOnBehalf(recorder, chains, victim, thief))]));
+		await recorder.vote(0, [await sendAfter(recorder, chains, victim, { to: thief, amount: 100n, signer: thief })]);
+	}),
 	scenario('PM3', 'SEND_ON_BEHALF granted for another token does not cover a send of the base token', {}, async function(recorder) {
 		await recorder.addGenesis(0);
 		const chains = chainsOf(recorder);
@@ -337,6 +368,18 @@ export const permissionScenarios: readonly Scenario[] = [
 		const chains = chainsOf(recorder);
 		const [victim, thief] = [recorder.user(0), recorder.user(1)];
 		const grant = chains.append(await sendOnBehalf(recorder, chains, victim, thief, lib.Block.AdjustMethod.ADD));
+		await recorder.vote(0, [grant, await sendAfter(recorder, chains, victim, { to: thief, amount: 100n, signer: thief })]);
+	}),
+	/*
+	 * A grant earlier in the request without a target applies to the whole
+	 * account, so it covers a requirement for any token.
+	 * [Keeta TS] index.js:68050-68057
+	 */
+	scenario('PM4b', 'SEND_ON_BEHALF granted without a target earlier in the same request covers a send of the base token', {}, async function(recorder) {
+		await recorder.addGenesis(0);
+		const chains = chainsOf(recorder);
+		const [victim, thief] = [recorder.user(0), recorder.user(1)];
+		const grant = chains.append(await wildcardSendOnBehalf(recorder, chains, victim, thief));
 		await recorder.vote(0, [grant, await sendAfter(recorder, chains, victim, { to: thief, amount: 100n, signer: thief })]);
 	}),
 	/*
@@ -385,15 +428,26 @@ export const permissionScenarios: readonly Scenario[] = [
 		const created = await createStorageBlock({ owner, previous: chains.previous(owner), network: recorder.network.network });
 		const { storage } = created;
 		await recorder.add(0, await confirmed(recorder, [...blocks, chains.append(created.block)]));
-		const deposit = await sendAfter(recorder, chains, token, { to: storage, amount: 10n, token });
+		const deposit = await sendAfter(recorder, chains, token, { to: storage, amount: 10n, token, signer: owner });
 		await recorder.vote(0, [deposit]);
-		const canHold = chains.append(await permissionChange(recorder, chains, storage, { principal: token, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['STORAGE_CAN_HOLD']) }));
-		const mayDeposit = chains.append(await permissionChange(recorder, chains, storage, { principal: token, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['STORAGE_DEPOSIT']), target: token }));
-		await recorder.add(0, await confirmed(recorder, [canHold, mayDeposit]));
+		// Holding alone is not enough: the token's deposits must be admitted too.
+		await recorder.add(0, await confirmed(recorder, [chains.append(await canHold(recorder, chains, storage, token))]));
+		await recorder.vote(0, [deposit]);
+		await recorder.add(0, await confirmed(recorder, [chains.append(await mayDeposit(recorder, chains, storage, token, token))]));
 		await recorder.vote(0, [deposit]);
 	}),
 	scenario('S2', 'a send into a storage account that granted nothing is refused', {}, async function(recorder) {
 		const { storage, chains } = await publishedStorage(recorder);
+		await recorder.vote(0, [await sendAfter(recorder, chains, recorder.user(1), { to: storage })]);
+	}),
+	scenario('S2b', 'a send into a storage account that admits the token but not the sender\'s deposits is refused', {}, async function(recorder) {
+		const { storage, chains } = await publishedStorage(recorder);
+		await recorder.add(0, await confirmed(recorder, [chains.append(await canHold(recorder, chains, storage, recorder.network.baseToken))]));
+		await recorder.vote(0, [await sendAfter(recorder, chains, recorder.user(1), { to: storage })]);
+	}),
+	scenario('S2c', 'a send into a storage account that admits the sender\'s deposits but not the token is refused', {}, async function(recorder) {
+		const { storage, chains } = await publishedStorage(recorder);
+		await recorder.add(0, await confirmed(recorder, [chains.append(await mayDeposit(recorder, chains, storage, recorder.user(1), recorder.network.baseToken))]));
 		await recorder.vote(0, [await sendAfter(recorder, chains, recorder.user(1), { to: storage })]);
 	}),
 	scenario('S3', 'a send into a storage account gets a temporary vote once its owner admits the token and the sender\'s deposits', {}, async function(recorder) {
@@ -430,26 +484,26 @@ export const permissionScenarios: readonly Scenario[] = [
 		await recorder.vote(0, [await narrowNetworkDefault(recorder), creation]);
 	}),
 	scenario('T4', 'a mint signed by a key that does not own the token is refused', {}, async function(recorder) {
-		const { token, chains } = await publishedToken(recorder, [0], ['ACCESS']);
+		const { token, chains } = await heldToken(recorder, [0], ['ACCESS']);
 		await recorder.vote(0, [await tokenSupplyBlock({ owner: recorder.user(1), token, amount: 1n, previous: chains.previous(token), network: recorder.network.network })]);
 	}),
 	scenario('T8', 'a send of a token without a default permission to an account without an ACL row is refused', {}, async function(recorder) {
-		const { token, chains } = await publishedToken(recorder, [0], []);
+		const { token, chains } = await heldToken(recorder, [0], []);
 		await recorder.vote(0, [await sendAfter(recorder, chains, recorder.user(0), { to: recorder.user(1), token })]);
 	}),
 	scenario('T10', 'storage contract D10: an ACL row emptied by a SET is stored, and overrides the token\'s default ACCESS', { basis: 'contract' }, async function(recorder) {
-		const { token, chains } = await publishedToken(recorder, [0], ['ACCESS'], async function(published) {
+		const { token, chains } = await heldToken(recorder, [0], ['ACCESS'], async function(published) {
 			return([published.chains.append(await freeze(recorder, published))]);
 		});
 		await recorder.vote(0, [await sendAfter(recorder, chains, recorder.user(0), { to: recorder.user(1), token })]);
 	}),
 	scenario('T10b', 'an ACL row emptied earlier in the same request does not refuse a send the stored default admits', {}, async function(recorder) {
-		const { token, chains } = await publishedToken(recorder, [0], ['ACCESS']);
+		const { token, chains } = await heldToken(recorder, [0], ['ACCESS']);
 		const frozen = chains.append(await freeze(recorder, { token, chains }));
 		await recorder.vote(0, [frozen, await sendAfter(recorder, chains, recorder.user(0), { to: recorder.user(1), token })]);
 	}),
 	scenario('SI3', 'a default permission set earlier in the same request admits the send that needs it, which alone is refused', {}, async function(recorder) {
-		const { token, chains } = await publishedToken(recorder, [0], []);
+		const { token, chains } = await heldToken(recorder, [0], []);
 		const owner = recorder.user(0);
 		const sent = await sendAfter(recorder, chains, owner, { to: recorder.user(1), token });
 		await recorder.vote(0, [sent]);
@@ -457,56 +511,58 @@ export const permissionScenarios: readonly Scenario[] = [
 		await recorder.vote(0, [opened, sent]);
 	}),
 	scenario('MS1', 'a multisig granted SEND_ON_BEHALF signs through a quorum of its signers', {}, async function(recorder) {
-		await multisigSend(recorder, true, [extraKey(0), extraKey(1)]);
+		await multisigSend(recorder, true, [extraKey(recorder, 0), extraKey(recorder, 1)]);
 	}),
 	scenario('MS2', 'a multisig signing through fewer signers than its quorum is refused', {}, async function(recorder) {
-		await multisigSend(recorder, true, [extraKey(0)]);
+		await multisigSend(recorder, true, [extraKey(recorder, 0)]);
 	}),
 	scenario('MS3', 'a multisig signing through a key that is not one of its signers is refused', {}, async function(recorder) {
-		await multisigSend(recorder, true, [extraKey(0), recorder.user(2)]);
+		await multisigSend(recorder, true, [extraKey(recorder, 0), recorder.user(2)]);
 	}),
 	scenario('MS4', 'a multisig without a grant on the account is refused, though a quorum signs', {}, async function(recorder) {
-		await multisigSend(recorder, false, [extraKey(0), extraKey(1)]);
+		await multisigSend(recorder, false, [extraKey(recorder, 0), extraKey(recorder, 1)]);
 	}),
 	scenario('O1', 'making a second account an owner of a token is refused', {}, async function(recorder) {
-		const published = await publishedToken(recorder, [0], ['ACCESS']);
+		const published = await heldToken(recorder, [0], ['ACCESS']);
 		await recorder.vote(0, [await ownerChange(recorder, published, [setOwner(recorder.user(1))])]);
 	}),
 	scenario('O2', 'handing a token\'s ownership to another account in one block gets a temporary vote', {}, async function(recorder) {
-		const published = await publishedToken(recorder, [0], ['ACCESS']);
+		const published = await heldToken(recorder, [0], ['ACCESS']);
 		await recorder.vote(0, [await ownerChange(recorder, published, [setOwner(recorder.user(1)), removeAll(recorder.user(0))])]);
 	}),
 	scenario('O3', 'adding a flag other than OWNER to the sole owner counts as removing it, and is refused', {}, async function(recorder) {
-		const published = await publishedToken(recorder, [0], ['ACCESS']);
+		const published = await heldToken(recorder, [0], ['ACCESS']);
 		await recorder.vote(0, [await ownerChange(recorder, published, [{ principal: recorder.user(0), method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['UPDATE_INFO']) }])]);
 	}),
 	scenario('O4', 'removing the sole owner of a token is refused', {}, async function(recorder) {
-		const published = await publishedToken(recorder, [0], ['ACCESS']);
+		const published = await heldToken(recorder, [0], ['ACCESS']);
 		await recorder.vote(0, [await ownerChange(recorder, published, [removeAll(recorder.user(0))])]);
 	}),
 	scenario('CE3', 'an ACL for a certificate its account does not hold is refused', {}, async function(recorder) {
 		const authorityKey = recorder.user(2);
-		const published = await publishedToken(recorder, [0], []);
+		const published = await heldToken(recorder, [0], []);
 		await recorder.vote(0, [await certificateGrant(recorder, published, await certificate(authorityKey, authorityKey, 1, 3650))]);
 	}),
 	scenario('CE3b', 'an ACL for a certificate that an earlier block of the same request stores is refused, since the certificate is looked up in storage', {}, async function(recorder) {
 		const authorityKey = recorder.user(2);
-		const published = await publishedToken(recorder, [0], []);
+		const published = await heldToken(recorder, [0], []);
 		const authority = await certificate(authorityKey, authorityKey, 1, 3650);
 		const { chains } = published;
 		const stored = chains.append(await storeCertificate(recorder, chains, authorityKey, authority));
 		await recorder.vote(0, [stored, await certificateGrant(recorder, published, authority)]);
 	}),
 	scenario('CE4', 'a token that admits a certificate\'s holders refuses a recipient without one, and admits one that holds it', {}, async function(recorder) {
-		const { token, chains } = await certifiedHolders(recorder, [0], 3650);
+		const { token, chains } = await certifiedHolders(recorder, [0], [{ holder: recorder.user(1), days: 3650 }]);
 		await recorder.vote(0, [await sendAfter(recorder, chains, recorder.user(0), { to: recorder.representative(1), token })]);
 		await recorder.vote(0, [await sendAfter(recorder, chains, recorder.user(0), { to: recorder.user(1), token })]);
 	}),
-	scenario('CE5', 'a certificate ACL admits a holder while the holder\'s certificate is valid, and refuses it once that certificate has expired', {}, async function(recorder) {
-		const { token, chains } = await certifiedHolders(recorder, [0, 1], 365);
-		await recorder.vote(0, [await sendAfter(recorder, chains, recorder.user(0), { to: recorder.user(1), token })]);
+	scenario('CE5', 'a certificate ACL admits a holder while the holder\'s certificate is valid, and refuses it once that certificate has expired, while still admitting a holder whose certificate is valid', {}, async function(recorder) {
+		const [expiring, lasting] = [recorder.user(1), recorder.representative(2)];
+		const { token, chains } = await certifiedHolders(recorder, [0, 1], [{ holder: expiring, days: 365 }, { holder: lasting, days: 3650 }]);
+		await recorder.vote(0, [await sendAfter(recorder, chains, recorder.user(0), { to: expiring, token })]);
 		recorder.advance(400 * DAY);
-		await recorder.vote(1, [await sendAfter(recorder, chains, recorder.user(0), { to: recorder.user(1), token })]);
+		await recorder.vote(1, [await sendAfter(recorder, chains, recorder.user(0), { to: expiring, token })]);
+		await recorder.vote(1, [await sendAfter(recorder, chains, recorder.user(0), { to: lasting, token })]);
 	}),
 	scenario('OP1', 'a TOKEN_ADMIN_MODIFY_BALANCE, signed by the token\'s owner, is refused as unsupported', {}, async function(recorder) {
 		await recorder.addGenesis(0);
@@ -550,7 +606,7 @@ export const permissionScenarios: readonly Scenario[] = [
 		})]);
 	}),
 	scenario('EO13', 'a second owner added by a key without rights is refused for the permissions before the owner count', {}, async function(recorder) {
-		const published = await publishedToken(recorder, [0], ['ACCESS']);
+		const published = await heldToken(recorder, [0], ['ACCESS']);
 		await recorder.vote(0, [await operationsBlock({
 			account: published.token,
 			signer: recorder.user(1),
@@ -560,14 +616,40 @@ export const permissionScenarios: readonly Scenario[] = [
 		})]);
 	}),
 	scenario('EO14', 'an overspend and a second owner are refused for the owner count before the balance', {}, async function(recorder) {
-		const published = await publishedToken(recorder, [0], ['ACCESS']);
+		const published = await heldToken(recorder, [0], ['ACCESS']);
 		const overspend = await sendAfter(recorder, published.chains, recorder.user(0), { to: recorder.user(1), amount: 401n });
 		await recorder.vote(0, [overspend, await ownerChange(recorder, published, [setOwner(recorder.user(1))])]);
 	}),
 	scenario('EO15', 'an overspend and an ACL for a certificate nobody holds are refused for the certificate before the balance', {}, async function(recorder) {
 		const authorityKey = recorder.user(2);
-		const published = await publishedToken(recorder, [0], []);
+		const published = await heldToken(recorder, [0], []);
 		const overspend = await sendAfter(recorder, published.chains, recorder.user(0), { to: recorder.user(1), amount: 401n });
 		await recorder.vote(0, [overspend, await certificateGrant(recorder, published, await certificate(authorityKey, authorityKey, 1, 3650))]);
+	}),
+	/*
+	 * The token's own effect, which carries the supply, exists from the
+	 * start of its block; the ACL's effect is the certificate's, created by
+	 * the operation, so the supply is checked first whatever the operation
+	 * order.
+	 * [Keeta TS] index.js:67425-67460, 68718-68724
+	 */
+	scenario('EO18', 'a token block that grants an ACL for a certificate nobody holds and mints past the maximum supply is refused for the supply', {}, async function(recorder) {
+		await recorder.addGenesis(0);
+		const chains = chainsOf(recorder);
+		const owner = recorder.user(0);
+		const authorityKey = recorder.user(2);
+		const { token, blocks } = await issueToken(recorder, chains, owner, { supply: MAXIMUM_SUPPLY, defaultPermission: [] });
+		await recorder.add(0, await confirmed(recorder, blocks));
+		const authority = await certificate(authorityKey, authorityKey, 1, 3650);
+		await recorder.vote(0, [await operationsBlock({
+			account: token,
+			signer: owner,
+			previous: chains.previous(token),
+			network: recorder.network.network,
+			operations: [
+				{ type: lib.Block.OperationType.MODIFY_PERMISSIONS, principal: { usingCertificate: true, certificateHash: authority.hash(), certificateAccount: authorityKey }, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['ACCESS']) },
+				{ type: lib.Block.OperationType.TOKEN_ADMIN_SUPPLY, method: lib.Block.AdjustMethod.ADD, amount: 1n }
+			]
+		})]);
 	})
 ];
