@@ -1,6 +1,24 @@
 # Every build artifact is defined here; "package.json" only exposes the
 # binaries of the npm packages. Run "make help" for a list of targets.
 
+CLEAN_GOALS := $(filter clean distclean,$(MAKECMDGOALS))
+OTHER_GOALS := $(filter-out clean distclean,$(MAKECMDGOALS))
+
+ifneq ($(and $(CLEAN_GOALS),$(OTHER_GOALS)),)
+
+# Under -j make stats the targets before "clean" has deleted them, so it
+# would judge them up to date. Running the clean goals to completion in a
+# separate make first gives the rest a fresh view of the tree.
+.PHONY: run-mixed-goals $(MAKECMDGOALS)
+$(MAKECMDGOALS): run-mixed-goals
+	@:
+
+run-mixed-goals:
+	$(MAKE) $(CLEAN_GOALS)
+	$(MAKE) $(OTHER_GOALS)
+
+else
+
 all: dist .nvmrc
 
 help:
@@ -15,32 +33,28 @@ help:
 	@echo "  clean         - Removes build artifacts"
 	@echo "  distclean     - Removes all build artifacts and dependencies"
 
-# When "clean" or "distclean" is given together with other goals, make would
-# otherwise run them concurrently under -j and delete files being built.
-CLEAN_GOALS := $(filter clean distclean,$(MAKECMDGOALS))
-
-.nvmrc: package.json Makefile | $(CLEAN_GOALS)
+.nvmrc: package.json Makefile
 	rm -f .nvmrc .nvmrc.new
 	jq -rM '"v" + .engines.node' < package.json > .nvmrc.new
 	mv .nvmrc.new .nvmrc
 
-node_modules/.done: package.json package-lock.json | $(CLEAN_GOALS)
+node_modules/.done: package.json package-lock.json
 	rm -rf node_modules
 	npm clean-install --ignore-scripts
 	@touch node_modules/.done
 
 # The directory itself is the target here, so it only follows the stamp.
-node_modules: node_modules/.done | $(CLEAN_GOALS)
+node_modules: node_modules/.done
 	@touch node_modules
 
-dist/.done: $(shell find src -type f -name '*.ts') tsconfig.json node_modules/.done | $(CLEAN_GOALS)
+dist/.done: $(shell find src -type f -name '*.ts') tsconfig.json node_modules/.done
 	npm run tsc
 	@touch dist/.done
 
-dist: dist/.done | $(CLEAN_GOALS)
+dist: dist/.done
 	@touch dist
 
-build/utils/.done: $(shell find utils -type f -name '*.ts' -not -path 'utils/lint-fixtures/*') utils/tsconfig.json tsconfig.json node_modules/.done | $(CLEAN_GOALS)
+build/utils/.done: $(shell find utils -type f -name '*.ts' -not -path 'utils/lint-fixtures/*') utils/tsconfig.json tsconfig.json node_modules/.done
 	npm run tsc -- -p utils
 	@touch build/utils/.done
 
@@ -66,3 +80,5 @@ distclean: clean
 	rm -rf node_modules .nvmrc reference
 
 .PHONY: all help test do-lint clean distclean
+
+endif
