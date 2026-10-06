@@ -48,7 +48,7 @@ help:
 	@echo "  test           - Type-checks and runs the test suite"
 	@echo "                   Specify extra flags with SLOP_NODE_TEST_EXTRA_ARGS"
 	@echo "  do-lint        - Runs the ASCII check, eslint and cspell"
-	@echo "  reference      - Extracts the reference tree for the installed keetanet-client"
+	@echo "  reference      - Extracts the reference tree for the pinned keetanet-client"
 	@echo "  reference-diff - Diffs the reference trees of two versions"
 	@echo "                   Specify FROM=<version> TO=<version>"
 	@echo "  clean          - Removes build artifacts"
@@ -64,14 +64,25 @@ node_modules/.done: package.json package-lock.json
 	npm clean-install --ignore-scripts
 	@touch node_modules/.done
 
+# Patches are written against one exact release, and patch refuses to apply
+# twice, so a stale stamp or a half-patched tree starts again from a clean
+# install. Everything that runs or type-checks code depends on this stamp.
+node_modules/.patched: node_modules/.done $(wildcard patches/keetanet-client@*/*.patch) utils/apply-patches
+	@if [ -e node_modules/.patched ]; then \
+		rm -f node_modules/.done node_modules/.patched; \
+		$(MAKE) node_modules/.done; \
+	fi
+	utils/apply-patches node_modules/@keetanetwork/keetanet-client patches || { rm -f node_modules/.done; exit 1; }
+	@touch node_modules/.patched
+
 # The directory itself is the target here, so it only follows the stamp.
-node_modules: node_modules/.done
+node_modules: node_modules/.patched
 	@touch node_modules
 
 # Compiled tests stay out of the distribution. The build info lives in dist, so
 # removing dist removes it too; without the stamp the directory may be partial,
 # which an incremental build would not notice, so it starts from scratch.
-dist/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts') tsconfig.json tsconfig.build.json node_modules/.done
+dist/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts') tsconfig.json tsconfig.build.json node_modules/.patched
 	@[ -e dist/.done ] || rm -f dist/.tsbuildinfo
 	npm run tsc -- -p tsconfig.build.json
 	@touch dist/.done
@@ -79,7 +90,7 @@ dist/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts') tsconf
 dist: dist/.done
 	@touch dist
 
-build/utils/.done: $(shell find utils -type f -name '*.ts' -not -path 'utils/lint-fixtures/*') utils/tsconfig.json tsconfig.json node_modules/.done
+build/utils/.done: $(shell find utils -type f -name '*.ts' -not -path 'utils/lint-fixtures/*') utils/tsconfig.json tsconfig.json node_modules/.patched
 	@[ -e build/utils/.done ] || rm -f build/utils/.tsbuildinfo
 	npm run tsc -- -p utils
 	@touch build/utils/.done
@@ -93,7 +104,7 @@ test: dist/.done build/utils/.done
 
 # git grep exits 1 when nothing matches and 128 when it fails, and only the
 # first means the tree is clean.
-do-lint: node_modules/.done
+do-lint: node_modules/.patched
 	@LC_ALL=C git grep -I -n --untracked '[^[:print:][:space:]]' -- . ':!LICENSE'; \
 	status=$$?; \
 	if [ $$status -eq 0 ]; then \
@@ -108,24 +119,23 @@ do-lint: node_modules/.done
 	npm run cspell -- --config .cspell.config.mjs --no-progress 'src/**/*.ts' 'utils/**/*.ts' Makefile
 
 # The tree is built beside its final name and renamed, so an interrupted run
-# never leaves a partial directory that looks complete. Versions other than the
-# installed one come from the registry, each into its own directory so that
-# parallel runs do not collide. The stem goes through the environment rather
-# than into the shell text, and is validated before anything is deleted.
+# never leaves a partial directory that looks complete. Every version, the
+# pinned one included, comes from its integrity-checked tarball rather than from
+# node_modules, so the patches never reach the reference. Each version has its
+# own download directory so that parallel runs do not collide. The stem goes
+# through the environment rather than into the shell text, and is validated
+# before anything is deleted.
 reference/%/.done: export REFERENCE_VERSION = $*
-reference/%/.done: node_modules/.done build/utils/.done utils/fetch-keetanet-client
+reference/%/.done: build/utils/.done utils/fetch-keetanet-client
 	@case "$$REFERENCE_VERSION" in \
 		''|[!0-9A-Za-z]*|*[!0-9A-Za-z.+-]*) \
 			echo "Error: not an exact version: $$REFERENCE_VERSION" >&2; \
 			exit 2;; \
 	esac
 	rm -rf "reference/$$REFERENCE_VERSION" "reference/$$REFERENCE_VERSION.tmp"
-	@package=node_modules/@keetanetwork/keetanet-client; \
-	if [ "$$REFERENCE_VERSION" != "$(KEETANET_CLIENT_VERSION)" ]; then \
-		package="reference/.packages/$$REFERENCE_VERSION"; \
-		rm -rf "$$package"; \
-		utils/fetch-keetanet-client "$$REFERENCE_VERSION" "$$package" || exit 1; \
-	fi; \
+	@package="reference/.packages/$$REFERENCE_VERSION"; \
+	rm -rf "$$package"; \
+	utils/fetch-keetanet-client "$$REFERENCE_VERSION" "$$package" || exit 1; \
 	node build/utils/reference/main.js --package "$$package" --out "reference/$$REFERENCE_VERSION.tmp"
 	mv "reference/$$REFERENCE_VERSION.tmp" "reference/$$REFERENCE_VERSION"
 	@touch "reference/$$REFERENCE_VERSION/.done"

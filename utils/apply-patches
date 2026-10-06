@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+fail() {
+	echo "apply-patches: $*" >&2
+	exit 1
+}
+
+if [ "$#" -ne 2 ]; then
+	echo "usage: apply-patches <package-directory> <patches-directory>" >&2
+	exit 2
+fi
+package_directory=$1
+patches_directory=$2
+
+name=$(basename "$package_directory")
+version=$(jq -er '.version' "$package_directory/package.json") ||
+	fail "cannot read the installed version from $package_directory/package.json"
+matching_directory="$patches_directory/$name@$version"
+
+# A patch is written against one exact release, so patches left over from
+# another version mean the upgrade has not reviewed them.
+shopt -s nullglob
+for directory in "$patches_directory/$name"@*; do
+	[ "$directory" = "$matching_directory" ] ||
+		fail "patches exist for ${directory#"$patches_directory/$name@"} but $name@$version is installed: $directory"
+done
+
+patch_options=(--strip=1 --forward --batch --no-backup-if-mismatch --reject-file=- --directory="$package_directory")
+export LC_ALL=C
+for patch_file in "$matching_directory"/*.patch; do
+	output=$(patch "${patch_options[@]}" --dry-run <"$patch_file" 2>&1) || {
+		echo "$output" >&2
+		fail "$patch_file does not apply to $name@$version"
+	}
+	output=$(patch "${patch_options[@]}" <"$patch_file" 2>&1) || {
+		echo "$output" >&2
+		fail "$patch_file failed to apply to $name@$version"
+	}
+done
