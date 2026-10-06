@@ -1,0 +1,332 @@
+import type { Account, AccountKeyAlgorithm } from '@keetanetwork/keetanet-client/lib/account.js';
+import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
+import type { ComputedEffectOfBlocks } from '@keetanetwork/keetanet-client/lib/ledger/effects.js';
+import type {
+	Ledger,
+	LedgerConfig,
+	LedgerStorageAPI,
+	LedgerStorageTransactionBase
+} from '@keetanetwork/keetanet-client/lib/ledger/index.js';
+import type { AccountInfoForType } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
+import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import { LedgerInternals, StatsPending } from '../../upstream/internals.js';
+import { assertNever } from '../../util/assert-never.js';
+import { blockHeightsOf, computeConfirmedStapleChange } from './confirmed.js';
+import type { ConfirmedStapleChange } from './confirmed.js';
+import { createLedgerError, describeError, isKeetaNetError } from './errors.js';
+import { toBlockHashKey, toStapleKey } from './keys.js';
+import type { BlockHashKey, StapleKey } from './keys.js';
+
+/** The options Ledger passes when it opens a transaction. */
+export type TransactionOptions = Parameters<LedgerStorageAPI['beginTransaction']>[0];
+
+/**
+ * What every driver transaction carries for upstream: the node, the moment the
+ * attempt began, its identifier, whether it may write, and the statistics that
+ * Ledger merges into the node only after a successful commit.
+ * [Keeta TS] index.js:68952-68960, 69001-69006
+ */
+export class LedgerDriverTransaction implements LedgerStorageTransactionBase {
+	readonly node?: NonNullable<TransactionOptions['node']>;
+	readonly moment: Date;
+	readonly identifier: string;
+	readonly readOnly: boolean;
+	readonly statsPending: InstanceType<typeof StatsPending>;
+
+	constructor(options: TransactionOptions) {
+		if (options.node !== undefined) {
+			this.node = options.node;
+		}
+		this.moment = options.moment ?? new Date();
+		this.identifier = options.identifier;
+		this.readOnly = options.readOnly ?? true;
+		this.statsPending = new StatsPending();
+	}
+}
+
+/** Raised when a driver is used before Ledger has called init(). */
+export class StorageDriverNotInitializedError extends Error {
+	constructor() {
+		super('storage driver used before Ledger called init()');
+		this.name = 'StorageDriverNotInitializedError';
+	}
+}
+
+type InitializedDriver = {
+	readonly config: LedgerConfig;
+	readonly ledger: Ledger;
+};
+
+type DriverState =
+	| { readonly state: 'uninitialized' }
+	| ({ readonly state: 'initialized' } & InitializedDriver);
+
+type StorageMember = keyof LedgerStorageAPI;
+
+type ArgumentsAfterTransaction<Member extends StorageMember> = Parameters<NonNullable<LedgerStorageAPI[Member]>> extends [unknown, ...infer Rest] ? Rest : never;
+
+type MemberResult<Member extends StorageMember> = ReturnType<NonNullable<LedgerStorageAPI[Member]>>;
+
+type ReplayState = {
+	readonly mayDefer: boolean;
+	readonly completed: Set<StapleKey>;
+	readonly deadline: number;
+};
+
+/** Documented default of LedgerConfig.heapProcessWindowMs. */
+const DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS = 5000;
+
+const LOG_SOURCE = 'ledger';
+
+/**
+ * The shared part of every storage driver. Upstream's own LedgerStorageBase
+ * supplies preAdjust, the height and head helpers and the gc loop unchanged;
+ * this class adds adjust, deferral and error evaluation on top, and declares
+ * every remaining member abstract so that a driver missing one does not compile.
+ */
+export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTransaction = LedgerDriverTransaction> extends LedgerInternals.LedgerStorageBase implements LedgerStorageAPI {
+	#driver: DriverState = { state: 'uninitialized' };
+
+	/**
+	 * Called once, synchronously, by the Ledger constructor; Ledger.copy shares
+	 * the driver without calling it again. A second call would bind one store to
+	 * two configurations, so it is refused.
+	 * [Keeta TS] index.js:70254-70266
+	 */
+	init(config: LedgerConfig, ledger: Ledger): void {
+		if (this.#driver.state === 'initialized') {
+			throw(new Error('storage driver is already initialized'));
+		}
+		// Upstream's base class logs through its own config field.
+		this.config = config;
+		this.#driver = { state: 'initialized', config, ledger };
+	}
+
+	protected get initialized(): InitializedDriver {
+		const driver = this.#driver;
+		switch (driver.state) {
+			case 'initialized':
+				return(driver);
+			case 'uninitialized':
+				throw(new StorageDriverNotInitializedError());
+			default:
+				return(assertNever(driver));
+		}
+	}
+
+	/**
+	 * Applies a confirmed staple, then every deferred staple that was waiting on
+	 * one of its blocks, all inside the caller's transaction. Returns each
+	 * applied staple once, or nothing when the staple had to be deferred, because
+	 * Ledger.add folds every returned block into the ledger checksum.
+	 * [Keeta TS] index.js:69404-69417
+	 */
+	async adjust(transaction: Transaction, input: VoteStaple, changes: ComputedEffectOfBlocks): Promise<VoteStaple[]> {
+		const windowMilliseconds = this.initialized.config.heapProcessWindowMs ?? DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS;
+		return(await this.#applyConfirmedStaple(transaction, input, changes, {
+			mayDefer: true,
+			completed: new Set(),
+			deadline: Date.now() + windowMilliseconds
+		}));
+	}
+
+	/**
+	 * Keeta errors pass through with their codes, so Ledger.run retries exactly
+	 * the ones that ask for it. Anything else becomes a non-retryable ledger
+	 * error: Ledger.run reruns the whole transaction on a retry, which is safe
+	 * only for failures a driver knows to be transient.
+	 * [Keeta TS] index.js:70325-70375
+	 */
+	evaluateError(error: unknown): Promise<unknown> {
+		if (isKeetaNetError(error)) {
+			return(Promise.resolve(error));
+		}
+		const wrapped = createLedgerError('LEDGER_OTHER', describeError(error));
+		wrapped.cause = error;
+		return(Promise.resolve(wrapped));
+	}
+
+	/**
+	 * Records the staple as waiting on each previous block that its own chain
+	 * lacks; a block whose previous is inside the staple waits on nothing.
+	 * [Keeta TS] index.js:67717-67728
+	 */
+	protected override async adjustDefer(transaction: Transaction, input: VoteStaple): Promise<void> {
+		const external = blocksWithExternalPrevious(input).filter(function(block): boolean {
+			return(!block.$opening);
+		});
+		const heights = await this.getBlockHeights(transaction, external.map(function(block) {
+			return({ blockHash: block.previous, account: block.account });
+		}));
+		const waitingOn = new Map<BlockHashKey, BlockHash>();
+		for (const block of external) {
+			const previous = toBlockHashKey(block.previous);
+			if (heights[previous] === null) {
+				waitingOn.set(previous, block.previous);
+			}
+		}
+		await this.storeDeferredStaple(transaction, input, [...waitingOn.values()]);
+	}
+
+	/**
+	 * Writes everything a confirmed staple changes. It must apply the whole
+	 * change or nothing, because a deferred staple that fails during replay is
+	 * skipped while the transaction carries on.
+	 */
+	protected abstract persistConfirmedStaple(transaction: Transaction, change: ConfirmedStapleChange): Promise<void>;
+
+	/** Stores a staple that is missing previous blocks, replacing an earlier copy. */
+	protected abstract storeDeferredStaple(transaction: Transaction, staple: VoteStaple, waitingOn: readonly BlockHash[]): Promise<void>;
+
+	/** Deferred staples waiting on any of these blocks, each listed once. */
+	protected abstract listDeferredStaplesWaitingOn(transaction: Transaction, blockHashes: readonly BlockHash[]): Promise<readonly VoteStaple[]>;
+
+	protected abstract removeDeferredStaple(transaction: Transaction, blocksHash: StapleKey): Promise<void>;
+
+	abstract beginTransaction(options: TransactionOptions): Promise<Transaction>;
+	abstract commitTransaction(transaction: Transaction): MemberResult<'commitTransaction'>;
+	abstract abortTransaction(transaction: Transaction): MemberResult<'abortTransaction'>;
+	abstract delegatedWeight(transaction: Transaction, ...input: ArgumentsAfterTransaction<'delegatedWeight'>): MemberResult<'delegatedWeight'>;
+	abstract getBalance(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getBalance'>): MemberResult<'getBalance'>;
+	abstract getAllBalances(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getAllBalances'>): MemberResult<'getAllBalances'>;
+	// Written out because a generic signature cannot be derived through Parameters and ReturnType.
+	abstract getAccountInfo<T extends AccountKeyAlgorithm = AccountKeyAlgorithm>(transaction: Transaction, account: Account<T> | string): Promise<AccountInfoForType<T>>;
+	abstract listOwners(transaction: Transaction, ...input: ArgumentsAfterTransaction<'listOwners'>): MemberResult<'listOwners'>;
+	abstract listACLsByPrincipal(transaction: Transaction, ...input: ArgumentsAfterTransaction<'listACLsByPrincipal'>): MemberResult<'listACLsByPrincipal'>;
+	abstract listACLsByEntity(transaction: Transaction, ...input: ArgumentsAfterTransaction<'listACLsByEntity'>): MemberResult<'listACLsByEntity'>;
+	abstract addPendingVote(transaction: Transaction, ...input: ArgumentsAfterTransaction<'addPendingVote'>): MemberResult<'addPendingVote'>;
+	abstract getBlock(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getBlock'>): MemberResult<'getBlock'>;
+	abstract override getBlockHeight(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getBlockHeight'>): MemberResult<'getBlockHeight'>;
+	abstract getVotes(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getVotes'>): MemberResult<'getVotes'>;
+	abstract override getVotesFromMultiplePrevious(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getVotesFromMultiplePrevious'>): MemberResult<'getVotesFromMultiplePrevious'>;
+	abstract getVoteStaples(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getVoteStaples'>): MemberResult<'getVoteStaples'>;
+	abstract getHistory(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getHistory'>): MemberResult<'getHistory'>;
+	abstract override getHeadBlocks(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getHeadBlocks'>): MemberResult<'getHeadBlocks'>;
+	abstract getBlockFromPrevious(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getBlockFromPrevious'>): MemberResult<'getBlockFromPrevious'>;
+	abstract getAccountRep(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getAccountRep'>): MemberResult<'getAccountRep'>;
+	abstract getVotesAfter(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getVotesAfter'>): MemberResult<'getVotesAfter'>;
+	abstract getNextSerialNumber(transaction?: Transaction): MemberResult<'getNextSerialNumber'>;
+	abstract getAccountCertificates(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getAccountCertificates'>): MemberResult<'getAccountCertificates'>;
+	abstract getAccountCertificateByHash(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getAccountCertificateByHash'>): MemberResult<'getAccountCertificateByHash'>;
+	abstract getIdempotentBlockHash(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getIdempotentBlockHash'>): MemberResult<'getIdempotentBlockHash'>;
+	abstract stats(): MemberResult<'stats'>;
+
+	/*
+	 * The template behind adjust: upstream's preAdjust assigns heights or
+	 * defers, the driver refuses forks, and only a fully computed change is
+	 * written.
+	 */
+	async #applyConfirmedStaple(transaction: Transaction, staple: VoteStaple, effects: ComputedEffectOfBlocks, replay: ReplayState): Promise<VoteStaple[]> {
+		const heights = await this.preAdjust(staple, replay.mayDefer, transaction);
+		// An empty result means preAdjust deferred the staple, or found it already deferred.
+		if (Object.keys(heights).length === 0) {
+			return([]);
+		}
+		await this.#assertExtendsConfirmedHistory(transaction, staple);
+
+		const { config, ledger } = this.initialized;
+		// Our temporary side vote is still in place here, which the settlement
+		// time is measured from; the increments are kept until the staple applies.
+		const settlementStatistics = await LedgerInternals.addTimeStatistic(ledger.node, staple.blocks, 'main', this, transaction, true);
+		const change = await computeConfirmedStapleChange({
+			transaction,
+			staple,
+			effects,
+			blockHeights: blockHeightsOf(staple, heights),
+			storage: this,
+			network: config.network,
+			baseToken: ledger.baseToken,
+			moment: transaction.moment
+		});
+		await this.persistConfirmedStaple(transaction, change);
+		for (const increase of settlementStatistics) {
+			transaction.statsPending.incr(...increase);
+		}
+		replay.completed.add(toStapleKey(staple.blocksHash));
+
+		const replayed = await this.#replayWaiters(transaction, staple, replay);
+		return([staple, ...replayed]);
+	}
+
+	/*
+	 * Replay never defers again: a waiter that still lacks another previous
+	 * stays where it is. A waiter that fails is logged and left in place, and
+	 * the staple that released it still applies.
+	 * [Keeta TS] index.js:67722-67725
+	 */
+	async #replayWaiters(transaction: Transaction, released: VoteStaple, replay: ReplayState): Promise<VoteStaple[]> {
+		const { config, ledger } = this.initialized;
+		const waiters = await this.listDeferredStaplesWaitingOn(transaction, released.blocks.map(function(block): BlockHash {
+			return(block.hash);
+		}));
+		const applied: VoteStaple[] = [];
+		for (const waiter of waiters) {
+			const waiterKey = toStapleKey(waiter.blocksHash);
+			if (replay.completed.has(waiterKey)) {
+				continue;
+			}
+			if (Date.now() > replay.deadline) {
+				config.log?.warn(LOG_SOURCE, `deferred staple replay window elapsed; ${waiterKey} stays deferred`);
+				break;
+			}
+			try {
+				const effects = LedgerInternals.computeEffectOfBlocks(waiter.blocks, ledger);
+				const result = await this.#applyConfirmedStaple(transaction, waiter, effects, { ...replay, mayDefer: false });
+				if (result.length > 0) {
+					await this.removeDeferredStaple(transaction, waiterKey);
+					applied.push(...result);
+				}
+			} catch (error: unknown) {
+				config.log?.error(LOG_SOURCE, `replaying deferred staple ${waiterKey} failed; it stays deferred`, error);
+			}
+		}
+		return(applied);
+	}
+
+	/*
+	 * Upstream's preAdjust assigns heights but never notices that a previous
+	 * block already has a confirmed successor, or that an opening block arrives
+	 * for an account that already has a chain. Applying such a staple would
+	 * overwrite confirmed history, so it is refused and reported.
+	 * [Keeta TS] index.js:67678-67732
+	 */
+	async #assertExtendsConfirmedHistory(transaction: Transaction, staple: VoteStaple): Promise<void> {
+		const claimedPrevious = new Set<BlockHashKey>();
+		for (const block of staple.blocks) {
+			const previous = toBlockHashKey(block.previous);
+			if (claimedPrevious.has(previous)) {
+				throw(this.#confirmedHistoryConflict(block, 'another block of the same staple has the same previous'));
+			}
+			claimedPrevious.add(previous);
+		}
+
+		await Promise.all(blocksWithExternalPrevious(staple).map(async (block): Promise<void> => {
+			if (block.$opening) {
+				const head = await this.getHeadBlock(transaction, block.account, 'main');
+				if (head !== null) {
+					throw(this.#confirmedHistoryConflict(block, `opening block for an account whose chain already ends at ${head.hash.toString()}`));
+				}
+				return;
+			}
+			const successor = await this.getBlockFromPrevious(transaction, block.previous, 'main');
+			if (successor !== null) {
+				throw(this.#confirmedHistoryConflict(block, `previous already has the confirmed successor ${successor.hash.toString()}`));
+			}
+		}));
+	}
+
+	#confirmedHistoryConflict(block: Block, reason: string): Error {
+		const message = `confirmed block ${block.hash.toString()} conflicts with confirmed history: ${reason}`;
+		this.initialized.config.log?.error(LOG_SOURCE, `network integrity alarm: ${message}`);
+		return(createLedgerError('LEDGER_PREVIOUS_ALREADY_USED', message));
+	}
+}
+
+function blocksWithExternalPrevious(staple: VoteStaple): Block[] {
+	const inStaple = new Set<BlockHashKey>(staple.blocks.map(function(block): BlockHashKey {
+		return(toBlockHashKey(block.hash));
+	}));
+	return(staple.blocks.filter(function(block): boolean {
+		return(!inStaple.has(toBlockHashKey(block.previous)));
+	}));
+}

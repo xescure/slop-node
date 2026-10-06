@@ -3,7 +3,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
-import { LedgerStorageSkeleton } from '../ledger/storage/skeleton.js';
+import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { advanceClock, createTestNetwork, freezeClock } from './network.js';
 import type { TestNetwork } from './network.js';
 import {
@@ -144,7 +144,7 @@ describe('test network', function() {
 
 	test('createLedger builds a ledger on the given storage driver', async function() {
 		const network = await createTestNetwork({ representativeWeights: WEIGHTS });
-		const storageDriver = new LedgerStorageSkeleton();
+		const storageDriver = new MemoryLedgerStorage();
 		const init = vi.spyOn(storageDriver, 'init');
 
 		const ledger = network.createLedger(storageDriver, requireAt(network.representatives, 0), { fee: { kind: 'flat', amount: 5n, payTo: requireAt(network.representatives, 0) } });

@@ -15,7 +15,8 @@ export default {
 		'vitest',
 		'retval',
 		'wordlist',
-		'esac'
+		'esac',
+		'blockhash'
 	],
 	ignorePaths: [
 		'/reference/',
