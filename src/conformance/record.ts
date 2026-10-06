@@ -1,13 +1,16 @@
+import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
-import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import type { Vote, VoteQuote, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import type { LedgerStorageDriverBase } from '../ledger/storage/base.js';
-import { TEST_NETWORK_SEEDS, advanceClock, freezeClock } from '../testing/network.js';
+import { TEST_NETWORK_SEEDS, advanceClock, createTestNetwork, freezeClock } from '../testing/network.js';
 import type { TestNetwork } from '../testing/network.js';
 import { toBase64, toCaseSeed, toDecimal, toMoment } from './case.js';
-import type { Base64, CaseAction, CaseFeePolicy, CaseLedgerMode, CaseStep, VoteCase, VoteReference } from './case.js';
+import type { AddSource, Base64, CaseAction, CaseFeePolicy, CaseLedgerMode, CaseNode, CaseStep, StapleReference, StepReference, VoteCase, VoteReference } from './case.js';
 import { CaseRunner } from './runner.js';
-import type { CaseSetup, Produced } from './runner.js';
+import type { CaseSetup } from './runner.js';
+
+const lib = KeetaNet.lib;
 
 /** Every case starts at this moment, after the cutoff that rejects negative amounts. */
 export const CASE_START: Date = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
@@ -25,23 +28,31 @@ export type Scenario = {
 	build(context: ScenarioContext): Promise<VoteCase>;
 };
 
+/**
+ * Without explicit nodes, node i is representative i's, with the given fee
+ * policy and write mode, so a scenario's actor is a representative index.
+ */
 export type RecordingOptions = {
 	readonly representativeWeights?: readonly bigint[];
 	readonly fee?: CaseFeePolicy;
 	readonly mode?: CaseLedgerMode;
+	readonly nodes?: readonly CaseNode[];
 };
 
-/** A step's produced vote or quote, as later steps reference it. */
-export type StepHandle = Extract<VoteReference, { fromStep: number }>;
+/** A step whose produced bytes later steps may reference. */
+export type StepHandle = StepReference;
 
 /** A supporting vote or quote: one an earlier step produced, or one given literally. */
-export type Supporting = StepHandle | Produced;
+export type Supporting = StepHandle | Vote | VoteQuote;
 
 function referenceTo(supporting: Supporting): VoteReference {
 	if ('fromStep' in supporting) {
 		return(supporting);
 	}
-	return({ bytes: toBase64(supporting.toBytes()) });
+	if (lib.Vote.Quote.isInstance(supporting)) {
+		return({ type: 'literal', kind: 'quote', bytes: toBase64(supporting.toBytes()) });
+	}
+	return({ type: 'literal', kind: 'vote', bytes: toBase64(supporting.toBytes()) });
 }
 
 function encodeBlocks(blocks: readonly Block[]): Base64[] {
@@ -57,18 +68,25 @@ function encodeBlocks(blocks: readonly Block[]): Base64[] {
  * outcome becomes the step's expectation; nothing is written by hand.
  */
 export class CaseRecorder {
+	readonly network: TestNetwork;
 	readonly #runner: CaseRunner;
 	readonly #setup: CaseSetup;
 	readonly #steps: CaseStep[] = [];
+	// The first add step that carried each staple, so later adds reference it.
+	readonly #staples = new Map<Base64, number>();
 
-	private constructor(runner: CaseRunner, setup: CaseSetup) {
-		this.#runner = runner;
+	private constructor(network: TestNetwork, setup: CaseSetup, runner: CaseRunner) {
+		this.network = network;
 		this.#setup = setup;
+		this.#runner = runner;
 	}
 
 	/** Freezes the clock at the start of the case. */
 	static async start(context: ScenarioContext, options: RecordingOptions = {}): Promise<CaseRecorder> {
 		const { representativeWeights = DEFAULT_WEIGHTS, fee = { type: 'free' }, mode = 'read-write' } = options;
+		const nodes = options.nodes ?? representativeWeights.map(function(_weight, representative): CaseNode {
+			return({ representative, fee, mode });
+		});
 		const setup: CaseSetup = {
 			network: {
 				id: '0',
@@ -79,19 +97,19 @@ export class CaseRecorder {
 				},
 				representativeWeights: representativeWeights.map(toDecimal)
 			},
-			fee,
-			mode
+			nodes
 		};
 		freezeClock(CASE_START);
-		return(new CaseRecorder(await CaseRunner.start(setup, context.createDriver), setup));
-	}
-
-	get network(): TestNetwork {
-		return(this.#runner.network);
+		const network = await createTestNetwork({ representativeWeights, seeds: TEST_NETWORK_SEEDS });
+		return(new CaseRecorder(network, setup, new CaseRunner(setup, context.createDriver)));
 	}
 
 	representative(index: number): Account {
-		return(this.#runner.representative(index));
+		const representative = this.network.representatives[index];
+		if (representative === undefined) {
+			throw(new Error(`there is no representative ${String(index)}`));
+		}
+		return(representative);
 	}
 
 	user(index: number): Account {
@@ -117,7 +135,7 @@ export class CaseRecorder {
 		advanceClock(milliseconds);
 	}
 
-	/** Every listed representative adds genesis, each as a step of its own. */
+	/** Every listed node adds genesis, each as a step of its own. */
 	async addGenesis(...actors: readonly number[]): Promise<void> {
 		for (const actor of actors) {
 			await this.add(actor, this.network.genesis);
@@ -125,11 +143,24 @@ export class CaseRecorder {
 	}
 
 	/**
-	 * A staple's canonical bytes are its uncompressed form, the one its hash covers.
+	 * A staple's canonical bytes are its uncompressed form, the one its hash
+	 * covers. A staple an earlier step already carried is referenced.
 	 * [Keeta TS] index.js:81036-81040
 	 */
-	add(actor: number, staple: VoteStaple): Promise<StepHandle> {
-		return(this.#record(actor, { type: 'add', staple: toBase64(staple.toBytes(true)) }));
+	add(actor: number, staple: VoteStaple, from?: AddSource): Promise<StepHandle> {
+		const bytes = toBase64(staple.toBytes(true));
+		const carriedBy = this.#staples.get(bytes);
+		let reference: StapleReference = { type: 'literal', kind: 'staple', bytes };
+		if (carriedBy === undefined) {
+			this.#staples.set(bytes, this.#steps.length);
+		} else {
+			reference = { type: 'step', fromStep: carriedBy };
+		}
+		const action: { type: 'add'; staple: StapleReference; from?: AddSource } = { type: 'add', staple: reference };
+		if (from !== undefined) {
+			action.from = from;
+		}
+		return(this.#record(actor, action));
 	}
 
 	vote(actor: number, blocks: readonly Block[], otherVotes?: readonly Supporting[], quote?: Supporting): Promise<StepHandle> {
@@ -151,8 +182,23 @@ export class CaseRecorder {
 		return(this.#record(actor, { type: 'gc' }));
 	}
 
+	/** Only the nodes that acted are kept, renumbered in their original order. */
 	finish(id: string, title: string): VoteCase {
-		return({ id, title, ...this.#setup, steps: [...this.#steps] });
+		const recorded = this.#steps;
+		const acting: number[] = [];
+		const nodes: CaseNode[] = [];
+		for (const [index, node] of this.#setup.nodes.entries()) {
+			if (recorded.some(function(step): boolean {
+				return(step.actor === index);
+			})) {
+				acting.push(index);
+				nodes.push(node);
+			}
+		}
+		const steps = recorded.map(function(step): CaseStep {
+			return({ ...step, actor: acting.indexOf(step.actor) });
+		});
+		return({ id, title, network: this.#setup.network, nodes, steps });
 	}
 
 	async #record(actor: number, action: CaseAction): Promise<StepHandle> {
@@ -163,7 +209,7 @@ export class CaseRecorder {
 			throw(new Error(`step ${String(fromStep)} cannot be recorded: ${result.reason}`));
 		}
 		this.#steps.push({ moment, actor, action, expect: result.observed });
-		return({ fromStep });
+		return({ type: 'step', fromStep });
 	}
 }
 

@@ -33,7 +33,7 @@ const baseToken = toCaseAccount(lib.Account.generateBaseAddresses(0n).baseToken)
 
 /** One step of every action, expectation, reference and fee shape. */
 const steps: readonly CaseStep[] = [
-	{ moment: toMoment(START), actor: 0, action: { type: 'add', staple: toBase64(bytesOf(1, 2, 3)) }, expect: { outcome: 'added' } },
+	{ moment: toMoment(START), actor: 0, action: { type: 'add', staple: { type: 'literal', kind: 'staple', bytes: toBase64(bytesOf(1, 2, 3)) } }, expect: { outcome: 'added' } },
 	{
 		moment: toMoment(START),
 		actor: 0,
@@ -49,7 +49,12 @@ const steps: readonly CaseStep[] = [
 	{
 		moment: toMoment(START),
 		actor: 0,
-		action: { type: 'vote', blocks: [toBase64(bytesOf(4)), toBase64(bytesOf(5))], otherVotes: [{ fromStep: 2 }, { bytes: toBase64(bytesOf(6)) }], quote: { fromStep: 1 } },
+		action: {
+			type: 'vote',
+			blocks: [toBase64(bytesOf(4)), toBase64(bytesOf(5))],
+			otherVotes: [{ type: 'step', fromStep: 2 }, { type: 'literal', kind: 'vote', bytes: toBase64(bytesOf(6)) }],
+			quote: { type: 'step', fromStep: 1 }
+		},
 		expect: { outcome: 'permanent', blocks: [hashOf('A'), hashOf('B')], fee: { type: 'none' } }
 	},
 	{ moment: toMoment(START), actor: 0, action: { type: 'vote', blocks: [], otherVotes: [] }, expect: { outcome: 'refused', error: { type: 'coded', code: 'LEDGER_MISSING_BLOCKS' } } },
@@ -66,7 +71,17 @@ const steps: readonly CaseStep[] = [
 		expect: { outcome: 'refused', error: { type: 'coded', code: 'LEDGER_NOT_SUCCESSOR', accounts: [holder, representative] } }
 	},
 	{ moment: toMoment(START), actor: 1, action: { type: 'gc' }, expect: { outcome: 'collected' } },
-	{ moment: toMoment(START), actor: 1, action: { type: 'quote', blocks: [] }, expect: { outcome: 'refused', error: { type: 'plain', message: 'May not issue votes in read-only mode, in no-voting mode' } } }
+	{ moment: toMoment(START), actor: 1, action: { type: 'quote', blocks: [] }, expect: { outcome: 'refused', error: { type: 'plain', message: 'May not issue votes in read-only mode, in no-voting mode' } } },
+	{ moment: toMoment(START), actor: 2, action: { type: 'add', staple: { type: 'step', fromStep: 0 }, from: 'bootstrap' }, expect: { outcome: 'added' } },
+	{
+		moment: toMoment(START),
+		actor: 0,
+		action: { type: 'vote', blocks: [toBase64(bytesOf(4))], otherVotes: [{ type: 'literal', kind: 'quote', bytes: toBase64(bytesOf(7)) }], quote: { type: 'literal', kind: 'vote', bytes: toBase64(bytesOf(8)) } },
+		expect: { outcome: 'rejectedInput', error: { type: 'coded', code: 'VOTE_EXPIRED' } }
+	},
+	{ moment: toMoment(START), actor: 2, action: { type: 'vote', blocks: [toBase64(bytesOf(4))] }, expect: { outcome: 'rejectedInput', error: { type: 'plain', message: 'not a block' } } },
+	{ moment: toMoment(START), actor: 1, action: { type: 'add', staple: { type: 'step', fromStep: 0 } }, expect: { outcome: 'refused', error: { type: 'coded', code: 'LEDGER_BLOCK_ALREADY_EXISTS' } } },
+	{ moment: toMoment(START), actor: 2, action: { type: 'gc' }, expect: { outcome: 'refused', error: { type: 'coded', code: 'LEDGER_OTHER', message: 'wrapped' } } }
 ];
 
 const voteCase: VoteCase = {
@@ -81,15 +96,18 @@ const voteCase: VoteCase = {
 		},
 		representativeWeights: [toDecimal(400n), toDecimal(300n)]
 	},
-	fee: { type: 'flat', amount: toDecimal(5n), token: baseToken, payTo: representative },
-	mode: 'read-write',
+	nodes: [
+		{ representative: 0, fee: { type: 'flat', amount: toDecimal(5n), token: baseToken, payTo: representative }, mode: 'read-write' },
+		{ representative: 1, fee: { type: 'free' }, mode: 'no-voting' },
+		{ representative: null, fee: { type: 'free' }, mode: 'bootstrap-only' }
+	],
 	steps
 };
 
 const file: VoteCaseFile = {
 	format: VOTE_CASE_FORMAT,
 	keetanetClient: '0.18.7',
-	cases: [voteCase, { ...voteCase, id: 'X2', fee: { type: 'free' }, mode: 'no-voting', steps: steps.slice(0, 1) }]
+	cases: [voteCase, { ...voteCase, id: 'X2', nodes: [{ representative: null, fee: { type: 'free' }, mode: 'read-only' }], steps: steps.slice(0, 1) }]
 };
 
 type JSONTree = { [key: string]: unknown };
@@ -137,7 +155,7 @@ describe('vote case format', function() {
 	test('the encoding has a fixed key order, two-space indentation and a trailing newline', function() {
 		const reordered: VoteCaseFile = {
 			cases: file.cases.map(function(entry): VoteCase {
-				return({ steps: entry.steps, mode: entry.mode, fee: entry.fee, network: entry.network, title: entry.title, id: entry.id });
+				return({ steps: entry.steps, nodes: entry.nodes, network: entry.network, title: entry.title, id: entry.id });
 			}),
 			keetanetClient: file.keetanetClient,
 			format: file.format
@@ -148,6 +166,19 @@ describe('vote case format', function() {
 		expect(text.startsWith('{\n  "format": "slop-node/vote-cases@1",\n  "keetanetClient": "0.18.7",\n  "cases": [\n')).toBe(true);
 		expect(text.endsWith('}\n')).toBe(true);
 		expect(text.endsWith('\n\n')).toBe(false);
+	});
+
+	test('references are written as {fromStep} or {kind, bytes}', function() {
+		const action = nodeAt(encodedTree(), ['cases', 0, 'steps', 3, 'action']);
+
+		expect(action).toEqual({
+			type: 'vote',
+			blocks: [toBase64(bytesOf(4)), toBase64(bytesOf(5))],
+			otherVotes: [{ fromStep: 2 }, { kind: 'vote', bytes: toBase64(bytesOf(6)) }],
+			quote: { fromStep: 1 }
+		});
+		expect(nodeAt(encodedTree(), ['cases', 0, 'steps', 9, 'action'])).toEqual({ type: 'add', staple: { fromStep: 0 }, from: 'bootstrap' });
+		expect(nodeAt(encodedTree(), ['cases', 0, 'nodes', 2])).toEqual({ representative: null, fee: { type: 'free' }, mode: 'bootstrap-only' });
 	});
 
 	test('an absent list of other votes stays distinct from an empty one', function() {
@@ -168,7 +199,7 @@ describe('vote case format', function() {
 		}, /format: expected "slop-node\/vote-cases@1"/, true],
 		['a missing expectation', function(tree: JSONTree): void {
 			deleteIn(tree, ['cases', 0, 'steps', 0], 'expect');
-		}, /cases\[0\]\.steps\[0\]\.expect: missing field/, true],
+		}, /^cases file\.cases\[0\]\.steps\[0\]\.expect: missing field$/, true],
 		['an unknown action', function(tree: JSONTree): void {
 			setIn(tree, ['cases', 0, 'steps', 0, 'action'], 'type', 'publish');
 		}, /cases\[0\]\.steps\[0\]\.action\.type: unknown value "publish"/, true],
@@ -176,29 +207,65 @@ describe('vote case format', function() {
 			setIn(tree, ['cases', 0, 'steps', 7, 'action'], 'blocks', []);
 		}, /cases\[0\]\.steps\[7\]\.action\.blocks: unexpected field/, true],
 		['bytes that are not canonical base64', function(tree: JSONTree): void {
-			setIn(tree, ['cases', 0, 'steps', 0, 'action'], 'staple', `${toBase64(bytesOf(1, 2, 3))}=`);
-		}, /cases\[0\]\.steps\[0\]\.action\.staple: expected canonical base64/, true],
+			setIn(tree, ['cases', 0, 'steps', 0, 'action', 'staple'], 'bytes', `${toBase64(bytesOf(1, 2, 3))}=`);
+		}, /cases\[0\]\.steps\[0\]\.action\.staple\.bytes: expected canonical base64/, true],
 		['an amount that is not a decimal', function(tree: JSONTree): void {
-			setIn(tree, ['cases', 0, 'fee'], 'amount', '05');
-		}, /cases\[0\]\.fee\.amount: expected a decimal integer/, true],
+			setIn(tree, ['cases', 0, 'nodes', 0, 'fee'], 'amount', '05');
+		}, /cases\[0\]\.nodes\[0\]\.fee\.amount: expected a decimal integer/, true],
 		['a weight of zero', function(tree: JSONTree): void {
 			setIn(tree, ['cases', 0, 'network', 'representativeWeights'], '0', '0');
 		}, /representativeWeights\[0\]: expected a positive weight/, true],
 		['a moment without milliseconds', function(tree: JSONTree): void {
 			setIn(tree, ['cases', 0, 'steps', 0], 'moment', '2026-01-01T00:00:00Z');
 		}, /cases\[0\]\.steps\[0\]\.moment: expected an ISO-8601 UTC moment with milliseconds/, true],
-		['an actor without a representative', function(tree: JSONTree): void {
-			setIn(tree, ['cases', 0, 'steps', 0], 'actor', 2);
-		}, /cases\[0\]\.steps\[0\]\.actor: expected a representative index below 2/, false],
+		['an actor without a node', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'steps', 0], 'actor', 3);
+		}, /cases\[0\]\.steps\[0\]\.actor: expected a node index below 3/, false],
+		['a non-integer actor', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'steps', 0], 'actor', 0.5);
+		}, /cases\[0\]\.steps\[0\]\.actor: expected a node index/, true],
+		['a node of a representative the network lacks', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'nodes', 0], 'representative', 2);
+		}, /cases\[0\]\.nodes\[0\]\.representative: expected null or a representative index below 2/, false],
+		['two nodes of one representative', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'nodes', 1], 'representative', 0);
+		}, /cases\[0\]\.nodes\[1\]\.representative: representative 0 already runs a node/, false],
+		['a case without nodes', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 1], 'nodes', []);
+		}, /cases\[1\]\.nodes: expected at least one node/, true],
 		['a reference to a later step', function(tree: JSONTree): void {
 			setIn(tree, ['cases', 0, 'steps', 3, 'action', 'otherVotes', 0], 'fromStep', 3);
 		}, /otherVotes\[0\]\.fromStep: expected an earlier step that produced a vote or quote/, false],
-		['a reference to a step that produced nothing', function(tree: JSONTree): void {
+		['a vote reference to an add step', function(tree: JSONTree): void {
 			setIn(tree, ['cases', 0, 'steps', 3, 'action', 'quote'], 'fromStep', 0);
 		}, /quote\.fromStep: expected an earlier step that produced a vote or quote/, false],
-		['a reference with both forms', function(tree: JSONTree): void {
-			setIn(tree, ['cases', 0, 'steps', 3, 'action', 'otherVotes', 0], 'bytes', toBase64(bytesOf(1, 2, 3)));
-		}, /otherVotes\[0\]: expected exactly one of bytes, fromStep/, true],
+		['a step reference with a kind', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'steps', 3, 'action', 'otherVotes', 0], 'kind', 'vote');
+		}, /otherVotes\[0\]\.kind: unexpected field/, true],
+		['literal bytes without a kind', function(tree: JSONTree): void {
+			deleteIn(tree, ['cases', 0, 'steps', 3, 'action', 'otherVotes', 1], 'kind');
+		}, /otherVotes\[1\]\.kind: missing field/, true],
+		['a staple among the other votes', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'steps', 3, 'action', 'otherVotes', 1], 'kind', 'staple');
+		}, /otherVotes\[1\]\.kind: unknown value "staple"/, true],
+		['a vote given as a staple', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'steps', 0, 'action', 'staple'], 'kind', 'vote');
+		}, /steps\[0\]\.action\.staple\.kind: unknown value "vote"/, true],
+		['a staple reference to a step that is not an add', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'steps', 9, 'action', 'staple'], 'fromStep', 1);
+		}, /steps\[9\]\.action\.staple\.fromStep: expected an earlier add step that carries its staple/, false],
+		['a chained staple reference', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'steps', 12, 'action', 'staple'], 'fromStep', 9);
+		}, /steps\[12\]\.action\.staple\.fromStep: expected an earlier add step that carries its staple/, false],
+		['an add source that is not a string', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'steps', 9, 'action'], 'from', 5);
+		}, /steps\[9\]\.action\.from: expected a string/, true],
+		['a message on a code that is not LEDGER_OTHER', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'steps', 4, 'expect', 'error'], 'message', 'not pinned');
+		}, /steps\[4\]\.expect\.error\.message: expected a message exactly when the code is LEDGER_OTHER/, false],
+		['LEDGER_OTHER without its message', function(tree: JSONTree): void {
+			deleteIn(tree, ['cases', 0, 'steps', 13, 'expect', 'error'], 'message');
+		}, /steps\[13\]\.expect\.error\.message: expected a message exactly when the code is LEDGER_OTHER/, false],
 		['an unknown error code', function(tree: JSONTree): void {
 			setIn(tree, ['cases', 0, 'steps', 4, 'expect', 'error'], 'code', 'LEDGER_NOPE');
 		}, /error\.code: unknown error code "LEDGER_NOPE"/, false],
@@ -206,17 +273,14 @@ describe('vote case format', function() {
 			setIn(tree, ['cases', 0, 'steps', 1, 'expect', 'blocks'], '0', 'a'.repeat(64));
 		}, /expect\.blocks\[0\]: expected an uppercase hex block hash/, true],
 		['an account that does not parse', function(tree: JSONTree): void {
-			setIn(tree, ['cases', 0, 'fee'], 'payTo', 'keeta_nope');
-		}, /cases\[0\]\.fee\.payTo: expected a keeta_ account/, false],
+			setIn(tree, ['cases', 0, 'nodes', 0, 'fee'], 'payTo', 'keeta_nope');
+		}, /cases\[0\]\.nodes\[0\]\.fee\.payTo: expected a keeta_ account/, false],
 		['an unknown ledger mode', function(tree: JSONTree): void {
-			setIn(tree, ['cases', 0], 'mode', 'write-only');
-		}, /cases\[0\]\.mode: unknown value "write-only"/, true],
+			setIn(tree, ['cases', 0, 'nodes', 0], 'mode', 'write-only');
+		}, /cases\[0\]\.nodes\[0\]\.mode: unknown value "write-only"/, true],
 		['a duplicate case', function(tree: JSONTree): void {
 			setIn(tree, ['cases', 1], 'id', 'X1');
-		}, /cases\[1\]\.id: duplicate case "X1"/, false],
-		['a non-integer actor', function(tree: JSONTree): void {
-			setIn(tree, ['cases', 0, 'steps', 0], 'actor', 0.5);
-		}, /cases\[0\]\.steps\[0\]\.actor: expected a representative index/, true]
+		}, /cases\[1\]\.id: duplicate case "X1"/, false]
 	])('decoding rejects %s', function(_name, change, message, schemaRejects) {
 		const tree = encodedTree();
 		change(tree);

@@ -2,7 +2,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { ErrorCode } from '@keetanetwork/keetanet-client/lib/error/index.js';
-import type { LedgerConfig } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
+import type { Ledger, LedgerConfig } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import { assertNever } from '../util/assert-never.js';
 
 /*
@@ -36,6 +36,12 @@ export type CaseBlockHash = ReturnType<BlockHash['toString']>;
 
 export type CaseLedgerMode = NonNullable<LedgerConfig['ledgerWriteMode']>;
 
+/** The one code whose message is pinned, because it wraps errors that have no code of their own. */
+export const WRAPPED_ERROR_CODE: Extract<ErrorCode, 'LEDGER_OTHER'> = 'LEDGER_OTHER';
+
+/** Where a staple comes from, as Ledger.add takes it; bootstrap-only ledgers accept only 'bootstrap'. */
+export type AddSource = NonNullable<Parameters<Ledger['add']>[1]>;
+
 /**
  * Representative and user i are the secp256k1 keys of their seed at index i,
  * the trusted root the key of its seed at index 0. Representative i is the
@@ -56,12 +62,33 @@ export type CaseFeePolicy =
 	{ readonly type: 'free' } |
 	{ readonly type: 'flat'; readonly amount: Decimal; readonly token?: CaseAccount; readonly payTo?: CaseAccount };
 
-/** A vote or quote given literally, or the one an earlier step of the same case produced. */
-export type VoteReference = { readonly bytes: Base64 } | { readonly fromStep: number };
+/**
+ * One node of the case: a representative's, or with a null representative
+ * one that holds no key. A representative runs at most one node, so the
+ * issuer of a vote names the node that produced it.
+ */
+export type CaseNode = {
+	readonly representative: number | null;
+	readonly fee: CaseFeePolicy;
+	readonly mode: CaseLedgerMode;
+};
+
+/**
+ * A reference always means bytes: literal bytes of the stated kind, or the
+ * bytes an earlier step produced, of the kind that step implies. The bytes
+ * are parsed at the referencing step's moment. In JSON a literal is
+ * `{kind, bytes}` and a step reference `{fromStep}`.
+ */
+export type StepReference = { readonly type: 'step'; readonly fromStep: number };
+
+export type VoteReference = { readonly type: 'literal'; readonly kind: 'vote' | 'quote'; readonly bytes: Base64 } | StepReference;
+
+/** A staple given literally, or the literal staple of an earlier add step; references do not chain. */
+export type StapleReference = { readonly type: 'literal'; readonly kind: 'staple'; readonly bytes: Base64 } | StepReference;
 
 /** An absent list of other votes differs from an empty one: upstream treats them differently. */
 export type CaseAction =
-	{ readonly type: 'add'; readonly staple: Base64 } |
+	{ readonly type: 'add'; readonly staple: StapleReference; readonly from?: AddSource } |
 	{ readonly type: 'vote'; readonly blocks: readonly Base64[]; readonly otherVotes?: readonly VoteReference[]; readonly quote?: VoteReference } |
 	{ readonly type: 'quote'; readonly blocks: readonly Base64[] } |
 	{ readonly type: 'gc' };
@@ -79,13 +106,16 @@ export type CaseVoteFee =
 	{ readonly type: 'choices'; readonly choices: readonly CaseFeeAmount[] };
 
 /**
- * A coded refusal is matched on its code and on the fields upstream attaches
- * to it; a plain one, which has no code, on its exact message.
+ * A coded error is matched on its code and on the fields upstream attaches
+ * to it; a plain one, an instance of Error itself, on its exact message.
+ * LEDGER_OTHER is the code a storage driver gives a plain error raised inside
+ * a ledger transaction, so it alone also carries that error's message.
  */
-export type CaseRefusal =
+export type CaseError =
 	{
 		readonly type: 'coded';
 		readonly code: ErrorCode;
+		readonly message?: string;
 		readonly accounts?: readonly CaseAccount[];
 		readonly blockhash?: CaseBlockHash;
 		readonly existingBlockhash?: CaseBlockHash;
@@ -96,14 +126,17 @@ export type ProducedOutcome = 'temporary' | 'permanent' | 'quote';
 
 /**
  * A produced vote or quote is pinned by the blocks it covers, its permanence
- * and its fee; its issuer is the step's actor. Serials and signatures are
- * never pinned.
+ * and its fee; its issuer is the actor's representative. Serials and
+ * signatures are never pinned. Input bytes that do not parse are rejected
+ * before the ledger sees the request; a request the ledger turns down is
+ * refused.
  */
 export type CaseExpectation =
 	{ readonly outcome: 'added' } |
 	{ readonly outcome: 'collected' } |
 	{ readonly outcome: ProducedOutcome; readonly blocks: readonly CaseBlockHash[]; readonly fee: CaseVoteFee } |
-	{ readonly outcome: 'refused'; readonly error: CaseRefusal };
+	{ readonly outcome: 'rejectedInput'; readonly error: CaseError } |
+	{ readonly outcome: 'refused'; readonly error: CaseError };
 
 export type CaseStep = {
 	readonly moment: Moment;
@@ -116,8 +149,7 @@ export type VoteCase = {
 	readonly id: string;
 	readonly title: string;
 	readonly network: CaseNetwork;
-	readonly fee: CaseFeePolicy;
-	readonly mode: CaseLedgerMode;
+	readonly nodes: readonly CaseNode[];
 	readonly steps: readonly CaseStep[];
 };
 
@@ -133,12 +165,6 @@ const LEDGER_MODES = {
 	'bootstrap-only': true,
 	'read-only': true
 } satisfies Record<CaseLedgerMode, true>;
-
-const PRODUCED_OUTCOMES = {
-	temporary: true,
-	permanent: true,
-	quote: true
-} satisfies Record<ProducedOutcome, true>;
 
 const DECIMAL_PATTERN = /^(0|[1-9][0-9]*)$/;
 const SEED_PATTERN = /^[0-9a-f]{64}$/;
@@ -208,7 +234,7 @@ export function toCaseBlockHash(hash: BlockHash): CaseBlockHash {
 
 /* Encoding. Objects are built field by field, so key order never depends on the input. */
 
-type JSONValue = string | number | readonly JSONValue[] | { readonly [key: string]: JSONValue };
+type JSONValue = string | number | null | readonly JSONValue[] | { readonly [key: string]: JSONValue };
 
 type JSONObject = { [key: string]: JSONValue };
 
@@ -252,17 +278,26 @@ function encodeVoteFee(fee: CaseVoteFee): JSONObject {
 	}
 }
 
-function encodeReference(reference: VoteReference): JSONObject {
-	if ('bytes' in reference) {
-		return({ bytes: reference.bytes });
+function encodeReference(reference: VoteReference | StapleReference): JSONObject {
+	switch (reference.type) {
+		case 'literal':
+			return({ kind: reference.kind, bytes: reference.bytes });
+		case 'step':
+			return({ fromStep: reference.fromStep });
+		default:
+			return(assertNever(reference));
 	}
-	return({ fromStep: reference.fromStep });
 }
 
 function encodeAction(action: CaseAction): JSONObject {
 	switch (action.type) {
-		case 'add':
-			return({ type: action.type, staple: action.staple });
+		case 'add': {
+			const encoded: JSONObject = { type: action.type, staple: encodeReference(action.staple) };
+			if (action.from !== undefined) {
+				encoded['from'] = action.from;
+			}
+			return(encoded);
+		}
 		case 'vote': {
 			const encoded: JSONObject = { type: action.type, blocks: [...action.blocks] };
 			if (action.otherVotes !== undefined) {
@@ -282,10 +317,13 @@ function encodeAction(action: CaseAction): JSONObject {
 	}
 }
 
-function encodeRefusal(error: CaseRefusal): JSONObject {
+function encodeError(error: CaseError): JSONObject {
 	switch (error.type) {
 		case 'coded': {
 			const encoded: JSONObject = { type: error.type, code: error.code };
+			if (error.message !== undefined) {
+				encoded['message'] = error.message;
+			}
 			if (error.accounts !== undefined) {
 				encoded['accounts'] = [...error.accounts];
 			}
@@ -313,8 +351,9 @@ function encodeExpectation(expectation: CaseExpectation): JSONObject {
 		case 'permanent':
 		case 'quote':
 			return({ outcome: expectation.outcome, blocks: [...expectation.blocks], fee: encodeVoteFee(expectation.fee) });
+		case 'rejectedInput':
 		case 'refused':
-			return({ outcome: expectation.outcome, error: encodeRefusal(expectation.error) });
+			return({ outcome: expectation.outcome, error: encodeError(expectation.error) });
 		default:
 			return(assertNever(expectation));
 	}
@@ -343,8 +382,9 @@ function encodeCase(voteCase: VoteCase): JSONObject {
 			},
 			representativeWeights: [...network.representativeWeights]
 		},
-		fee: encodeFeePolicy(voteCase.fee),
-		mode: voteCase.mode,
+		nodes: voteCase.nodes.map(function(node): JSONObject {
+			return({ representative: node.representative, fee: encodeFeePolicy(node.fee), mode: node.mode });
+		}),
 		steps: voteCase.steps.map(encodeStep)
 	});
 }
@@ -558,22 +598,71 @@ function readVoteFee(value: unknown, path: string): CaseVoteFee {
 	}
 }
 
-/** The steps before this one that produced a vote or quote, which a reference may name. */
-type Producers = ReadonlySet<number>;
+/** What each earlier step offers to references: the bytes it produced or carried, by kind. */
+type ReferenceKind = 'vote' | 'quote' | 'staple';
+type Producers = ReadonlyMap<number, ReferenceKind>;
 
-function readReference(value: unknown, path: string, producers: Producers): VoteReference {
-	const fields = readObject(value, path, [], ['bytes', 'fromStep']);
-	if (fields.has('bytes') === fields.has('fromStep')) {
-		throw(new CaseFormatError(path, 'expected exactly one of bytes, fromStep'));
+/** The kind of bytes a step offers to later references, if any. */
+function offeredBy(step: CaseStep): ReferenceKind | null {
+	switch (step.expect.outcome) {
+		case 'temporary':
+		case 'permanent':
+			return('vote');
+		case 'quote':
+			return('quote');
+		case 'added':
+		case 'collected':
+		case 'rejectedInput':
+		case 'refused':
+			break;
+		default:
+			return(assertNever(step.expect));
 	}
-	if (fields.has('bytes')) {
-		return({ bytes: readBase64(fields.get('bytes'), fields.at('bytes')) });
+	// An add step offers the staple it carries literally, whatever its outcome; references do not chain.
+	if (step.action.type === 'add' && step.action.staple.type === 'literal') {
+		return('staple');
 	}
+	return(null);
+}
+
+function readStepReference(fields: Fields, producers: Producers, accepted: readonly ReferenceKind[], expected: string): StepReference {
 	const fromStep = fields.get('fromStep');
-	if (typeof fromStep !== 'number' || !producers.has(fromStep)) {
-		throw(new CaseFormatError(fields.at('fromStep'), 'expected an earlier step that produced a vote or quote'));
+	if (typeof fromStep !== 'number') {
+		throw(new CaseFormatError(fields.at('fromStep'), expected));
 	}
-	return({ fromStep });
+	const offered = producers.get(fromStep);
+	if (offered === undefined || !accepted.includes(offered)) {
+		throw(new CaseFormatError(fields.at('fromStep'), expected));
+	}
+	return({ type: 'step', fromStep });
+}
+
+function readVoteReference(value: unknown, path: string, producers: Producers): VoteReference {
+	const fields = readObject(value, path, [], ['kind', 'bytes', 'fromStep']);
+	if (fields.has('fromStep')) {
+		readObject(value, path, ['fromStep']);
+		return(readStepReference(fields, producers, ['vote', 'quote'], 'expected an earlier step that produced a vote or quote'));
+	}
+	readObject(value, path, ['kind', 'bytes']);
+	return({
+		type: 'literal',
+		kind: readChoice(fields.get('kind'), fields.at('kind'), { vote: true, quote: true }),
+		bytes: readBase64(fields.get('bytes'), fields.at('bytes'))
+	});
+}
+
+function readStapleReference(value: unknown, path: string, producers: Producers): StapleReference {
+	const fields = readObject(value, path, [], ['kind', 'bytes', 'fromStep']);
+	if (fields.has('fromStep')) {
+		readObject(value, path, ['fromStep']);
+		return(readStepReference(fields, producers, ['staple'], 'expected an earlier add step that carries its staple'));
+	}
+	readObject(value, path, ['kind', 'bytes']);
+	return({
+		type: 'literal',
+		kind: readChoice(fields.get('kind'), fields.at('kind'), { staple: true }),
+		bytes: readBase64(fields.get('bytes'), fields.at('bytes'))
+	});
 }
 
 function readBlocks(fields: Fields): Base64[] {
@@ -581,22 +670,26 @@ function readBlocks(fields: Fields): Base64[] {
 }
 
 function readAction(value: unknown, path: string, producers: Producers): CaseAction {
-	const type = readChoice(readObject(value, path, ['type'], ['staple', 'blocks', 'otherVotes', 'quote']).get('type'), `${path}.type`, { add: true, vote: true, quote: true, gc: true });
+	const type = readChoice(readObject(value, path, ['type'], ['staple', 'from', 'blocks', 'otherVotes', 'quote']).get('type'), `${path}.type`, { add: true, vote: true, quote: true, gc: true });
 	switch (type) {
 		case 'add': {
-			const fields = readObject(value, path, ['type', 'staple']);
-			return({ type, staple: readBase64(fields.get('staple'), fields.at('staple')) });
+			const fields = readObject(value, path, ['type', 'staple'], ['from']);
+			const action: { type: 'add'; staple: StapleReference; from?: AddSource } = { type, staple: readStapleReference(fields.get('staple'), fields.at('staple'), producers) };
+			if (fields.has('from')) {
+				action.from = readString(fields.get('from'), fields.at('from'));
+			}
+			return(action);
 		}
 		case 'vote': {
 			const fields = readObject(value, path, ['type', 'blocks'], ['otherVotes', 'quote']);
 			const action: { type: 'vote'; blocks: Base64[]; otherVotes?: VoteReference[]; quote?: VoteReference } = { type, blocks: readBlocks(fields) };
 			if (fields.has('otherVotes')) {
 				action.otherVotes = readArray(fields.get('otherVotes'), fields.at('otherVotes'), function(reference, referencePath): VoteReference {
-					return(readReference(reference, referencePath, producers));
+					return(readVoteReference(reference, referencePath, producers));
 				});
 			}
 			if (fields.has('quote')) {
-				action.quote = readReference(fields.get('quote'), fields.at('quote'), producers);
+				action.quote = readVoteReference(fields.get('quote'), fields.at('quote'), producers);
 			}
 			return(action);
 		}
@@ -610,25 +703,31 @@ function readAction(value: unknown, path: string, producers: Producers): CaseAct
 	}
 }
 
-function readRefusal(value: unknown, path: string): CaseRefusal {
+function readError(value: unknown, path: string): CaseError {
 	const type = readChoice(readObject(value, path, ['type'], ['code', 'accounts', 'blockhash', 'existingBlockhash', 'message']).get('type'), `${path}.type`, { coded: true, plain: true });
 	switch (type) {
 		case 'coded': {
-			const fields = readObject(value, path, ['type', 'code'], ['accounts', 'blockhash', 'existingBlockhash']);
-			const refusal: { type: 'coded'; code: ErrorCode; accounts?: CaseAccount[]; blockhash?: CaseBlockHash; existingBlockhash?: CaseBlockHash } = {
+			const fields = readObject(value, path, ['type', 'code'], ['message', 'accounts', 'blockhash', 'existingBlockhash']);
+			const error: { type: 'coded'; code: ErrorCode; message?: string; accounts?: CaseAccount[]; blockhash?: CaseBlockHash; existingBlockhash?: CaseBlockHash } = {
 				type,
 				code: readErrorCode(fields.get('code'), fields.at('code'))
 			};
+			if (fields.has('message') !== (error.code === WRAPPED_ERROR_CODE)) {
+				throw(new CaseFormatError(fields.at('message'), `expected a message exactly when the code is ${WRAPPED_ERROR_CODE}`));
+			}
+			if (fields.has('message')) {
+				error.message = readString(fields.get('message'), fields.at('message'));
+			}
 			if (fields.has('accounts')) {
-				refusal.accounts = readArray(fields.get('accounts'), fields.at('accounts'), readAccount);
+				error.accounts = readArray(fields.get('accounts'), fields.at('accounts'), readAccount);
 			}
 			if (fields.has('blockhash')) {
-				refusal.blockhash = readBlockHash(fields.get('blockhash'), fields.at('blockhash'));
+				error.blockhash = readBlockHash(fields.get('blockhash'), fields.at('blockhash'));
 			}
 			if (fields.has('existingBlockhash')) {
-				refusal.existingBlockhash = readBlockHash(fields.get('existingBlockhash'), fields.at('existingBlockhash'));
+				error.existingBlockhash = readBlockHash(fields.get('existingBlockhash'), fields.at('existingBlockhash'));
 			}
-			return(refusal);
+			return(error);
 		}
 		case 'plain': {
 			const fields = readObject(value, path, ['type', 'message']);
@@ -646,6 +745,7 @@ function readExpectation(value: unknown, path: string): CaseExpectation {
 		temporary: true,
 		permanent: true,
 		quote: true,
+		rejectedInput: true,
 		refused: true
 	});
 	switch (outcome) {
@@ -663,9 +763,10 @@ function readExpectation(value: unknown, path: string): CaseExpectation {
 				fee: readVoteFee(fields.get('fee'), fields.at('fee'))
 			});
 		}
+		case 'rejectedInput':
 		case 'refused': {
 			const fields = readObject(value, path, ['outcome', 'error']);
-			return({ outcome, error: readRefusal(fields.get('error'), fields.at('error')) });
+			return({ outcome, error: readError(fields.get('error'), fields.at('error')) });
 		}
 		default:
 			return(assertNever(outcome));
@@ -693,33 +794,58 @@ function readNetwork(value: unknown, path: string): CaseNetwork {
 	});
 }
 
-function readSteps(value: unknown, path: string, representatives: number): CaseStep[] {
-	const producers = new Set<number>();
+function readNodes(value: unknown, path: string, representatives: number): CaseNode[] {
+	const running = new Set<number>();
+	const nodes = readArray(value, path, function(item, nodePath): CaseNode {
+		const fields = readObject(item, nodePath, ['representative', 'fee', 'mode']);
+		let representative: number | null = null;
+		if (fields.get('representative') !== null) {
+			representative = readIndex(fields.get('representative'), fields.at('representative'), representatives, `expected null or a representative index below ${String(representatives)}`);
+			if (running.has(representative)) {
+				throw(new CaseFormatError(fields.at('representative'), `representative ${String(representative)} already runs a node`));
+			}
+			running.add(representative);
+		}
+		return({
+			representative,
+			fee: readFeePolicy(fields.get('fee'), fields.at('fee')),
+			mode: readChoice(fields.get('mode'), fields.at('mode'), LEDGER_MODES)
+		});
+	});
+	if (nodes.length === 0) {
+		throw(new CaseFormatError(path, 'expected at least one node'));
+	}
+	return(nodes);
+}
+
+function readSteps(value: unknown, path: string, nodes: number): CaseStep[] {
+	const producers = new Map<number, ReferenceKind>();
 	return(readArray(value, path, function(item, stepPath, index): CaseStep {
 		const fields = readObject(item, stepPath, ['moment', 'actor', 'action', 'expect']);
 		const step: CaseStep = {
 			moment: readMoment(fields.get('moment'), fields.at('moment')),
-			actor: readIndex(fields.get('actor'), fields.at('actor'), representatives, `expected a representative index below ${String(representatives)}`),
+			actor: readIndex(fields.get('actor'), fields.at('actor'), nodes, `expected a node index below ${String(nodes)}`),
 			action: readAction(fields.get('action'), fields.at('action'), producers),
 			expect: readExpectation(fields.get('expect'), fields.at('expect'))
 		};
-		if (Object.hasOwn(PRODUCED_OUTCOMES, step.expect.outcome)) {
-			producers.add(index);
+		const offered = offeredBy(step);
+		if (offered !== null) {
+			producers.set(index, offered);
 		}
 		return(step);
 	}));
 }
 
 function readCase(value: unknown, path: string): VoteCase {
-	const fields = readObject(value, path, ['id', 'title', 'network', 'fee', 'mode', 'steps']);
+	const fields = readObject(value, path, ['id', 'title', 'network', 'nodes', 'steps']);
 	const network = readNetwork(fields.get('network'), fields.at('network'));
+	const nodes = readNodes(fields.get('nodes'), fields.at('nodes'), network.representativeWeights.length);
 	return({
 		id: readNonEmptyString(fields.get('id'), fields.at('id')),
 		title: readNonEmptyString(fields.get('title'), fields.at('title')),
 		network,
-		fee: readFeePolicy(fields.get('fee'), fields.at('fee')),
-		mode: readChoice(fields.get('mode'), fields.at('mode'), LEDGER_MODES),
-		steps: readSteps(fields.get('steps'), fields.at('steps'), network.representativeWeights.length)
+		nodes,
+		steps: readSteps(fields.get('steps'), fields.at('steps'), nodes.length)
 	});
 }
 
@@ -741,7 +867,7 @@ export function decodeVoteCaseFile(text: string): VoteCaseFile {
 		throw(new CaseFormatError(fields.at('keetanetClient'), 'expected an exact version'));
 	}
 	const seen = new Set<string>();
-	const cases = readArray(fields.get('cases'), 'cases', function(item, casePath): VoteCase {
+	const cases = readArray(fields.get('cases'), fields.at('cases'), function(item, casePath): VoteCase {
 		const voteCase = readCase(item, casePath);
 		if (seen.has(voteCase.id)) {
 			throw(new CaseFormatError(`${casePath}.id`, `duplicate case ${JSON.stringify(voteCase.id)}`));

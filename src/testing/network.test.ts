@@ -4,7 +4,7 @@ import type { Account, GenericAccount } from '@keetanetwork/keetanet-client/lib/
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
-import { TEST_NETWORK_SEEDS, advanceClock, createTestNetwork, freezeClock } from './network.js';
+import { TEST_NETWORK_SEEDS, advanceClock, createTestNetwork, deriveTestKeys, freezeClock } from './network.js';
 import type { TestNetwork } from './network.js';
 import {
 	createTokenBlock,
@@ -162,6 +162,25 @@ describe('test network', function() {
 		expect(publicKeys(defaults.representatives)).toEqual(publicKeys(WEIGHTS.map(function(_weight, index): Account {
 			return(KeetaNet.lib.Account.fromSeed(TEST_NETWORK_SEEDS.representative, index));
 		})));
+	});
+
+	test('createAccountLedger builds a keyless ledger that follows the network without voting', async function() {
+		const network = await createTestNetwork({ representativeWeights: WEIGHTS });
+		const ledger = network.createAccountLedger(new MemoryLedgerStorage());
+
+		await ledger.add(network.genesis);
+
+		expect(await ledger.getBalance(requireAt(network.users, 0), network.baseToken)).toBe(WEIGHTS[0]);
+		await expect(ledger.vote([await sendFromFirstUser(network)])).rejects.toMatchObject({ message: 'Cannot vote on block, no private key loaded' });
+	});
+
+	test('deriveTestKeys gives the keys of the network without building genesis', async function() {
+		const network = await createTestNetwork({ representativeWeights: WEIGHTS });
+		const keys = deriveTestKeys(TEST_NETWORK_SEEDS, WEIGHTS.length);
+
+		expect(keys.trustedRoot.publicKeyString.get()).toBe(network.trustedRoot.publicKeyString.get());
+		expect(keys.representatives.map(String)).toEqual(network.representatives.map(String));
+		expect(keys.users.map(String)).toEqual(network.users.map(String));
 	});
 
 	test('createLedger passes the write mode and the fee token on to the ledger', async function() {

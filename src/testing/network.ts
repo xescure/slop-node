@@ -55,21 +55,31 @@ export type TestLedgerOptions = {
 	readonly log?: LedgerConfig['log'];
 };
 
-export type TestNetwork = {
-	readonly network: 0n;
+/** The keys a network derives from its seeds; none of them needs genesis. */
+export type TestKeys = {
 	readonly trustedRoot: Account;
 	readonly trustedSigner: Account;
 	readonly representatives: readonly Account[];
 	readonly users: readonly Account[];
-	readonly baseToken: TokenAddress;
-	readonly networkAddress: NetworkAddress;
-	readonly genesis: VoteStaple;
+};
+
+/** Builds ledgers and nodes for one trusted root on network 0, each on the storage driver given. */
+export type TestLedgerFactory = {
 	createLedger(storageDriver: LedgerStorageAPI, representative: Account, options?: TestLedgerOptions): Ledger;
+	/** A ledger of a node that is not a representative: it holds no key, so it can never vote. */
+	createAccountLedger(storageDriver: LedgerStorageAPI, options?: TestLedgerOptions): Ledger;
 	/**
 	 * A representative node that owns its ledger, so the ledger records the
 	 * statistics that upstream gathers only when a node is attached.
 	 */
 	createNode(storageDriver: LedgerStorageAPI, representative: Account, options?: TestLedgerOptions): Node;
+};
+
+export type TestNetwork = TestKeys & TestLedgerFactory & {
+	readonly network: 0n;
+	readonly baseToken: TokenAddress;
+	readonly networkAddress: NetworkAddress;
+	readonly genesis: VoteStaple;
 };
 
 type Holder = {
@@ -226,59 +236,44 @@ function buildGenesis(trustedSigner: Account, holders: readonly Holder[]): Promi
 	return(buildMultiHolderGenesis(trustedSigner, holders, new Date()));
 }
 
-/*
- * Genesis and the blocks built afterwards read the global clock, so callers
- * freeze it with freezeClock() before creating the network to get identical
- * bytes.
- */
-export async function createTestNetwork(options: TestNetworkOptions): Promise<TestNetwork> {
-	const { representativeWeights, seeds = TEST_NETWORK_SEEDS } = options;
-	if (representativeWeights.length === 0) {
-		throw(new Error('a test network needs at least one representative'));
-	}
-	if (representativeWeights.some(function(weight): boolean {
-		return(weight <= 0n);
-	})) {
-		throw(new Error('every representative weight must be positive'));
-	}
-
+/** Representative and user i are the keys of their seeds at index i. */
+export function deriveTestKeys(seeds: TestNetworkSeeds, count: number): TestKeys {
 	const trustedSigner = lib.Account.fromSeed(seeds.trustedRoot, 0);
-	const trustedRoot = lib.Account.fromPublicKeyString(trustedSigner.publicKeyString.get());
-	const holders = representativeWeights.map(function(weight, index): Holder {
-		return({
-			weight,
-			representative: lib.Account.fromSeed(seeds.representative, index),
-			user: lib.Account.fromSeed(seeds.user, index)
-		});
+	const indexes = Array.from({ length: count }, function(_value, index): number {
+		return(index);
 	});
-	const { networkAddress, baseToken } = lib.Account.generateBaseAddresses(NETWORK);
-	const genesis = await buildGenesis(trustedSigner, holders);
-
 	return({
-		network: NETWORK,
-		trustedRoot,
 		trustedSigner,
-		representatives: holders.map(function(holder): Account {
-			return(holder.representative);
+		trustedRoot: lib.Account.fromPublicKeyString(trustedSigner.publicKeyString.get()),
+		representatives: indexes.map(function(index): Account {
+			return(lib.Account.fromSeed(seeds.representative, index));
 		}),
-		users: holders.map(function(holder): Account {
-			return(holder.user);
-		}),
-		baseToken,
-		networkAddress,
-		genesis,
+		users: indexes.map(function(index): Account {
+			return(lib.Account.fromSeed(seeds.user, index));
+		})
+	});
+}
+
+/** The trusted root is public only, as on a real node, which refuses a root with a private key. */
+export function createTestLedgerFactory(trustedRoot: Account): TestLedgerFactory {
+	function ledgerConfig(storageDriver: LedgerStorageAPI, ledgerOptions: TestLedgerOptions): LedgerConfig {
+		const config: LedgerConfig = {
+			...ledgerSettings(storageDriver, ledgerOptions),
+			kind: lib.Ledger.Kind.ACCOUNT,
+			initialTrustedAccount: trustedRoot,
+			network: NETWORK
+		};
+		if (ledgerOptions.log !== undefined) {
+			config.log = ledgerOptions.log;
+		}
+		return(config);
+	}
+	return({
 		createLedger(storageDriver, representative, ledgerOptions = {}) {
-			const config: LedgerConfig = {
-				...ledgerSettings(storageDriver, ledgerOptions),
-				kind: lib.Ledger.Kind.REPRESENTATIVE,
-				privateKey: representative,
-				initialTrustedAccount: trustedRoot,
-				network: NETWORK
-			};
-			if (ledgerOptions.log !== undefined) {
-				config.log = ledgerOptions.log;
-			}
-			return(new lib.Ledger(config));
+			return(new lib.Ledger({ ...ledgerConfig(storageDriver, ledgerOptions), kind: lib.Ledger.Kind.REPRESENTATIVE, privateKey: representative }));
+		},
+		createAccountLedger(storageDriver, ledgerOptions = {}) {
+			return(new lib.Ledger(ledgerConfig(storageDriver, ledgerOptions)));
 		},
 		createNode(storageDriver, representative, ledgerOptions = {}) {
 			// Peers are never connected, so the node only ever talks to its own ledger.
@@ -295,6 +290,47 @@ export async function createTestNetwork(options: TestNetworkOptions): Promise<Te
 			}));
 		}
 	});
+}
+
+/*
+ * Genesis and the blocks built afterwards read the global clock, so callers
+ * freeze it with freezeClock() before creating the network to get identical
+ * bytes.
+ */
+export async function createTestNetwork(options: TestNetworkOptions): Promise<TestNetwork> {
+	const { representativeWeights, seeds = TEST_NETWORK_SEEDS } = options;
+	if (representativeWeights.length === 0) {
+		throw(new Error('a test network needs at least one representative'));
+	}
+	if (representativeWeights.some(function(weight): boolean {
+		return(weight <= 0n);
+	})) {
+		throw(new Error('every representative weight must be positive'));
+	}
+
+	const keys = deriveTestKeys(seeds, representativeWeights.length);
+	const holders = representativeWeights.map(function(weight, index): Holder {
+		return({ weight, representative: requireKey(keys.representatives, index), user: requireKey(keys.users, index) });
+	});
+	const { networkAddress, baseToken } = lib.Account.generateBaseAddresses(NETWORK);
+	const genesis = await buildGenesis(keys.trustedSigner, holders);
+
+	return({
+		...keys,
+		...createTestLedgerFactory(keys.trustedRoot),
+		network: NETWORK,
+		baseToken,
+		networkAddress,
+		genesis
+	});
+}
+
+function requireKey(keys: readonly Account[], index: number): Account {
+	const key = keys[index];
+	if (key === undefined) {
+		throw(new Error(`no key at index ${String(index)}`));
+	}
+	return(key);
 }
 
 export function freezeClock(at: Date): void {

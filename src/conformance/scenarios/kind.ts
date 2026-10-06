@@ -185,7 +185,7 @@ export const kindScenarios: readonly Scenario[] = [
 		await recorder.vote(0, [await send(recorder, 1)], undefined, quote);
 		await recorder.vote(0, [block, await send(recorder, 0, block.hash)], undefined, quote);
 	}),
-	scenario('P9c', 'a temporary vote on a matching quote copies the quote\'s fee', CHARGING, async function(recorder) {
+	scenario('P9c', 'a request with a matching quote and no other votes gets a temporary vote', CHARGING, async function(recorder) {
 		await recorder.addGenesis(0);
 		const block = await send(recorder, 0);
 		const quote = await recorder.quote(0, [block]);

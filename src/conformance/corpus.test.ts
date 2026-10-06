@@ -87,19 +87,29 @@ describe('vote-decision corpus', function() {
 			expect(await generate(group)).toBe(await generate(group));
 		});
 
-		test('every scenario has a distinct ID', function() {
-			const ids = group.scenarios.map(function(scenario): string {
-				return(scenario.id);
-			});
-			expect(new Set(ids).size).toBe(ids.length);
-		});
-
 		test('the committed file is valid under the schema and decodes', async function() {
 			const text = await readCommitted(group);
 
 			expect(schemaViolations(JSON.parse(text))).toEqual([]);
 			expect(encodeVoteCaseFile(decodeVoteCaseFile(text))).toBe(text);
 		});
+	});
+
+	test('case IDs are unique across every group, in the scenarios and in the committed files', async function() {
+		const scenarioIDs = groups.flatMap(function(group): string[] {
+			return(group.scenarios.map(function(scenario): string {
+				return(scenario.id);
+			}));
+		});
+		const committedIDs: string[] = [];
+		for (const group of groups) {
+			for (const voteCase of decodeVoteCaseFile(await readCommitted(group)).cases) {
+				committedIDs.push(voteCase.id);
+			}
+		}
+
+		expect(new Set(scenarioIDs).size).toBe(scenarioIDs.length);
+		expect(new Set(committedIDs).size).toBe(committedIDs.length);
 	});
 
 	test('every committed file belongs to a group', async function() {

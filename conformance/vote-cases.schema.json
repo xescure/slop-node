@@ -1,18 +1,29 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Vote-decision cases, format slop-node/vote-cases@1",
-  "description": "Situations a Keeta representative decides on, each with the outcome the published keetanet-client Ledger produces. A case rebuilds its network from the seeds and weights, then runs its steps in order, each with the clock frozen at the step's moment.",
+  "description": "Situations a Keeta node decides on, each with the outcome the published keetanet-client Ledger produces. A case derives its keys from the seeds, builds each node's ledger as described, then runs its steps in order, each with the clock frozen at the step's moment.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["format", "keetanetClient", "cases"],
+  "required": [
+    "format",
+    "keetanetClient",
+    "cases"
+  ],
   "properties": {
-    "format": { "const": "slop-node/vote-cases@1" },
+    "format": {
+      "const": "slop-node/vote-cases@1"
+    },
     "keetanetClient": {
       "description": "The exact keetanet-client version whose Ledger produced the expectations.",
       "type": "string",
       "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
     },
-    "cases": { "type": "array", "items": { "$ref": "#/$defs/case" } }
+    "cases": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/case"
+      }
+    }
   },
   "$defs": {
     "base64": {
@@ -58,111 +69,294 @@
       "description": "Representative and user i are the secp256k1 keys of their seed at index i, the trusted root the key of its seed at index 0. User i holds representative i's weight in the base token and delegates to it.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "seeds", "representativeWeights"],
+      "required": [
+        "id",
+        "seeds",
+        "representativeWeights"
+      ],
       "properties": {
-        "id": { "const": "0" },
+        "id": {
+          "const": "0"
+        },
         "seeds": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["trustedRoot", "representative", "user"],
+          "required": [
+            "trustedRoot",
+            "representative",
+            "user"
+          ],
           "properties": {
-            "trustedRoot": { "$ref": "#/$defs/seed" },
-            "representative": { "$ref": "#/$defs/seed" },
-            "user": { "$ref": "#/$defs/seed" }
+            "trustedRoot": {
+              "$ref": "#/$defs/seed"
+            },
+            "representative": {
+              "$ref": "#/$defs/seed"
+            },
+            "user": {
+              "$ref": "#/$defs/seed"
+            }
           }
         },
-        "representativeWeights": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/positiveDecimal" } }
+        "representativeWeights": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/positiveDecimal"
+          }
+        }
       }
     },
     "feePolicy": {
-      "description": "What every representative's ledger charges for a temporary vote or quote. A flat fee without a token is in the base token, and without a payee is paid to the voter.",
+      "description": "What the node's ledger charges for a temporary vote or quote. A flat fee without a token is in the base token, and without a payee is paid to the voter.",
       "oneOf": [
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type"],
-          "properties": { "type": { "const": "free" } }
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "free"
+            }
+          }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "amount"],
+          "required": [
+            "type",
+            "amount"
+          ],
           "properties": {
-            "type": { "const": "flat" },
-            "amount": { "$ref": "#/$defs/decimal" },
-            "token": { "$ref": "#/$defs/account" },
-            "payTo": { "$ref": "#/$defs/account" }
+            "type": {
+              "const": "flat"
+            },
+            "amount": {
+              "$ref": "#/$defs/decimal"
+            },
+            "token": {
+              "$ref": "#/$defs/account"
+            },
+            "payTo": {
+              "$ref": "#/$defs/account"
+            }
           }
         }
       ]
     },
-    "mode": { "enum": ["read-write", "no-voting", "bootstrap-only", "read-only"] },
-    "reference": {
-      "description": "A vote or quote given literally, or the one an earlier step of the same case produced.",
+    "mode": {
+      "enum": [
+        "read-write",
+        "no-voting",
+        "bootstrap-only",
+        "read-only"
+      ]
+    },
+    "node": {
+      "description": "One node of the case: a representative's, or with a null representative one that holds no key and so never votes. A representative runs at most one node. A step's actor indexes the case's nodes.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "representative",
+        "fee",
+        "mode"
+      ],
+      "properties": {
+        "representative": {
+          "description": "The index of the representative whose key the node holds, or null.",
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fee": {
+          "$ref": "#/$defs/feePolicy"
+        },
+        "mode": {
+          "$ref": "#/$defs/mode"
+        }
+      }
+    },
+    "voteReference": {
+      "description": "Always bytes: literal bytes of the stated kind, or the vote or quote an earlier step produced. The bytes are parsed at the referencing step's moment.",
       "oneOf": [
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["bytes"],
-          "properties": { "bytes": { "$ref": "#/$defs/base64" } }
+          "required": [
+            "kind",
+            "bytes"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "vote",
+                "quote"
+              ]
+            },
+            "bytes": {
+              "$ref": "#/$defs/base64"
+            }
+          }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["fromStep"],
-          "properties": { "fromStep": { "type": "integer", "minimum": 0 } }
+          "required": [
+            "fromStep"
+          ],
+          "properties": {
+            "fromStep": {
+              "description": "An earlier step of the same case, whose bytes are meant.",
+              "type": "integer",
+              "minimum": 0
+            }
+          }
         }
       ]
     },
-    "blocks": { "type": "array", "items": { "$ref": "#/$defs/base64" } },
+    "stapleReference": {
+      "description": "Literal staple bytes, or the literal staple an earlier add step carries; a reference never names an add step that itself references.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "bytes"
+          ],
+          "properties": {
+            "kind": {
+              "const": "staple"
+            },
+            "bytes": {
+              "$ref": "#/$defs/base64"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "fromStep"
+          ],
+          "properties": {
+            "fromStep": {
+              "description": "An earlier step of the same case, whose bytes are meant.",
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      ]
+    },
+    "blocks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/base64"
+      }
+    },
     "action": {
       "description": "An absent otherVotes differs from an empty one.",
       "oneOf": [
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "staple"],
+          "required": [
+            "type",
+            "staple"
+          ],
           "properties": {
-            "type": { "const": "add" },
-            "staple": { "$ref": "#/$defs/base64" }
+            "type": {
+              "const": "add"
+            },
+            "staple": {
+              "$ref": "#/$defs/stapleReference"
+            },
+            "from": {
+              "description": "The source Ledger.add is given; a bootstrap-only ledger accepts only \"bootstrap\".",
+              "type": "string"
+            }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "blocks"],
+          "required": [
+            "type",
+            "blocks"
+          ],
           "properties": {
-            "type": { "const": "vote" },
-            "blocks": { "$ref": "#/$defs/blocks" },
-            "otherVotes": { "type": "array", "items": { "$ref": "#/$defs/reference" } },
-            "quote": { "$ref": "#/$defs/reference" }
+            "type": {
+              "const": "vote"
+            },
+            "blocks": {
+              "$ref": "#/$defs/blocks"
+            },
+            "otherVotes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/voteReference"
+              }
+            },
+            "quote": {
+              "$ref": "#/$defs/voteReference"
+            }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "blocks"],
+          "required": [
+            "type",
+            "blocks"
+          ],
           "properties": {
-            "type": { "const": "quote" },
-            "blocks": { "$ref": "#/$defs/blocks" }
+            "type": {
+              "const": "quote"
+            },
+            "blocks": {
+              "$ref": "#/$defs/blocks"
+            }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type"],
-          "properties": { "type": { "const": "gc" } }
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "gc"
+            }
+          }
         }
       ]
     },
     "feeAmount": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["amount"],
+      "required": [
+        "amount"
+      ],
       "properties": {
-        "amount": { "$ref": "#/$defs/decimal" },
-        "token": { "$ref": "#/$defs/account" },
-        "payTo": { "$ref": "#/$defs/account" }
+        "amount": {
+          "$ref": "#/$defs/decimal"
+        },
+        "token": {
+          "$ref": "#/$defs/account"
+        },
+        "payTo": {
+          "$ref": "#/$defs/account"
+        }
       }
     },
     "voteFee": {
@@ -171,83 +365,173 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type"],
-          "properties": { "type": { "const": "none" } }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["type", "amount"],
+          "required": [
+            "type"
+          ],
           "properties": {
-            "type": { "const": "single" },
-            "amount": { "$ref": "#/$defs/decimal" },
-            "token": { "$ref": "#/$defs/account" },
-            "payTo": { "$ref": "#/$defs/account" }
+            "type": {
+              "const": "none"
+            }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "choices"],
+          "required": [
+            "type",
+            "amount"
+          ],
           "properties": {
-            "type": { "const": "choices" },
-            "choices": { "type": "array", "items": { "$ref": "#/$defs/feeAmount" } }
+            "type": {
+              "const": "single"
+            },
+            "amount": {
+              "$ref": "#/$defs/decimal"
+            },
+            "token": {
+              "$ref": "#/$defs/account"
+            },
+            "payTo": {
+              "$ref": "#/$defs/account"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "choices"
+          ],
+          "properties": {
+            "type": {
+              "const": "choices"
+            },
+            "choices": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/feeAmount"
+              }
+            }
           }
         }
       ]
     },
-    "refusal": {
-      "description": "A coded error is matched on its code and the fields upstream attaches to it; a plain Error on its exact message.",
+    "error": {
+      "description": "A coded error is matched on its code and the fields upstream attaches to it, and LEDGER_OTHER also on the message of the error it wraps; a plain one, an instance of Error itself, on its exact message.",
       "oneOf": [
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "code"],
+          "required": [
+            "type",
+            "code"
+          ],
           "properties": {
-            "type": { "const": "coded" },
-            "code": { "$ref": "#/$defs/errorCode" },
-            "accounts": { "type": "array", "items": { "$ref": "#/$defs/account" } },
-            "blockhash": { "$ref": "#/$defs/blockHash" },
-            "existingBlockhash": { "$ref": "#/$defs/blockHash" }
+            "type": {
+              "const": "coded"
+            },
+            "code": {
+              "$ref": "#/$defs/errorCode"
+            },
+            "message": {
+              "description": "Present exactly when the code is LEDGER_OTHER, which wraps an error that has no code of its own.",
+              "type": "string"
+            },
+            "accounts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/account"
+              }
+            },
+            "blockhash": {
+              "$ref": "#/$defs/blockHash"
+            },
+            "existingBlockhash": {
+              "$ref": "#/$defs/blockHash"
+            }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "message"],
+          "required": [
+            "type",
+            "message"
+          ],
           "properties": {
-            "type": { "const": "plain" },
-            "message": { "type": "string" }
+            "type": {
+              "const": "plain"
+            },
+            "message": {
+              "type": "string"
+            }
           }
         }
       ]
     },
     "expectation": {
-      "description": "A produced vote or quote is issued by the step's actor and validly signed; its serial and signature are not pinned.",
+      "description": "A produced vote or quote is issued by the actor's representative and validly signed; its serial and signature are not pinned. Input bytes that do not parse are rejectedInput; a request the ledger turns down is refused.",
       "oneOf": [
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["outcome"],
-          "properties": { "outcome": { "enum": ["added", "collected"] } }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["outcome", "blocks", "fee"],
+          "required": [
+            "outcome"
+          ],
           "properties": {
-            "outcome": { "enum": ["temporary", "permanent", "quote"] },
-            "blocks": { "type": "array", "items": { "$ref": "#/$defs/blockHash" } },
-            "fee": { "$ref": "#/$defs/voteFee" }
+            "outcome": {
+              "enum": [
+                "added",
+                "collected"
+              ]
+            }
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["outcome", "error"],
+          "required": [
+            "outcome",
+            "blocks",
+            "fee"
+          ],
           "properties": {
-            "outcome": { "const": "refused" },
-            "error": { "$ref": "#/$defs/refusal" }
+            "outcome": {
+              "enum": [
+                "temporary",
+                "permanent",
+                "quote"
+              ]
+            },
+            "blocks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/blockHash"
+              }
+            },
+            "fee": {
+              "$ref": "#/$defs/voteFee"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "outcome",
+            "error"
+          ],
+          "properties": {
+            "outcome": {
+              "enum": [
+                "rejectedInput",
+                "refused"
+              ]
+            },
+            "error": {
+              "$ref": "#/$defs/error"
+            }
           }
         }
       ]
@@ -255,25 +539,64 @@
     "step": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["moment", "actor", "action", "expect"],
+      "required": [
+        "moment",
+        "actor",
+        "action",
+        "expect"
+      ],
       "properties": {
-        "moment": { "$ref": "#/$defs/moment" },
-        "actor": { "description": "The index of the representative whose ledger acts.", "type": "integer", "minimum": 0 },
-        "action": { "$ref": "#/$defs/action" },
-        "expect": { "$ref": "#/$defs/expectation" }
+        "moment": {
+          "$ref": "#/$defs/moment"
+        },
+        "actor": {
+          "description": "The index of the node that acts.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "action": {
+          "$ref": "#/$defs/action"
+        },
+        "expect": {
+          "$ref": "#/$defs/expectation"
+        }
       }
     },
     "case": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "title", "network", "fee", "mode", "steps"],
+      "required": [
+        "id",
+        "title",
+        "network",
+        "nodes",
+        "steps"
+      ],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "title": { "type": "string", "minLength": 1 },
-        "network": { "$ref": "#/$defs/network" },
-        "fee": { "$ref": "#/$defs/feePolicy" },
-        "mode": { "$ref": "#/$defs/mode" },
-        "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } }
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "network": {
+          "$ref": "#/$defs/network"
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/node"
+          }
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/step"
+          }
+        }
       }
     }
   }

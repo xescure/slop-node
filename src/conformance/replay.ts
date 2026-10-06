@@ -14,21 +14,16 @@ export type ReplayFailure = {
 };
 
 /**
- * Executes a case from its data alone: the network is rebuilt from the
- * case's seeds and weights, every step runs with the clock frozen at its
- * moment, and every step's outcome is compared with its expectation. A step
- * that cannot be judged, such as one that references a vote an earlier step
- * failed to produce, ends the case.
+ * Executes a case from its data alone: keys derive from the case's seeds,
+ * each node's ledger is built as the case describes it, every step runs with
+ * the clock frozen at its moment, and every step's outcome is compared with
+ * its expectation. A step that cannot be judged, such as one that references
+ * bytes an earlier step failed to produce, ends the case.
  */
 export async function replayVoteCase(voteCase: VoteCase, createDriver: () => Promise<LedgerStorageDriverBase>): Promise<readonly ReplayFailure[]> {
 	const failures: ReplayFailure[] = [];
-	const [first] = voteCase.steps;
-	if (first === undefined) {
-		return(failures);
-	}
 	try {
-		freezeClock(momentDate(first.moment));
-		const runner = await CaseRunner.start(voteCase, createDriver);
+		const runner = new CaseRunner(voteCase, createDriver);
 		for (const [index, step] of voteCase.steps.entries()) {
 			freezeClock(momentDate(step.moment));
 			const result = await runner.run(step.actor, step.action);
