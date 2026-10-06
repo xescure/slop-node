@@ -8,7 +8,8 @@ const ignoredPaths = ['dist/', 'build/', 'reference/', 'node_modules/', '.devenv
 
 // Rejects "Id", "Url", "Http", "Api", "Json" and "Sql" when they end a word
 // inside an identifier, so initialisms are spelled ID, URL, HTTP, API, JSON, SQL.
-const mangledInitialism = '(Id|Url|Http|Api|Json|Sql)(?=[A-Z0-9_]|$)';
+// A plural "s" may follow, so "accountIds" is caught as well as "accountId".
+const mangledInitialism = '(Id|Url|Http|Api|Json|Sql)s?(?=[A-Z0-9_]|$)';
 
 export default defineConfig(
 	globalIgnores(ignoredPaths),

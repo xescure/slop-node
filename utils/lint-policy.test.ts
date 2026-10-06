@@ -6,9 +6,9 @@ const linter = new ESLint({ overrideConfigFile: '.eslint.config.mjs', ignore: fa
 async function lintRuleIDs(fixture: string): Promise<string[]> {
 	const [result] = await linter.lintFiles([`utils/lint-fixtures/${fixture}`]);
 	expect(result).toBeDefined();
-	return result?.messages.map(function(message): string {
-		return message.ruleId ?? 'parse-error';
-	}) ?? [];
+	return(result?.messages.map(function(message): string {
+		return(message.ruleId ?? 'parse-error');
+	}) ?? []);
 }
 
 test('rejects conditional expressions', async function(): Promise<void> {
@@ -17,6 +17,10 @@ test('rejects conditional expressions', async function(): Promise<void> {
 
 test('rejects mangled initialisms', async function(): Promise<void> {
 	expect(await lintRuleIDs('mangled-initialism.ts')).toContain('@typescript-eslint/naming-convention');
+});
+
+test('rejects mangled plural initialisms', async function(): Promise<void> {
+	expect(await lintRuleIDs('mangled-initialism-plural.ts')).toEqual(['@typescript-eslint/naming-convention', '@typescript-eslint/naming-convention']);
 });
 
 test('rejects any', async function(): Promise<void> {
