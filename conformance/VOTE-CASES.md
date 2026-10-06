@@ -8,7 +8,7 @@ The expectations are recorded by running Keeta's own `Ledger`, never written by 
 
 - `[Keeta TS] index.js:N` is line N of `client/index.js` in the published `@keetanetwork/keetanet-client` 0.18.7 package.
 - "Must" states a requirement on a replay.
-- Case IDs follow a catalog of the decisions that `Ledger.vote`, `Ledger.quote` and `Ledger.add` make, grouped as the files are. Section 10 maps every catalog row to its cases.
+- Case IDs follow a catalog of the decisions that `Ledger.vote`, `Ledger.quote` and `Ledger.add` make, grouped as the files are. The catalog itself is not published; section 10.1 lists its rows and the cases that cover each.
 - `CONTRACT.md` means `schema/CONTRACT.md`, the storage driver contract, whose rules are cited as D4, D6 and so on.
 
 ## 1. Files
@@ -199,7 +199,7 @@ For a produced vote or quote:
 An `error` is one of:
 
 - `{"type": "coded", "code": C, "accounts"?: [...], "blockhash"?: H, "existingBlockhash"?: H}`: an error with a Keeta error code. The optional fields appear exactly when upstream attaches them to the error:
-  - `accounts`, sorted by their string form, on `LEDGER_NOT_OPENING` and `LEDGER_NOT_SUCCESSOR`, which carry every account whose head the request checked [Keeta TS] index.js:69260-69276
+  - `accounts`, as `keeta_` strings sorted in code-point order, on `LEDGER_NOT_OPENING` and `LEDGER_NOT_SUCCESSOR`, which carry every account whose head the request checked [Keeta TS] index.js:69260-69276
   - `blockhash` and `existingBlockhash`, together, on `LEDGER_IDEMPOTENT_KEY_EXISTS`: the refused block and the block that holds the key
 
   The code is a valid Keeta error code and never `LEDGER_OTHER` (section 4.7).
@@ -264,7 +264,7 @@ Inputs are parsed in a fixed order, and the first failure decides:
 
 Blocks parse as Keeta blocks, votes as `Vote`, quotes as `VoteQuote`, staples as `VoteStaple`, each at the step's moment. A parse failure is `rejectedInput {error}`, where `error` has exactly the shape of a refusal's. The cases record these parse failures:
 
-- `VOTE_EXPIRED`: a vote more than 60 s past its `validityTo` (C7, C9, F11)
+- `VOTE_EXPIRED`: a vote more than 60 s past its `validityTo` (C7, C9, F11, EO6)
 - `VOTE_MOMENT_BEFORE_VALIDITY_FROM`: a vote whose `validityFrom` is more than 60 s ahead (C10, EO6)
 - `VOTE_STAPLE_DUPLICATE_VOTE_ISSUER` and `VOTE_STAPLE_PERMANENCE_MISMATCH`: staples built without validation (Q5, Q9)
 
@@ -272,7 +272,7 @@ EO6 pins the order between other votes and the quote. That order belongs to this
 
 ### 4.5 Performing the action
 
-Each action is one call into the actor's ledger (section 3.5). Pass `otherVotes` only when the action has it, and an empty list as an empty list. A `gc` step observes only that collection completed: what it reports depends on how storage batches its work.
+Each action is one call into the actor's ledger (section 3.5), and runs as one ledger transaction. A refused action leaves the node's stored state as it was, and a rejected one never reaches the ledger. Apart from `gc`, only a produced vote, which the node keeps, and an added staple change what later steps observe. Pass `otherVotes` only when the action has it, and an empty list as an empty list. A `gc` step observes only that collection completed: what it reports depends on how storage batches its work.
 
 ### 4.6 Checking a produced vote or quote
 
@@ -326,9 +326,9 @@ These are the decisions an implementation is most likely to get wrong. Each is u
 
 ### 6.1 Permanence is decided when a vote is parsed
 
-A vote is permanent exactly when its `validityTo` lies more than 100 years after the moment it is parsed at [Keeta TS] index.js:80376-80380, 80654. `Ledger` reads this flag, never the vote's encoding. A permanent vote is issued valid until 00:00 UTC on 31 January of the year 1001 years on [Keeta TS] index.js:81524-81529, so for its last 100 years it parses as temporary.
+A vote is permanent exactly when its `validityTo` lies more than `permanentVoteThreshold` after the moment it is parsed at: 100 * 365 days, 3153600000000 ms, not 100 calendar years [Keeta TS] index.js:80376-80380, 80654. `Ledger` reads this flag, never the vote's encoding. A permanent vote is issued valid until 00:00 UTC on 31 January of the year 1001 years on [Keeta TS] index.js:81524-81529, so for the last 36500 days of its validity it parses as temporary.
 
-C7 shows it: a permanent vote of 2026, parsed at 3027-01-31T00:01:00.000Z, is within its validity and slop but parses as temporary. The request that offers it is then a permanent request without the node's own temporary vote, and is refused `LEDGER_NO_PERM_WITHOUT_SELF_TEMP`. One millisecond later the vote is `VOTE_EXPIRED`.
+C7 shows it: a permanent vote of 2026, valid until 3027-01-31T00:00:00.000Z, still parses at 3027-01-31T00:01:00.000Z, within the slop that follows its validity (section 6.2), but parses as temporary. The request that offers it is then a permanent request without the node's own temporary vote, and is refused `LEDGER_NO_PERM_WITHOUT_SELF_TEMP`. One millisecond later the vote is `VOTE_EXPIRED`.
 
 ### 6.2 The parse slop and the expiry of this node's own votes
 
@@ -392,7 +392,7 @@ When a request fails several checks, the first check decides the outcome. The or
 4. **Kind.** Without `otherVotes`, the request is for a temporary vote. With `otherVotes` that include a temporary vote, it is for a permanent vote. With `otherVotes` that are all permanent, the empty list included, it is a recovery request: a temporary vote issued without the block window and without a fee.
 5. **Quote.** A quote with a permanent request: `LEDGER_VOTE_WITH_QUOTE`. A quote issued by another key, or on another number of blocks, or on other blocks: `LEDGER_QUOTE_MISMATCH`.
 6. **Each other vote, in order.** A quote: `LEDGER_VOTE_WITH_QUOTE`. The same vote twice: `LEDGER_DUPLICATE_VOTE_FOUND`. A second vote of one issuer: `LEDGER_DUPLICATE_VOTE_ISSUER_FOUND`. In a permanent request, this node's own permanent vote: `LEDGER_CANNOT_EXCHANGE_PERM_VOTE`. Other blocks than the request's (section 6.3 for the fee block): `LEDGER_BLOCKS_DIFFER_FROM_VOTED_ON`.
-7. **Fees or self.** A permanent request checks fees (section 6.3). A temporary or recovery request that includes a vote of this node: `LEDGER_TEMP_VOTE_INCLUDES_SELF`.
+7. **Fees or self.** A permanent request checks fees (section 6.3). A recovery request that includes a vote of this node: `LEDGER_TEMP_VOTE_INCLUDES_SELF`.
 8. **Recovery weight.** Other votes that weigh no more than a quarter of the total weight, rounded down: `LEDGER_INSUFFICIENT_VOTING_WEIGHT`.
 9. **Own vote.** A permanent request without a vote of this node among the other votes: `LEDGER_NO_PERM_WITHOUT_SELF_TEMP`.
 10. **Each block, in order.** A second fee block: `LEDGER_MULTIPLE_FEE_BLOCK`. Another network: `LEDGER_INVALID_NETWORK`. Another subnet: `LEDGER_INVALID_SUBNET`. An idempotent key that an earlier block of the request has for the same account: `LEDGER_IDEMPOTENT_KEY_EXISTS`. A previous that an earlier block used: `LEDGER_PREVIOUS_ALREADY_USED`. A previous that is a block of the request on another account: `LEDGER_INVALID_CHAIN`; one that comes later in the request: `LEDGER_PREVIOUS_NOT_SEEN`. A block whose previous is not in the request has its account's head checked in step 12.
@@ -478,9 +478,9 @@ Every row of the catalog is a case, an exclusion, or both:
 - A row that combines situations, such as C1/C3, has one case per ID.
 - A row that the public API can reach only in part is split: a case with the row's ID carries the reachable part, and the other part is excluded (B8, T6, I5). F8 is excluded whole.
 - An exclusion is a block that Keeta's block builder and block parser refuse alike. A node only ever parses what a client sends, so such a block reaches a node only as bytes encoded and signed by hand, and is rejected before any ledger decision.
-- The catalog's cross-reference to Keeta's own test suites (`client/client_common_tests.d.ts`) cites T9, S1 and MS5, which name no row and so no situation. They are neither cases nor exclusions.
+- The IDs T9, S1 and MS5 are not used: the catalog mentions them without defining a situation.
 
-`src/conformance/catalog.ts` lists the catalog's IDs and the corpus's own, and a test checks this section's claims against the committed files: every catalog ID is a case or an exclusion; every case is a catalog ID or a declared extra; an excluded row has no case, and an excluded part shares its ID with the case that carries the rest.
+`src/conformance/catalog.ts` lists the catalog's IDs and the corpus's own, and a test checks this section's claims against the committed files: every catalog ID is a case or an exclusion; every case is a catalog ID or a declared extra; an excluded row has no case, and an excluded part shares its ID with the case that carries the rest. Another test holds this document's tables to the committed files: the case counts of section 1, the contract cases of section 5, the plain messages of section 3.7, and the case IDs and files of sections 7.3, 10.1 and 10.2.
 
 ### 10.1 Catalog rows
 
