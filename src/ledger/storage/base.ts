@@ -78,6 +78,9 @@ const DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS = 5000;
 
 const LOG_SOURCE = 'ledger';
 
+// Test hooks answer only to this key, so callers outside the test suite cannot use them by accident.
+const TESTING_KEY = 'ba48dff1-fc9c-4834-abc0-68434c8dc29b';
+
 /**
  * The shared part of every storage driver. Upstream's own LedgerStorageBase
  * supplies preAdjust, the height and head helpers and the gc loop unchanged;
@@ -165,25 +168,25 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 				waitingOn.set(previous, block.previous);
 			}
 		}
-		/*
-		 * preAdjust also defers a staple that lists a block before its own
-		 * previous; such a staple misses nothing on chain, so no arriving block
-		 * would ever release it.
-		 */
+		// No arriving block would ever release a staple that waits on nothing.
 		if (waitingOn.size === 0) {
-			const message = `staple ${toStapleKey(input.blocksHash)} cannot be applied or deferred: it misses no previous block on chain, so its blocks are out of order`;
-			this.initialized.config.log?.warn(LOG_SOURCE, message);
-			throw(new Error(message));
+			throw(new Error(`internal error: staple ${toStapleKey(input.blocksHash)} was deferred but misses no previous block`));
 		}
 		await this.storeDeferredStaple(transaction, input, [...waitingOn.values()]);
 	}
 
-	/**
-	 * @internal
-	 * Test seam: the deferred staples waiting on these blocks, as replay sees them.
-	 */
-	_testingDeferredStaplesWaitingOn(transaction: Transaction, blockHashes: readonly BlockHash[]): Promise<readonly VoteStaple[]> {
-		return(this.listDeferredStaplesWaitingOn(transaction, blockHashes));
+	/** @internal */
+	_Testing(key: string): {
+		deferredStaplesWaitingOn(transaction: Transaction, blockHashes: readonly BlockHash[]): Promise<readonly VoteStaple[]>;
+	} {
+		if (key !== TESTING_KEY) {
+			throw(new Error('This is a testing only method'));
+		}
+		return({
+			deferredStaplesWaitingOn: (transaction, blockHashes) => {
+				return(this.listDeferredStaplesWaitingOn(transaction, blockHashes));
+			}
+		});
 	}
 
 	/**
@@ -236,6 +239,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * written.
 	 */
 	async #applyConfirmedStaple(transaction: Transaction, staple: VoteStaple, effects: ComputedEffectOfBlocks, replay: ReplayState): Promise<VoteStaple[]> {
+		this.#assertChainOrder(staple);
 		const heights = await this.preAdjust(staple, replay.mayDefer, transaction);
 		// An empty result means preAdjust deferred the staple, or found it already deferred.
 		if (Object.keys(heights).length === 0) {
@@ -317,7 +321,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 		for (const block of staple.blocks) {
 			const previous = toBlockHashKey(block.previous);
 			if (claimedPrevious.has(previous)) {
-				throw(this.#confirmedHistoryConflict(block, 'another block of the same staple has the same previous'));
+				throw(this.confirmedHistoryConflict(block, 'another block of the same staple has the same previous'));
 			}
 			claimedPrevious.add(previous);
 		}
@@ -326,18 +330,43 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			if (block.$opening) {
 				const head = await this.getHeadBlock(transaction, block.account, 'main');
 				if (head !== null) {
-					throw(this.#confirmedHistoryConflict(block, `opening block for an account whose chain already ends at ${head.hash.toString()}`));
+					throw(this.confirmedHistoryConflict(block, `opening block for an account whose chain already ends at ${head.hash.toString()}`));
 				}
 				return;
 			}
 			const successor = await this.getBlockFromPrevious(transaction, block.previous, 'main');
 			if (successor !== null) {
-				throw(this.#confirmedHistoryConflict(block, `previous already has the confirmed successor ${successor.hash.toString()}`));
+				throw(this.confirmedHistoryConflict(block, `previous already has the confirmed successor ${successor.hash.toString()}`));
 			}
 		}));
 	}
 
-	#confirmedHistoryConflict(block: Block, reason: string): Error {
+	/*
+	 * Upstream's preAdjust assigns a block its height only when its previous
+	 * came earlier in the staple, and otherwise defers; a staple that lists a
+	 * block before its own previous would wait for a block it carries itself,
+	 * and no arrival would ever release it.
+	 * [Keeta TS] index.js:67691-67728
+	 */
+	#assertChainOrder(staple: VoteStaple): void {
+		const later = new Set<BlockHashKey>(staple.blocks.map(function(block): BlockHashKey {
+			return(toBlockHashKey(block.hash));
+		}));
+		for (const block of staple.blocks) {
+			later.delete(toBlockHashKey(block.hash));
+			if (later.has(toBlockHashKey(block.previous))) {
+				const message = `staple ${toStapleKey(staple.blocksHash)} lists block ${block.hash.toString()} before its previous ${block.previous.toString()}, so its blocks are out of order`;
+				this.initialized.config.log?.warn(LOG_SOURCE, message);
+				throw(createLedgerError('LEDGER_INVALID_CHAIN', message));
+			}
+		}
+	}
+
+	/**
+	 * The error for a confirmed block that would overwrite confirmed history,
+	 * logged as a network integrity alarm: a quorum confirmed a fork.
+	 */
+	protected confirmedHistoryConflict(block: Block, reason: string): Error {
 		const message = `confirmed block ${block.hash.toString()} conflicts with confirmed history: ${reason}`;
 		this.initialized.config.log?.error(LOG_SOURCE, `network integrity alarm: ${message}`);
 		return(createLedgerError('LEDGER_PREVIOUS_ALREADY_USED', message));

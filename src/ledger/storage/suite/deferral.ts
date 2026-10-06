@@ -4,7 +4,7 @@ import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { confirmedStaple, sendBlock } from '../../../testing/blocks.js';
 import type { TestNetwork } from '../../../testing/network.js';
 import type { LedgerStorageDriverBase } from '../base.js';
-import { headOf, requireAt, useFixtures } from './support.js';
+import { TESTING_KEY, headOf, requireAt, useFixtures } from './support.js';
 import type { DriverUnderTest } from './types.js';
 
 type UserChain = {
@@ -23,7 +23,7 @@ async function chainOfTwoSends(network: TestNetwork): Promise<UserChain> {
 async function deferredWaitingOn(storage: LedgerStorageDriverBase, hash: BlockHash): Promise<string[]> {
 	const transaction = await storage.beginTransaction({ identifier: 'suite-inspect-deferred', readOnly: true });
 	try {
-		const waiting = await storage._testingDeferredStaplesWaitingOn(transaction, [hash]);
+		const waiting = await storage._Testing(TESTING_KEY).deferredStaplesWaitingOn(transaction, [hash]);
 		return(waiting.map(function(staple): string {
 			return(staple.blocksHash.toString());
 		}));
@@ -68,12 +68,25 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			const outOfOrder = await confirmedStaple([second, first], network.representatives);
 			const refusal = ledger.add(outOfOrder);
 
-			await expect(refusal).rejects.toMatchObject({ code: 'LEDGER_OTHER', shouldRetry: false });
+			await expect(refusal).rejects.toMatchObject({ code: 'LEDGER_INVALID_CHAIN', shouldRetry: false });
 			await expect(refusal).rejects.toThrow('out of order');
-
 			expect(await deferredWaitingOn(storage, first.hash)).toEqual([]);
 			expect(await deferredWaitingOn(storage, headOf(network.genesis, user))).toEqual([]);
 			expect(await ledger.getBalance(user, network.baseToken)).toBe(400n);
+		});
+
+		test('an out-of-order staple that also misses a previous is refused, not deferred', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			const from = requireAt(network.users, 0);
+			const to = requireAt(network.users, 1);
+			await ledger.add(network.genesis);
+			const missing = await sendBlock({ from, previous: headOf(network.genesis, from), to, amount: 1n, token: network.baseToken, network: network.network });
+			const first = await sendBlock({ from, previous: missing.hash, to, amount: 5n, token: network.baseToken, network: network.network });
+			const second = await sendBlock({ from, previous: first.hash, to, amount: 7n, token: network.baseToken, network: network.network });
+			const outOfOrder = await confirmedStaple([second, first], network.representatives);
+
+			await expect(ledger.add(outOfOrder)).rejects.toMatchObject({ code: 'LEDGER_INVALID_CHAIN', shouldRetry: false });
+			expect(await deferredWaitingOn(storage, missing.hash)).toEqual([]);
 		});
 	});
 }

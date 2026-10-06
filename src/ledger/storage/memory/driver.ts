@@ -49,7 +49,7 @@ class AsyncMutex {
 
 type TransactionState =
 	| { readonly status: 'open'; readonly overlay: LedgerOverlay; readonly release: Release }
-	| { readonly status: 'finished'; readonly outcome: 'committed' | 'aborted' };
+	| { readonly status: 'finished'; readonly outcome: 'committed' | 'aborted' | 'failed' };
 
 /** A memory transaction: its own view of the ledger, valid until commit or abort. */
 export class MemoryTransaction extends LedgerDriverTransaction {
@@ -67,12 +67,23 @@ export class MemoryTransaction extends LedgerDriverTransaction {
 		}));
 	}
 
-	/** Ends the transaction and hands back what it held, exactly once. */
-	finish(outcome: 'committed' | 'aborted'): Promise<{ readonly overlay: LedgerOverlay; readonly release: Release }> {
+	/**
+	 * Ends the transaction exactly once and releases its lock. The merge runs
+	 * first, and the outcome is recorded only once it has succeeded.
+	 */
+	end(outcome: 'committed' | 'aborted', merge: (overlay: LedgerOverlay) => void): Promise<void> {
 		return(new Promise((resolve) => {
 			const open = this.#open();
-			this.#state = { status: 'finished', outcome };
-			resolve(open);
+			try {
+				merge(open.overlay);
+				this.#state = { status: 'finished', outcome };
+			} catch (error: unknown) {
+				this.#state = { status: 'finished', outcome: 'failed' };
+				throw(error);
+			} finally {
+				open.release();
+			}
+			resolve();
 		}));
 	}
 
@@ -180,18 +191,14 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		return(new MemoryTransaction(options, openOverlay(this.#committed), release));
 	}
 
-	async commitTransaction(transaction: MemoryTransaction): Promise<void> {
-		const { overlay, release } = await transaction.finish('committed');
-		try {
-			commitOverlay(overlay);
-		} finally {
-			release();
-		}
+	commitTransaction(transaction: MemoryTransaction): Promise<void> {
+		return(transaction.end('committed', commitOverlay));
 	}
 
-	async abortTransaction(transaction: MemoryTransaction): Promise<void> {
-		const { release } = await transaction.finish('aborted');
-		release();
+	abortTransaction(transaction: MemoryTransaction): Promise<void> {
+		return(transaction.end('aborted', function() {
+			// Dropping the overlay is the whole of an abort.
+		}));
 	}
 
 	getNextSerialNumber(_transaction?: MemoryTransaction): Promise<bigint> {
@@ -538,7 +545,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 			}
 			const successor = overlay.successors.get(previousKey);
 			if (successor !== undefined) {
-				throw(createLedgerError('LEDGER_PREVIOUS_ALREADY_USED', `previous ${previousKey} of block ${blockKey} already has the confirmed successor ${successor}`));
+				throw(this.confirmedHistoryConflict(block, `previous already has the confirmed successor ${successor}`));
 			}
 			overlay.blocks.set(blockKey, { block, height, staple: stapleKey });
 			overlay.successors.set(previousKey, blockKey);
