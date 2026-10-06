@@ -1,9 +1,7 @@
 import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
-import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
-import { confirmedStaple } from '../../testing/blocks.js';
 import { scenario } from '../record.js';
 import type { CaseRecorder, Scenario } from '../record.js';
-import { genesisBlocksOf, send, sendFrom } from './support.js';
+import { confirmed, genesisBlocksOf, send, sendFrom } from './support.js';
 
 /*
  * Which blocks may follow an account's chain: each block in a request needs
@@ -13,11 +11,6 @@ import { genesisBlocksOf, send, sendFrom } from './support.js';
  * check covered.
  * [Keeta TS] index.js:69260-69305, 70096-70170
  */
-
-/** Every representative confirms the blocks. */
-function confirmed(recorder: CaseRecorder, blocks: readonly Block[]): Promise<VoteStaple> {
-	return(confirmedStaple(blocks, recorder.network.representatives));
-}
 
 /** User 0's genesis block before its head, so a block after it is no successor. */
 function beforeHead(recorder: CaseRecorder): Block {

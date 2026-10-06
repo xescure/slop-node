@@ -10,9 +10,11 @@ import type { Scenario } from './record.js';
 import { replayVoteCase } from './replay.js';
 import type { ReplayFailure } from './replay.js';
 import { schemaViolations } from './schema.js';
+import { balanceScenarios } from './scenarios/balances.js';
 import { clockScenarios } from './scenarios/clock.js';
 import { conflictScenarios } from './scenarios/conflicts.js';
 import { kindScenarios } from './scenarios/kind.js';
+import { permissionScenarios } from './scenarios/permissions.js';
 import { quorumScenarios } from './scenarios/quorum.js';
 
 /*
@@ -31,7 +33,9 @@ const groups: readonly Group[] = [
 	{ name: 'kind', scenarios: kindScenarios },
 	{ name: 'quorum', scenarios: quorumScenarios },
 	{ name: 'clock', scenarios: clockScenarios },
-	{ name: 'conflicts', scenarios: conflictScenarios }
+	{ name: 'conflicts', scenarios: conflictScenarios },
+	{ name: 'balances', scenarios: balanceScenarios },
+	{ name: 'permissions', scenarios: permissionScenarios }
 ];
 
 const UPDATE = process.env['SLOP_NODE_UPDATE_CONFORMANCE'] === '1';

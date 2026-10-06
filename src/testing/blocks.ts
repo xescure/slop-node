@@ -1,10 +1,11 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, GenericAccount, MultisigAddress, StorageAddress, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
-import type { Block, BlockHash, BlockJSONIncomplete } from '@keetanetwork/keetanet-client/lib/block/index.js';
+import type { Block, BlockHash, BlockJSONIncomplete, BlockV2JSON } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { MultisigConfig } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
 import type {
 	BlockJSONOperationMANAGE_CERTIFICATE,
 	BlockJSONOperationMODIFY_PERMISSIONS,
+	BlockJSONOperationRECEIVE,
 	BlockJSONOperationSEND,
 	BlockJSONOperationSET_INFO,
 	BlockJSONOperationTOKEN_ADMIN_SUPPLY,
@@ -48,6 +49,11 @@ async function seal(input: SealInput): Promise<Block> {
 	return(await new lib.Block.Builder(fields).seal());
 }
 
+/** A block of any operations, for the combinations the single-operation builders do not cover. */
+export function operationsBlock(input: SealInput): Promise<Block> {
+	return(seal(input));
+}
+
 /** An identifier such as a token sends with its owner as the signer. */
 export function sendBlock(input: BlockContext & { readonly from: GenericAccount; readonly signer?: Account; readonly to: GenericAccount; readonly amount: bigint; readonly token: TokenAddress }): Promise<Block> {
 	const { from, to, amount, token, ...context } = input;
@@ -56,6 +62,47 @@ export function sendBlock(input: BlockContext & { readonly from: GenericAccount;
 		account: from,
 		operations: [{ type: lib.Block.OperationType.SEND, to, amount, token }]
 	}));
+}
+
+/** The account requires that `from` sent it, earlier in the request, at least the amount stated, or with `exact` exactly that amount. */
+export function receiveBlock(input: SignedBlockContext & Omit<BlockJSONOperationRECEIVE, 'type' | 'forward'>): Promise<Block> {
+	const { account, signer, previous, network, idempotent, date, ...operation } = input;
+	return(seal({
+		account,
+		signer,
+		previous,
+		network,
+		idempotent,
+		date,
+		operations: [{ type: lib.Block.OperationType.RECEIVE, ...operation }]
+	}));
+}
+
+/** A multisig and the signers that sign for it, nested to any depth the network allows. */
+export type MultisigSigner = Extract<BlockV2JSON['signer'], readonly unknown[]>;
+
+/*
+ * Only a version 2 block carries a multisig signer; each listed key signs.
+ * [Keeta TS] index.js:64140-64166
+ */
+export function multisigSendBlock(input: BlockContext & { readonly from: GenericAccount; readonly signer: MultisigSigner; readonly to: GenericAccount; readonly amount: bigint; readonly token: TokenAddress }): Promise<Block> {
+	const { from, signer, to, amount, token, previous, network, idempotent, date } = input;
+	const fields: BlockJSONIncomplete = {
+		version: 2,
+		purpose: lib.Block.Purpose.GENERIC,
+		network,
+		account: from,
+		signer,
+		previous: previous ?? lib.Block.NO_PREVIOUS,
+		operations: [{ type: lib.Block.OperationType.SEND, to, amount, token }]
+	};
+	if (idempotent !== undefined) {
+		fields.idempotent = idempotent;
+	}
+	if (date !== undefined) {
+		fields.date = date;
+	}
+	return(new lib.Block.Builder(fields).seal());
 }
 
 export function setRepresentativeBlock(input: SignedBlockContext & { readonly representative: GenericAccount }): Promise<Block> {
