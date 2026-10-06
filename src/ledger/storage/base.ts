@@ -345,8 +345,9 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * Upstream's preAdjust assigns a block its height only when its previous
 	 * came earlier in the staple, and otherwise defers; a staple that lists a
 	 * block before its own previous would wait for a block it carries itself,
-	 * and no arrival would ever release it.
-	 * [Keeta TS] index.js:67691-67728
+	 * and no arrival would ever release it. It is refused with the code vote
+	 * validation uses for the same ordering fault.
+	 * [Keeta TS] index.js:67691-67728 (deferral), 70150-70160 (error code)
 	 */
 	#assertChainOrder(staple: VoteStaple): void {
 		const later = new Set<BlockHashKey>(staple.blocks.map(function(block): BlockHashKey {
@@ -357,7 +358,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			if (later.has(toBlockHashKey(block.previous))) {
 				const message = `staple ${toStapleKey(staple.blocksHash)} lists block ${block.hash.toString()} before its previous ${block.previous.toString()}, so its blocks are out of order`;
 				this.initialized.config.log?.warn(LOG_SOURCE, message);
-				throw(createLedgerError('LEDGER_INVALID_CHAIN', message));
+				throw(createLedgerError('LEDGER_PREVIOUS_NOT_SEEN', message));
 			}
 		}
 	}

@@ -68,7 +68,7 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			const outOfOrder = await confirmedStaple([second, first], network.representatives);
 			const refusal = ledger.add(outOfOrder);
 
-			await expect(refusal).rejects.toMatchObject({ code: 'LEDGER_INVALID_CHAIN', shouldRetry: false });
+			await expect(refusal).rejects.toMatchObject({ code: 'LEDGER_PREVIOUS_NOT_SEEN', shouldRetry: false });
 			await expect(refusal).rejects.toThrow('out of order');
 			expect(await deferredWaitingOn(storage, first.hash)).toEqual([]);
 			expect(await deferredWaitingOn(storage, headOf(network.genesis, user))).toEqual([]);
@@ -85,7 +85,7 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			const second = await sendBlock({ from, previous: first.hash, to, amount: 7n, token: network.baseToken, network: network.network });
 			const outOfOrder = await confirmedStaple([second, first], network.representatives);
 
-			await expect(ledger.add(outOfOrder)).rejects.toMatchObject({ code: 'LEDGER_INVALID_CHAIN', shouldRetry: false });
+			await expect(ledger.add(outOfOrder)).rejects.toMatchObject({ code: 'LEDGER_PREVIOUS_NOT_SEEN', shouldRetry: false });
 			expect(await deferredWaitingOn(storage, missing.hash)).toEqual([]);
 		});
 	});
