@@ -1,0 +1,169 @@
+import * as KeetaNet from '@keetanetwork/keetanet-client';
+import type { Account, GenericAccount, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
+import type { Block, BlockHash, BlockJSONIncomplete } from '@keetanetwork/keetanet-client/lib/block/index.js';
+import type {
+	BlockJSONOperationMANAGE_CERTIFICATE,
+	BlockJSONOperationMODIFY_PERMISSIONS,
+	BlockJSONOperationSEND,
+	BlockJSONOperationSET_INFO,
+	BlockJSONOperationTOKEN_ADMIN_SUPPLY,
+	BlockJSONOperations
+} from '@keetanetwork/keetanet-client/lib/block/operations.js';
+import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+
+const lib = KeetaNet.lib;
+
+type BlockContext = {
+	readonly previous: BlockHash | null;
+	readonly network: bigint;
+	readonly idempotent?: string | undefined;
+};
+
+type SignedBlockContext = BlockContext & {
+	readonly account: GenericAccount;
+	readonly signer?: Account | undefined;
+};
+
+type SealInput = SignedBlockContext & { readonly operations: BlockJSONOperations[] };
+
+async function seal(input: SealInput): Promise<Block> {
+	const fields: BlockJSONIncomplete = {
+		network: input.network,
+		account: input.account,
+		previous: input.previous ?? lib.Block.NO_PREVIOUS,
+		operations: input.operations
+	};
+	if (input.signer !== undefined) {
+		fields.signer = input.signer;
+	}
+	if (input.idempotent !== undefined) {
+		fields.idempotent = input.idempotent;
+	}
+	return(await new lib.Block.Builder(fields).seal());
+}
+
+export function sendBlock(input: BlockContext & { readonly from: Account; readonly to: GenericAccount; readonly amount: bigint; readonly token: TokenAddress }): Promise<Block> {
+	const { from, to, amount, token, ...context } = input;
+	return(seal({
+		...context,
+		account: from,
+		operations: [{ type: lib.Block.OperationType.SEND, to, amount, token }]
+	}));
+}
+
+export function setRepresentativeBlock(input: SignedBlockContext & { readonly representative: GenericAccount }): Promise<Block> {
+	const { representative, ...context } = input;
+	return(seal({
+		...context,
+		operations: [{ type: lib.Block.OperationType.SET_REP, to: representative }]
+	}));
+}
+
+/*
+ * The identifier derives from the owner's previous block and the operation
+ * index, so the token address is known before the block is published.
+ * [Keeta TS] index.js:62864-62889
+ */
+export async function createTokenBlock(input: BlockContext & { readonly owner: Account }): Promise<{ readonly block: Block; readonly token: TokenAddress }> {
+	const { owner, ...context } = input;
+	const token = owner.generateIdentifier(lib.Account.AccountKeyAlgorithm.TOKEN, context.previous ?? undefined, 0);
+	const block = await seal({
+		...context,
+		account: owner,
+		operations: [{ type: lib.Block.OperationType.CREATE_IDENTIFIER, identifier: token }]
+	});
+	return({ block, token });
+}
+
+export function tokenSupplyBlock(input: BlockContext & { readonly owner: Account; readonly token: TokenAddress; readonly amount: bigint; readonly method?: BlockJSONOperationTOKEN_ADMIN_SUPPLY['method'] }): Promise<Block> {
+	const { owner, token, amount, method = lib.Block.AdjustMethod.ADD, ...context } = input;
+	return(seal({
+		...context,
+		account: token,
+		signer: owner,
+		operations: [{ type: lib.Block.OperationType.TOKEN_ADMIN_SUPPLY, amount, method }]
+	}));
+}
+
+export function modifyPermissionsBlock(input: SignedBlockContext & Omit<BlockJSONOperationMODIFY_PERMISSIONS, 'type'>): Promise<Block> {
+	const { account, signer, previous, network, idempotent, ...operation } = input;
+	return(seal({
+		account,
+		signer,
+		previous,
+		network,
+		idempotent,
+		operations: [{ type: lib.Block.OperationType.MODIFY_PERMISSIONS, ...operation }]
+	}));
+}
+
+export function setInfoBlock(input: SignedBlockContext & Omit<BlockJSONOperationSET_INFO, 'type'>): Promise<Block> {
+	const { account, signer, previous, network, idempotent, ...operation } = input;
+	return(seal({
+		account,
+		signer,
+		previous,
+		network,
+		idempotent,
+		operations: [{ type: lib.Block.OperationType.SET_INFO, ...operation }]
+	}));
+}
+
+/*
+ * Adding a certificate requires the intermediate certificates field to be
+ * present, and null states that there are none.
+ */
+export function manageCertificateBlock(input: SignedBlockContext & Omit<BlockJSONOperationMANAGE_CERTIFICATE, 'type'>): Promise<Block> {
+	const { account, signer, previous, network, idempotent, intermediateCertificates = null, ...operation } = input;
+	return(seal({
+		account,
+		signer,
+		previous,
+		network,
+		idempotent,
+		operations: [{ type: lib.Block.OperationType.MANAGE_CERTIFICATE, intermediateCertificates, ...operation }]
+	}));
+}
+
+/*
+ * A fee block pays the voters, one SEND per required fee, and must be a
+ * version 2 block with the FEE purpose.
+ * [Keeta TS] index.js:57612-57681
+ */
+export function feeBlock(input: BlockContext & { readonly from: Account; readonly payments: readonly Pick<BlockJSONOperationSEND, 'to' | 'token' | 'amount'>[] }): Promise<Block> {
+	const { from, payments, previous, network, idempotent } = input;
+	const fields: BlockJSONIncomplete = {
+		version: 2,
+		purpose: lib.Block.Purpose.FEE,
+		network,
+		account: from,
+		previous: previous ?? lib.Block.NO_PREVIOUS,
+		operations: payments.map(function(payment): BlockJSONOperationSEND {
+			return({ type: lib.Block.OperationType.SEND, ...payment });
+		})
+	};
+	if (idempotent !== undefined) {
+		fields.idempotent = idempotent;
+	}
+	return(new lib.Block.Builder(fields).seal());
+}
+
+/*
+ * The serial comes from the block hashes so that a signer never issues two
+ * different votes under one serial, and repeated runs stay byte-identical.
+ */
+function serialForBlocks(blocks: readonly Block[]): bigint {
+	const blocksHash = lib.Vote.VoteBlocksHash.fromBlockHashes(blocks.map(function(block): BlockHash {
+		return(block.hash);
+	}));
+	return(BigInt(`0x${blocksHash.toString('hex').slice(0, 15)}`));
+}
+
+export async function confirmedStaple(blocks: readonly Block[], signers: readonly Account[]): Promise<VoteStaple> {
+	const serial = serialForBlocks(blocks);
+	const votes = [];
+	for (const signer of signers) {
+		votes.push(await new lib.Vote.Builder(signer, [...blocks]).seal(serial, null));
+	}
+	return(lib.Vote.Staple.fromVotesAndBlocks(votes, [...blocks]));
+}
