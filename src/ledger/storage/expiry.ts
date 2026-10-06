@@ -13,6 +13,7 @@ export const voteExpirySlopMilliseconds = 60_000;
  * reads or gc: a transaction's moment can be stale, and the future bound would
  * then hide a vote that still guards its previous. Use isVoteUnexpired there.
  * [Keeta TS] index.js:80373-80374, 80641-80653
+ * @internal
  */
 export function isVoteLive(vote: Pick<Vote, 'validityFrom' | 'validityTo' | '$permanent'>, moment: Date): boolean {
 	if (moment.getTime() + voteExpirySlopMilliseconds < vote.validityFrom.getTime()) {

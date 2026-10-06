@@ -917,7 +917,7 @@ A stored vote is live at moment m exactly when Keeta's `Vote` class would constr
 
 This node's own side votes are judged by the expiry bound alone: side reads and gc drop a side vote only when it is temporary and m - 60 s > `validityTo`, and never because m + 60 s < `validityFrom`.
 
-m is the transaction moment. `isVoteLive` (`src/ledger/storage/expiry.ts`) implements the first predicate and exists only for parity checks against the `Vote` class; it must never filter side reads or gc. `isVoteUnexpired` implements the second, and every side read filter and gc use it.
+m is the transaction moment. `isVoteLive` (`src/ledger/storage/expiry.ts`, internal and not exported from the package) implements the first predicate and exists only for parity checks against the `Vote` class; it must never filter side reads or gc. `isVoteUnexpired` implements the second, and every side read filter and gc use it.
 
 **Reason.**
 - The `Vote` constructor rejects a vote outside the first predicate's bounds with `VOTE_MOMENT_BEFORE_VALIDITY_FROM` or `VOTE_EXPIRED` [Keeta TS] index.js:80370-80374, 80676-80679, and upstream's own staple builder drops expired votes [Keeta TS] index.js:80795-80799.
