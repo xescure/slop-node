@@ -19,6 +19,8 @@ export default {
 		'blockhash',
 		'savepoint'
 	],
+	// Account strings are base32 public keys, not words.
+	ignoreRegExpList: ['/keeta_[a-z2-7]+/g'],
 	ignorePaths: [
 		'/reference/',
 		'node_modules/',

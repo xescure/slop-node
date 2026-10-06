@@ -230,6 +230,22 @@ Each key is derived from a seed and an index as Keeta's `Account.fromSeed(seed, 
 
 A replay needs the trusted root's public key and the private keys of the representatives that run nodes. Every other key, the users and the further keys some cases use, such as multisig signers and token issuers, appears only inside bytes or as an account string.
 
+The keys that appear in the corpus, derived from the seeds every case uses, are these, so that a replay can check its own derivation:
+
+| Seed | Index | Public key |
+|---|---|---|
+| `trustedRoot` | 0 | `keeta_aabyvwulmd2q6qtkkd42b4d63a4xcyckeisuknsvywmmbnkypguljzyla42as5q` |
+| `representative` | 0 | `keeta_aab4lhb5eqgtqja6gkjzrbtszwiuyjmnprkwh7b3eo2l5sqgrx7ok5ccggh5r3y` |
+| `representative` | 1 | `keeta_aabg37x7rwrmkrv6l5ti2aufbto6nou5hmo55qh2uvrcdbu6u3znbm45zdnfhiq` |
+| `representative` | 2 | `keeta_aabtj57rlgydtearubg5vuepsvyjdavevgj4um6zjrqcwtq4xlzataheovnyoai` |
+| `representative` | 3 | `keeta_aabxu7phqklvbz3kuewr7h3kdd6pru6lutjnjbh5jlkk3aa6z2e4kuttrta4x7a` |
+| `user` | 0 | `keeta_aabx4z7qrrsongdomou3l6vcyuaovnfo6s3wlm4v3vub6zu4xhte5ntk6qifixa` |
+| `user` | 1 | `keeta_aabbuacc245m6hsc2rzgykk2hneqcuiizsuxqxelfcmywjbsvslgrtmu57mnh7y` |
+| `user` | 2 | `keeta_aab6b2mx7yzhlks2shdxsgqd664ikli7t534tqkoj2axvagw6fla6nygo2fxpia` |
+| `user` | 3 | `keeta_aabc3csi43biptqlnuiqip6xgetvdjp2l6xnlxemhavxwqm22apdmyitqd3obfi` |
+| `user` | 4 | `keeta_aabkuk7xemxs7s46norwa45empi2o2kzhqegsxpcsq2keg2of5hpajoujknttlq` |
+| `user` | 5 | `keeta_aabi6bey4j7mbybtosnx4ftko6ij5blwsg4phtxh6uvbfsysivh6mx3swuxmqea` |
+
 The base token and the network address are the identifiers Keeta derives from network id 0 [Keeta TS] index.js:62632-62639.
 
 ### 4.2 Nodes
@@ -480,7 +496,7 @@ Every row of the catalog is a case, an exclusion, or both:
 - An exclusion is a block that Keeta's block builder and block parser refuse alike. A node only ever parses what a client sends, so such a block reaches a node only as bytes encoded and signed by hand, and is rejected before any ledger decision.
 - The IDs T9, S1 and MS5 are not used: the catalog mentions them without defining a situation.
 
-`src/conformance/catalog.ts` lists the catalog's IDs and the corpus's own, and a test checks this section's claims against the committed files: every catalog ID is a case or an exclusion; every case is a catalog ID or a declared extra; an excluded row has no case, and an excluded part shares its ID with the case that carries the rest. Another test holds this document's tables to the committed files: the case counts of section 1, the contract cases of section 5, the plain messages of section 3.7, and the case IDs and files of sections 7.3, 10.1 and 10.2.
+`src/conformance/catalog.ts` lists the catalog's IDs and the corpus's own, and a test checks this section's claims against the committed files: every catalog ID is a case or an exclusion; every case is a catalog ID or a declared extra; an excluded row has no case, and an excluded part shares its ID with the case that carries the rest. Another test holds this document's tables to the committed files: the case counts of section 1, the statement of section 3.5 that no case has a `gc` step, the plain messages of section 3.7, the keys of section 4.1, derived again from the seeds, the contract cases of section 5, and the case IDs and files of sections 7.3, 10.1 and 10.2.
 
 ### 10.1 Catalog rows
 

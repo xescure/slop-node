@@ -1,8 +1,9 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { describe, expect, test } from 'vitest';
+import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { assertNever } from '../util/assert-never.js';
-import { decodeVoteCaseFile } from './case.js';
-import type { CaseError, VoteCase } from './case.js';
+import { base64Bytes, decodeVoteCaseFile, toCaseAccount } from './case.js';
+import type { Base64, CaseAccount, CaseError, CaseFeeAmount, CaseFeePolicy, CaseNetwork, CaseVoteFee, StapleReference, VoteCase, VoteReference } from './case.js';
 import { CATALOG_ROWS } from './catalog.js';
 import { EXCLUDED_ROWS } from './exclusions.js';
 
@@ -11,6 +12,8 @@ import { EXCLUDED_ROWS } from './exclusions.js';
  * hold each table to the committed files, so a case added, moved or
  * re-based without the document fails here.
  */
+
+const lib = KeetaNet.lib;
 
 const CORPUS_DIRECTORY = new URL('../../conformance/vote-cases/', import.meta.url);
 const DOCUMENT_FILE = new URL('../../conformance/VOTE-CASES.md', import.meta.url);
@@ -177,6 +180,182 @@ function plainMessagesOf(cases: readonly CommittedCase[]): ReadonlySet<string> {
 	return(messages);
 }
 
+/** The statement of section 3.5 that holds while no case collects. */
+const NO_GC_STATEMENT = 'No committed case has a `gc` step yet; the action is part of the format.';
+
+type SeedName = keyof CaseNetwork['seeds'];
+
+const SEED_NAMES: readonly SeedName[] = ['trustedRoot', 'representative', 'user'];
+
+/** Keys are looked for at every index below this; the corpus uses far fewer. */
+const KEY_SCAN_LIMIT = 64;
+
+/** The text of a cell written in backticks. */
+function unquoted(value: string): string {
+	const match = /^`([^`]+)`$/.exec(value);
+	if (match?.[1] === undefined) {
+		throw(new Error(`not a cell in backticks: ${value}`));
+	}
+	return(match[1]);
+}
+
+function seedName(value: string): SeedName {
+	const name = SEED_NAMES.find(function(candidate): boolean {
+		return(candidate === value);
+	});
+	if (name === undefined) {
+		throw(new Error(`not a seed: ${value}`));
+	}
+	return(name);
+}
+
+/** A derived key as "seed index account". */
+function keyLine(seed: SeedName, index: number, account: string): string {
+	return(`${seed} ${String(index)} ${account}`);
+}
+
+function derivedAccount(seeds: CaseNetwork['seeds'], seed: SeedName, index: number): CaseAccount {
+	return(toCaseAccount(lib.Account.fromSeed(seeds[seed], index)));
+}
+
+/** The seeds every committed case uses; the document's key table is derived from them. */
+function corpusSeeds(cases: readonly CommittedCase[]): CaseNetwork['seeds'] {
+	const distinct = new Map(cases.map(function({ voteCase }): [string, CaseNetwork['seeds']] {
+		return([JSON.stringify(voteCase.network.seeds), voteCase.network.seeds]);
+	}));
+	const [seeds] = distinct.values();
+	if (seeds === undefined || distinct.size !== 1) {
+		throw(new Error(`expected one set of seeds across the corpus, found ${String(distinct.size)}`));
+	}
+	return(seeds);
+}
+
+function feeAccounts(amount: CaseFeeAmount): readonly CaseAccount[] {
+	return([amount.token, amount.payTo].filter(function(account): account is CaseAccount {
+		return(account !== undefined);
+	}));
+}
+
+function policyAccounts(fee: CaseFeePolicy): readonly CaseAccount[] {
+	switch (fee.type) {
+		case 'free':
+			return([]);
+		case 'flat':
+			return(feeAccounts(fee));
+		case 'choices':
+			return(fee.choices.flatMap(feeAccounts));
+		default:
+			return(assertNever(fee));
+	}
+}
+
+function voteFeeAccounts(fee: CaseVoteFee): readonly CaseAccount[] {
+	switch (fee.type) {
+		case 'none':
+			return([]);
+		case 'single':
+			return(feeAccounts(fee));
+		case 'choices':
+			return(fee.choices.flatMap(feeAccounts));
+		default:
+			return(assertNever(fee));
+	}
+}
+
+function errorAccounts(error: CaseError): readonly CaseAccount[] {
+	switch (error.type) {
+		case 'coded':
+			return(error.accounts ?? []);
+		case 'plain':
+			return([]);
+		default:
+			return(assertNever(error));
+	}
+}
+
+/** Every account a case states as a string. */
+function statedAccounts(voteCase: VoteCase): readonly CaseAccount[] {
+	const accounts = voteCase.nodes.flatMap(function(node): readonly CaseAccount[] {
+		return(policyAccounts(node.fee));
+	});
+	for (const { expect: expectation } of voteCase.steps) {
+		switch (expectation.outcome) {
+			case 'added':
+			case 'collected':
+				break;
+			case 'temporary':
+			case 'permanent':
+			case 'quote':
+				accounts.push(...voteFeeAccounts(expectation.fee));
+				break;
+			case 'rejectedInput':
+			case 'refused':
+				accounts.push(...errorAccounts(expectation.error));
+				break;
+			default:
+				assertNever(expectation);
+		}
+	}
+	return(accounts);
+}
+
+function literalBytes(reference: VoteReference | StapleReference | undefined): readonly Base64[] {
+	if (reference === undefined || reference.type === 'step') {
+		return([]);
+	}
+	return([reference.bytes]);
+}
+
+/** Every block, vote, quote and staple a case carries as bytes. */
+function carriedBytes(voteCase: VoteCase): readonly Buffer[] {
+	return(voteCase.steps.flatMap(function({ action }): readonly Base64[] {
+		switch (action.type) {
+			case 'add':
+				return(literalBytes(action.staple));
+			case 'vote':
+				return([...action.blocks, ...(action.otherVotes ?? []).flatMap(literalBytes), ...literalBytes(action.quote)]);
+			case 'quote':
+				return(action.blocks);
+			case 'gc':
+				return([]);
+			default:
+				return(assertNever(action));
+		}
+	}).map(base64Bytes));
+}
+
+/** The derived keys the corpus uses: a key is used when a case states its account or carries its public key in some bytes. */
+function usedKeys(cases: readonly CommittedCase[]): readonly string[] {
+	const seeds = corpusSeeds(cases);
+	const accounts = new Set(cases.flatMap(function({ voteCase }): readonly CaseAccount[] {
+		return(statedAccounts(voteCase));
+	}));
+	const bytes = cases.flatMap(function({ voteCase }): readonly Buffer[] {
+		return(carriedBytes(voteCase));
+	});
+	const used: string[] = [];
+	for (const seed of SEED_NAMES) {
+		for (let index = 0; index < KEY_SCAN_LIMIT; index++) {
+			const account = lib.Account.fromSeed(seeds[seed], index);
+			const publicKey = Buffer.from(account.publicKey.get());
+			const carried = bytes.some(function(item): boolean {
+				return(item.includes(publicKey));
+			});
+			if (carried || accounts.has(toCaseAccount(account))) {
+				used.push(keyLine(seed, index, toCaseAccount(account)));
+			}
+		}
+	}
+	return(used);
+}
+
+/** The key table of section 4.1, as "seed index account" lines. */
+function listedKeys(document: string): readonly string[] {
+	return(tableRows(section(document, '### 4.1 Keys')).map(function(row): string {
+		return(keyLine(seedName(unquoted(cell(row, 0))), Number(cell(row, 1)), unquoted(cell(row, 2))));
+	}));
+}
+
 describe('VOTE-CASES.md tables', function() {
 	test('the file table counts each file\'s cases', async function() {
 		const document = await readFile(DOCUMENT_FILE, 'utf8');
@@ -265,6 +444,36 @@ describe('VOTE-CASES.md tables', function() {
 		});
 
 		expect(sorted(listed)).toEqual(sorted(contractCases));
+	});
+
+	test('each key of the key table derives from its seed and index', async function() {
+		const document = await readFile(DOCUMENT_FILE, 'utf8');
+		const seeds = corpusSeeds(await committedCases());
+		const listed = listedKeys(document);
+		const derived = listed.map(function(line): string {
+			const [seed = '', index = ''] = line.split(' ');
+			return(keyLine(seedName(seed), Number(index), derivedAccount(seeds, seedName(seed), Number(index))));
+		});
+
+		expect(listed.length).toBeGreaterThan(0);
+		expect(listed).toEqual(derived);
+	});
+
+	test('the key table lists exactly the derived keys the corpus uses', async function() {
+		const document = await readFile(DOCUMENT_FILE, 'utf8');
+
+		expect(sorted(listedKeys(document))).toEqual(sorted(usedKeys(await committedCases())));
+	});
+
+	test('the document says no case has a gc step exactly when none has', async function() {
+		const document = await readFile(DOCUMENT_FILE, 'utf8');
+		const gcSteps = (await committedCases()).flatMap(function({ voteCase }) {
+			return(voteCase.steps.filter(function(step): boolean {
+				return(step.action.type === 'gc');
+			}));
+		});
+
+		expect(section(document, '### 3.5 Actions').includes(NO_GC_STATEMENT)).toBe(gcSteps.length === 0);
 	});
 
 	test('the list of plain messages is the corpus\'s', async function() {
