@@ -1,21 +1,31 @@
 import { vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import type { Account, NetworkAddress, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
+import type { Account, NetworkAddress, StorageAddress, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { Ledger, LedgerConfig, LedgerStorageAPI } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { Node, NodeConfig } from '@keetanetwork/keetanet-client/lib/node/index.js';
-import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import type { FeeAmountAndToken, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { assertNever } from '../util/assert-never.js';
 
 const lib = KeetaNet.lib;
 
 const NETWORK = 0n;
 
-const SEEDS = {
+/**
+ * Representative and user i derive from their seed at index i, the trusted
+ * root from its seed at index 0, all as secp256k1 keys.
+ */
+export type TestNetworkSeeds = {
+	readonly trustedRoot: string;
+	readonly representative: string;
+	readonly user: string;
+};
+
+export const TEST_NETWORK_SEEDS: TestNetworkSeeds = {
 	trustedRoot: '5f1d2c9a7b3e48d0a6c4e8f1b2d3a495c7e0f6b8a1d2c3e4f5a6b7c8d9e0f1a2',
 	representative: '0b7e3a91c4d85f26e1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8',
 	user: 'c3a8e5f1d92b7064a8c1e3f5b7d9021436587a9bcde0f1a2b3c4d5e6f708192a'
-} as const;
+};
 
 const BASE_TOKEN_INFO = {
 	name: 'Test Token',
@@ -29,14 +39,18 @@ const NETWORK_DEFAULT_PERMISSION = ['ACCESS', 'STORAGE_CREATE', 'TOKEN_ADMIN_CRE
 
 const GENESIS_VOTE_SERIAL = 0n;
 
-export type TestNetworkOptions = { readonly representativeWeights: readonly bigint[] };
+export type TestNetworkOptions = {
+	readonly representativeWeights: readonly bigint[];
+	readonly seeds?: TestNetworkSeeds;
+};
 
-/** A flat fee without a payee is paid to the issuer of each vote. */
-export type TestFeePolicy = { readonly kind: 'free' } | { readonly kind: 'flat'; readonly amount: bigint; readonly payTo?: Account };
+/** A flat fee without a payee is paid to the issuer of each vote, and without a token in the base token. */
+export type TestFeePolicy = { readonly kind: 'free' } | { readonly kind: 'flat'; readonly amount: bigint; readonly token?: TokenAddress; readonly payTo?: Account | StorageAddress };
 
 export type TestLedgerOptions = {
 	readonly fee?: TestFeePolicy;
 	readonly heapProcessWindowMs?: LedgerConfig['heapProcessWindowMs'];
+	readonly ledgerWriteMode?: LedgerConfig['ledgerWriteMode'];
 	/** Where a ledger without a node logs; a node keeps its own log. */
 	readonly log?: LedgerConfig['log'];
 };
@@ -73,12 +87,16 @@ function computeFeeFor(policy: TestFeePolicy): ComputeFee {
 				return(null);
 			});
 		case 'flat': {
-			const { amount, payTo } = policy;
+			const { amount, token, payTo } = policy;
+			const fee: FeeAmountAndToken = { amount };
+			if (token !== undefined) {
+				fee.token = token;
+			}
+			if (payTo !== undefined) {
+				fee.payTo = payTo;
+			}
 			return(function() {
-				if (payTo === undefined) {
-					return({ amount });
-				}
-				return({ amount, payTo });
+				return({ ...fee });
 			});
 		}
 		default:
@@ -93,6 +111,9 @@ function ledgerSettings(storageDriver: LedgerStorageAPI, options: TestLedgerOpti
 	};
 	if (options.heapProcessWindowMs !== undefined) {
 		settings.heapProcessWindowMs = options.heapProcessWindowMs;
+	}
+	if (options.ledgerWriteMode !== undefined) {
+		settings.ledgerWriteMode = options.ledgerWriteMode;
 	}
 	return(settings);
 }
@@ -211,7 +232,7 @@ function buildGenesis(trustedSigner: Account, holders: readonly Holder[]): Promi
  * bytes.
  */
 export async function createTestNetwork(options: TestNetworkOptions): Promise<TestNetwork> {
-	const { representativeWeights } = options;
+	const { representativeWeights, seeds = TEST_NETWORK_SEEDS } = options;
 	if (representativeWeights.length === 0) {
 		throw(new Error('a test network needs at least one representative'));
 	}
@@ -221,13 +242,13 @@ export async function createTestNetwork(options: TestNetworkOptions): Promise<Te
 		throw(new Error('every representative weight must be positive'));
 	}
 
-	const trustedSigner = lib.Account.fromSeed(SEEDS.trustedRoot, 0);
+	const trustedSigner = lib.Account.fromSeed(seeds.trustedRoot, 0);
 	const trustedRoot = lib.Account.fromPublicKeyString(trustedSigner.publicKeyString.get());
 	const holders = representativeWeights.map(function(weight, index): Holder {
 		return({
 			weight,
-			representative: lib.Account.fromSeed(SEEDS.representative, index),
-			user: lib.Account.fromSeed(SEEDS.user, index)
+			representative: lib.Account.fromSeed(seeds.representative, index),
+			user: lib.Account.fromSeed(seeds.user, index)
 		});
 	});
 	const { networkAddress, baseToken } = lib.Account.generateBaseAddresses(NETWORK);

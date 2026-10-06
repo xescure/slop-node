@@ -48,6 +48,7 @@ help:
 	@echo "  test           - Type-checks and runs the test suite"
 	@echo "                   Specify extra flags with SLOP_NODE_TEST_EXTRA_ARGS"
 	@echo "  do-lint        - Runs the ASCII check, eslint and cspell"
+	@echo "  conformance    - Regenerates the vote-decision corpus in conformance/"
 	@echo "  reference      - Extracts the reference tree for the pinned keetanet-client"
 	@echo "  reference-diff - Diffs the reference trees of two versions"
 	@echo "                   Specify FROM=<version> TO=<version>"
@@ -102,6 +103,11 @@ test: dist/.done build/utils/.done
 	npm run tsc -- --noEmit --incremental false
 	npm run tsc -- --noEmit --incremental false -p utils
 	npm run vitest -- run --config .vitest.config.js $(SLOP_NODE_TEST_EXTRA_ARGS)
+
+# The corpus records what upstream's ledger decides, so it is regenerated from
+# the scenarios rather than edited; "make test" then checks it is current.
+conformance: node_modules/.patched
+	SLOP_NODE_UPDATE_CONFORMANCE=1 npm run vitest -- run --config .vitest.config.js src/conformance/corpus.test.ts
 
 # git grep exits 1 when nothing matches and 128 when it fails, and only the
 # first means the tree is clean.
@@ -165,6 +171,6 @@ clean:
 distclean: clean
 	rm -rf node_modules .nvmrc reference
 
-.PHONY: all help test do-lint reference reference-diff reference-diff-usage clean distclean
+.PHONY: all help test conformance do-lint reference reference-diff reference-diff-usage clean distclean
 
 endif

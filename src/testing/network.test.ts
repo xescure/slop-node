@@ -4,7 +4,7 @@ import type { Account, GenericAccount } from '@keetanetwork/keetanet-client/lib/
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
-import { advanceClock, createTestNetwork, freezeClock } from './network.js';
+import { TEST_NETWORK_SEEDS, advanceClock, createTestNetwork, freezeClock } from './network.js';
 import type { TestNetwork } from './network.js';
 import {
 	createTokenBlock,
@@ -140,6 +140,45 @@ describe('test network', function() {
 		});
 
 		expect(new Set(keys).size).toBe(keys.length);
+	});
+
+	test('explicit seeds derive every key, and the defaults are the published test seeds', async function() {
+		const seeds = { trustedRoot: '01'.repeat(32), representative: '02'.repeat(32), user: '03'.repeat(32) };
+		const explicit = await createTestNetwork({ representativeWeights: WEIGHTS, seeds });
+		const defaults = await createTestNetwork({ representativeWeights: WEIGHTS });
+		const publicKeys = function(accounts: readonly Account[]): string[] {
+			return(accounts.map(function(account): string {
+				return(account.publicKeyString.get());
+			}));
+		};
+
+		expect(explicit.trustedRoot.publicKeyString.get()).toBe(KeetaNet.lib.Account.fromSeed(seeds.trustedRoot, 0).publicKeyString.get());
+		expect(publicKeys(explicit.representatives)).toEqual(publicKeys(WEIGHTS.map(function(_weight, index): Account {
+			return(KeetaNet.lib.Account.fromSeed(seeds.representative, index));
+		})));
+		expect(publicKeys(explicit.users)).toEqual(publicKeys(WEIGHTS.map(function(_weight, index): Account {
+			return(KeetaNet.lib.Account.fromSeed(seeds.user, index));
+		})));
+		expect(publicKeys(defaults.representatives)).toEqual(publicKeys(WEIGHTS.map(function(_weight, index): Account {
+			return(KeetaNet.lib.Account.fromSeed(TEST_NETWORK_SEEDS.representative, index));
+		})));
+	});
+
+	test('createLedger passes the write mode and the fee token on to the ledger', async function() {
+		const network = await createTestNetwork({ representativeWeights: WEIGHTS });
+		const [user, other] = network.users;
+		if (user === undefined || other === undefined) {
+			throw(new Error('the network has no users'));
+		}
+		const ledger = network.createLedger(new MemoryLedgerStorage(), requireAt(network.representatives, 0), {
+			fee: { kind: 'flat', amount: 5n, token: network.baseToken },
+			ledgerWriteMode: 'no-voting'
+		});
+		await ledger.add(network.genesis);
+		const send = await sendBlock({ from: user, to: other, amount: 1n, token: network.baseToken, previous: headOf(network.genesis, user), network: network.network });
+
+		expect(ledger.ledgerWriteMode).toBe('no-voting');
+		expect(await ledger.getFee([send])).toEqual({ amount: 5n, token: network.baseToken });
 	});
 
 	test('createLedger builds a ledger on the given storage driver', async function() {
