@@ -529,8 +529,8 @@
     },
     {
       "id": "I3",
-      "title": "a block with the idempotent key of a block we voted for is refused for the key before the competition, which alone refuses a block without it",
-      "basis": "upstream",
+      "title": "storage contract D6 and D12: a block with the idempotent key of a block we voted for is refused for the key the side ledger claims for it, before the competition, which alone refuses a block without it",
+      "basis": "contract",
       "network": {
         "id": "0",
         "seeds": {
@@ -1530,6 +1530,102 @@
             "error": {
               "type": "coded",
               "code": "LEDGER_INVALID_NETWORK"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "EO31",
+      "title": "a successor of a published block, carrying that block's idempotent key, is refused for the key though we voted for a competing successor",
+      "basis": "upstream",
+      "network": {
+        "id": "0",
+        "seeds": {
+          "trustedRoot": "5f1d2c9a7b3e48d0a6c4e8f1b2d3a495c7e0f6b8a1d2c3e4f5a6b7c8d9e0f1a2",
+          "representative": "0b7e3a91c4d85f26e1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8",
+          "user": "c3a8e5f1d92b7064a8c1e3f5b7d9021436587a9bcde0f1a2b3c4d5e6f708192a"
+        },
+        "representativeWeights": [
+          "400",
+          "300",
+          "300"
+        ]
+      },
+      "nodes": [
+        {
+          "representative": 0,
+          "fee": {
+            "type": "free"
+          },
+          "mode": "read-write"
+        }
+      ],
+      "steps": [
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "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"
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "MIIFvDCCAQIEgf8wgfwCAQACAQAFAAQHb3JkZXItMRgPMjAyNjAxMDEwMDAwMDBaBCIAA35n8Ixk5phuY6m1+qLFAOq0rvS3ZbOV3WgfZpy55k62BQAEIFmBwe1rmBDg8nT4BpKYIinrb3cfmvdIDoBuErgMFR1cME6gTDBKBCIAAhoAQtc6zx5C1HJsKVo7SQFRCMypeFyLKJmLJDKslmjNAgEBBCEDhtTHB/Kinyj1ACfTrR4fsAVPMD/sqbWlRi8V+4hTldEEQG4NNZaa3sJn4azibdqkodLtXsBN6mpaOkvtTyaZu2zQRFRIaRXoRgqo8XHgQ5lIwgUSJUlTxlkihDqRPUFvXmwwggSyBIIBjTCCAYkwggEuoAMCAQICCACnZRYmN6C9MAsGCWCGSAFlAwQDCjBQMU4wTAYDVQQDDEVrZWV0YV9hYWI0bGhiNWVxZ3RxamE2Z2tqenJidHN6d2l1eWptbnBya3doN2IzZW8ybDVzcWdyeDdvazVjY2dnaDVyM3kwIhgPMjAyNjAxMDEwMDAwMDBaGA8zMDI3MDEzMTAwMDAwMFowGTEXMBUGA1UEBQwOYTc2NTE2MjYzN2EwYmQwNjAQBgcqhkjOPQIBBgUrgQQACgMiAAPFnD0kDTgkHjKTmIZyzZFMJY18VWP8OyO0vsoGjf7ldKNHMEUwQwYJYIZIAWUDAwEDAQH/BDOgMTAvBglghkgBZQMEAggwIgQghWSaO/2JVuw4qhTn0t4GIVwZLvJVXRjbz7G7OpPvHTswCwYJYIZIAWUDBAMKA0gAMEUCIQCLlarEQX6fLcqlM9aZ1J8WSdvQRCluWziL1VOzRfa+8wIgJoQDkvOsYwgtGvsXwQhnLdgcQSpIkPp++TlFPwQk5BMEggGNMIIBiTCCAS6gAwIBAgIIAKdlFiY3oL0wCwYJYIZIAWUDBAMKMFAxTjBMBgNVBAMMRWtlZXRhX2FhYnRqNTdybGd5ZHRlYXJ1Ymc1dnVlcHN2eWpkYXZldmdqNHVtNnpqcnFjd3RxNHhsemF0YWhlb3ZueW9haTAiGA8yMDI2MDEwMTAwMDAwMFoYDzMwMjcwMTMxMDAwMDAwWjAZMRcwFQYDVQQFDA5hNzY1MTYyNjM3YTBiZDA2MBAGByqGSM49AgEGBSuBBAAKAyIAAzT38VmwOZARoE3a0I+VcJGCpKmTyjPZTGArThy68gmAo0cwRTBDBglghkgBZQMDAQMBAf8EM6AxMC8GCWCGSAFlAwQCCDAiBCCFZJo7/YlW7DiqFOfS3gYhXBku8lVdGNvPsbs6k+8dOzALBglghkgBZQMEAwoDSAAwRQIhAKGu+Dj9WuqBOpYm5f6o8XgoXsgdqsteAX4RncPZj76AAiBdqzhurUQvlSvfe3vkCJG1XHPs88c4b6H+u4Kfee/ORwSCAYwwggGIMIIBLqADAgECAggAp2UWJjegvTALBglghkgBZQMEAwowUDFOMEwGA1UEAwxFa2VldGFfYWFiZzM3eDdyd3Jta3J2Nmw1dGkyYXVmYnRvNm5vdTVobW81NXFoMnV2cmNkYnU2dTN6bmJtNDV6ZG5maGlxMCIYDzIwMjYwMTAxMDAwMDAwWhgPMzAyNzAxMzEwMDAwMDBaMBkxFzAVBgNVBAUMDmE3NjUxNjI2MzdhMGJkMDYwEAYHKoZIzj0CAQYFK4EEAAoDIgACbf7/jaLFRr5fZo0ChQzd5rqdOx3ewPqlYiGGnqby0LOjRzBFMEMGCWCGSAFlAwMBAwEB/wQzoDEwLwYJYIZIAWUDBAIIMCIEIIVkmjv9iVbsOKoU59LeBiFcGS7yVV0Y28+xuzqT7x07MAsGCWCGSAFlAwQDCgNHADBEAiB4tthnyR57vFlT/dN09qppDmlFyz/iVrO9ALb7/hK6kgIgdLsyJW8n5J5CzI3wO4aRg2EmsYjthCXmRQLiTS3jH0c="
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "vote",
+            "blocks": [
+              "MIHzAgEAAgEABQAYDzIwMjYwMTAxMDAwMDAwWgQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgUABCCFZJo7/YlW7DiqFOfS3gYhXBku8lVdGNvPsbs6k+8dOzBOoEwwSgQiAAIaAELXOs8eQtRybClaO0kBUQjMqXhciyiZiyQyrJZozQIBAQQhA4bUxwfyop8o9QAn060eH7AFTzA/7Km1pUYvFfuIU5XRBEB1xQEtx5A4b03XgzWu7IkQbtkYnkDXkGo7rBtELftuwGNhycz4sqtRCVOe3cQm7WFYXlP+UW7AMa2ODLPMPoTy"
+            ]
+          },
+          "expect": {
+            "outcome": "temporary",
+            "blocks": [
+              "D01E9AD8B326678CD395D1507EF5E2E33478534B4F03E9CE3F0A3DF58CA52EAF"
+            ],
+            "fee": {
+              "type": "single",
+              "amount": "0"
+            }
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "vote",
+            "blocks": [
+              "MIH8AgEAAgEABQAEB29yZGVyLTEYDzIwMjYwMTAxMDAwMDAwWgQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgUABCCFZJo7/YlW7DiqFOfS3gYhXBku8lVdGNvPsbs6k+8dOzBOoEwwSgQiAAIaAELXOs8eQtRybClaO0kBUQjMqXhciyiZiyQyrJZozQIBAgQhA4bUxwfyop8o9QAn060eH7AFTzA/7Km1pUYvFfuIU5XRBECsFjkZP36+aafMDEaO+dG3PoKxRNg/oDPbUcGAhlk6PEHyQB3IiXe4XKUny9u70r4MCYJpeG0qxkZbgOMt/8on"
+            ]
+          },
+          "expect": {
+            "outcome": "refused",
+            "error": {
+              "type": "coded",
+              "code": "LEDGER_IDEMPOTENT_KEY_EXISTS",
+              "blockhash": "63C3BDA19A5F67E866599A815D714E0DF6B94D8D6EB5F87ADA941C2EFE2E7421",
+              "existingBlockhash": "85649A3BFD8956EC38AA14E7D2DE06215C192EF2555D18DBCFB1BB3A93EF1D3B"
             }
           }
         }

@@ -235,8 +235,8 @@ export function manageCertificateBlock(input: SignedBlockContext & Omit<BlockJSO
 }
 
 /*
- * A fee block pays the voters, one SEND per required fee, and must be a
- * version 2 block with the FEE purpose.
+ * A fee block pays the voters with SENDs only, as many as the votes that
+ * charge a fee, and must be a version 2 block with the FEE purpose.
  * [Keeta TS] index.js:57612-57681
  */
 export function feeBlock(input: BlockContext & { readonly from: Account; readonly payments: readonly Pick<BlockJSONOperationSEND, 'to' | 'token' | 'amount'>[] }): Promise<Block> {

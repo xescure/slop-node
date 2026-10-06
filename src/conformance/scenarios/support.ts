@@ -4,6 +4,7 @@ import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/i
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { ChainCursor } from '../../ledger/storage/suite/support.js';
 import { confirmedStaple, createTokenBlock, operationsBlock, sendBlock } from '../../testing/blocks.js';
+import { TEST_NETWORK_SEEDS } from '../../testing/network.js';
 import type { CaseRecorder } from '../record.js';
 
 const lib = KeetaNet.lib;
@@ -26,6 +27,15 @@ export const MAXIMUM_SUPPLY: bigint = (10n ** 200n) - 1n;
 
 /** Blocks dated from this moment on may not carry a negative amount. [Keeta TS] index.js:61330 */
 export const NEGATIVE_AMOUNTS_REFUSED_FROM: Date = new Date(Date.UTC(2025, 10, 21));
+
+/**
+ * Keys after a network's own users, from the same seed: key `index` of a
+ * network with `users` users. A replay never needs them, since every block
+ * they sign enters a case as bytes.
+ */
+export function extraUserKey(users: number, index: number): Account {
+	return(lib.Account.fromSeed(TEST_NETWORK_SEEDS.user, users + index));
+}
 
 /** An idempotent key as a block carries it: the base64 of the text's bytes. */
 export function idempotentKey(text: string): string {

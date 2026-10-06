@@ -16,11 +16,10 @@ import {
 	setRepresentativeBlock,
 	tokenSupplyBlock
 } from '../../testing/blocks.js';
-import { TEST_NETWORK_SEEDS } from '../../testing/network.js';
 import { toDecimal } from '../case.js';
 import { scenario } from '../record.js';
 import type { CaseRecorder, RecordingOptions, Scenario } from '../record.js';
-import { HOUR, MAXIMUM_SUPPLY, NEGATIVE_AMOUNTS_REFUSED_FROM, chainsOf, confirmed, issueToken } from './support.js';
+import { HOUR, MAXIMUM_SUPPLY, NEGATIVE_AMOUNTS_REFUSED_FROM, chainsOf, confirmed, extraUserKey, issueToken } from './support.js';
 import type { PublishedToken, TokenOptions } from './support.js';
 
 /*
@@ -54,7 +53,7 @@ const NARROWED_NETWORK_DEFAULT: PermissionFlags = ['ACCESS', 'STORAGE_CREATE'];
 
 /** Keys after the network's own users, from the same seed, that only ever sign for a multisig. */
 function extraKey(recorder: CaseRecorder, index: number): Account {
-	return(lib.Account.fromSeed(TEST_NETWORK_SEEDS.user, recorder.network.users.length + index));
+	return(extraUserKey(recorder.network.users.length, index));
 }
 
 /** `account` changes the permissions of `principal` on itself; an identifier's owner, user 0, signs for it. */

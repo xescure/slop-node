@@ -8,18 +8,22 @@ import { TEST_NETWORK_SEEDS } from '../../testing/network.js';
 import type { TestFeePolicy } from '../../testing/network.js';
 import { toCaseAccount, toDecimal } from '../case.js';
 import type { CaseFeeAmount, CaseFeePolicy } from '../case.js';
-import { scenario } from '../record.js';
+import { DEFAULT_WEIGHTS, scenario } from '../record.js';
 import type { CaseRecorder, RecordingOptions, Scenario, StepHandle } from '../record.js';
-import { BLOCK_WINDOW, TEMPORARY_VALIDITY, VOTE_SLOP, confirmed, idempotentKey, send } from './support.js';
+import { BLOCK_WINDOW, TEMPORARY_VALIDITY, VOTE_SLOP, confirmed, extraUserKey, idempotentKey, send } from './support.js';
 
 /*
  * What a node charges, and how a permanent request pays it. Each temporary
  * vote carries its node's fee: a vote with a zero option makes its fee
  * optional, any other fee is required. A permanent request that holds
- * temporary votes with required fees must end in one fee block with one
- * SEND per such vote, or per such vote and optional one, each matching an
- * option exactly in amount, token and payee. Only a permanent request is
- * checked, and only one with a fee block validates its ledger outcome again.
+ * temporary votes with required fees must end in a fee block; a fee block
+ * anywhere else is an ordinary block. The fee block's operations must number
+ * the votes with required fees, or those and the optional ones, and every
+ * such vote must find among them some SEND that matches one of its options
+ * exactly in amount, token and payee. The match is not exclusive: one SEND
+ * can serve several votes, so only the count limits a fee block. Only a
+ * permanent request is checked, and only one with a fee block validates its
+ * ledger outcome again.
  * [Keeta TS] index.js:69073-69212, 69324-69330, 70212-70226
  */
 
@@ -30,13 +34,16 @@ const FLAT_FEE = 5n;
 // A fee option in another token, dearer than the flat fee in the base token.
 const TOKEN_FEE = 7n;
 
+// The fee a quote carried before its node's fee changed, dearer than the flat fee.
+const EARLIER_QUOTED_FEE = 9n;
+
 /*
- * A key outside the network's users. Its opening block creates the fee
- * token, so the token's address follows from the key alone and a node's fee
- * policy can name it before the case starts.
+ * A key outside the default network's users. Its opening block creates the
+ * fee token, so the token's address follows from the key alone and a node's
+ * fee policy can name it before the case starts.
  * [Keeta TS] index.js:62864-62889
  */
-const TOKEN_ISSUER = lib.Account.fromSeed(TEST_NETWORK_SEEDS.user, 3);
+const TOKEN_ISSUER = extraUserKey(DEFAULT_WEIGHTS.length, 0);
 
 const FEE_TOKEN: TokenAddress = TOKEN_ISSUER.generateIdentifier(lib.Account.AccountKeyAlgorithm.TOKEN, undefined, 0);
 
@@ -219,6 +226,14 @@ export const feeScenarios: readonly Scenario[] = [
 		const temporary = await temporaryVotes(recorder, [block]);
 		await recorder.vote(0, [block, first, second], temporary);
 	}),
+	scenario('F7b', 'a fee block that is not the last block of a permanent request is an ordinary block, so the request lacks the fee block its votes require', CHARGING, async function(recorder) {
+		await recorder.addGenesis(0, 1, 2);
+		const block = await send(recorder, 0);
+		const fee = await feeAfter(recorder, block, feesTo(recorder, [0, 1, 2]));
+		const after = await send(recorder, 0, { previous: fee.hash, amount: 2n });
+		const temporary = await temporaryVotes(recorder, [block, fee, after]);
+		await recorder.vote(0, [block, fee, after], temporary);
+	}),
 	scenario('F9', 'fees with a zero option are optional: a permanent request without a fee block is given', OPTIONAL, async function(recorder) {
 		await payAndRequest(recorder, null);
 	}),
@@ -254,6 +269,9 @@ export const feeScenarios: readonly Scenario[] = [
 			return({ to });
 		}));
 	}),
+	scenario('E3c', 'fees with a payee need only some SEND matching each vote: a fee block of the right size with one SEND to the payee serves every vote', COLLECTED, async function(recorder) {
+		await payAndRequest(recorder, [{ to: COLLECTOR }, { to: recorder.user(1) }, { to: recorder.user(1) }]);
+	}),
 	scenario('E3b', 'fees with a payee paid to the voters instead are refused', COLLECTED, async function(recorder) {
 		await payAndRequest(recorder, feesTo(recorder, [0, 1, 2]));
 	}),
@@ -278,7 +296,7 @@ export const feeScenarios: readonly Scenario[] = [
 		await recorder.addGenesis(0);
 		const block = await send(recorder, 0);
 		await recorder.quote(0, [block]);
-		const dearer = await quoteElsewhere(recorder, { kind: 'flat', amount: TOKEN_FEE }, [block]);
+		const dearer = await quoteElsewhere(recorder, { kind: 'flat', amount: EARLIER_QUOTED_FEE }, [block]);
 		await recorder.vote(0, [block], undefined, dearer);
 	}),
 	scenario('F13', 'a quote on a block that overspends is refused: a quote validates the outcome', CHARGING, async function(recorder) {
