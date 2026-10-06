@@ -19,6 +19,8 @@ run-mixed-goals:
 
 else
 
+KEETANET_CLIENT_VERSION := $(shell jq -r '.dependencies["@keetanetwork/keetanet-client"]' package.json)
+
 all: dist .nvmrc
 
 help:
@@ -30,6 +32,7 @@ help:
 	@echo "  test          - Type-checks and runs the test suite"
 	@echo "                  Specify extra flags with SLOP_NODE_TEST_EXTRA_ARGS"
 	@echo "  do-lint       - Runs the ASCII check, eslint and cspell"
+	@echo "  reference     - Extracts the reference tree for the installed keetanet-client"
 	@echo "  clean         - Removes build artifacts"
 	@echo "  distclean     - Removes all build artifacts and dependencies"
 
@@ -73,12 +76,22 @@ do-lint: node_modules/.done
 	npm run eslint -- --config .eslint.config.mjs src utils
 	npm run cspell -- --config .cspell.config.mjs --no-progress 'src/**/*.ts' 'utils/**/*.ts' Makefile
 
+# The tree is built beside its final name and renamed, so an interrupted run
+# never leaves a partial directory that looks complete.
+reference/$(KEETANET_CLIENT_VERSION)/.done: node_modules/.done build/utils/.done
+	rm -rf reference/$(KEETANET_CLIENT_VERSION) reference/$(KEETANET_CLIENT_VERSION).tmp
+	node build/utils/reference/main.js --package node_modules/@keetanetwork/keetanet-client --out reference/$(KEETANET_CLIENT_VERSION).tmp
+	mv reference/$(KEETANET_CLIENT_VERSION).tmp reference/$(KEETANET_CLIENT_VERSION)
+	@touch reference/$(KEETANET_CLIENT_VERSION)/.done
+
+reference: reference/$(KEETANET_CLIENT_VERSION)/.done
+
 clean:
 	rm -rf dist build .coverage .tsbuildinfo
 
 distclean: clean
 	rm -rf node_modules .nvmrc reference
 
-.PHONY: all help test do-lint clean distclean
+.PHONY: all help test do-lint reference clean distclean
 
 endif
