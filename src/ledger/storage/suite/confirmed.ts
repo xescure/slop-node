@@ -4,6 +4,7 @@ import type { Account, GenericAccount } from '@keetanetwork/keetanet-client/lib/
 import type { Ledger, PaginatedVotes } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { ACLRow } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import { LedgerInternals } from '../../../upstream/internals.js';
 import { assertNever } from '../../../util/assert-never.js';
 import { advanceClock } from '../../../testing/network.js';
 import type { TestNetwork } from '../../../testing/network.js';
@@ -18,9 +19,13 @@ import {
 	setRepresentativeBlock,
 	tokenSupplyBlock
 } from '../../../testing/blocks.js';
+import { computeConfirmedStapleChange } from '../confirmed.js';
+import type { ConfirmedStapleChange } from '../confirmed.js';
+import { toBlockHashKey } from '../keys.js';
 import {
 	ChainCursor,
 	GENESIS_MOMENT,
+	TESTING_KEY,
 	certificateFor,
 	blockHashesOf,
 	blocksHashesOf,
@@ -493,6 +498,56 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(await ledger.getBlock(fork.hash, 'main')).toBeNull();
 			expect(await ledger.getBalance(user, network.baseToken)).toBe(395n);
 			expect(await ledger.getBalance(other, network.baseToken)).toBe(305n);
+		});
+
+		// The ledger refuses duplicates and forks before persisting, so only a direct call shows that the write itself refuses them.
+		test('persisting never overwrites a confirmed block or successor', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			const other = requireAt(network.users, 1);
+			const genesisHead = headOf(network.genesis, user);
+			await ledger.add(network.genesis);
+			const kept = await sendBlock({ from: user, previous: genesisHead, to: other, amount: 5n, token: network.baseToken, network: network.network });
+			const fork = await sendBlock({ from: user, previous: genesisHead, to: other, amount: 7n, token: network.baseToken, network: network.network });
+			const keptStaple = await confirmedStaple([kept], network.representatives);
+			const forkStaple = await confirmedStaple([fork], network.representatives);
+			await ledger.add(keptStaple);
+			const keptHeight = (await ledger.getAccountsBlockHeightInfo([{ account: user }]))[user.publicKeyString.get()]?.height;
+			if (keptHeight === undefined || keptHeight === null) {
+				throw(new Error('the kept block has no height'));
+			}
+
+			const transaction = await storage.beginTransaction({ identifier: 'suite-persist-probe', readOnly: false });
+			try {
+				const changeAtKeptHeight = function(staple: VoteStaple): Promise<ConfirmedStapleChange> {
+					return(computeConfirmedStapleChange({
+						transaction,
+						staple,
+						effects: LedgerInternals.computeEffectOfBlocks(staple.blocks, ledger),
+						blockHeights: new Map(staple.blocks.map(function(block) {
+							return([toBlockHashKey(block.hash), keptHeight]);
+						})),
+						storage,
+						network: network.network,
+						baseToken: network.baseToken,
+						moment: transaction.moment
+					}));
+				};
+				const hooks = storage._Testing(TESTING_KEY);
+
+				await expect(hooks.persist(transaction, await changeAtKeptHeight(keptStaple))).rejects.toMatchObject({ code: 'LEDGER_BLOCK_ALREADY_EXISTS', shouldRetry: false });
+				await expect(hooks.persist(transaction, await changeAtKeptHeight(forkStaple))).rejects.toMatchObject({ code: 'LEDGER_PREVIOUS_ALREADY_USED', shouldRetry: false });
+
+				// A refused change leaves nothing behind in the transaction.
+				expect(await storage.getBlock(transaction, fork.hash, 'main')).toBeNull();
+				expect((await storage.getBlockFromPrevious(transaction, genesisHead, 'main'))?.hash.toString()).toBe(kept.hash.toString());
+				expect((await storage.getVoteStaples(transaction, [forkStaple.blocksHash], 'main')).get(forkStaple.blocksHash)).toBeNull();
+				expect(await storage.getBalance(transaction, user, network.baseToken)).toBe(395n);
+				expect(await storage.getBalance(transaction, other, network.baseToken)).toBe(305n);
+				expect((await storage.getHistory(transaction, user, null, 25)).map(String)).toEqual(blocksHashesOf([keptStaple, network.genesis]));
+			} finally {
+				await storage.abortTransaction(transaction);
+			}
 		});
 
 		test('a cross-account funding gap stores a negative balance that heals', async function() {

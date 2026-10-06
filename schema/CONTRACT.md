@@ -160,7 +160,7 @@ A driver must provide the following.
    - One transaction defers S on A while another applies A. Under weaker isolation each misses the other's write, and S waits until a gc retry. Untested.
 2. **Read-your-writes.** Every read in a transaction sees that transaction's earlier writes. Replay depends on this, because a replayed staple reads the heights, balances and representatives its trigger has just written. Tested by `transactions.ts: "reads see the transaction's own writes"`, and by every replay case in `deferral.ts`.
 3. **Concurrent calls within one transaction.** Upstream issues reads on one transaction concurrently [Keeta TS] index.js:67332-67339, 67638-67646, 69935-69945, and `Promise.all` over `add` within one transaction is legal. A driver must accept overlapping calls on one transaction and lose no write. Tested by `transactions.ts: "concurrent calls within one transaction keep every write"`.
-4. **Atomic staple application.** `persistConfirmedStaple` applies a whole change or nothing, even inside a transaction that continues afterwards: a replayed staple that fails is skipped while its trigger commits. In a database where a failed statement aborts the enclosing transaction, each replayed staple's statements need a savepoint of their own, or one failing waiter prevents its trigger from committing. Tested by `deferral.ts: "a replayed staple whose idempotent key is taken stays deferred while its trigger applies"`, where the replay fails inside `persistConfirmedStaple`; by `deferral.ts: "a replayed staple that conflicts stays deferred while its trigger applies"`, where it fails before the write; and by `src/ledger/storage/memory/driver.test.ts: "persisting never overwrites a confirmed block or successor"`, which is memory-only.
+4. **Atomic staple application.** `persistConfirmedStaple` applies a whole change or nothing, even inside a transaction that continues afterwards: a replayed staple that fails is skipped while its trigger commits. In a database where a failed statement aborts the enclosing transaction, each replayed staple's statements need a savepoint of their own, or one failing waiter prevents its trigger from committing. Tested by `deferral.ts: "a replayed staple whose idempotent key is taken stays deferred while its trigger applies"`, where the replay fails inside `persistConfirmedStaple`; by `deferral.ts: "a replayed staple that conflicts stays deferred while its trigger applies"`, where it fails before the write; and by `confirmed.ts: "persisting never overwrites a confirmed block or successor"`, which calls the primitive directly.
 
 The memory driver meets 1 by holding one first-come, first-served lock from `beginTransaction` until commit or abort. It meets 2 and 4 with a copy-on-write overlay per transaction, applied on commit and dropped on abort, and with a nested overlay for each staged group of writes. It meets 3 by keeping every overlay operation synchronous. It records a commit as done only after the overlay has been applied, and a failed commit leaves the transaction finished with a non-retryable error (untested).
 
@@ -788,7 +788,7 @@ Writes everything that one confirmed staple changes, all of it or none of it (se
   - Refuse a block already on the main ledger with `LEDGER_BLOCK_ALREADY_EXISTS`.
   - Refuse a block whose `previous` already has a successor with the error from `confirmedHistoryConflict`, which logs the conflict as a network integrity alarm.
 
-  `adjust` checks both conditions earlier, but the write must not depend on that check (D14). Tested by `src/ledger/storage/memory/driver.test.ts: "persisting never overwrites a confirmed block or successor"`, which is memory-only. Every driver needs an equivalent test of its own primitive.
+  `adjust` checks both conditions earlier, but the write must not depend on that check (D14). Tested by `confirmed.ts: "persisting never overwrites a confirmed block or successor"`, which reaches the primitive through the base's key-gated test hook, so every driver in the suite runs it.
 - **`ledgerEffect.balances`.** Add each non-zero `change` to the stored balance of the account and token, creating the row at `0n`. Never clamp the result.
 - **`ledgerEffect.supplies`.** Add each `change` to the token's stored supply.
 - **`ledgerEffect.weights`.** Add each `change` to the representative's stored weight.
@@ -1068,7 +1068,7 @@ A staple that lists a block before its own previous is refused with a non-retrya
 - `deferral.ts: "a staple listing a block before its previous is refused, not deferred"`
 - `deferral.ts: "an out-of-order staple that also misses a previous is refused, not deferred"`
 - `deferral.ts: "two blocks sharing a missing previous are refused, not deferred"`
-- `src/ledger/storage/memory/driver.test.ts: "persisting never overwrites a confirmed block or successor"`, for the write-time check (memory-only)
+- `confirmed.ts: "persisting never overwrites a confirmed block or successor"`, for the write-time check
 
 ### D14a. Race conflicts under real concurrency
 

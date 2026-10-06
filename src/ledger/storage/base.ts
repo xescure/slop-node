@@ -236,6 +236,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	_Testing(key: string): {
 		deferredStaplesWaitingOn(transaction: Transaction, blockHashes: readonly BlockHash[]): Promise<readonly VoteStaple[]>;
 		gcBatch(transaction: Transaction, limit: number): Promise<boolean>;
+		persist(transaction: Transaction, change: ConfirmedStapleChange): Promise<void>;
 	} {
 		if (key !== TESTING_KEY) {
 			throw(new Error('This is a testing only method'));
@@ -246,6 +247,9 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			},
 			gcBatch: (transaction, limit) => {
 				return(this.#gcBatch(transaction, limit));
+			},
+			persist: (transaction, change) => {
+				return(this.persistConfirmedStaple(transaction, change));
 			}
 		});
 	}
