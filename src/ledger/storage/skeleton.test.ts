@@ -1,6 +1,8 @@
 import { describe, expect, expectTypeOf, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
+import type { Account as AccountInstance, AccountKeyAlgorithm } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { LedgerStorageAPI } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
+import type { AccountInfoForType } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
 import { LedgerStorageSkeleton } from './skeleton.js';
 
 const Account = KeetaNet.lib.Account;
@@ -44,5 +46,22 @@ describe('LedgerStorageSkeleton', function() {
 
 	test('skeleton satisfies the full storage contract', function() {
 		expectTypeOf<LedgerStorageSkeleton>().toExtend<LedgerStorageAPI>();
+	});
+
+	test('operations reject instead of throwing synchronously', async function() {
+		const storageDriver = new LedgerStorageSkeleton();
+
+		await expect(storageDriver.stats()).rejects.toThrow('not implemented: stats');
+	});
+
+	test('a subclass can override getAccountInfo as a method', async function() {
+		class OverridingStorage extends LedgerStorageSkeleton {
+			override getAccountInfo<T extends AccountKeyAlgorithm = AccountKeyAlgorithm>(transaction: Parameters<LedgerStorageAPI['getAccountInfo']>[0], account: AccountInstance<T> | string): Promise<AccountInfoForType<T>> {
+				return(super.getAccountInfo(transaction, account));
+			}
+		}
+
+		expectTypeOf<OverridingStorage>().toExtend<LedgerStorageAPI>();
+		await expect(new OverridingStorage().getAccountInfo(undefined, 'any')).rejects.toThrow('not implemented: getAccountInfo');
 	});
 });
