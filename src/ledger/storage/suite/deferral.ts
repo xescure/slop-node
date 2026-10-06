@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import { confirmedStaple, sendBlock } from '../../../testing/blocks.js';
+import { advanceClock } from '../../../testing/network.js';
 import type { TestNetwork } from '../../../testing/network.js';
 import type { LedgerStorageDriverBase } from '../base.js';
 import {
@@ -37,12 +38,14 @@ function deferredWaitingOn(storage: LedgerStorageDriverBase, hash: BlockHash): P
 	}));
 }
 
+/** Each block is built a second after the one before, so each staple of one block has a staple time of its own. */
 async function sendsAfter(network: TestNetwork, previous: BlockHash, amounts: readonly bigint[]): Promise<Block[]> {
 	const from = requireAt(network.users, 0);
 	const to = requireAt(network.users, 1);
 	const blocks: Block[] = [];
 	let head = previous;
 	for (const amount of amounts) {
+		advanceClock(1000);
 		const block = await sendBlock({ from, previous: head, to, amount, token: network.baseToken, network: network.network });
 		blocks.push(block);
 		head = block.hash;
@@ -140,8 +143,11 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			const to = requireAt(network.users, 1);
 			const idempotent = btoa('order-1');
 			await ledger.add(network.genesis);
+			advanceClock(1000);
 			const keyed = await sendBlock({ from, previous: headOf(network.genesis, from), to, amount: 1n, token: network.baseToken, network: network.network, idempotent });
+			advanceClock(1000);
 			const trigger = await sendBlock({ from, previous: keyed.hash, to, amount: 2n, token: network.baseToken, network: network.network });
+			advanceClock(1000);
 			const reused = await sendBlock({ from, previous: trigger.hash, to, amount: 4n, token: network.baseToken, network: network.network, idempotent });
 			const [keyedStaple, triggerStaple, reusedStaple] = await Promise.all([keyed, trigger, reused].map(function(block) {
 				return(confirmedStaple([block], network.representatives));
@@ -162,8 +168,7 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			expect((await ledger.getHeadBlock(from, 'main'))?.hash.toString()).toBe(trigger.hash.toString());
 			expect(await ledger.getBalance(from, network.baseToken)).toBe(397n);
 			expect(await ledger.getBalance(to, network.baseToken)).toBe(303n);
-			// These staples share genesis's staple time, so history lists them by blocks hash, descending.
-			expect(blocksHashesOf(await ledger.getHistory(from, null))).toEqual(blocksHashesOf([triggerStaple, network.genesis, keyedStaple]));
+			expect(blocksHashesOf(await ledger.getHistory(from, null))).toEqual(blocksHashesOf([triggerStaple, keyedStaple, network.genesis]));
 			expect((await ledger.getIdempotentBlockHash(from, idempotent, 'main'))?.toString()).toBe(keyed.hash.toString());
 		});
 
@@ -244,8 +249,7 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			expect((await node.ledger.getVoteStaples([thirdStaple.blocksHash], 'main')).get(thirdStaple.blocksHash)).toBeNull();
 			expect(hashOf(await node.ledger.getHeadBlock(user, 'main'))).toBe(hashOf(second));
 			expect(await node.ledger.getBalance(user, network.baseToken)).toBe(388n);
-			// These staples share genesis's staple time, so history lists them by blocks hash, descending.
-			expect(blocksHashesOf(await node.ledger.getHistory(user, null))).toEqual(blocksHashesOf([network.genesis, secondStaple, firstStaple]));
+			expect(blocksHashesOf(await node.ledger.getHistory(user, null))).toEqual(blocksHashesOf([secondStaple, firstStaple, network.genesis]));
 			expect(await deferredWaitingOn(storage, second.hash)).toEqual(blocksHashesOf([thirdStaple]));
 			expect(await ledgerChecksumOf(node)).toBe(checksumOf([network.genesis, firstStaple, secondStaple]));
 		});

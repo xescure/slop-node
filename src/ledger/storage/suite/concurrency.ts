@@ -178,6 +178,7 @@ export function defineConcurrencyCases(driver: DriverUnderTest): void {
 			const { network, startNode } = await startNetwork();
 			const user = requireAt(network.users, 0);
 			const { node } = await startNode(0);
+			advanceClock(1000);
 			const send = await sendBlock({ from: user, previous: headOf(network.genesis, user), to: requireAt(network.users, 1), amount: 5n, token: network.baseToken, network: network.network });
 			const staple = await confirmedStaple([send], network.representatives);
 
@@ -186,8 +187,7 @@ export function defineConcurrencyCases(driver: DriverUnderTest): void {
 			expect(settledValues(outcomes).map(blocksHashesOf)).toEqual([blocksHashesOf([staple])]);
 			expect(settledReasons(outcomes)).toEqual([expect.objectContaining({ code: 'LEDGER_BLOCK_ALREADY_EXISTS' })]);
 			expect(await node.ledger.getBalance(user, network.baseToken)).toBe(395n);
-			// The staple shares genesis's staple time, so history lists them by blocks hash, descending.
-			expect(blocksHashesOf(await node.ledger.getHistory(user, null))).toEqual(blocksHashesOf([network.genesis, staple]));
+			expect(blocksHashesOf(await node.ledger.getHistory(user, null))).toEqual(blocksHashesOf([staple, network.genesis]));
 			// Each applied block enters the checksum by XOR, so a second application would cancel the first.
 			expect(await ledgerChecksumOf(node)).toBe(checksumOf([network.genesis, staple]));
 		});

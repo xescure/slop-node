@@ -590,7 +590,7 @@ getHistory: (transaction: any, account: GenericAccount | null, start: VoteBlockH
   - A `start` that is unknown, or not in the listed history, gives `[]`.
 - **Selector.** Main only.
 - **Tested by**:
-  - `confirmed.ts: "history lists the staple for every touched account, exclusive start, unknown start empty"`
+  - `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, unknown start empty"`
   - `confirmed.ts: "history orders staples by staple time, not by when they were applied"`
   - `confirmed.ts: "history breaks staple-time ties by blocks hash, descending, and pages across a tie"`
   - `concurrency.ts: "concurrent adds of one staple apply it once"`
@@ -1011,7 +1011,7 @@ The history key of a main staple is the ordered pair:
 - The client passes the previous page's `nextKey` as the next start [Keeta TS] index.js:58986-58990, and its fallback passes the last returned staple's ID [Keeta TS] index.js:58992-58994. Paging by the last returned staple works without duplicates only if `start` is exclusive.
 
 **Tested by**:
-- `confirmed.ts: "history lists the staple for every touched account, exclusive start, unknown start empty"`
+- `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, unknown start empty"`
 - `confirmed.ts: "history orders staples by staple time, not by when they were applied"`
 - `confirmed.ts: "history breaks staple-time ties by blocks hash, descending, and pages across a tie"`
 
@@ -1162,7 +1162,7 @@ Sections 3.2 to 3.4, which also describe how the memory driver meets them.
 
 No member reads account rows, so their creation is untested.
 
-**Tested by** `confirmed.ts: "history lists the staple for every touched account, exclusive start, unknown start empty"`, which also checks that a delegation does not touch the representative it names.
+**Tested by** `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, unknown start empty"`, which also checks that a delegation does not touch the representative it names.
 
 ### D19. Statistics
 
