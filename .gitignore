@@ -1,0 +1,13 @@
+.private
+reference/
+build/
+dist/
+node_modules/
+.coverage/
+.tsbuildinfo
+.nvmrc
+.devenv/
+.direnv/
+CLAUDE.md
+.claude/
+.superpowers/
