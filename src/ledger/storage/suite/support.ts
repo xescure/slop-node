@@ -1,13 +1,17 @@
 import { afterEach, vi } from 'vitest';
+import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
-import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
-import { createTestNetwork, freezeClock } from '../../../testing/network.js';
+import type { Vote, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import { advanceClock, createTestNetwork, freezeClock } from '../../../testing/network.js';
 import type { TestLedgerOptions, TestNetwork } from '../../../testing/network.js';
 import type { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
+import { voteExpirySlopMilliseconds } from '../expiry.js';
 import type { DriverUnderTest } from './types.js';
+
+const lib = KeetaNet.lib;
 
 export const GENESIS_MOMENT: Date = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
 // The key the driver base's test hooks answer to.
@@ -101,13 +105,51 @@ export function publicKeysOf(accounts: readonly (Account | GenericAccount)[]): s
 }
 
 /** Runs storage reads in a transaction of their own, which is then abandoned. */
-export async function readStorage<Result>(storage: LedgerStorageDriverBase, read: (transaction: LedgerDriverTransaction) => Promise<Result>): Promise<Result> {
-	const transaction = await storage.beginTransaction({ identifier: 'suite-read-storage', readOnly: true });
+export function readStorage<Result>(storage: LedgerStorageDriverBase, read: (transaction: LedgerDriverTransaction) => Promise<Result>): Promise<Result> {
+	return(readStorageAt(storage, new Date(), read));
+}
+
+/**
+ * Reads as of an earlier moment. Liveness is judged at the transaction's
+ * moment, so this shows whether an expired side row is still stored.
+ */
+export async function readStorageAt<Result>(storage: LedgerStorageDriverBase, moment: Date, read: (transaction: LedgerDriverTransaction) => Promise<Result>): Promise<Result> {
+	const transaction = await storage.beginTransaction({ identifier: 'suite-read-storage', readOnly: true, moment });
 	try {
 		return(await read(transaction));
 	} finally {
 		await storage.abortTransaction(transaction);
 	}
+}
+
+/** Runs storage writes in a transaction of their own, committed when they succeed. */
+export async function writeStorage<Result>(storage: LedgerStorageDriverBase, write: (transaction: LedgerDriverTransaction) => Promise<Result>): Promise<Result> {
+	const transaction = await storage.beginTransaction({ identifier: 'suite-write-storage', readOnly: false });
+	let result: Result;
+	try {
+		result = await write(transaction);
+	} catch (error: unknown) {
+		await storage.abortTransaction(transaction);
+		throw(error);
+	}
+	await storage.commitTransaction(transaction);
+	return(result);
+}
+
+/** The checksum a node keeps over every block its ledger applied. */
+export async function ledgerChecksumOf(node: Node): Promise<bigint> {
+	return((await node.stats.getXor('ledgerChecksum')).toBigInt());
+}
+
+/** The checksum of exactly these staples' blocks, each counted once. */
+export function checksumOf(staples: readonly VoteStaple[]): bigint {
+	let checksum = 0n;
+	for (const staple of staples) {
+		for (const block of staple.blocks) {
+			checksum ^= block.hash.toBigInt();
+		}
+	}
+	return(checksum);
 }
 
 /**
@@ -138,6 +180,36 @@ export class ChainCursor {
 		this.#heads.set(block.account.publicKeyString.get(), block.hash);
 		return(block);
 	}
+}
+
+/** Moves the clock to the last moment the vote is still live. */
+export function advanceToExpiryEdge(vote: Vote): void {
+	advanceClock(vote.validityTo.getTime() + voteExpirySlopMilliseconds - Date.now());
+}
+
+export function advancePastExpiry(vote: Vote): void {
+	advanceToExpiryEdge(vote);
+	advanceClock(1);
+}
+
+/** Vote identities in a stable order, or null when there are no votes. */
+export function identitiesOf(votes: readonly Vote[] | null | undefined): string[] | null {
+	if (votes === null || votes === undefined) {
+		return(null);
+	}
+	return(votes.map(function(vote): string {
+		return(vote.$uid);
+	}).sort());
+}
+
+export function hashOf(item: Block | BlockHash | null): string | null {
+	if (item === null) {
+		return(null);
+	}
+	if (lib.Block.isInstance(item)) {
+		return(item.hash.toString());
+	}
+	return(item.toString());
 }
 
 export function blocksHashesOf(staples: readonly VoteStaple[]): string[] {

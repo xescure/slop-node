@@ -1,5 +1,5 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import type { Account, GenericAccount, MultisigAddress, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
+import type { Account, GenericAccount, MultisigAddress, StorageAddress, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block, BlockHash, BlockJSONIncomplete } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { MultisigConfig } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
 import type {
@@ -75,6 +75,18 @@ export async function createTokenBlock(input: BlockContext & { readonly owner: A
 		operations: [{ type: lib.Block.OperationType.CREATE_IDENTIFIER, identifier: token }]
 	});
 	return({ block, token });
+}
+
+/** A storage account, derived like a token; its creator becomes its owner. */
+export async function createStorageBlock(input: BlockContext & { readonly owner: Account }): Promise<{ readonly block: Block; readonly storage: StorageAddress }> {
+	const { owner, ...context } = input;
+	const storage = owner.generateIdentifier(lib.Account.AccountKeyAlgorithm.STORAGE, context.previous ?? undefined, 0);
+	const block = await seal({
+		...context,
+		account: owner,
+		operations: [{ type: lib.Block.OperationType.CREATE_IDENTIFIER, identifier: storage }]
+	});
+	return({ block, storage });
 }
 
 /*

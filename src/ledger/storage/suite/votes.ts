@@ -7,10 +7,10 @@ import type { Vote, VoteBlockHash, VoteStaple } from '@keetanetwork/keetanet-cli
 import { advanceClock } from '../../../testing/network.js';
 import type { TestLedgerOptions, TestNetwork } from '../../../testing/network.js';
 import { confirmedStaple, feeBlock, sendBlock, setRepresentativeBlock } from '../../../testing/blocks.js';
-import { voteExpirySlopMilliseconds } from '../expiry.js';
 import type { LedgerStorageDriverBase } from '../base.js';
-import { DEFAULT_WEIGHTS, blockHashesOf, blocksHashesOf, chainLengthOf, headOf, readStorage, requireAt, useFixtures } from './support.js';
-import type { DriverUnderTest } from './types.js';
+import { DEFAULT_WEIGHTS, advancePastExpiry, advanceToExpiryEdge, blockHashesOf, blocksHashesOf, chainLengthOf, hashOf, headOf, identitiesOf, readStorage, requireAt, useFixtures } from './support.js';
+import type { FixtureFactory } from './support.js';
+import type { DriverUnderTest, SuiteCase } from './types.js';
 
 const lib = KeetaNet.lib;
 
@@ -42,35 +42,6 @@ const FLAT_FEE: TestLedgerOptions = { fee: { kind: 'flat', amount: FEE_AMOUNT } 
 
 function newcomerAccount(): Account {
 	return(lib.Account.fromSeed(NEWCOMER_SEED, 0));
-}
-
-function identitiesOf(votes: readonly Vote[] | null | undefined): string[] | null {
-	if (votes === null || votes === undefined) {
-		return(null);
-	}
-	return(votes.map(function(vote): string {
-		return(vote.$uid);
-	}).sort());
-}
-
-function hashOf(item: Block | BlockHash | null): string | null {
-	if (item === null) {
-		return(null);
-	}
-	if (lib.Block.isInstance(item)) {
-		return(item.hash.toString());
-	}
-	return(item.toString());
-}
-
-/** Moves the clock to the last moment the vote is still live. */
-function advanceToExpiryEdge(vote: Vote): void {
-	advanceClock(vote.validityTo.getTime() + voteExpirySlopMilliseconds - Date.now());
-}
-
-function advancePastExpiry(vote: Vote): void {
-	advanceToExpiryEdge(vote);
-	advanceClock(1);
 }
 
 function sendFromFirstUser(network: TestNetwork, previous: BlockHash, amount: bigint, idempotent?: string): Promise<Block> {
@@ -128,11 +99,11 @@ async function successorVotes(ledger: Ledger, previous: readonly BlockHash[], fr
 	})));
 }
 
-export function defineVoteCases(driver: DriverUnderTest): void {
-	describe('vote lifecycle', function() {
-		const startNetwork = useFixtures(driver);
-
-		test('a temporary vote is stored on the side ledger and is not a head', async function() {
+/** Kept as data, so that the suite's meta-test can also run them against a deliberately broken driver. */
+export const voteLifecycleCases: readonly SuiteCase[] = [
+	{
+		name: 'a temporary vote is stored on the side ledger and is not a head',
+		async run(startNetwork: FixtureFactory): Promise<void> {
 			const { network, ledger } = await startNetwork();
 			const user = requireAt(network.users, 0);
 			const representative = requireAt(network.representatives, 0);
@@ -177,9 +148,11 @@ export function defineVoteCases(driver: DriverUnderTest): void {
 			expect(heights[newcomer.publicKeyString.get()]).toBeNull();
 			expect(await ledger.getBalance(user, network.baseToken)).toBe(400n);
 			expect(await ledger.getAccountRep(newcomer)).toBeNull();
-		});
-
-		test('a permanent vote with a fee block joins the temporary vote', async function() {
+		}
+	},
+	{
+		name: 'a permanent vote with a fee block joins the temporary vote',
+		async run(startNetwork: FixtureFactory): Promise<void> {
 			const { network, ledger, startPeer } = await startNetwork(DEFAULT_WEIGHTS, FLAT_FEE);
 			await ledger.add(network.genesis);
 			const peer = await startPeer(1, FLAT_FEE);
@@ -208,9 +181,11 @@ export function defineVoteCases(driver: DriverUnderTest): void {
 			expect(identitiesOf(await ledger.getVotes(send.hash, 'side'))).toEqual([ourPermanent.$uid]);
 			const competitor = await sendFromFirstUser(network, genesisHead, 9n);
 			await expect(ledger.vote([competitor])).rejects.toMatchObject({ code: 'LEDGER_SUCCESSOR_VOTE_EXISTS', shouldRetry: false });
-		});
-
-		test('without a fee block the permanent vote shares its staple with the temporary vote', async function() {
+		}
+	},
+	{
+		name: 'without a fee block the permanent vote shares its staple with the temporary vote',
+		async run(startNetwork: FixtureFactory): Promise<void> {
 			const { network, ledger, startPeer } = await startNetwork();
 			await ledger.add(network.genesis);
 			const peer = await startPeer(1);
@@ -225,9 +200,11 @@ export function defineVoteCases(driver: DriverUnderTest): void {
 			expect(identitiesOf(await ledger.getVotes(send.hash, 'side'))).toEqual(identitiesOf([ourTemporary, ourPermanent]));
 			// A staple holds votes of one permanence, and the permanent one wins.
 			expect(await stapleOf(ledger, ourPermanent.blocksHash, 'side')).toEqual({ blocks: [hashOf(send)], votes: [ourPermanent.$uid] });
-		});
-
-		test('publishing promotes the staple and deletes side copies of promoted rows', async function() {
+		}
+	},
+	{
+		name: 'publishing promotes the staple and deletes side copies of promoted rows',
+		async run(startNetwork: FixtureFactory): Promise<void> {
 			const { network, startNode, startPeer } = await startNetwork();
 			const user = requireAt(network.users, 0);
 			const genesisHead = headOf(network.genesis, user);
@@ -264,9 +241,11 @@ export function defineVoteCases(driver: DriverUnderTest): void {
 
 			const next = await sendFromFirstUser(network, fee.hash, 1n);
 			expect((await ours.vote([next])).$permanent).toBe(false);
-		});
-
-		test('a competing vote is refused while our temporary vote is live', async function() {
+		}
+	},
+	{
+		name: 'a competing vote is refused while our temporary vote is live',
+		async run(startNetwork: FixtureFactory): Promise<void> {
 			const { network, ledger } = await startNetwork();
 			const user = requireAt(network.users, 0);
 			await ledger.add(network.genesis);
@@ -282,9 +261,11 @@ export function defineVoteCases(driver: DriverUnderTest): void {
 			expect(await ledger.getVotes(competitor.hash, 'side')).toBeNull();
 			expect(hashOf(await ledger.getBlockFromPrevious(genesisHead, 'side'))).toBe(hashOf(send));
 			expect(await successorVotes(ledger, [genesisHead], 'both', requireAt(network.representatives, 0))).toEqual({ [genesisHead.toString()]: [vote.$uid] });
-		});
-
-		test('after expiry a competing vote is allowed', async function() {
+		}
+	},
+	{
+		name: 'after expiry a competing vote is allowed',
+		async run(startNetwork: FixtureFactory): Promise<void> {
 			const { network, ledger } = await startNetwork();
 			const user = requireAt(network.users, 0);
 			await ledger.add(network.genesis);
@@ -307,9 +288,11 @@ export function defineVoteCases(driver: DriverUnderTest): void {
 			expect(hashOf(await ledger.getBlockFromPrevious(genesisHead, 'side'))).toBe(hashOf(competitor));
 			expect(hashOf(await ledger.getBlockFromPrevious(genesisHead, 'both'))).toBe(hashOf(competitor));
 			expect(await successorVotes(ledger, [genesisHead], 'both', requireAt(network.representatives, 0))).toEqual({ [genesisHead.toString()]: [competing.$uid] });
-		});
-
-		test('getVotes selectors: side returns all live side votes, both prefers main, absent gives null', async function() {
+		}
+	},
+	{
+		name: 'getVotes selectors: side returns all live side votes, both prefers main, absent gives null',
+		async run(startNetwork: FixtureFactory): Promise<void> {
 			const { network, storage, ledger, startPeer } = await startNetwork(DEFAULT_WEIGHTS, FLAT_FEE);
 			await ledger.add(network.genesis);
 			const peer = await startPeer(1, FLAT_FEE);
@@ -329,9 +312,11 @@ export function defineVoteCases(driver: DriverUnderTest): void {
 			advancePastExpiry(ourTemporary);
 			expect(await votesOn(storage, send.hash)).toEqual({ main: confirmed, side: null, both: confirmed });
 			expect(await votesOn(storage, absent.hash)).toEqual(nowhere);
-		});
-
-		test('side idempotent keys are visible under both and lose to main', async function() {
+		}
+	},
+	{
+		name: 'side idempotent keys are visible under both and lose to main',
+		async run(startNetwork: FixtureFactory): Promise<void> {
 			const { network, ledger } = await startNetwork();
 			const user = requireAt(network.users, 0);
 			const idempotent = btoa('order-1');
@@ -362,9 +347,11 @@ export function defineVoteCases(driver: DriverUnderTest): void {
 			advancePastExpiry(vote);
 			expect(await holderOf('side')).toBeNull();
 			expect(await holderOf('both')).toBe(hashOf(competing));
-		});
-
-		test('quote consumes a serial and stores nothing on the side ledger', async function() {
+		}
+	},
+	{
+		name: 'quote consumes a serial and stores nothing on the side ledger',
+		async run(startNetwork: FixtureFactory): Promise<void> {
 			const { network, ledger } = await startNetwork(DEFAULT_WEIGHTS, FLAT_FEE);
 			const user = requireAt(network.users, 0);
 			await ledger.add(network.genesis);
@@ -383,6 +370,17 @@ export function defineVoteCases(driver: DriverUnderTest): void {
 
 			expect(vote.serial).toBe(quote.serial + 1n);
 			expect(identitiesOf(await ledger.getVotes(send.hash, 'side'))).toEqual([vote.$uid]);
-		});
+		}
+	}
+];
+
+export function defineVoteCases(driver: DriverUnderTest): void {
+	describe('vote lifecycle', function() {
+		const startNetwork = useFixtures(driver);
+		for (const suiteCase of voteLifecycleCases) {
+			test(suiteCase.name, function() {
+				return(suiteCase.run(startNetwork));
+			});
+		}
 	});
 }

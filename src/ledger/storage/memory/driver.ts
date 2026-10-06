@@ -7,7 +7,7 @@ import type { Vote, VoteBlockHash, VoteBlockHashMap, VoteStaple } from '@keetane
 import { LedgerInternals } from '../../../upstream/internals.js';
 import { assertNever } from '../../../util/assert-never.js';
 import { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
-import type { TransactionOptions } from '../base.js';
+import type { LedgerCountsSnapshot, TransactionOptions } from '../base.js';
 import type { AccountInfoUpdate, ConfirmedStapleChange } from '../confirmed.js';
 import { createIdempotentKeyError, createLedgerError } from '../errors.js';
 import { isVoteLive } from '../expiry.js';
@@ -109,12 +109,6 @@ export class MemoryTransaction extends LedgerDriverTransaction {
 				return(assertNever(state));
 		}
 	}
-}
-
-// Every operation but init is asynchronous upstream, so callers attach their
-// error handling to the returned promise; a synchronous throw would bypass it.
-function rejectNotImplemented(member: string): Promise<never> {
-	return(Promise.reject(new Error(`not implemented: ${member}`)));
 }
 
 function sumOf(values: Iterable<bigint>): bigint {
@@ -653,12 +647,29 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		commitOverlay(overlay);
 	}
 
-	stats(): ReturnType<LedgerStorageAPI['stats']> {
-		return(rejectNotImplemented('stats'));
-	}
-
-	protected gcBatch(_transaction: MemoryTransaction): Promise<boolean> {
-		return(rejectNotImplemented('gcBatch'));
+	/*
+	 * Read from the committed state, outside any transaction: commits apply
+	 * without yielding, so the snapshot is exact and its moment has no range.
+	 */
+	protected countLedger(): Promise<LedgerCountsSnapshot> {
+		const committed = this.#committed;
+		let transactionCount = 0;
+		for (const row of committed.blocks.values()) {
+			transactionCount += row.block.operations.length;
+		}
+		let representativeCount = 0;
+		for (const weight of committed.weights.values()) {
+			if (weight > 0n) {
+				representativeCount++;
+			}
+		}
+		return(Promise.resolve({
+			moment: new Date(),
+			momentRange: 0,
+			blockCount: committed.blocks.size,
+			transactionCount,
+			representativeCount
+		}));
 	}
 
 	/*
@@ -711,6 +722,35 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		this.#forgetDeferredStaple(await transaction.view(), blocksHash);
 	}
 
+	protected async listReleasedDeferredStaples(transaction: MemoryTransaction): Promise<readonly VoteStaple[]> {
+		const overlay = await transaction.view();
+		const released: VoteStaple[] = [];
+		for (const [, row] of overlay.deferredStaples.entries()) {
+			if (row.waitingOn.every(function(blockKey): boolean {
+				return(overlay.blocks.get(blockKey) !== undefined);
+			})) {
+				released.push(row.staple);
+			}
+		}
+		return(released);
+	}
+
+	protected async collectObsoleteSideVotes(transaction: MemoryTransaction, limit: number): Promise<boolean> {
+		const overlay = await transaction.view();
+		const obsolete: VoteKey[] = [];
+		for (const [key, row] of overlay.sideVotes.entries()) {
+			if (!isVoteLive(row.vote, transaction.moment) || row.blocks.some(function(block): boolean {
+				return(overlay.blocks.get(toBlockHashKey(block.hash)) !== undefined);
+			})) {
+				obsolete.push(key);
+			}
+		}
+		for (const key of obsolete.slice(0, limit)) {
+			this.#collectSideVote(overlay, key);
+		}
+		return(obsolete.length > limit);
+	}
+
 	#forgetDeferredStaple(overlay: LedgerOverlay, key: StapleKey): void {
 		const row = overlay.deferredStaples.get(key);
 		if (row === undefined) {
@@ -760,24 +800,42 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		}
 	}
 
+	/** Drops a pending vote, then each side block it covered that no other pending vote covers. */
+	#collectSideVote(overlay: LedgerOverlay, key: VoteKey): void {
+		const row = overlay.sideVotes.get(key);
+		if (row === undefined) {
+			return;
+		}
+		this.#forgetSideVote(overlay, key);
+		for (const block of row.blocks) {
+			if (overlay.sideVotesByBlock.get(toBlockHashKey(block.hash)) === undefined) {
+				this.#dropSideBlock(overlay, block);
+			}
+		}
+	}
+
+	#dropSideBlock(overlay: LedgerOverlay, block: Block): void {
+		const blockKey = toBlockHashKey(block.hash);
+		overlay.sideBlocks.delete(blockKey);
+		const idempotentKey = idempotentKeyOf(block);
+		if (idempotentKey !== undefined) {
+			removeMember(overlay.sideIdempotentKeys, idempotentKey, blockKey);
+		}
+	}
+
 	/*
 	 * A confirmed row exists once, on main, so the side copies of the staple's
 	 * blocks and of any of its votes that we issued are dropped. Every other
-	 * pending vote stays until it expires: our temporary vote on these blocks,
-	 * which settlement statistics were measured from, and our votes on blocks
-	 * that compete with them.
+	 * pending vote stays until gc collects it: our temporary vote on these
+	 * blocks, which settlement statistics were measured from, and our votes on
+	 * blocks that compete with them.
 	 */
 	#promoteSideRows(overlay: LedgerOverlay, change: ConfirmedStapleChange): void {
 		for (const vote of change.staple.votes) {
 			this.#forgetSideVote(overlay, toVoteKey(vote));
 		}
 		for (const block of change.staple.blocks) {
-			const blockKey = toBlockHashKey(block.hash);
-			overlay.sideBlocks.delete(blockKey);
-			const idempotentKey = idempotentKeyOf(block);
-			if (idempotentKey !== undefined) {
-				removeMember(overlay.sideIdempotentKeys, idempotentKey, blockKey);
-			}
+			this.#dropSideBlock(overlay, block);
 		}
 	}
 

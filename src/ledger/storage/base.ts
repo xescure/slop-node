@@ -1,3 +1,4 @@
+import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, AccountKeyAlgorithm } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { ComputedEffectOfBlocks } from '@keetanetwork/keetanet-client/lib/ledger/effects.js';
@@ -7,7 +8,7 @@ import type {
 	LedgerStorageAPI,
 	LedgerStorageTransactionBase
 } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
-import type { AccountInfoForType } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
+import type { AccountInfoForType, LedgerStatistics } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerInternals, StatsPending } from '../../upstream/internals.js';
 import { assertNever } from '../../util/assert-never.js';
@@ -73,10 +74,27 @@ type ReplayState = {
 	readonly deadline: number;
 };
 
+/**
+ * What a driver counts for stats(), and when: the moment its snapshot
+ * describes, and how many milliseconds either side of it the snapshot may
+ * actually come from.
+ */
+export type LedgerCountsSnapshot = Pick<LedgerStatistics, 'momentRange' | 'blockCount' | 'transactionCount' | 'representativeCount'> & {
+	readonly moment: Date;
+};
+
 /** Documented default of LedgerConfig.heapProcessWindowMs. */
 const DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS = 5000;
 
+// Upstream's gc loop checks its time budget only between batches, so a batch stays small.
+const GC_BATCH_LIMIT = 100;
+
+const LEDGER_CHECKSUM_KEY = 'ledgerChecksum';
+
 const LOG_SOURCE = 'ledger';
+
+// Where upstream's ledger records its own node statistics.
+const STATS_ARENA = 'ledger';
 
 // Test hooks answer only to this key, so callers outside the test suite cannot use them by accident.
 const TESTING_KEY = 'ba48dff1-fc9c-4834-abc0-68434c8dc29b';
@@ -89,6 +107,8 @@ const TESTING_KEY = 'ba48dff1-fc9c-4834-abc0-68434c8dc29b';
  */
 export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTransaction = LedgerDriverTransaction> extends LedgerInternals.LedgerStorageBase implements LedgerStorageAPI {
 	#driver: DriverState = { state: 'uninitialized' };
+	// Deferred staples each gc transaction has already retried; one that fails is not retried again in the same pass.
+	readonly #retriedByGc = new WeakMap<Transaction, Set<StapleKey>>();
 
 	/**
 	 * Called once, synchronously, by the Ledger constructor; Ledger.copy shares
@@ -150,6 +170,43 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	}
 
 	/**
+	 * Ledger statistics: the driver's counts of its main ledger, with the
+	 * settlement times and transaction retries that only the node records.
+	 * Without a node these are reported as unknown, the way upstream reports a
+	 * statistic it cannot read.
+	 * [Keeta TS] index.js:70537-70551, 70379, 74388-74396, 74451-74472
+	 */
+	async stats(): Promise<LedgerStatistics> {
+		const { moment, momentRange, blockCount, transactionCount, representativeCount } = await this.countLedger();
+		// Read lazily: a node creates its ledger before its statistics exist.
+		const node = this.initialized.ledger.node;
+		let retries = -1;
+		let settlementTimes = KeetaNet.lib.Stats.placeholderTimingData();
+		if (node !== undefined) {
+			retries = await node.stats.get(STATS_ARENA, 'dbRetries');
+			settlementTimes = await node.stats.getTimingData(STATS_ARENA, 'settlementTime');
+		}
+		return({
+			moment: moment.toISOString(),
+			momentRange,
+			blockCount,
+			transactionCount,
+			representativeCount,
+			db: { retries },
+			settlementTimes
+		});
+	}
+
+	/**
+	 * One batch of upstream's gc loop, which runs batches in one transaction
+	 * until a batch reports that nothing remains or the time budget is spent.
+	 * [Keeta TS] index.js:67852-67862
+	 */
+	protected override async gcBatch(transaction: Transaction): Promise<boolean> {
+		return(await this.#gcBatch(transaction, GC_BATCH_LIMIT));
+	}
+
+	/**
 	 * Records the staple as waiting on each previous block that its own chain
 	 * lacks; a block whose previous is inside the staple waits on nothing.
 	 * [Keeta TS] index.js:67717-67728
@@ -178,6 +235,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	/** @internal */
 	_Testing(key: string): {
 		deferredStaplesWaitingOn(transaction: Transaction, blockHashes: readonly BlockHash[]): Promise<readonly VoteStaple[]>;
+		gcBatch(transaction: Transaction, limit: number): Promise<boolean>;
 	} {
 		if (key !== TESTING_KEY) {
 			throw(new Error('This is a testing only method'));
@@ -185,6 +243,9 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 		return({
 			deferredStaplesWaitingOn: (transaction, blockHashes) => {
 				return(this.listDeferredStaplesWaitingOn(transaction, blockHashes));
+			},
+			gcBatch: (transaction, limit) => {
+				return(this.#gcBatch(transaction, limit));
 			}
 		});
 	}
@@ -204,6 +265,24 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 
 	/** Forgets a deferred staple; a staple that is not deferred is no error. */
 	protected abstract removeDeferredStaple(transaction: Transaction, blocksHash: StapleKey): Promise<void>;
+
+	/**
+	 * Deferred staples whose every awaited block is now on the main ledger.
+	 * Arrival normally replays them at once; these are the ones it missed.
+	 */
+	protected abstract listReleasedDeferredStaples(transaction: Transaction): Promise<readonly VoteStaple[]>;
+
+	/**
+	 * Removes up to limit side votes that no longer matter, with the side
+	 * blocks and idempotent keys that only they held, and reports whether more
+	 * such votes remain. A side vote no longer matters once it has expired at
+	 * the transaction's moment, or once any block it covers is on the main
+	 * ledger: its staple can then never be added.
+	 */
+	protected abstract collectObsoleteSideVotes(transaction: Transaction, limit: number): Promise<boolean>;
+
+	/** The counts stats() reports, as of one consistent snapshot of the main ledger. */
+	protected abstract countLedger(): Promise<LedgerCountsSnapshot>;
 
 	abstract beginTransaction(options: TransactionOptions): Promise<Transaction>;
 	abstract commitTransaction(transaction: Transaction): MemberResult<'commitTransaction'>;
@@ -231,7 +310,6 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	abstract getAccountCertificates(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getAccountCertificates'>): MemberResult<'getAccountCertificates'>;
 	abstract getAccountCertificateByHash(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getAccountCertificateByHash'>): MemberResult<'getAccountCertificateByHash'>;
 	abstract getIdempotentBlockHash(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getIdempotentBlockHash'>): MemberResult<'getIdempotentBlockHash'>;
-	abstract stats(): MemberResult<'stats'>;
 
 	/*
 	 * The template behind adjust: upstream's preAdjust assigns heights or
@@ -310,6 +388,50 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	}
 
 	/*
+	 * Deferred staples are retried first, because applying one can leave more
+	 * side votes with a block on main.
+	 */
+	async #gcBatch(transaction: Transaction, limit: number): Promise<boolean> {
+		const moreDeferred = await this.#retryReleasedDeferredStaples(transaction, limit);
+		const moreSideVotes = await this.collectObsoleteSideVotes(transaction, limit);
+		return(moreDeferred || moreSideVotes);
+	}
+
+	/*
+	 * A deferred staple whose awaited blocks are all on main should have been
+	 * replayed when the last of them arrived; the replay window may have run
+	 * out, or the replay failed. It is retried the way a replay would run it.
+	 * One that fails again stays deferred and is logged, and is not retried
+	 * again by the same gc pass, so it never keeps the pass going.
+	 */
+	async #retryReleasedDeferredStaples(transaction: Transaction, limit: number): Promise<boolean> {
+		const { config, ledger } = this.initialized;
+		const retried = this.#retriedByGc.get(transaction) ?? new Set<StapleKey>();
+		this.#retriedByGc.set(transaction, retried);
+		const notRetried = async (): Promise<VoteStaple[]> => {
+			return((await this.listReleasedDeferredStaples(transaction)).filter(function(staple): boolean {
+				return(!retried.has(toStapleKey(staple.blocksHash)));
+			}));
+		};
+		const replay: ReplayState = {
+			mayDefer: false,
+			completed: new Set(),
+			deadline: Date.now() + (config.heapProcessWindowMs ?? DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS)
+		};
+		for (const staple of (await notRetried()).slice(0, limit)) {
+			const stapleKey = toStapleKey(staple.blocksHash);
+			retried.add(stapleKey);
+			try {
+				const applied = await this.#applyConfirmedStaple(transaction, staple, LedgerInternals.computeEffectOfBlocks(staple.blocks, ledger), replay);
+				foldIntoLedgerChecksum(transaction, applied);
+			} catch (error: unknown) {
+				config.log?.error(LOG_SOURCE, `retrying deferred staple ${stapleKey} failed; it stays deferred`, error);
+			}
+		}
+		return((await notRetried()).length > 0);
+	}
+
+	/*
 	 * Upstream's preAdjust assigns heights but never notices that a previous
 	 * block already has a confirmed successor, or that an opening block arrives
 	 * for an account that already has a chain. Applying such a staple would
@@ -371,6 +493,20 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 		const message = `confirmed block ${block.hash.toString()} conflicts with confirmed history: ${reason}`;
 		this.initialized.config.log?.error(LOG_SOURCE, `network integrity alarm: ${message}`);
 		return(createLedgerError('LEDGER_PREVIOUS_ALREADY_USED', message));
+	}
+}
+
+/*
+ * Ledger.add folds the staples adjust returns into the node's checksum, and
+ * the transaction's statistics reach the node only on commit; staples that gc
+ * applies are folded in the same way.
+ * [Keeta TS] index.js:69413-69417, 69001-69006
+ */
+function foldIntoLedgerChecksum(transaction: LedgerDriverTransaction, staples: readonly VoteStaple[]): void {
+	for (const staple of staples) {
+		for (const block of staple.blocks) {
+			transaction.statsPending.xor(LEDGER_CHECKSUM_KEY, block.hash);
+		}
 	}
 }
 
