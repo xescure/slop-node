@@ -178,6 +178,21 @@ describe('test network', function() {
 		})).toBe(true);
 	});
 
+	test('confirmed staples of the same blocks are identical however the clock moves', async function() {
+		freezeClock(FROZEN_AT);
+		const network = await createTestNetwork({ representativeWeights: WEIGHTS });
+		const blocks = [await sendFromFirstUser(network)];
+		const first = await confirmedStaple(blocks, network.representatives);
+
+		advanceClock(400 * 24 * 60 * 60 * 1000);
+		const second = await confirmedStaple(blocks, network.representatives);
+
+		expect(toHex(second)).toBe(toHex(first));
+		expect(second.votes.every(function(vote): boolean {
+			return(vote.$permanent);
+		})).toBe(true);
+	});
+
 	test('confirmed staples give different blocks different vote serials', async function() {
 		const network = await createTestNetwork({ representativeWeights: WEIGHTS });
 		const first = await confirmedStaple([await sendFromFirstUser(network)], network.representatives);

@@ -190,10 +190,6 @@ export function feeBlock(input: BlockContext & { readonly from: Account; readonl
 	return(new lib.Block.Builder(fields).seal());
 }
 
-/*
- * The serial comes from the block hashes so that a signer never issues two
- * different votes under one serial, and repeated runs stay byte-identical.
- */
 function serialForBlocks(blocks: readonly Block[]): bigint {
 	const blocksHash = lib.Vote.VoteBlocksHash.fromBlockHashes(blocks.map(function(block): BlockHash {
 		return(block.hash);
@@ -201,11 +197,39 @@ function serialForBlocks(blocks: readonly Block[]): bigint {
 	return(BigInt(`0x${blocksHash.toString('hex').slice(0, 15)}`));
 }
 
+type VoteValidity = {
+	readonly validFrom: Date;
+	readonly validTo: Date;
+};
+
+/*
+ * A permanent vote's validity, as upstream sets it, but counted from the
+ * newest block's date rather than from the clock. The clock has passed that
+ * date by the time the blocks are voted on, so the vote is never issued in
+ * the future.
+ * [Keeta TS] index.js:81533-81540
+ */
+function permanentValidityForBlocks(blocks: readonly Block[]): VoteValidity {
+	const validFrom = new Date(Math.max(...blocks.map(function(block): number {
+		return(block.date.getTime());
+	})));
+	const validTo = new Date(validFrom);
+	validTo.setUTCFullYear(validFrom.getUTCFullYear() + 1000, 12, 31);
+	validTo.setUTCHours(0, 0, 0, 0);
+	return({ validFrom, validTo });
+}
+
+/*
+ * Serial and validity both derive from the blocks, so a signer never issues
+ * two different votes under one serial, however the clock moves between
+ * calls, and repeated runs stay byte-identical.
+ */
 export async function confirmedStaple(blocks: readonly Block[], signers: readonly Account[]): Promise<VoteStaple> {
 	const serial = serialForBlocks(blocks);
+	const { validFrom, validTo } = permanentValidityForBlocks(blocks);
 	const votes = [];
 	for (const signer of signers) {
-		votes.push(await new lib.Vote.Builder(signer, [...blocks]).seal(serial, null));
+		votes.push(await new lib.Vote.Builder(signer, [...blocks]).seal(serial, validTo, validFrom));
 	}
 	return(lib.Vote.Staple.fromVotesAndBlocks(votes, [...blocks]));
 }
