@@ -158,7 +158,10 @@ export function defineTransactionCases(driver: DriverUnderTest): void {
 			expect(passed).toBe(retryable);
 			expect(lib.Error.isInstance(wrapped)).toBe(true);
 			expect(wrapped).toMatchObject({ type: 'LEDGER', code: 'LEDGER_OTHER', shouldRetry: false, message: 'disk on fire' });
-			expect(wrapped).toHaveProperty('cause', plain);
+			if (!lib.Error.isInstance(wrapped)) {
+				throw(new Error('evaluateError did not return a KeetaNet error'));
+			}
+			expect(wrapped.cause).toBe(plain);
 
 			let retriedAttempts = 0;
 			const retried = await ledger.run('suite-retry', function() {

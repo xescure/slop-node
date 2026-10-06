@@ -256,6 +256,45 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			expect((await ledger.vote([reusing])).$permanent).toBe(false);
 		});
 
+		test('gc keeps our permanent vote when an expired vote of ours on a competitor remains', async function() {
+			const { network, ledger, startPeer } = await startNetwork();
+			await ledger.add(network.genesis);
+			const peer = await startPeer(1);
+			const competitor = await sendFromGenesis(network, 0, 7n);
+			advancePastExpiry(await ledger.vote([competitor]));
+			const send = await sendFromGenesis(network, 0, 5n);
+			const temporary = [await ledger.vote([send]), await peer.vote([send])];
+			const ourPermanent = await ledger.vote([send], temporary);
+
+			expect(await ledger.gc()).toBe(false);
+
+			// A pending competitor is not a confirmed successor, so our votes still guard the previous.
+			expect(identitiesOf(await ledger.getVotes(send.hash, 'side'))).toEqual(identitiesOf([requireAt(temporary, 0), ourPermanent]));
+			const third = await sendFromGenesis(network, 0, 9n);
+			await expect(ledger.vote([third])).rejects.toMatchObject({ code: 'LEDGER_SUCCESSOR_VOTE_EXISTS' });
+		});
+
+		test('gc keeps our permanent vote when a deferred staple holds a competitor', async function() {
+			const { network, ledger, startPeer } = await startNetwork();
+			await ledger.add(network.genesis);
+			const peer = await startPeer(1);
+			const send = await sendFromGenesis(network, 0, 5n);
+			const temporary = [await ledger.vote([send]), await peer.vote([send])];
+			const ourPermanent = await ledger.vote([send], temporary);
+			// The competitor is confirmed beside a block whose previous this node lacks, so the staple waits.
+			const competitor = await sendFromGenesis(network, 0, 7n);
+			const missing = await sendFromGenesis(network, 1, 1n);
+			const waiting = await sendFrom(network, 1, missing.hash, 2n);
+			expect(await ledger.add(await confirmedStaple([competitor, waiting], network.representatives))).toEqual([]);
+
+			expect(await ledger.gc()).toBe(false);
+
+			// A deferred competitor is not a confirmed successor, so our votes still guard the previous.
+			expect(identitiesOf(await ledger.getVotes(send.hash, 'side'))).toEqual(identitiesOf([requireAt(temporary, 0), ourPermanent]));
+			const third = await sendFromGenesis(network, 0, 9n);
+			await expect(ledger.vote([third])).rejects.toMatchObject({ code: 'LEDGER_SUCCESSOR_VOTE_EXISTS' });
+		});
+
 		test('gc retries deferred staples whose previous is now on main', async function() {
 			const { network, startNode } = await startNetwork();
 			const user = requireAt(network.users, 0);

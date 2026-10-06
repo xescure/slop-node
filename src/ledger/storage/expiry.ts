@@ -7,10 +7,11 @@ import type { Vote } from '@keetanetwork/keetanet-client/lib/vote.js';
 export const voteExpirySlopMilliseconds = 60_000;
 
 /**
- * Whether a stored vote is live at a moment: exactly when Keeta's Vote class
- * would still construct it then, which rejects a vote issued too far in the
- * future as well as an expired one. Callers pass the transaction's moment,
- * never the wall clock, so every read in one transaction agrees.
+ * Whether Keeta's Vote class would still construct a vote at a moment, which
+ * rejects a vote issued too far in the future as well as an expired one. It
+ * exists to check parity with that class only. It must never filter side
+ * reads or gc: a transaction's moment can be stale, and the future bound would
+ * then hide a vote that still guards its previous. Use isVoteUnexpired there.
  * [Keeta TS] index.js:80373-80374, 80641-80653
  */
 export function isVoteLive(vote: Pick<Vote, 'validityFrom' | 'validityTo' | '$permanent'>, moment: Date): boolean {

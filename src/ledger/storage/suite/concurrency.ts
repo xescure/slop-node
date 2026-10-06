@@ -125,6 +125,34 @@ export function defineConcurrencyCases(driver: DriverUnderTest): void {
 			expect(identitiesOf(found[genesisHead.toString()])).toEqual(identitiesOf(votes));
 		});
 
+		test('side reads queued behind a long transaction see a vote committed meanwhile', async function() {
+			const { network, ledger } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			const idempotent = btoa('queued-order');
+			await ledger.add(network.genesis);
+			const genesisHead = headOf(network.genesis, user);
+			const send = await sendBlock({ from: user, previous: genesisHead, to: requireAt(network.users, 1), amount: 5n, token: network.baseToken, network: network.network, idempotent });
+			const long = startLongTransaction(ledger);
+			const voting = ledger.vote([send]);
+			const reading = Promise.all([
+				ledger.getVotes(send.hash, 'side'),
+				ledger.getBlock(send.hash, 'side'),
+				ledger.getBlockFromPrevious(genesisHead, 'side'),
+				ledger.getIdempotentBlockHash(user, idempotent, 'side')
+			]);
+
+			advanceClock(QUEUED_MILLISECONDS);
+			long.release();
+			const vote = await voting;
+			const [votes, block, successor, holder] = await reading;
+
+			expect(await long.finished).toBe('released');
+			expect(identitiesOf(votes)).toEqual([vote.$uid]);
+			expect(hashOf(block)).toBe(hashOf(send));
+			expect(hashOf(successor)).toBe(hashOf(send));
+			expect(hashOf(holder)).toBe(hashOf(send));
+		});
+
 		test('gc queued behind a long transaction keeps a vote committed meanwhile', async function() {
 			const { network, ledger } = await startNetwork();
 			const user = requireAt(network.users, 0);
