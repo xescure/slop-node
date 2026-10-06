@@ -844,7 +844,7 @@ protected abstract collectObsoleteSideVotes(transaction: Transaction, limit: num
 
 Removes up to `limit` obsolete side votes, then the side blocks and side idempotent claims that no remaining side vote covers. Reports whether more obsolete votes remain. A side vote is obsolete when either holds (D6):
 - it has expired at the transaction moment, judged by the expiry bound alone (D4)
-- the `previous` of any block it covers has a confirmed successor: the block itself is on the main ledger, or it competes with a block that is, and either way its staple can never be added
+- the `previous` of any block it covers has a confirmed successor: the block itself is on the main ledger, or it competes with a block that is, and either way its staple can never be added. A pending or deferred competitor is not a confirmed successor, and must not make the vote obsolete: the vote still guards its previous, and removing it would let the node sign a third competitor
 
 Main rows, and side blocks still covered by another side vote, are never touched (D20).
 
@@ -853,6 +853,8 @@ Tested by:
 - `gc.ts: "gc removes side votes whose blocks were all confirmed under another staple"`
 - `gc.ts: "gc removes side votes whose staple can no longer be published"`
 - `gc.ts: "gc removes our votes on a competitor of a confirmed block and frees its idempotent key"`
+- `gc.ts: "gc keeps our permanent vote when an expired vote of ours on a competitor remains"`
+- `gc.ts: "gc keeps our permanent vote when a deferred staple holds a competitor"`
 - `gc.ts: "gc reports whether more work remains"`
 - `concurrency.ts: "gc queued behind a long transaction keeps a vote committed meanwhile"`
 
@@ -887,7 +889,7 @@ A stored vote is live at moment m exactly when Keeta's `Vote` class would constr
 
 This node's own side votes are judged by the expiry bound alone: side reads and gc drop a side vote only when it is temporary and m - 60 s > `validityTo`, and never because m + 60 s < `validityFrom`.
 
-m is the transaction moment. `isVoteLive` (`src/ledger/storage/expiry.ts`) implements the first predicate and `isVoteUnexpired` the second; every side read filter and gc use `isVoteUnexpired`.
+m is the transaction moment. `isVoteLive` (`src/ledger/storage/expiry.ts`) implements the first predicate and exists only for parity checks against the `Vote` class; it must never filter side reads or gc. `isVoteUnexpired` implements the second, and every side read filter and gc use it.
 
 **Reason.**
 - The `Vote` constructor rejects a vote outside the first predicate's bounds with `VOTE_MOMENT_BEFORE_VALIDITY_FROM` or `VOTE_EXPIRED` [Keeta TS] index.js:80370-80374, 80676-80679, and upstream's own staple builder drops expired votes [Keeta TS] index.js:80795-80799.
@@ -899,6 +901,7 @@ m is the transaction moment. `isVoteLive` (`src/ledger/storage/expiry.ts`) imple
 - `transactions.ts: "issued-in-the-future boundary matches the Vote class"`, for `isVoteLive`
 - `votes.ts: "after expiry a competing vote is allowed"`: refused at `validityTo` + 60 s, allowed 1 ms later
 - `concurrency.ts: "a vote queued behind a long transaction still sees a competing vote committed meanwhile"`
+- `concurrency.ts: "side reads queued behind a long transaction see a vote committed meanwhile"`, covering `getVotes`, `getBlock`, `getBlockFromPrevious` and `getIdempotentBlockHash` under `'side'`
 - `concurrency.ts: "gc queued behind a long transaction keeps a vote committed meanwhile"`
 - the `gc.ts` cases, which read through a transaction opened at the vote's moment
 
@@ -915,7 +918,7 @@ Heights and heads count main-ledger blocks only, under every selector. `getHeadB
 - The side ledger holds this node's own pending votes, the blocks they cover, and those blocks' idempotent keys.
 - A permanent vote is stored beside this node's temporary vote on the same blocks. The temporary vote stays until it expires or gc collects it.
 - When a staple is applied, the side copies of its votes, its blocks and their keys are removed in the same write. Side entries for competing blocks are left in place.
-- gc collects every side vote that can never be published, with the side blocks and idempotent claims only it held: a vote is collected once the `previous` of any block it covers has a confirmed successor. That successor is either the block itself, now on the main ledger, or a competitor that won.
+- gc collects every side vote that can never be published, with the side blocks and idempotent claims only it held: a vote is collected once the `previous` of any block it covers has a confirmed successor. That successor is either the block itself, now on the main ledger, or a competitor that won. Only a confirmed successor counts: a competitor that is merely pending on the side ledger, or held in a deferred staple, leaves the vote in place, because the vote still guards its previous.
 
 **Reason.**
 - The temporary vote is what the settlement statistic measures from at publish [Keeta TS] index.js:67593-67632.
@@ -931,6 +934,8 @@ Heights and heads count main-ledger blocks only, under every selector. `getHeadB
 - `gc.ts: "gc removes side votes whose blocks were all confirmed under another staple"`
 - `gc.ts: "gc removes side votes whose staple can no longer be published"`
 - `gc.ts: "gc removes our votes on a competitor of a confirmed block and frees its idempotent key"`
+- `gc.ts: "gc keeps our permanent vote when an expired vote of ours on a competitor remains"`
+- `gc.ts: "gc keeps our permanent vote when a deferred staple holds a competitor"`
 
 ### D7. Map completeness and the `'both'` selector
 
