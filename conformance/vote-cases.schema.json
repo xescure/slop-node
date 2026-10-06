@@ -482,7 +482,9 @@
               "$ref": "#/$defs/errorCode"
             },
             "accounts": {
+              "description": "Every account whose head the request checked, sorted in code-point order, each once. The decoder checks the order, which a schema cannot state.",
               "type": "array",
+              "uniqueItems": true,
               "items": {
                 "$ref": "#/$defs/account"
               }

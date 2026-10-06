@@ -68,7 +68,7 @@ const steps: readonly CaseStep[] = [
 		moment: toMoment(START),
 		actor: 1,
 		action: { type: 'vote', blocks: [toBase64(bytesOf(4))] },
-		expect: { outcome: 'refused', error: { type: 'coded', code: 'LEDGER_NOT_SUCCESSOR', accounts: [holder, representative] } }
+		expect: { outcome: 'refused', error: { type: 'coded', code: 'LEDGER_NOT_SUCCESSOR', accounts: [representative, holder] } }
 	},
 	{ moment: toMoment(START), actor: 1, action: { type: 'gc' }, expect: { outcome: 'collected' } },
 	{ moment: toMoment(START), actor: 1, action: { type: 'quote', blocks: [] }, expect: { outcome: 'refused', error: { type: 'plain', message: 'May not issue votes in read-only mode, in no-voting mode' } } },
@@ -299,6 +299,12 @@ describe('vote case format', function() {
 		['an unknown error code', function(tree: JSONTree): void {
 			setIn(tree, ['cases', 0, 'steps', 4, 'expect', 'error'], 'code', 'LEDGER_NOPE');
 		}, /error\.code: unknown error code "LEDGER_NOPE"/, false],
+		['accounts out of code-point order', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'steps', 6, 'expect', 'error'], 'accounts', [holder, representative]);
+		}, /steps\[6\]\.expect\.error\.accounts\[1\]: expected accounts in code-point order, each once/, false],
+		['an account listed twice', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'steps', 6, 'expect', 'error'], 'accounts', [holder, holder]);
+		}, /steps\[6\]\.expect\.error\.accounts\[1\]: expected accounts in code-point order, each once/, true],
 		['a block hash in lowercase', function(tree: JSONTree): void {
 			setIn(tree, ['cases', 0, 'steps', 1, 'expect', 'blocks'], '0', 'a'.repeat(64));
 		}, /expect\.blocks\[0\]: expected an uppercase hex block hash/, true],

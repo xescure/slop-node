@@ -807,6 +807,19 @@ function readAction(value: unknown, path: string, producers: Producers): CaseAct
 	}
 }
 
+/** An error's accounts, which upstream holds as a set, are written in code-point order, each once. */
+function readAccounts(value: unknown, path: string): CaseAccount[] {
+	const accounts = readArray(value, path, readAccount);
+	for (const [index, account] of accounts.entries()) {
+		const previous = accounts[index - 1];
+		// Account strings are ASCII, so comparing UTF-16 units compares code points.
+		if (previous !== undefined && previous >= account) {
+			throw(new CaseFormatError(`${path}[${String(index)}]`, 'expected accounts in code-point order, each once'));
+		}
+	}
+	return(accounts);
+}
+
 function readError(value: unknown, path: string): CaseError {
 	const type = readChoice(readObject(value, path, ['type'], ['code', 'accounts', 'blockhash', 'existingBlockhash', 'message']).get('type'), `${path}.type`, { coded: true, plain: true });
 	switch (type) {
@@ -820,7 +833,7 @@ function readError(value: unknown, path: string): CaseError {
 				throw(new CaseFormatError(fields.at('code'), `${DRIVER_WRAPPING_CODE} is a driver's wrapping; record its cause`));
 			}
 			if (fields.has('accounts')) {
-				error.accounts = readArray(fields.get('accounts'), fields.at('accounts'), readAccount);
+				error.accounts = readAccounts(fields.get('accounts'), fields.at('accounts'));
 			}
 			if (fields.has('blockhash')) {
 				error.blockhash = readBlockHash(fields.get('blockhash'), fields.at('blockhash'));
