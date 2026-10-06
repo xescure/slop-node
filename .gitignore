@@ -4,7 +4,6 @@ build/
 dist/
 node_modules/
 .coverage/
-.tsbuildinfo
 .nvmrc
 .devenv/
 .direnv/

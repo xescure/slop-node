@@ -68,22 +68,27 @@ node_modules/.done: package.json package-lock.json
 node_modules: node_modules/.done
 	@touch node_modules
 
-dist/.done: $(shell find src -type f -name '*.ts') tsconfig.json node_modules/.done
-	npm run tsc
+# Compiled tests stay out of the distribution. The build info lives in dist, so
+# removing dist removes it too; without the stamp the directory may be partial,
+# which an incremental build would not notice, so it starts from scratch.
+dist/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts') tsconfig.json tsconfig.build.json node_modules/.done
+	@[ -e dist/.done ] || rm -f dist/.tsbuildinfo
+	npm run tsc -- -p tsconfig.build.json
 	@touch dist/.done
 
 dist: dist/.done
 	@touch dist
 
 build/utils/.done: $(shell find utils -type f -name '*.ts' -not -path 'utils/lint-fixtures/*') utils/tsconfig.json tsconfig.json node_modules/.done
+	@[ -e build/utils/.done ] || rm -f build/utils/.tsbuildinfo
 	npm run tsc -- -p utils
 	@touch build/utils/.done
 
-# The type checks share the incremental build info files with the builds,
-# so they run after them rather than beside them.
+# The type checks cover the tests that the builds exclude, so they must not
+# write the build info that the builds read.
 test: dist/.done build/utils/.done
-	npm run tsc -- --noEmit
-	npm run tsc -- --noEmit -p utils
+	npm run tsc -- --noEmit --incremental false
+	npm run tsc -- --noEmit --incremental false -p utils
 	npm run vitest -- run --config .vitest.config.js $(SLOP_NODE_TEST_EXTRA_ARGS)
 
 # git grep exits 1 when nothing matches and 128 when it fails, and only the
@@ -144,7 +149,7 @@ reference-diff: $(if $(and $(FROM),$(TO)),reference/$(FROM)/.done reference/$(TO
 	[ $$changed -eq 1 ] || echo "no differences"
 
 clean:
-	rm -rf dist build .coverage .tsbuildinfo
+	rm -rf dist build .coverage
 
 distclean: clean
 	rm -rf node_modules .nvmrc reference

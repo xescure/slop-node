@@ -2,7 +2,7 @@
 	"compilerOptions": {
 		"incremental": true,
 		"composite": false,
-		"tsBuildInfoFile": "./.tsbuildinfo",
+		"tsBuildInfoFile": "./dist/.tsbuildinfo",
 		"disableSolutionSearching": true,
 		"target": "es2022",
 		"lib": ["es2022", "esnext.disposable", "dom"],
