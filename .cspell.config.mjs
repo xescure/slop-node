@@ -5,6 +5,7 @@ export default {
 	words: [
 		'keeta',
 		'keetanet',
+		'keetanetwork',
 		'staple',
 		'staples',
 		'devenv',
