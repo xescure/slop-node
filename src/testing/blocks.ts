@@ -18,6 +18,8 @@ type BlockContext = {
 	readonly previous: BlockHash | null;
 	readonly network: bigint;
 	readonly idempotent?: string | undefined;
+	/** Without a date a block is dated at the moment it is sealed. */
+	readonly date?: Date | undefined;
 };
 
 type SignedBlockContext = BlockContext & {
@@ -39,6 +41,9 @@ async function seal(input: SealInput): Promise<Block> {
 	}
 	if (input.idempotent !== undefined) {
 		fields.idempotent = input.idempotent;
+	}
+	if (input.date !== undefined) {
+		fields.date = input.date;
 	}
 	return(await new lib.Block.Builder(fields).seal());
 }
@@ -120,25 +125,27 @@ export function tokenSupplyBlock(input: BlockContext & { readonly owner: Account
 }
 
 export function modifyPermissionsBlock(input: SignedBlockContext & Omit<BlockJSONOperationMODIFY_PERMISSIONS, 'type'>): Promise<Block> {
-	const { account, signer, previous, network, idempotent, ...operation } = input;
+	const { account, signer, previous, network, idempotent, date, ...operation } = input;
 	return(seal({
 		account,
 		signer,
 		previous,
 		network,
 		idempotent,
+		date,
 		operations: [{ type: lib.Block.OperationType.MODIFY_PERMISSIONS, ...operation }]
 	}));
 }
 
 export function setInfoBlock(input: SignedBlockContext & Omit<BlockJSONOperationSET_INFO, 'type'>): Promise<Block> {
-	const { account, signer, previous, network, idempotent, ...operation } = input;
+	const { account, signer, previous, network, idempotent, date, ...operation } = input;
 	return(seal({
 		account,
 		signer,
 		previous,
 		network,
 		idempotent,
+		date,
 		operations: [{ type: lib.Block.OperationType.SET_INFO, ...operation }]
 	}));
 }
@@ -150,7 +157,7 @@ export function setInfoBlock(input: SignedBlockContext & Omit<BlockJSONOperation
  * [Keeta TS] index.js:65684-65686
  */
 export function manageCertificateBlock(input: SignedBlockContext & Omit<BlockJSONOperationMANAGE_CERTIFICATE, 'type'>): Promise<Block> {
-	const { account, signer, previous, network, idempotent, intermediateCertificates, ...fields } = input;
+	const { account, signer, previous, network, idempotent, date, intermediateCertificates, ...fields } = input;
 	const operation: BlockJSONOperationMANAGE_CERTIFICATE = { type: lib.Block.OperationType.MANAGE_CERTIFICATE, ...fields };
 	if (fields.method === lib.Block.AdjustMethod.ADD) {
 		operation.intermediateCertificates = intermediateCertificates ?? null;
@@ -163,6 +170,7 @@ export function manageCertificateBlock(input: SignedBlockContext & Omit<BlockJSO
 		previous,
 		network,
 		idempotent,
+		date,
 		operations: [operation]
 	}));
 }
@@ -173,7 +181,7 @@ export function manageCertificateBlock(input: SignedBlockContext & Omit<BlockJSO
  * [Keeta TS] index.js:57612-57681
  */
 export function feeBlock(input: BlockContext & { readonly from: Account; readonly payments: readonly Pick<BlockJSONOperationSEND, 'to' | 'token' | 'amount'>[] }): Promise<Block> {
-	const { from, payments, previous, network, idempotent } = input;
+	const { from, payments, previous, network, idempotent, date } = input;
 	const fields: BlockJSONIncomplete = {
 		version: 2,
 		purpose: lib.Block.Purpose.FEE,
@@ -186,6 +194,9 @@ export function feeBlock(input: BlockContext & { readonly from: Account; readonl
 	};
 	if (idempotent !== undefined) {
 		fields.idempotent = idempotent;
+	}
+	if (date !== undefined) {
+		fields.date = date;
 	}
 	return(new lib.Block.Builder(fields).seal());
 }

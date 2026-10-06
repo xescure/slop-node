@@ -10,7 +10,10 @@ import type { Scenario } from './record.js';
 import { replayVoteCase } from './replay.js';
 import type { ReplayFailure } from './replay.js';
 import { schemaViolations } from './schema.js';
+import { clockScenarios } from './scenarios/clock.js';
+import { conflictScenarios } from './scenarios/conflicts.js';
 import { kindScenarios } from './scenarios/kind.js';
+import { quorumScenarios } from './scenarios/quorum.js';
 
 /*
  * The committed corpus must equal what upstream's ledger produces now, so an
@@ -25,7 +28,10 @@ type Group = {
 };
 
 const groups: readonly Group[] = [
-	{ name: 'kind', scenarios: kindScenarios }
+	{ name: 'kind', scenarios: kindScenarios },
+	{ name: 'quorum', scenarios: quorumScenarios },
+	{ name: 'clock', scenarios: clockScenarios },
+	{ name: 'conflicts', scenarios: conflictScenarios }
 ];
 
 const UPDATE = process.env['SLOP_NODE_UPDATE_CONFORMANCE'] === '1';

@@ -12,7 +12,7 @@ import {
 	toDecimal,
 	toMoment
 } from './case.js';
-import type { CaseStep, VoteCase, VoteCaseFile } from './case.js';
+import type { CaseAction, CaseExpectation, CaseStep, VoteCase, VoteCaseFile } from './case.js';
 import { schemaViolations } from './schema.js';
 
 const lib = KeetaNet.lib;
@@ -290,6 +290,50 @@ describe('vote case format', function() {
 		}).toThrow(message);
 		// The schema checks structure only; references, ranges and code lists need the decoder.
 		expect(schemaViolations(JSON.parse(text)).length > 0).toBe(schemaRejects);
+	});
+
+	describe('a step\'s outcome must be one its action can have', function() {
+		const actions: Readonly<Record<CaseAction['type'], CaseAction>> = {
+			add: { type: 'add', staple: { type: 'literal', kind: 'staple', bytes: toBase64(bytesOf(1)) } },
+			vote: { type: 'vote', blocks: [toBase64(bytesOf(4))] },
+			quote: { type: 'quote', blocks: [toBase64(bytesOf(4))] },
+			gc: { type: 'gc' }
+		};
+		const expectations: Readonly<Record<CaseExpectation['outcome'], CaseExpectation>> = {
+			added: { outcome: 'added' },
+			collected: { outcome: 'collected' },
+			temporary: { outcome: 'temporary', blocks: [hashOf('A')], fee: { type: 'none' } },
+			permanent: { outcome: 'permanent', blocks: [hashOf('A')], fee: { type: 'none' } },
+			quote: { outcome: 'quote', blocks: [hashOf('A')], fee: { type: 'single', amount: toDecimal(0n) } },
+			rejectedInput: { outcome: 'rejectedInput', error: { type: 'coded', code: 'VOTE_EXPIRED' } },
+			refused: { outcome: 'refused', error: { type: 'plain', message: 'no' } }
+		};
+		// Only a vote produces votes and only a quote a quote; gc parses no input, so nothing it is given can be rejected.
+		const allowed: Readonly<Record<CaseAction['type'], readonly CaseExpectation['outcome'][]>> = {
+			add: ['added', 'refused', 'rejectedInput'],
+			vote: ['temporary', 'permanent', 'refused', 'rejectedInput'],
+			quote: ['quote', 'refused', 'rejectedInput'],
+			gc: ['collected', 'refused']
+		};
+		const pairs = Object.values(actions).flatMap(function(action) {
+			return(Object.values(expectations).map(function(expectation) {
+				return({ action, expectation, valid: allowed[action.type].includes(expectation.outcome) });
+			}));
+		});
+
+		test.each(pairs)('$action.type with $expectation.outcome is valid: $valid', function({ action, expectation, valid }) {
+			const text = encodeVoteCaseFile({ ...file, cases: [{ ...voteCase, steps: [{ moment: toMoment(START), actor: 0, action, expect: expectation }] }] });
+
+			if (valid) {
+				expect(decodeVoteCaseFile(text).cases[0]?.steps[0]?.expect).toEqual(expectation);
+				expect(schemaViolations(JSON.parse(text))).toEqual([]);
+			} else {
+				expect(function() {
+					return(decodeVoteCaseFile(text));
+				}).toThrow(`cases file.cases[0].steps[0].expect.outcome: a ${action.type} step cannot have the outcome "${expectation.outcome}"`);
+				expect(schemaViolations(JSON.parse(text)).length > 0).toBe(true);
+			}
+		});
 	});
 
 	test('the schema accepts every shape the format has', function() {

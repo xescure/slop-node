@@ -135,6 +135,11 @@ export class CaseRecorder {
 		advanceClock(milliseconds);
 	}
 
+	/** Sets the clock, earlier or later; a step's moment need not follow the one before. */
+	moveTo(moment: Date): void {
+		freezeClock(moment);
+	}
+
 	/** Every listed node adds genesis, each as a step of its own. */
 	async addGenesis(...actors: readonly number[]): Promise<void> {
 		for (const actor of actors) {

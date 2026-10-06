@@ -537,6 +537,7 @@
     },
     "step": {
       "type": "object",
+      "description": "Only a vote produces votes and only a quote a quote; gc parses no input, so nothing it is given can be rejected.",
       "additionalProperties": false,
       "required": [
         "moment",
@@ -559,7 +560,161 @@
         "expect": {
           "$ref": "#/$defs/expectation"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "add"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "expect": {
+                "type": "object",
+                "properties": {
+                  "outcome": {
+                    "enum": [
+                      "added",
+                      "refused",
+                      "rejectedInput"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "vote"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "expect": {
+                "type": "object",
+                "properties": {
+                  "outcome": {
+                    "enum": [
+                      "temporary",
+                      "permanent",
+                      "refused",
+                      "rejectedInput"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "quote"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "expect": {
+                "type": "object",
+                "properties": {
+                  "outcome": {
+                    "enum": [
+                      "quote",
+                      "refused",
+                      "rejectedInput"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "const": "gc"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "type": "object",
+            "properties": {
+              "expect": {
+                "type": "object",
+                "properties": {
+                  "outcome": {
+                    "enum": [
+                      "collected",
+                      "refused"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "case": {
       "type": "object",

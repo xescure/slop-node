@@ -1,16 +1,15 @@
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
-import { feeBlock, sendBlock } from '../../testing/blocks.js';
+import { feeBlock } from '../../testing/blocks.js';
 import { toDecimal } from '../case.js';
 import { scenario } from '../record.js';
 import type { CaseRecorder, RecordingOptions, Scenario } from '../record.js';
+import { HOUR, send } from './support.js';
 
 /*
  * Which kind of vote a request asks for, and the checks on the votes and
  * quote that come with it.
  * [Keeta TS] index.js:69037-69251
  */
-
-const HOUR = 60 * 60 * 1000;
 
 // Every representative weighs exactly a quarter of the total.
 const QUARTERS = [250n, 250n, 250n, 250n];
@@ -19,19 +18,6 @@ const FLAT_FEE = 5n;
 
 // Every representative charges the flat fee in the base token, paid to itself.
 const CHARGING: RecordingOptions = { fee: { type: 'flat', amount: toDecimal(FLAT_FEE) } };
-
-/** User `from` sends one unit to the next user, after `previous` or else after its genesis blocks. */
-function send(recorder: CaseRecorder, from: number, previous?: BlockHash): Promise<Block> {
-	const sender = recorder.user(from);
-	return(sendBlock({
-		from: sender,
-		to: recorder.user((from + 1) % recorder.network.users.length),
-		amount: 1n,
-		token: recorder.network.baseToken,
-		previous: previous ?? recorder.genesisHead(sender),
-		network: recorder.network.network
-	}));
-}
 
 /** A fee block after `previous` from user `from`, paying each listed representative the flat fee. */
 function payFees(recorder: CaseRecorder, from: number, previous: BlockHash, representatives: readonly number[]): Promise<Block> {
@@ -183,7 +169,7 @@ export const kindScenarios: readonly Scenario[] = [
 		const quote = await recorder.quote(0, [block]);
 		await recorder.vote(1, [block], undefined, quote);
 		await recorder.vote(0, [await send(recorder, 1)], undefined, quote);
-		await recorder.vote(0, [block, await send(recorder, 0, block.hash)], undefined, quote);
+		await recorder.vote(0, [block, await send(recorder, 0, { previous: block.hash })], undefined, quote);
 	}),
 	scenario('P9c', 'a request with a matching quote and no other votes gets a temporary vote', CHARGING, async function(recorder) {
 		await recorder.addGenesis(0);

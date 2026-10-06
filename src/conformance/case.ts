@@ -138,6 +138,18 @@ export type CaseExpectation =
 	{ readonly outcome: 'rejectedInput'; readonly error: CaseError } |
 	{ readonly outcome: 'refused'; readonly error: CaseError };
 
+/**
+ * The outcomes a step of each action can have: only a vote produces votes
+ * and only a quote a quote, and gc parses no input, so nothing it is given
+ * can be rejected.
+ */
+const STEP_OUTCOMES = {
+	add: { added: true, refused: true, rejectedInput: true },
+	vote: { temporary: true, permanent: true, refused: true, rejectedInput: true },
+	quote: { quote: true, refused: true, rejectedInput: true },
+	gc: { collected: true, refused: true }
+} satisfies { readonly [Type in CaseAction['type']]: Partial<Record<CaseExpectation['outcome'], true>> };
+
 export type CaseStep = {
 	readonly moment: Moment;
 	readonly actor: number;
@@ -822,6 +834,9 @@ function readSteps(value: unknown, path: string, nodes: number): CaseStep[] {
 			action: readAction(fields.get('action'), fields.at('action'), producers),
 			expect: readExpectation(fields.get('expect'), fields.at('expect'))
 		};
+		if (!Object.hasOwn(STEP_OUTCOMES[step.action.type], step.expect.outcome)) {
+			throw(new CaseFormatError(`${fields.at('expect')}.outcome`, `a ${step.action.type} step cannot have the outcome ${JSON.stringify(step.expect.outcome)}`));
+		}
 		const offered = offeredBy(step);
 		if (offered !== null) {
 			producers.set(index, offered);
