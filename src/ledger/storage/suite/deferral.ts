@@ -88,6 +88,72 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			await expect(ledger.add(outOfOrder)).rejects.toMatchObject({ code: 'LEDGER_PREVIOUS_NOT_SEEN', shouldRetry: false });
 			expect(await deferredWaitingOn(storage, missing.hash)).toEqual([]);
 		});
+		test('a deferred staple added again stays deferred once', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			await ledger.add(network.genesis);
+			const { first, second } = await chainOfTwoSends(network);
+			const secondStaple = await confirmedStaple([second], network.representatives);
+
+			expect(await ledger.add(secondStaple)).toEqual([]);
+			expect(await ledger.add(secondStaple)).toEqual([]);
+
+			expect(await deferredWaitingOn(storage, first.hash)).toEqual(blocksHashesOf([secondStaple]));
+			const firstStaple = await confirmedStaple([first], network.representatives);
+			expect(blockHashesOf(await ledger.add(firstStaple))).toEqual([first.hash.toString(), second.hash.toString()]);
+			expect(await ledger.getBalance(user, network.baseToken)).toBe(388n);
+		});
+
+		test('two blocks sharing a missing previous are refused, not deferred', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			await ledger.add(network.genesis);
+			const [missing, ...unused] = await sendsAfter(network, headOf(network.genesis, user), [1n]);
+			if (missing === undefined || unused.length > 0) {
+				throw(new Error('one missing block expected'));
+			}
+			const [twin] = await sendsAfter(network, missing.hash, [5n]);
+			const [twinFork] = await sendsAfter(network, missing.hash, [7n]);
+			if (twin === undefined || twinFork === undefined) {
+				throw(new Error('two forks expected'));
+			}
+
+			await expect(ledger.add(await confirmedStaple([twin, twinFork], network.representatives))).rejects.toMatchObject({ code: 'LEDGER_PREVIOUS_ALREADY_USED', shouldRetry: false });
+			expect(await deferredWaitingOn(storage, missing.hash)).toEqual([]);
+		});
+
+		test('a replayed staple whose idempotent key is taken stays deferred while its trigger applies', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			const from = requireAt(network.users, 0);
+			const to = requireAt(network.users, 1);
+			const idempotent = btoa('order-1');
+			await ledger.add(network.genesis);
+			const keyed = await sendBlock({ from, previous: headOf(network.genesis, from), to, amount: 1n, token: network.baseToken, network: network.network, idempotent });
+			const trigger = await sendBlock({ from, previous: keyed.hash, to, amount: 2n, token: network.baseToken, network: network.network });
+			const reused = await sendBlock({ from, previous: trigger.hash, to, amount: 4n, token: network.baseToken, network: network.network, idempotent });
+			const [keyedStaple, triggerStaple, reusedStaple] = await Promise.all([keyed, trigger, reused].map(function(block) {
+				return(confirmedStaple([block], network.representatives));
+			}));
+			if (keyedStaple === undefined || triggerStaple === undefined || reusedStaple === undefined) {
+				throw(new Error('three staples expected'));
+			}
+			expect(await ledger.add(reusedStaple)).toEqual([]);
+			await ledger.add(keyedStaple);
+
+			// The replay passes every check made before the write, and the write refuses the taken key.
+			const applied = await ledger.add(triggerStaple);
+
+			expect(blocksHashesOf(applied)).toEqual(blocksHashesOf([triggerStaple]));
+			expect(await deferredWaitingOn(storage, trigger.hash)).toEqual(blocksHashesOf([reusedStaple]));
+			expect(await ledger.getBlock(reused.hash, 'main')).toBeNull();
+			expect((await ledger.getVoteStaples([reusedStaple.blocksHash], 'main')).get(reusedStaple.blocksHash)).toBeNull();
+			expect((await ledger.getHeadBlock(from, 'main'))?.hash.toString()).toBe(trigger.hash.toString());
+			expect(await ledger.getBalance(from, network.baseToken)).toBe(397n);
+			expect(await ledger.getBalance(to, network.baseToken)).toBe(303n);
+			expect(blocksHashesOf(await ledger.getHistory(from, null))).toEqual(blocksHashesOf([triggerStaple, keyedStaple, network.genesis]));
+			expect((await ledger.getIdempotentBlockHash(from, idempotent, 'main'))?.toString()).toBe(keyed.hash.toString());
+		});
+
 		test('deferred staple applies exactly once when its previous arrives', async function() {
 			const { network, storage, ledger } = await startNetwork();
 			const user = requireAt(network.users, 0);

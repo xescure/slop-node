@@ -90,6 +90,14 @@ export function defineTransactionCases(driver: DriverUnderTest): void {
 
 			await expect(storage.getBalance(transaction, requireAt(network.users, 0), network.baseToken)).rejects.toThrow();
 			await expect(storage.abortTransaction(transaction)).rejects.toThrow();
+			await expect(storage.commitTransaction(transaction)).rejects.toThrow();
+
+			const aborted = await storage.beginTransaction({ identifier: 'suite-aborted', readOnly: true });
+			await storage.abortTransaction(aborted);
+
+			await expect(storage.getBalance(aborted, requireAt(network.users, 0), network.baseToken)).rejects.toThrow();
+			await expect(storage.commitTransaction(aborted)).rejects.toThrow();
+			await expect(storage.abortTransaction(aborted)).rejects.toThrow();
 		});
 
 		test('concurrent calls within one transaction keep every write', async function() {
@@ -149,7 +157,8 @@ export function defineTransactionCases(driver: DriverUnderTest): void {
 
 			expect(passed).toBe(retryable);
 			expect(lib.Error.isInstance(wrapped)).toBe(true);
-			expect(wrapped).toMatchObject({ type: 'LEDGER', shouldRetry: false, message: 'disk on fire' });
+			expect(wrapped).toMatchObject({ type: 'LEDGER', code: 'LEDGER_OTHER', shouldRetry: false, message: 'disk on fire' });
+			expect(wrapped).toHaveProperty('cause', plain);
 
 			let retriedAttempts = 0;
 			const retried = await ledger.run('suite-retry', function() {

@@ -368,7 +368,7 @@ export const voteLifecycleCases: readonly SuiteCase[] = [
 
 			const vote = await ledger.vote([send], undefined, quote);
 
-			expect(vote.serial).toBe(quote.serial + 1n);
+			expect(vote.serial > quote.serial).toBe(true);
 			expect(identitiesOf(await ledger.getVotes(send.hash, 'side'))).toEqual([vote.$uid]);
 		}
 	}

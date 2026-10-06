@@ -14,12 +14,24 @@ export const voteExpirySlopMilliseconds = 60_000;
  * [Keeta TS] index.js:80373-80374, 80641-80653
  */
 export function isVoteLive(vote: Pick<Vote, 'validityFrom' | 'validityTo' | '$permanent'>, moment: Date): boolean {
-	const now = moment.getTime();
-	if (now + voteExpirySlopMilliseconds < vote.validityFrom.getTime()) {
+	if (moment.getTime() + voteExpirySlopMilliseconds < vote.validityFrom.getTime()) {
 		return(false);
 	}
+	return(isVoteUnexpired(vote, moment));
+}
+
+/**
+ * Whether one of this node's own side votes still counts at a moment, for
+ * side reads and gc: only expiry ends it. Upstream fixes the transaction's
+ * moment before the driver's lock is taken, so a transaction that waited
+ * behind a long one carries a stale moment, and a competing vote committed
+ * meanwhile would look issued in the future; hiding it would let the node
+ * sign a competitor. A stale moment can only delay expiry.
+ * [Keeta TS] index.js:70393-70396, 80641-80653
+ */
+export function isVoteUnexpired(vote: Pick<Vote, 'validityTo' | '$permanent'>, moment: Date): boolean {
 	if (vote.$permanent) {
 		return(true);
 	}
-	return(now - voteExpirySlopMilliseconds <= vote.validityTo.getTime());
+	return(moment.getTime() - voteExpirySlopMilliseconds <= vote.validityTo.getTime());
 }

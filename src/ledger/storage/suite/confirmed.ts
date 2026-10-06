@@ -287,6 +287,10 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 				rowFor(principal, entity, entity, ['ACCESS']),
 				rowFor(principal, entity, network.baseToken, [])
 			].sort(byTarget));
+			expect((await ledger.listACLsByEntity(entity)).map(summarizeACL).sort(byTarget)).toEqual([
+				rowFor(principal, entity, entity, ['ACCESS']),
+				rowFor(principal, entity, network.baseToken, [])
+			].sort(byTarget));
 
 			// Had the emptied row been deleted, this grant would inherit ACCESS from the entity-wide row.
 			await applyPermissionChanges(network, ledger, cursor, entity, [
@@ -382,6 +386,14 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			await expect(ledger.add(await confirmedStaple([reused], network.representatives))).rejects.toMatchObject({ code: 'LEDGER_IDEMPOTENT_KEY_EXISTS' });
 			expect(await headHash(ledger, user)).toBe(keyed.hash.toString());
 			expect(await ledger.getBalance(user, network.baseToken)).toBe(399n);
+
+			// Two blocks of one staple may not claim one key either.
+			const twice = btoa('order-3');
+			const first = await sendBlock({ from: user, previous: cursor.previous(user), to: other, amount: 3n, token: network.baseToken, network: network.network, idempotent: twice });
+			const second = await sendBlock({ from: user, previous: first.hash, to: other, amount: 4n, token: network.baseToken, network: network.network, idempotent: twice });
+			await expect(ledger.add(await confirmedStaple([first, second], network.representatives))).rejects.toMatchObject({ code: 'LEDGER_IDEMPOTENT_KEY_EXISTS' });
+			expect(await headHash(ledger, user)).toBe(keyed.hash.toString());
+			expect(await ledger.getIdempotentBlockHash(user, twice, 'main')).toBeNull();
 		});
 
 		test('history lists the staple for every touched account, newest first, exclusive start, unknown start empty', async function() {
@@ -554,6 +566,26 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			const heights = await ledger.getAccountsBlockHeightInfo([{ account: newcomer }, { account: user }]);
 			expect(heights[newcomer.publicKeyString.get()]).toBeNull();
 			expect(heights[user.publicKeyString.get()]?.height).toBe(chainLengthOf(network.genesis, user));
+		});
+
+		test('successor votes filtered to a representative outside the confirming quorum are null', async function() {
+			const { network, ledger } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			const [first, second, leftOut] = network.representatives;
+			if (first === undefined || second === undefined || leftOut === undefined) {
+				throw(new Error('three representatives expected'));
+			}
+			await ledger.add(network.genesis);
+			const genesisHead = headOf(network.genesis, user);
+			const send = await sendBlock({ from: user, previous: genesisHead, to: requireAt(network.users, 1), amount: 1n, token: network.baseToken, network: network.network });
+			// 400 and 300 of 1000 are a quorum without the third representative.
+			await ledger.add(await confirmedStaple([send], [first, second]));
+
+			expect(await ledger.getVotesFromMultiplePrevious([genesisHead], 'main', leftOut)).toEqual({ [genesisHead.toString()]: null });
+			expect(await ledger.getVotesFromMultiplePrevious([genesisHead], 'both', leftOut)).toEqual({ [genesisHead.toString()]: null });
+			expect(publicKeysOf((await ledger.getVotesFromMultiplePrevious([genesisHead], 'main', second))[genesisHead.toString()]?.map(function(vote) {
+				return(vote.issuer);
+			}) ?? [])).toEqual([second.publicKeyString.get()]);
 		});
 
 		test('an ACL granted to a certificate this node lacks is rejected', async function() {

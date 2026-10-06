@@ -277,8 +277,10 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * Removes up to limit side votes that no longer matter, with the side
 	 * blocks and idempotent keys that only they held, and reports whether more
 	 * such votes remain. A side vote no longer matters once it has expired at
-	 * the transaction's moment, or once any block it covers is on the main
-	 * ledger: its staple can then never be added.
+	 * the transaction's moment, or once the previous of any block it covers
+	 * has a confirmed successor: that block is then on the main ledger or
+	 * competes with one that is, and its staple can never be added. A vote
+	 * kept on a dead competitor would hold its idempotent keys forever.
 	 */
 	protected abstract collectObsoleteSideVotes(transaction: Transaction, limit: number): Promise<boolean>;
 
@@ -319,6 +321,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 */
 	async #applyConfirmedStaple(transaction: Transaction, staple: VoteStaple, effects: ComputedEffectOfBlocks, replay: ReplayState): Promise<VoteStaple[]> {
 		this.#assertChainOrder(staple);
+		this.#assertDistinctPrevious(staple);
 		const heights = await this.preAdjust(staple, replay.mayDefer, transaction);
 		// An empty result means preAdjust deferred the staple, or found it already deferred.
 		if (Object.keys(heights).length === 0) {
@@ -435,15 +438,6 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * [Keeta TS] index.js:67678-67732
 	 */
 	async #assertExtendsConfirmedHistory(transaction: Transaction, staple: VoteStaple): Promise<void> {
-		const claimedPrevious = new Set<BlockHashKey>();
-		for (const block of staple.blocks) {
-			const previous = toBlockHashKey(block.previous);
-			if (claimedPrevious.has(previous)) {
-				throw(this.confirmedHistoryConflict(block, 'another block of the same staple has the same previous'));
-			}
-			claimedPrevious.add(previous);
-		}
-
 		await Promise.all(blocksWithExternalPrevious(staple).map(async (block): Promise<void> => {
 			if (block.$opening) {
 				const head = await this.getHeadBlock(transaction, block.account, 'main');
@@ -457,6 +451,22 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 				throw(this.confirmedHistoryConflict(block, `previous already has the confirmed successor ${successor.hash.toString()}`));
 			}
 		}));
+	}
+
+	/*
+	 * Two blocks of one staple that claim the same previous are a fork within
+	 * the staple. It is refused before preAdjust, which would otherwise defer
+	 * it when that previous is missing and leave it failing on every replay.
+	 */
+	#assertDistinctPrevious(staple: VoteStaple): void {
+		const claimedPrevious = new Set<BlockHashKey>();
+		for (const block of staple.blocks) {
+			const previous = toBlockHashKey(block.previous);
+			if (claimedPrevious.has(previous)) {
+				throw(this.confirmedHistoryConflict(block, 'another block of the same staple has the same previous'));
+			}
+			claimedPrevious.add(previous);
+		}
 	}
 
 	/*

@@ -40,6 +40,8 @@ const OUTVOTED_WEIGHTS: readonly bigint[] = [100n, 400n, 500n];
 
 const LONE_IDEMPOTENT = btoa('lone-order');
 
+const ABANDONED_IDEMPOTENT = btoa('abandoned-order');
+
 /** Our temporary and permanent votes on a send plus the fee block that pays every voter. */
 type OurPermanentVote = {
 	readonly send: Block;
@@ -220,6 +222,38 @@ export function defineGcCases(driver: DriverUnderTest): void {
 				});
 			})).toEqual({ fee: { votes: null, block: null }, successor: null, staple: null });
 			expect(hashOf(await ledger.getBlockFromPrevious(send.hash, 'main'))).toBe(hashOf(otherFee));
+		});
+
+		test('gc removes our votes on a competitor of a confirmed block and frees its idempotent key', async function() {
+			const { network, storage, ledger, startPeer } = await startNetwork(OUTVOTED_WEIGHTS);
+			await ledger.add(network.genesis);
+			const peers = [await startPeer(1), await startPeer(2)];
+			const abandoned = await sendFromGenesis(network, 0, 5n, ABANDONED_IDEMPOTENT);
+			const votedAt = new Date();
+			const ourTemporary = await ledger.vote([abandoned]);
+			const temporary = [ourTemporary];
+			for (const peer of peers) {
+				temporary.push(await peer.vote([abandoned]));
+			}
+			// The client collects our permanent vote and then abandons the staple.
+			const ourPermanent = await ledger.vote([abandoned], temporary);
+			advancePastExpiry(ourTemporary);
+			// Once their temporary votes have expired, the others confirm a competitor without us.
+			const competitor = await sendFromGenesis(network, 0, 9n);
+			await ledger.add(await confirmedStaple([competitor], network.representatives.slice(1)));
+			const reusing = await sendFrom(network, 0, competitor.hash, 1n, ABANDONED_IDEMPOTENT);
+			const storedAtVote = function() {
+				return(readStorageAt(storage, votedAt, async function(transaction) {
+					return(await sideRowsOf(transaction, storage, abandoned));
+				}));
+			};
+			expect(await storedAtVote()).toEqual({ votes: identitiesOf([ourTemporary, ourPermanent]), block: hashOf(abandoned) });
+			await expect(ledger.vote([reusing])).rejects.toMatchObject({ code: 'LEDGER_IDEMPOTENT_KEY_EXISTS' });
+
+			expect(await ledger.gc()).toBe(false);
+
+			expect(await storedAtVote()).toEqual({ votes: null, block: null });
+			expect((await ledger.vote([reusing])).$permanent).toBe(false);
 		});
 
 		test('gc retries deferred staples whose previous is now on main', async function() {

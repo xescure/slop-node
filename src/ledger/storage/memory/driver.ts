@@ -10,7 +10,7 @@ import { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
 import type { LedgerCountsSnapshot, TransactionOptions } from '../base.js';
 import type { AccountInfoUpdate, ConfirmedStapleChange } from '../confirmed.js';
 import { createIdempotentKeyError, createLedgerError } from '../errors.js';
-import { isVoteLive } from '../expiry.js';
+import { isVoteUnexpired } from '../expiry.js';
 import {
 	toACLScopeKey,
 	toAccountKey,
@@ -407,8 +407,8 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 
 	/*
 	 * On the side ledger a previous block can have several pending successors
-	 * over time, but at most one with a live vote of ours: voting refuses a
-	 * competing successor while one is live.
+	 * over time, but at most one with an unexpired vote of ours: voting
+	 * refuses a competing successor until that vote expires.
 	 * [Keeta TS] index.js:69281-69306
 	 */
 	async getBlockFromPrevious(transaction: MemoryTransaction, previous: BlockHash, from: LedgerSelector): Promise<Block | null> {
@@ -421,7 +421,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 			}
 			return(this.#confirmedBlock(overlay, successor));
 		}, () => {
-			for (const row of this.#liveSideVoteRows(overlay, overlay.sideVotesByPrevious.get(previousKey), transaction.moment)) {
+			for (const row of this.#unexpiredSideVoteRows(overlay, overlay.sideVotesByPrevious.get(previousKey), transaction.moment)) {
 				for (const block of row.blocks) {
 					const successor = this.#sideBlock(overlay, toBlockHashKey(block.hash), transaction.moment);
 					if (successor !== null && toBlockHashKey(successor.previous) === previousKey) {
@@ -448,7 +448,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 			}
 			return(Array.from(this.#confirmedStaple(overlay, row.staple).votes.values()));
 		}, () => {
-			return(nullWhenEmpty(this.#liveSideVoteRows(overlay, overlay.sideVotesByBlock.get(key), transaction.moment).map(function(row): Vote {
+			return(nullWhenEmpty(this.#unexpiredSideVoteRows(overlay, overlay.sideVotesByBlock.get(key), transaction.moment).map(function(row): Vote {
 				return(row.vote);
 			})));
 		}));
@@ -456,7 +456,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 
 	/*
 	 * Voting reads this under 'both' with its own key as the issuer, and may
-	 * replace only a single live temporary vote of its own; an expired vote
+	 * replace only a single unexpired temporary vote of its own; an expired vote
 	 * left in the answer would block the account until it is collected.
 	 * [Keeta TS] index.js:69281-69306
 	 */
@@ -468,7 +468,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 			votes[previousKey] = fromSelected(from, () => {
 				return(this.#successorVotes(overlay, previous, issuer));
 			}, () => {
-				return(nullWhenEmpty(this.#liveSideVoteRows(overlay, overlay.sideVotesByPrevious.get(previousKey), transaction.moment).map(function(row): Vote {
+				return(nullWhenEmpty(this.#unexpiredSideVoteRows(overlay, overlay.sideVotesByPrevious.get(previousKey), transaction.moment).map(function(row): Vote {
 					return(row.vote);
 				}).filter(function(vote): boolean {
 					return(issuer === undefined || vote.issuer.comparePublicKey(issuer));
@@ -572,7 +572,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	 * The holder of a key other than the block the caller asked to exclude:
 	 * voting excludes the block it is voting on, so a permanent vote can
 	 * follow the temporary vote that put the key on the side ledger. A side
-	 * block holds its key only while a vote of ours on it is live.
+	 * block holds its key only while a vote of ours on it is unexpired.
 	 * [Keeta TS] index.js:69254-69259, 69711-69716
 	 */
 	async getIdempotentBlockHash(transaction: MemoryTransaction, idempotent: IdempotentKey, from: LedgerSelector, excludeBlockHash?: BlockHash): Promise<BlockHash | null> {
@@ -745,8 +745,11 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		const overlay = await transaction.view();
 		const obsolete: VoteKey[] = [];
 		for (const [key, row] of overlay.sideVotes.entries()) {
-			if (!isVoteLive(row.vote, transaction.moment) || row.blocks.some(function(block): boolean {
-				return(overlay.blocks.get(toBlockHashKey(block.hash)) !== undefined);
+			// A block whose previous already has a confirmed successor is on
+			// main itself or competes with what is: either way the staple can
+			// never be added.
+			if (!isVoteUnexpired(row.vote, transaction.moment) || row.blocks.some(function(block): boolean {
+				return(overlay.successors.get(toBlockHashKey(block.previous)) !== undefined);
 			})) {
 				obsolete.push(key);
 			}
@@ -846,28 +849,29 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	}
 
 	/*
-	 * Liveness is judged at the transaction's moment, so every read in one
+	 * Expiry is judged at the transaction's moment, so every read in one
 	 * transaction agrees, and nothing depends on expired votes having been
-	 * collected.
+	 * collected. A vote issued after that moment still counts: the moment
+	 * may be stale, and hiding the vote could let the node sign a competitor.
 	 */
-	#liveSideVoteRows(overlay: LedgerOverlay, keys: Iterable<VoteKey> | undefined, moment: Date): SideVoteRow[] {
+	#unexpiredSideVoteRows(overlay: LedgerOverlay, keys: Iterable<VoteKey> | undefined, moment: Date): SideVoteRow[] {
 		const rows: SideVoteRow[] = [];
 		for (const key of keys ?? []) {
 			const row = overlay.sideVotes.get(key);
 			if (row === undefined) {
 				throw(new Error(`internal error: pending vote ${key} is indexed but not stored`));
 			}
-			if (isVoteLive(row.vote, moment)) {
+			if (isVoteUnexpired(row.vote, moment)) {
 				rows.push(row);
 			}
 		}
 		return(rows);
 	}
 
-	/** A side block counts only while a vote of ours on it is live. */
+	/** A side block counts only while a vote of ours on it is unexpired. */
 	#sideBlock(overlay: LedgerOverlay, key: BlockHashKey, moment: Date): Block | null {
 		const block = overlay.sideBlocks.get(key);
-		if (block === undefined || this.#liveSideVoteRows(overlay, overlay.sideVotesByBlock.get(key), moment).length === 0) {
+		if (block === undefined || this.#unexpiredSideVoteRows(overlay, overlay.sideVotesByBlock.get(key), moment).length === 0) {
 			return(null);
 		}
 		return(block);
@@ -879,12 +883,12 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	 * [Keeta TS] index.js:80795-80827
 	 */
 	#sideStaple(overlay: LedgerOverlay, key: StapleKey, moment: Date): VoteStaple | null {
-		const live = this.#liveSideVoteRows(overlay, overlay.sideVotesByStaple.get(key), moment);
-		let chosen = live.filter(function(row): boolean {
+		const unexpired = this.#unexpiredSideVoteRows(overlay, overlay.sideVotesByStaple.get(key), moment);
+		let chosen = unexpired.filter(function(row): boolean {
 			return(row.vote.$permanent);
 		});
 		if (chosen.length === 0) {
-			chosen = live;
+			chosen = unexpired;
 		}
 		const [first] = chosen;
 		if (first === undefined) {
