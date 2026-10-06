@@ -5,6 +5,7 @@
     {
       "id": "C1",
       "title": "a block dated exactly five minutes ago gets a temporary vote",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -67,6 +68,7 @@
     {
       "id": "C2",
       "title": "a block dated five minutes and a millisecond ago is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -126,6 +128,7 @@
     {
       "id": "C3",
       "title": "a block dated exactly five minutes ahead gets a temporary vote",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -188,6 +191,7 @@
     {
       "id": "C4",
       "title": "a block dated five minutes and a millisecond ahead is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -247,6 +251,7 @@
     {
       "id": "C5",
       "title": "a permanent request on a block too old for a temporary vote gets a permanent vote",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -413,6 +418,7 @@
     {
       "id": "C6",
       "title": "a quote shares the block window: exactly five minutes is quoted, a millisecond more is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -492,6 +498,7 @@
     {
       "id": "C7",
       "title": "a temporary vote is valid for five minutes and a permanent one until the end of January a thousand years on, each with a minute of slop",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -727,8 +734,139 @@
       ]
     },
     {
+      "id": "C8",
+      "title": "a permanent request with other votes past their validity but within the parse slop gets a permanent vote",
+      "basis": "upstream",
+      "network": {
+        "id": "0",
+        "seeds": {
+          "trustedRoot": "5f1d2c9a7b3e48d0a6c4e8f1b2d3a495c7e0f6b8a1d2c3e4f5a6b7c8d9e0f1a2",
+          "representative": "0b7e3a91c4d85f26e1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8",
+          "user": "c3a8e5f1d92b7064a8c1e3f5b7d9021436587a9bcde0f1a2b3c4d5e6f708192a"
+        },
+        "representativeWeights": [
+          "400",
+          "300",
+          "300"
+        ]
+      },
+      "nodes": [
+        {
+          "representative": 0,
+          "fee": {
+            "type": "free"
+          },
+          "mode": "read-write"
+        },
+        {
+          "representative": 1,
+          "fee": {
+            "type": "free"
+          },
+          "mode": "read-write"
+        }
+      ],
+      "steps": [
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "MIIKazCCB+oEggE0MIIBMAIBAAIBAAUAGA8yMDI2MDEwMTAwMDAwMFoEIgADitqLYPUPQmpQ+aDwftg5cWBKIiVFNlXFmMC1WHmotOcEIQI3LUbDran4l8dNNJu/4ORQx5gWfJ9YD42vhd71fpbD6gQgKUwhirVmKppT0/xjh/fljtq4dAQoG30/uYlH3wgMhSowaqMxMC8EIgADitqLYPUPQmpQ+aDwftg5cWBKIiVFNlXFmMC1WHmotOcCAQIwBgIBAwIBAKI1MDMMCEtFRVRBTkVUDBxOZXR3b3JrIEFkZHJlc3MgRm9yIEtlZXRhTmV0DAAwBwICASECAQAEQO1wH0gGScLPxoVrsa4FIp3NTdf6fjYiAdyctu/9gHyaG2ipMqD1KgVZ1VycuKOffrts2refobJLB8JANBEAe2EEggFEMIIBQAIBAAIBAAUAGA8yMDI2MDEwMTAwMDAwMFoEIgADitqLYPUPQmpQ+aDwftg5cWBKIiVFNlXFmMC1WHmotOcEIQOG1McH8qKfKPUAJ9OtHh+wBU8wP+yptaVGLxX7iFOV0QQgKWkNpNQMVuWwI4gsJoTB5+u3n3z6NYU02sk3vhz2HPoweqMxMC8EIgADitqLYPUPQmpQ+aDwftg5cWBKIiVFNlXFmMC1WHmotOcCAQIwBgIBAwIBAKI6MDgMBFRFU1QMClRlc3QgVG9rZW4MHGV5SmtaV05wYldGc1VHeGhZMlZ6SWpvd2ZRPT0wBgIBAQIBAKUJMAcCAgPoAgEABEB5naDY7HqvGQpjUstQjAeIOuerraxBPi0TYiamaImdSFEeJQSHzeI5rH2RLICnNeiKb++h6pCRuUAx8Ch8aG9bBIH4MIH1AgEAAgEABQAYDzIwMjYwMTAxMDAwMDAwWgQiAAOK2otg9Q9CalD5oPB+2DlxYEoiJUU2VcWYwLVYeai05wQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgQgSwenuAjcVT7u2iL3H4u6Be4M/C45qQCUcbd1p/uOW78wLqYsMCoEIQOG1McH8qKfKPUAJ9OtHh+wBU8wP+yptaVGLxX7iFOV0QICAZACAQAEQCwlPzdmvY61FJsaV4bt0/f/5vYuw/RET9iL39/q3L6PSDwH7P80cVttb+tCwgolvlZBvrZIhOHhpDP8p1pnl+AEgdAwgc0CAQACAQAFABgPMjAyNjAxMDEwMDAwMDBaBCIAA35n8Ixk5phuY6m1+qLFAOq0rvS3ZbOV3WgfZpy55k62BQAEIJjTXunz3c3ZhsgLkZZMCBVwg6cEih2haM8gMClH86XYMCihJjAkBCIAA8WcPSQNOCQeMpOYhnLNkUwljXxVY/w7I7S+ygaN/uV0BEBkRK2Tt3C+zJmQ3+xdhHT2FdalIItyNtkWxnPhtzqEPjxxpF12dEQ4jtlPnesl7dJ7//EgqqNEKu5ytHrCWOYdBIH4MIH1AgEAAgEABQAYDzIwMjYwMTAxMDAwMDAwWgQiAAOK2otg9Q9CalD5oPB+2DlxYEoiJUU2VcWYwLVYeai05wQiAAIaAELXOs8eQtRybClaO0kBUQjMqXhciyiZiyQyrJZozQQgZxAIjTxcdBtoDybdlZkDav5bMOO6GxIz09YCg6WYaP0wLqYsMCoEIQOG1McH8qKfKPUAJ9OtHh+wBU8wP+yptaVGLxX7iFOV0QICASwCAQAEQD9aDdQK1WnAdbRmctLSsrNdH9SJ68TLk68gn10p+U24PrqUqHo9VOfDHdGwrPH+BKezuUyHUYYdWbRVHm+CYIoEgdAwgc0CAQACAQAFABgPMjAyNjAxMDEwMDAwMDBaBCIAAhoAQtc6zx5C1HJsKVo7SQFRCMypeFyLKJmLJDKslmjNBQAEIGzWoZxHHuIByozpiF11537rO1X+P/2/O3WFe2ZkgqYmMCihJjAkBCIAAm3+/42ixUa+X2aNAoUM3ea6nTsd3sD6pWIhhp6m8tCzBEDbeFySNkTA+7SIMBzybzx8Fv0xtaIVZJyuLANwfmIl3VwS+0MT/PdyMT41JAvil2FOXLKUzo0GW8ibZJrxyxyWBIH4MIH1AgEAAgEABQAYDzIwMjYwMTAxMDAwMDAwWgQiAAOK2otg9Q9CalD5oPB+2DlxYEoiJUU2VcWYwLVYeai05wQiAAPg6Zf+MnWqWpHHeRoD97iFLR+fd8nBTk6BeoDW8VYPNwQgJxFJOZM6QETgD4Rh0WY9fInT8imiSi7xigPTtqOON5EwLqYsMCoEIQOG1McH8qKfKPUAJ9OtHh+wBU8wP+yptaVGLxX7iFOV0QICASwCAQAEQCJN6tRtcTFcVVuQZmGAxdpMuBjc7t9OMfkiOMgxx+bjCta/52fvLVddIVkHtODzph2U/nZAn7HswvCO7/3uUTMEgdAwgc0CAQACAQAFABgPMjAyNjAxMDEwMDAwMDBaBCIAA+Dpl/4ydapakcd5GgP3uIUtH593ycFOToF6gNbxVg83BQAEINbxcFo4dZ4UWnnH/Co4hLQYp8Djee1AEz/cLczEQ3f0MCihJjAkBCIAAzT38VmwOZARoE3a0I+VcJGCpKmTyjPZTGArThy68gmABEAXzab+AlZvbTX78ZM+QJF6cPb9rixKsKwVlSznRJGqelsje1IA7JOAjdPKT9sV1jybs/yNfNNh20t0sutDN7C2MIICeQSCAnUwggJxMIICFqADAgECAgEAMAsGCWCGSAFlAwQDCjBQMU4wTAYDVQQDDEVrZWV0YV9hYWJ5dnd1bG1kMnE2cXRra2Q0MmI0ZDYzYTR4Y3lja2Vpc3VrbnN2eXdtbWJua3lwZ3Vsanp5bGE0MmFzNXEwIhgPMjAyNjAxMDEwMDAwMDBaGA8zMDI3MDEzMTAwMDAwMFowDDEKMAgGA1UEBQwBMDA2MBAGByqGSM49AgEGBSuBBAAKAyIAA4rai2D1D0JqUPmg8H7YOXFgSiIlRTZVxZjAtVh5qLTno4IBQTCCAT0wggE5BglghkgBZQMDAQMBAf8EggEnoIIBIzCCAR8GCWCGSAFlAwQCCDCCARAEIESX2FJlLonyB5UxPug5p8kfAnc05DgLM3PPCDGE+zQ3BCBwj6thxJ1fw+XnYenCof8Ozfj4PM5C8zYdUmJrHxYFpQQgmNNe6fPdzdmGyAuRlkwIFXCDpwSKHaFozyAwKUfzpdgEIFmBwe1rmBDg8nT4BpKYIinrb3cfmvdIDoBuErgMFR1cBCBs1qGcRx7iAcqM6Yhdded+6ztV/j/9vzt1hXtmZIKmJgQgym/+1lfkOK64SDtvTZbWozsj/wXt7vWnkd9t9bTC6hYEINbxcFo4dZ4UWnnH/Co4hLQYp8Djee1AEz/cLczEQ3f0BCD4EaB8udDz2TvuHLshZE38xqIump4zVwd4czp7OgWZeTALBglghkgBZQMEAwoDSAAwRQIhAMPkayXx33sIfY+s2RMA+UZeQqBj5fSULz3FImQ1ubLIAiB6W2GKxNnx6wzrbYhw95EY3Gv+jI88xbIOk+jSN5Nhlg=="
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 1,
+          "action": {
+            "type": "add",
+            "staple": {
+              "fromStep": 0
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "vote",
+            "blocks": [
+              "MIHzAgEAAgEABQAYDzIwMjYwMTAxMDAwMDAwWgQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgUABCBZgcHta5gQ4PJ0+AaSmCIp6293H5r3SA6AbhK4DBUdXDBOoEwwSgQiAAIaAELXOs8eQtRybClaO0kBUQjMqXhciyiZiyQyrJZozQIBAQQhA4bUxwfyop8o9QAn060eH7AFTzA/7Km1pUYvFfuIU5XRBEAyM6NscaH614O9XZ3KWWPWqC0fx4Rc37jyJJwKxAnMKB3LXmNLJYW99lP3yb+r+ubSHJNX8SLY+v+p38WLIqIN"
+            ]
+          },
+          "expect": {
+            "outcome": "temporary",
+            "blocks": [
+              "B8122B5AC065E983C0675F7BF18459F514139CE4C6E72EAF2D16B4BEB78F3975"
+            ],
+            "fee": {
+              "type": "single",
+              "amount": "0"
+            }
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 1,
+          "action": {
+            "type": "vote",
+            "blocks": [
+              "MIHzAgEAAgEABQAYDzIwMjYwMTAxMDAwMDAwWgQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgUABCBZgcHta5gQ4PJ0+AaSmCIp6293H5r3SA6AbhK4DBUdXDBOoEwwSgQiAAIaAELXOs8eQtRybClaO0kBUQjMqXhciyiZiyQyrJZozQIBAQQhA4bUxwfyop8o9QAn060eH7AFTzA/7Km1pUYvFfuIU5XRBEAyM6NscaH614O9XZ3KWWPWqC0fx4Rc37jyJJwKxAnMKB3LXmNLJYW99lP3yb+r+ubSHJNX8SLY+v+p38WLIqIN"
+            ]
+          },
+          "expect": {
+            "outcome": "temporary",
+            "blocks": [
+              "B8122B5AC065E983C0675F7BF18459F514139CE4C6E72EAF2D16B4BEB78F3975"
+            ],
+            "fee": {
+              "type": "single",
+              "amount": "0"
+            }
+          }
+        },
+        {
+          "moment": "2026-01-01T00:06:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "vote",
+            "blocks": [
+              "MIHzAgEAAgEABQAYDzIwMjYwMTAxMDAwMDAwWgQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgUABCBZgcHta5gQ4PJ0+AaSmCIp6293H5r3SA6AbhK4DBUdXDBOoEwwSgQiAAIaAELXOs8eQtRybClaO0kBUQjMqXhciyiZiyQyrJZozQIBAQQhA4bUxwfyop8o9QAn060eH7AFTzA/7Km1pUYvFfuIU5XRBEAyM6NscaH614O9XZ3KWWPWqC0fx4Rc37jyJJwKxAnMKB3LXmNLJYW99lP3yb+r+ubSHJNX8SLY+v+p38WLIqIN"
+            ],
+            "otherVotes": [
+              {
+                "fromStep": 2
+              },
+              {
+                "fromStep": 3
+              }
+            ]
+          },
+          "expect": {
+            "outcome": "permanent",
+            "blocks": [
+              "B8122B5AC065E983C0675F7BF18459F514139CE4C6E72EAF2D16B4BEB78F3975"
+            ],
+            "fee": {
+              "type": "none"
+            }
+          }
+        }
+      ]
+    },
+    {
       "id": "C9",
       "title": "the bytes of a temporary vote seven minutes old do not parse",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -856,6 +994,7 @@
     {
       "id": "C10",
       "title": "the bytes of a vote issued a minute ahead parse, and a millisecond further ahead do not",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1049,7 +1188,8 @@
     },
     {
       "id": "C11",
-      "title": "a second request for a block is refused while our temporary vote lives, its minute of slop included, and given once it has expired",
+      "title": "a second request for a block is refused while our temporary vote is valid, and given once it has expired with its minute of slop",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1125,6 +1265,106 @@
           }
         },
         {
+          "moment": "2026-01-01T00:05:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "vote",
+            "blocks": [
+              "MIHzAgEAAgEABQAYDzIwMjYwMTAxMDAwNTAwWgQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgUABCBZgcHta5gQ4PJ0+AaSmCIp6293H5r3SA6AbhK4DBUdXDBOoEwwSgQiAAIaAELXOs8eQtRybClaO0kBUQjMqXhciyiZiyQyrJZozQIBAQQhA4bUxwfyop8o9QAn060eH7AFTzA/7Km1pUYvFfuIU5XRBEBwkIjivlSX3SbUl+aXi0hMqbvPEo5J6iV6HRy9yzOAplRZ/dp6zgr97c1772xyOegzqJNs16i+yIdfA/RnRwW7"
+            ]
+          },
+          "expect": {
+            "outcome": "refused",
+            "error": {
+              "type": "coded",
+              "code": "LEDGER_SUCCESSOR_VOTE_EXISTS"
+            }
+          }
+        },
+        {
+          "moment": "2026-01-01T00:06:00.001Z",
+          "actor": 0,
+          "action": {
+            "type": "vote",
+            "blocks": [
+              "MIHzAgEAAgEABQAYDzIwMjYwMTAxMDAwNTAwWgQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgUABCBZgcHta5gQ4PJ0+AaSmCIp6293H5r3SA6AbhK4DBUdXDBOoEwwSgQiAAIaAELXOs8eQtRybClaO0kBUQjMqXhciyiZiyQyrJZozQIBAQQhA4bUxwfyop8o9QAn060eH7AFTzA/7Km1pUYvFfuIU5XRBEBwkIjivlSX3SbUl+aXi0hMqbvPEo5J6iV6HRy9yzOAplRZ/dp6zgr97c1772xyOegzqJNs16i+yIdfA/RnRwW7"
+            ]
+          },
+          "expect": {
+            "outcome": "temporary",
+            "blocks": [
+              "56C5065D471704F3528A33D37A23E4C4FB416ECAA91582CB23A93CFC9179791D"
+            ],
+            "fee": {
+              "type": "single",
+              "amount": "0"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "C11-D4",
+      "title": "storage contract D4: our temporary side vote keeps refusing a competing request until a minute past its validity",
+      "basis": "contract",
+      "network": {
+        "id": "0",
+        "seeds": {
+          "trustedRoot": "5f1d2c9a7b3e48d0a6c4e8f1b2d3a495c7e0f6b8a1d2c3e4f5a6b7c8d9e0f1a2",
+          "representative": "0b7e3a91c4d85f26e1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8",
+          "user": "c3a8e5f1d92b7064a8c1e3f5b7d9021436587a9bcde0f1a2b3c4d5e6f708192a"
+        },
+        "representativeWeights": [
+          "400",
+          "300",
+          "300"
+        ]
+      },
+      "nodes": [
+        {
+          "representative": 0,
+          "fee": {
+            "type": "free"
+          },
+          "mode": "read-write"
+        }
+      ],
+      "steps": [
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "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"
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "vote",
+            "blocks": [
+              "MIHzAgEAAgEABQAYDzIwMjYwMTAxMDAwNTAwWgQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgUABCBZgcHta5gQ4PJ0+AaSmCIp6293H5r3SA6AbhK4DBUdXDBOoEwwSgQiAAIaAELXOs8eQtRybClaO0kBUQjMqXhciyiZiyQyrJZozQIBAQQhA4bUxwfyop8o9QAn060eH7AFTzA/7Km1pUYvFfuIU5XRBEBwkIjivlSX3SbUl+aXi0hMqbvPEo5J6iV6HRy9yzOAplRZ/dp6zgr97c1772xyOegzqJNs16i+yIdfA/RnRwW7"
+            ]
+          },
+          "expect": {
+            "outcome": "temporary",
+            "blocks": [
+              "56C5065D471704F3528A33D37A23E4C4FB416ECAA91582CB23A93CFC9179791D"
+            ],
+            "fee": {
+              "type": "single",
+              "amount": "0"
+            }
+          }
+        },
+        {
           "moment": "2026-01-01T00:06:00.000Z",
           "actor": 0,
           "action": {
@@ -1166,6 +1406,7 @@
     {
       "id": "EO3",
       "title": "a permanent request without our temporary vote is refused for that, however old its block",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1330,6 +1571,7 @@
     {
       "id": "EO4",
       "title": "a stale block that overspends is refused for its balance before its age",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1389,6 +1631,7 @@
     {
       "id": "EO5",
       "title": "a stale block whose sibling holds our permanent vote is refused for the sibling before its age",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1535,6 +1778,7 @@
     {
       "id": "EO6",
       "title": "the other votes parse before the quote: a vote from the future is reported before an expired quote",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {

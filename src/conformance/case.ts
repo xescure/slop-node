@@ -157,9 +157,16 @@ export type CaseStep = {
 	readonly expect: CaseExpectation;
 };
 
+/**
+ * What decides a case's outcomes: Keeta's Ledger alone, or also a rule of
+ * the storage contract, which a contract case names in its title.
+ */
+export type CaseBasis = 'upstream' | 'contract';
+
 export type VoteCase = {
 	readonly id: string;
 	readonly title: string;
+	readonly basis: CaseBasis;
 	readonly network: CaseNetwork;
 	readonly nodes: readonly CaseNode[];
 	readonly steps: readonly CaseStep[];
@@ -177,6 +184,11 @@ const LEDGER_MODES = {
 	'bootstrap-only': true,
 	'read-only': true
 } satisfies Record<CaseLedgerMode, true>;
+
+const CASE_BASES = {
+	upstream: true,
+	contract: true
+} satisfies Record<CaseBasis, true>;
 
 const DECIMAL_PATTERN = /^(0|[1-9][0-9]*)$/;
 const SEED_PATTERN = /^[0-9a-f]{64}$/;
@@ -382,6 +394,7 @@ function encodeCase(voteCase: VoteCase): JSONObject {
 	return({
 		id: voteCase.id,
 		title: voteCase.title,
+		basis: voteCase.basis,
 		network: {
 			id: network.id,
 			seeds: {
@@ -846,12 +859,13 @@ function readSteps(value: unknown, path: string, nodes: number): CaseStep[] {
 }
 
 function readCase(value: unknown, path: string): VoteCase {
-	const fields = readObject(value, path, ['id', 'title', 'network', 'nodes', 'steps']);
+	const fields = readObject(value, path, ['id', 'title', 'basis', 'network', 'nodes', 'steps']);
 	const network = readNetwork(fields.get('network'), fields.at('network'));
 	const nodes = readNodes(fields.get('nodes'), fields.at('nodes'), network.representativeWeights.length);
 	return({
 		id: readNonEmptyString(fields.get('id'), fields.at('id')),
 		title: readNonEmptyString(fields.get('title'), fields.at('title')),
+		basis: readChoice(fields.get('basis'), fields.at('basis'), CASE_BASES),
 		network,
 		nodes,
 		steps: readSteps(fields.get('steps'), fields.at('steps'), nodes.length)

@@ -5,6 +5,7 @@
     {
       "id": "K1",
       "title": "a block competing with the one we gave a temporary vote is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -84,6 +85,7 @@
     {
       "id": "K1b",
       "title": "another representative votes for the competing block",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -186,6 +188,7 @@
     {
       "id": "K1c",
       "title": "a block competing with the one we gave a permanent vote is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -332,6 +335,7 @@
     {
       "id": "K1d",
       "title": "a second permanent request for a block we gave a permanent vote is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -486,6 +490,7 @@
     {
       "id": "K1e",
       "title": "a block competing with one already added is no successor, even while we hold a vote for the added one",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -582,6 +587,7 @@
     {
       "id": "K1f",
       "title": "a permanent request replaces our temporary vote on the same block",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -711,6 +717,7 @@
     {
       "id": "K2",
       "title": "two blocks with one previous in a request are refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -771,6 +778,7 @@
     {
       "id": "K3",
       "title": "a block after an earlier block than the head is no successor, naming every account checked",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -835,6 +843,7 @@
     {
       "id": "K4",
       "title": "a block with a previous on an account without blocks is not opening, naming every account checked",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -899,6 +908,7 @@
     {
       "id": "K5",
       "title": "an opening block on an account with blocks is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -958,6 +968,7 @@
     {
       "id": "K5b",
       "title": "an opening block on an account that has only received funds gets a temporary vote",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1034,6 +1045,7 @@
     {
       "id": "K6",
       "title": "a chain of two blocks of one account in a request gets a temporary vote",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1098,6 +1110,7 @@
     {
       "id": "K6b",
       "title": "a chain given in reverse order is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1158,6 +1171,7 @@
     {
       "id": "K6c",
       "title": "a block whose previous is another account's block in the request is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1218,6 +1232,7 @@
     {
       "id": "K7",
       "title": "a staple added twice is refused the second time",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1291,6 +1306,7 @@
     {
       "id": "K8",
       "title": "a block already added is no successor",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1367,6 +1383,7 @@
     {
       "id": "EO7",
       "title": "an empty list of other votes is refused as missing blocks when there are no blocks",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1425,6 +1442,7 @@
     {
       "id": "EO8",
       "title": "an empty list of other votes is refused for its weight before the head is checked",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1499,6 +1517,7 @@
     {
       "id": "EO9",
       "title": "two blocks after an earlier block than the head are refused for sharing it before the head is checked",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1559,6 +1578,7 @@
     {
       "id": "EO10",
       "title": "an overspending block competing with one we voted for is refused for the competition before its balance",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1638,6 +1658,7 @@
     {
       "id": "EO11",
       "title": "heads are checked in the order of the request, so the first failing account decides the refusal",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {

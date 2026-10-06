@@ -6,7 +6,7 @@ import type { LedgerStorageDriverBase } from '../ledger/storage/base.js';
 import { TEST_NETWORK_SEEDS, advanceClock, createTestNetwork, freezeClock } from '../testing/network.js';
 import type { TestNetwork } from '../testing/network.js';
 import { toBase64, toCaseSeed, toDecimal, toMoment } from './case.js';
-import type { AddSource, Base64, CaseAction, CaseFeePolicy, CaseLedgerMode, CaseNode, CaseStep, StapleReference, StepReference, VoteCase, VoteReference } from './case.js';
+import type { AddSource, Base64, CaseAction, CaseBasis, CaseFeePolicy, CaseLedgerMode, CaseNode, CaseStep, StapleReference, StepReference, VoteCase, VoteReference } from './case.js';
 import { CaseRunner } from './runner.js';
 import type { CaseSetup } from './runner.js';
 
@@ -37,6 +37,8 @@ export type RecordingOptions = {
 	readonly fee?: CaseFeePolicy;
 	readonly mode?: CaseLedgerMode;
 	readonly nodes?: readonly CaseNode[];
+	/** Upstream unless an outcome also depends on a rule of the storage contract. */
+	readonly basis?: CaseBasis;
 };
 
 /** A step whose produced bytes later steps may reference. */
@@ -71,19 +73,21 @@ export class CaseRecorder {
 	readonly network: TestNetwork;
 	readonly #runner: CaseRunner;
 	readonly #setup: CaseSetup;
+	readonly #basis: CaseBasis;
 	readonly #steps: CaseStep[] = [];
 	// The first add step that carried each staple, so later adds reference it.
 	readonly #staples = new Map<Base64, number>();
 
-	private constructor(network: TestNetwork, setup: CaseSetup, runner: CaseRunner) {
+	private constructor(network: TestNetwork, setup: CaseSetup, basis: CaseBasis, runner: CaseRunner) {
 		this.network = network;
 		this.#setup = setup;
+		this.#basis = basis;
 		this.#runner = runner;
 	}
 
 	/** Freezes the clock at the start of the case. */
 	static async start(context: ScenarioContext, options: RecordingOptions = {}): Promise<CaseRecorder> {
-		const { representativeWeights = DEFAULT_WEIGHTS, fee = { type: 'free' }, mode = 'read-write' } = options;
+		const { representativeWeights = DEFAULT_WEIGHTS, fee = { type: 'free' }, mode = 'read-write', basis = 'upstream' } = options;
 		const nodes = options.nodes ?? representativeWeights.map(function(_weight, representative): CaseNode {
 			return({ representative, fee, mode });
 		});
@@ -101,7 +105,7 @@ export class CaseRecorder {
 		};
 		freezeClock(CASE_START);
 		const network = await createTestNetwork({ representativeWeights, seeds: TEST_NETWORK_SEEDS });
-		return(new CaseRecorder(network, setup, new CaseRunner(setup, context.createDriver)));
+		return(new CaseRecorder(network, setup, basis, new CaseRunner(setup, context.createDriver)));
 	}
 
 	representative(index: number): Account {
@@ -203,7 +207,7 @@ export class CaseRecorder {
 		const steps = recorded.map(function(step): CaseStep {
 			return({ ...step, actor: acting.indexOf(step.actor) });
 		});
-		return({ id, title, network: this.#setup.network, nodes, steps });
+		return({ id, title, basis: this.#basis, network: this.#setup.network, nodes, steps });
 	}
 
 	async #record(actor: number, action: CaseAction): Promise<StepHandle> {

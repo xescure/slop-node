@@ -125,15 +125,16 @@ export const quorumScenarios: readonly Scenario[] = [
 		const block = await send(recorder, 0);
 		await recorder.add(0, await confirmedStaple([block], [recorder.network.trustedSigner]));
 	}),
-	scenario('Q13', 'a staple whose votes are valid from before 1970 is refused before its weight is counted, and one valid from 1970 is added', {}, async function(recorder) {
+	scenario('Q13', 'a staple whose votes are valid from before 1970 is refused for that before its weight is counted; from 1970 on its weight decides', {}, async function(recorder) {
 		await recorder.addGenesis(0);
 		const block = await send(recorder, 0);
-		const signers = representatives(recorder, 0, 1);
-		for (const validFrom of [new Date(-1), new Date(0)]) {
-			const votes = await Promise.all(signers.map(function(signer): Promise<Vote> {
-				return(signedVote(signer, [block], 1n, null, validFrom));
-			}));
-			await recorder.add(0, lib.Vote.Staple.fromVotesAndBlocks(votes, [block]));
+		for (const signers of [representatives(recorder, 1), representatives(recorder, 0, 1)]) {
+			for (const validFrom of [new Date(-1), new Date(0)]) {
+				const votes = await Promise.all(signers.map(function(signer): Promise<Vote> {
+					return(signedVote(signer, [block], 1n, null, validFrom));
+				}));
+				await recorder.add(0, lib.Vote.Staple.fromVotesAndBlocks(votes, [block]));
+			}
 		}
 	}),
 	scenario('Q14', 'a staple with enough weight is added without a balance check, though votes on its block and on the next one are refused', {}, async function(recorder) {

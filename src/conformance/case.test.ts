@@ -86,6 +86,7 @@ const steps: readonly CaseStep[] = [
 const voteCase: VoteCase = {
 	id: 'X1',
 	title: 'every shape the format has',
+	basis: 'upstream',
 	network: {
 		id: '0',
 		seeds: {
@@ -106,7 +107,7 @@ const voteCase: VoteCase = {
 const file: VoteCaseFile = {
 	format: VOTE_CASE_FORMAT,
 	keetanetClient: '0.18.7',
-	cases: [voteCase, { ...voteCase, id: 'X2', nodes: [{ representative: null, fee: { type: 'free' }, mode: 'read-only' }], steps: steps.slice(0, 1) }]
+	cases: [voteCase, { ...voteCase, id: 'X2', basis: 'contract', nodes: [{ representative: null, fee: { type: 'free' }, mode: 'read-only' }], steps: steps.slice(0, 1) }]
 };
 
 type JSONTree = { [key: string]: unknown };
@@ -154,7 +155,7 @@ describe('vote case format', function() {
 	test('the encoding has a fixed key order, two-space indentation and a trailing newline', function() {
 		const reordered: VoteCaseFile = {
 			cases: file.cases.map(function(entry): VoteCase {
-				return({ steps: entry.steps, nodes: entry.nodes, network: entry.network, title: entry.title, id: entry.id });
+				return({ steps: entry.steps, nodes: entry.nodes, network: entry.network, basis: entry.basis, title: entry.title, id: entry.id });
 			}),
 			keetanetClient: file.keetanetClient,
 			format: file.format
@@ -178,6 +179,14 @@ describe('vote case format', function() {
 		});
 		expect(nodeAt(encodedTree(), ['cases', 0, 'steps', 9, 'action'])).toEqual({ type: 'add', staple: { fromStep: 0 }, from: 'bootstrap' });
 		expect(nodeAt(encodedTree(), ['cases', 0, 'nodes', 2])).toEqual({ representative: null, fee: { type: 'free' }, mode: 'bootstrap-only' });
+	});
+
+	test('every case states its basis, after its title', function() {
+		const tree = encodedTree();
+
+		expect(Object.keys(nodeAt(tree, ['cases', 0]))).toEqual(['id', 'title', 'basis', 'network', 'nodes', 'steps']);
+		expect(Reflect.get(nodeAt(tree, ['cases', 0]), 'basis')).toBe('upstream');
+		expect(Reflect.get(nodeAt(tree, ['cases', 1]), 'basis')).toBe('contract');
 	});
 
 	test('an absent list of other votes stays distinct from an empty one', function() {
@@ -277,6 +286,12 @@ describe('vote case format', function() {
 		['an unknown ledger mode', function(tree: JSONTree): void {
 			setIn(tree, ['cases', 0, 'nodes', 0], 'mode', 'write-only');
 		}, /cases\[0\]\.nodes\[0\]\.mode: unknown value "write-only"/, true],
+		['a case without a basis', function(tree: JSONTree): void {
+			deleteIn(tree, ['cases', 0], 'basis');
+		}, /^cases file\.cases\[0\]\.basis: missing field$/, true],
+		['an unknown basis', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0], 'basis', 'driver');
+		}, /cases\[0\]\.basis: unknown value "driver"/, true],
 		['a duplicate case', function(tree: JSONTree): void {
 			setIn(tree, ['cases', 1], 'id', 'X1');
 		}, /cases\[1\]\.id: duplicate case "X1"/, false]

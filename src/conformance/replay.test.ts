@@ -31,6 +31,7 @@ function caseOf(steps: readonly CaseStep[], nodes: readonly CaseNode[] = REPRESE
 	return({
 		id: 'R1',
 		title: 'a hand-made case',
+		basis: 'upstream',
 		network: {
 			id: '0',
 			seeds: {

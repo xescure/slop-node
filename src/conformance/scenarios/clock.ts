@@ -60,11 +60,32 @@ export const clockScenarios: readonly Scenario[] = [
 		const permanent = await recorder.vote(0, [block], [ours, await recorder.vote(1, [block])]);
 		const probes = [{ offered: ours, end: start + TEMPORARY_VALIDITY }, { offered: permanent, end: PERMANENT_UNTIL.getTime() }];
 		for (const { offered, end } of probes) {
+			/*
+			 * Permanence is decided when bytes are parsed, by a validity that
+			 * ends more than a hundred years after the moment, so near its end
+			 * the permanent vote parses as temporary and the request is a
+			 * permanent one that lacks rep2's own vote.
+			 * [Keeta TS] index.js:80379
+			 */
 			recorder.moveTo(new Date(end + VOTE_SLOP));
 			await recorder.vote(2, [block], [offered]);
 			recorder.advance(1);
 			await recorder.vote(2, [block], [offered]);
 		}
+	}),
+	/*
+	 * The literal row hands vote() objects that have since expired, which a
+	 * case cannot express: it parses every reference at the step's moment.
+	 * Within the parse slop the same rule shows: vote() checks no other
+	 * vote's expiry itself.
+	 * [Keeta TS] index.js:69094-69144
+	 */
+	scenario('C8', 'a permanent request with other votes past their validity but within the parse slop gets a permanent vote', {}, async function(recorder) {
+		await recorder.addGenesis(0, 1);
+		const block = await send(recorder, 0);
+		const temporary = [await recorder.vote(0, [block]), await recorder.vote(1, [block])];
+		recorder.advance(TEMPORARY_VALIDITY + VOTE_SLOP);
+		await recorder.vote(0, [block], temporary);
 	}),
 	scenario('C9', 'the bytes of a temporary vote seven minutes old do not parse', {}, async function(recorder) {
 		await recorder.addGenesis(0, 1);
@@ -86,12 +107,27 @@ export const clockScenarios: readonly Scenario[] = [
 		await recorder.vote(0, [block], [ours, ahead]);
 		await recorder.vote(0, [block], [ours, inSlop]);
 	}),
-	scenario('C11', 'a second request for a block is refused while our temporary vote lives, its minute of slop included, and given once it has expired', {}, async function(recorder) {
+	scenario('C11', 'a second request for a block is refused while our temporary vote is valid, and given once it has expired with its minute of slop', {}, async function(recorder) {
 		await recorder.addGenesis(0);
 		// Dated ahead, so the block is still fresh once the vote has expired.
 		const block = await send(recorder, 0, { date: new Date(Date.now() + BLOCK_WINDOW) });
 		await recorder.vote(0, [block]);
 		await recorder.vote(0, [block]);
+		recorder.advance(TEMPORARY_VALIDITY);
+		await recorder.vote(0, [block]);
+		recorder.advance(VOTE_SLOP + 1);
+		await recorder.vote(0, [block]);
+	}),
+	scenario('C11-D4', 'storage contract D4: our temporary side vote keeps refusing a competing request until a minute past its validity', { basis: 'contract' }, async function(recorder) {
+		await recorder.addGenesis(0);
+		const block = await send(recorder, 0, { date: new Date(Date.now() + BLOCK_WINDOW) });
+		await recorder.vote(0, [block]);
+		/*
+		 * Ledger.vote never checks the expiry of the votes it reads for a
+		 * previous; the contract has side reads skip a temporary vote only
+		 * once the moment is past its validity by the slop parsing allows.
+		 * [Keeta TS] index.js:69282-69304
+		 */
 		recorder.advance(TEMPORARY_VALIDITY + VOTE_SLOP);
 		await recorder.vote(0, [block]);
 		recorder.advance(1);

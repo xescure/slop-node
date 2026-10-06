@@ -537,7 +537,7 @@
     },
     "step": {
       "type": "object",
-      "description": "Only a vote produces votes and only a quote a quote; gc parses no input, so nothing it is given can be rejected.",
+      "description": "Each action admits only the outcomes it can produce: only a vote produces votes and only a quote a quote; gc parses no input, so nothing it is given can be rejected.",
       "additionalProperties": false,
       "required": [
         "moment",
@@ -722,6 +722,7 @@
       "required": [
         "id",
         "title",
+        "basis",
         "network",
         "nodes",
         "steps"
@@ -734,6 +735,13 @@
         "title": {
           "type": "string",
           "minLength": 1
+        },
+        "basis": {
+          "description": "What decides the outcomes: \"upstream\", the Ledger alone; or \"contract\", which also depends on a rule of the storage contract that the case's title names.",
+          "enum": [
+            "upstream",
+            "contract"
+          ]
         },
         "network": {
           "$ref": "#/$defs/network"

@@ -5,6 +5,7 @@
     {
       "id": "V1",
       "title": "a request without other votes gets a temporary vote",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -67,6 +68,7 @@
     {
       "id": "V2",
       "title": "a request with the temporary votes of every representative gets a permanent vote",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -239,6 +241,7 @@
     {
       "id": "V3",
       "title": "an hour later, a representative that has not voted refuses the bare block but gives a recovery vote against permanent votes",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -459,6 +462,7 @@
     {
       "id": "V3b",
       "title": "a recovery vote carries no fee, while a normal temporary vote carries a zero fee",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -682,6 +686,7 @@
     {
       "id": "V3c",
       "title": "a recovery vote on blocks that end in a fee block skips the fee checks",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -894,6 +899,7 @@
     {
       "id": "V4",
       "title": "a recovery vote is refused when the permanent votes weigh exactly a quarter of the total",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1109,6 +1115,7 @@
     {
       "id": "V4b",
       "title": "a recovery vote is given when the permanent votes weigh three quarters of the total",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1392,6 +1399,7 @@
     {
       "id": "V5",
       "title": "an empty list of other votes takes the recovery path with no weight",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1452,6 +1460,7 @@
     {
       "id": "V6",
       "title": "a request without blocks is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1509,6 +1518,7 @@
     {
       "id": "V6b",
       "title": "a request whose first block is a fee block is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1568,6 +1578,7 @@
     {
       "id": "V6c",
       "title": "a quote on no blocks is given",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1626,6 +1637,7 @@
     {
       "id": "P1",
       "title": "a permanent request with only other representatives' temporary votes is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1773,6 +1785,7 @@
     {
       "id": "P2",
       "title": "a permanent request that offers our own permanent vote is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1973,6 +1986,7 @@
     {
       "id": "P3",
       "title": "a recovery request that includes our own permanent vote is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -2154,6 +2168,7 @@
     {
       "id": "P4",
       "title": "a request that offers the same vote twice is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -2284,6 +2299,7 @@
     {
       "id": "P5",
       "title": "a request that offers two votes of one issuer is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -2441,6 +2457,7 @@
     {
       "id": "P6",
       "title": "a request whose other votes cover other blocks is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -2568,6 +2585,7 @@
     {
       "id": "P7",
       "title": "a request that offers a quote as a supporting vote is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -2695,6 +2713,7 @@
     {
       "id": "P8",
       "title": "a permanent request that comes with a quote is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -2845,6 +2864,7 @@
     {
       "id": "P9",
       "title": "a quote from another issuer, on other blocks or on another number of blocks is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -2988,6 +3008,7 @@
     {
       "id": "P9c",
       "title": "a request with a matching quote and no other votes gets a temporary vote",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {

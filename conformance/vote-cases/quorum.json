@@ -5,6 +5,7 @@
     {
       "id": "Q1",
       "title": "a permanent request backed by representatives weighing 60% is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -132,6 +133,7 @@
     {
       "id": "Q2",
       "title": "a permanent request backed by representatives weighing 70% gets a permanent vote",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -261,6 +263,7 @@
     {
       "id": "Q3",
       "title": "with equal thirds, two of three representatives are not enough and all three are",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -458,6 +461,7 @@
     {
       "id": "Q3b",
       "title": "two thirds of the weight round down before one is added: one short is refused, exactly enough is given",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -609,6 +613,7 @@
     {
       "id": "Q5",
       "title": "a staple with two votes of one issuer does not parse",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -669,6 +674,7 @@
     {
       "id": "Q6",
       "title": "a staple voted by representatives weighing 70% is added",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -725,6 +731,7 @@
     {
       "id": "Q7",
       "title": "a staple voted by representatives weighing 60% is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -785,6 +792,7 @@
     {
       "id": "Q8",
       "title": "a staple of temporary votes is refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -845,6 +853,7 @@
     {
       "id": "Q9",
       "title": "a staple mixing temporary and permanent votes does not parse",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -905,6 +914,7 @@
     {
       "id": "Q10",
       "title": "while nothing is delegated, a staple needs the trusted root's vote, alone or among others",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -986,6 +996,7 @@
     {
       "id": "Q11",
       "title": "while nothing is delegated, any staple the trusted root votes for is added",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1028,6 +1039,7 @@
     {
       "id": "Q12",
       "title": "once weight is delegated, the trusted root's vote alone is not enough",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1087,7 +1099,8 @@
     },
     {
       "id": "Q13",
-      "title": "a staple whose votes are valid from before 1970 is refused before its weight is counted, and one valid from 1970 is added",
+      "title": "a staple whose votes are valid from before 1970 is refused for that before its weight is counted; from 1970 on its weight decides",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1132,6 +1145,42 @@
             "type": "add",
             "staple": {
               "kind": "staple",
+              "bytes": "MIICgDCB+QSB9jCB8wIBAAIBAAUAGA8yMDI2MDEwMTAwMDAwMFoEIgADfmfwjGTmmG5jqbX6osUA6rSu9Ldls5XdaB9mnLnmTrYFAAQgWYHB7WuYEODydPgGkpgiKetvdx+a90gOgG4SuAwVHVwwTqBMMEoEIgACGgBC1zrPHkLUcmwpWjtJAVEIzKl4XIsomYskMqyWaM0CAQEEIQOG1McH8qKfKPUAJ9OtHh+wBU8wP+yptaVGLxX7iFOV0QRAMjOjbHGh+teDvV2dyllj1qgtH8eEXN+48iScCsQJzCgdy15jSyWFvfZT98m/q/rm0hyTV/Ei2Pr/qd/FiyKiDTCCAYAEggF8MIIBeDCCAR6gAwIBAgIBATALBglghkgBZQMEAwowUDFOMEwGA1UEAwxFa2VldGFfYWFiZzM3eDdyd3Jta3J2Nmw1dGkyYXVmYnRvNm5vdTVobW81NXFoMnV2cmNkYnU2dTN6bmJtNDV6ZG5maGlxMCYYEzE5NjkxMjMxMjM1OTU5Ljk5OVoYDzMwMjcwMTMxMDAwMDAwWjAMMQowCAYDVQQFDAExMDYwEAYHKoZIzj0CAQYFK4EEAAoDIgACbf7/jaLFRr5fZo0ChQzd5rqdOx3ewPqlYiGGnqby0LOjRzBFMEMGCWCGSAFlAwMBAwEB/wQzoDEwLwYJYIZIAWUDBAIIMCIEILgSK1rAZemDwGdfe/GEWfUUE5zkxucury0WtL63jzl1MAsGCWCGSAFlAwQDCgNHADBEAiAxiZctJngC7BxO15q/fFmczuf64TknfTKhAmchFZWSeQIga1uWkg52JDe3gI7q2gWzb0x9YUmqcVN1YlzvjwQlSP4="
+            }
+          },
+          "expect": {
+            "outcome": "refused",
+            "error": {
+              "type": "coded",
+              "code": "LEDGER_INVALID_DATE"
+            }
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "MIICfDCB+QSB9jCB8wIBAAIBAAUAGA8yMDI2MDEwMTAwMDAwMFoEIgADfmfwjGTmmG5jqbX6osUA6rSu9Ldls5XdaB9mnLnmTrYFAAQgWYHB7WuYEODydPgGkpgiKetvdx+a90gOgG4SuAwVHVwwTqBMMEoEIgACGgBC1zrPHkLUcmwpWjtJAVEIzKl4XIsomYskMqyWaM0CAQEEIQOG1McH8qKfKPUAJ9OtHh+wBU8wP+yptaVGLxX7iFOV0QRAMjOjbHGh+teDvV2dyllj1qgtH8eEXN+48iScCsQJzCgdy15jSyWFvfZT98m/q/rm0hyTV/Ei2Pr/qd/FiyKiDTCCAXwEggF4MIIBdDCCARqgAwIBAgIBATALBglghkgBZQMEAwowUDFOMEwGA1UEAwxFa2VldGFfYWFiZzM3eDdyd3Jta3J2Nmw1dGkyYXVmYnRvNm5vdTVobW81NXFoMnV2cmNkYnU2dTN6bmJtNDV6ZG5maGlxMCIYDzE5NzAwMTAxMDAwMDAwWhgPMzAyNzAxMzEwMDAwMDBaMAwxCjAIBgNVBAUMATEwNjAQBgcqhkjOPQIBBgUrgQQACgMiAAJt/v+NosVGvl9mjQKFDN3mup07Hd7A+qViIYaepvLQs6NHMEUwQwYJYIZIAWUDAwEDAQH/BDOgMTAvBglghkgBZQMEAggwIgQguBIrWsBl6YPAZ1978YRZ9RQTnOTG5y6vLRa0vrePOXUwCwYJYIZIAWUDBAMKA0cAMEQCIEmKCo85qJA4g5sb5hU+ntjz6rud+kf8DAyhcRFyItXAAiAHsLTaP4NVip4Q1DcuwF0jB//HZgUcg5oRX4lmhK9YHA=="
+            }
+          },
+          "expect": {
+            "outcome": "refused",
+            "error": {
+              "type": "coded",
+              "code": "LEDGER_INSUFFICIENT_VOTING_WEIGHT"
+            }
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
               "bytes": "MIIEADCB+QSB9jCB8wIBAAIBAAUAGA8yMDI2MDEwMTAwMDAwMFoEIgADfmfwjGTmmG5jqbX6osUA6rSu9Ldls5XdaB9mnLnmTrYFAAQgWYHB7WuYEODydPgGkpgiKetvdx+a90gOgG4SuAwVHVwwTqBMMEoEIgACGgBC1zrPHkLUcmwpWjtJAVEIzKl4XIsomYskMqyWaM0CAQEEIQOG1McH8qKfKPUAJ9OtHh+wBU8wP+yptaVGLxX7iFOV0QRAMjOjbHGh+teDvV2dyllj1qgtH8eEXN+48iScCsQJzCgdy15jSyWFvfZT98m/q/rm0hyTV/Ei2Pr/qd/FiyKiDTCCAwAEggF8MIIBeDCCAR6gAwIBAgIBATALBglghkgBZQMEAwowUDFOMEwGA1UEAwxFa2VldGFfYWFiZzM3eDdyd3Jta3J2Nmw1dGkyYXVmYnRvNm5vdTVobW81NXFoMnV2cmNkYnU2dTN6bmJtNDV6ZG5maGlxMCYYEzE5NjkxMjMxMjM1OTU5Ljk5OVoYDzMwMjcwMTMxMDAwMDAwWjAMMQowCAYDVQQFDAExMDYwEAYHKoZIzj0CAQYFK4EEAAoDIgACbf7/jaLFRr5fZo0ChQzd5rqdOx3ewPqlYiGGnqby0LOjRzBFMEMGCWCGSAFlAwMBAwEB/wQzoDEwLwYJYIZIAWUDBAIIMCIEILgSK1rAZemDwGdfe/GEWfUUE5zkxucury0WtL63jzl1MAsGCWCGSAFlAwQDCgNHADBEAiAxiZctJngC7BxO15q/fFmczuf64TknfTKhAmchFZWSeQIga1uWkg52JDe3gI7q2gWzb0x9YUmqcVN1YlzvjwQlSP4EggF8MIIBeDCCAR6gAwIBAgIBATALBglghkgBZQMEAwowUDFOMEwGA1UEAwxFa2VldGFfYWFiNGxoYjVlcWd0cWphNmdranpyYnRzendpdXlqbW5wcmt3aDdiM2VvMmw1c3Fncng3b2s1Y2NnZ2g1cjN5MCYYEzE5NjkxMjMxMjM1OTU5Ljk5OVoYDzMwMjcwMTMxMDAwMDAwWjAMMQowCAYDVQQFDAExMDYwEAYHKoZIzj0CAQYFK4EEAAoDIgADxZw9JA04JB4yk5iGcs2RTCWNfFVj/DsjtL7KBo3+5XSjRzBFMEMGCWCGSAFlAwMBAwEB/wQzoDEwLwYJYIZIAWUDBAIIMCIEILgSK1rAZemDwGdfe/GEWfUUE5zkxucury0WtL63jzl1MAsGCWCGSAFlAwQDCgNHADBEAiAxLHlNfrEdGUNGeYsnMyNXEw3OIWJv9z30aWr0ISOk3wIgVTPBbHZS9FIkC7Gsdys16pFZMSMMQkMP4fq0IUfghuU="
             }
           },
@@ -1162,6 +1211,7 @@
     {
       "id": "Q14",
       "title": "a staple with enough weight is added without a balance check, though votes on its block and on the next one are refused",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1272,6 +1322,7 @@
     {
       "id": "Q15",
       "title": "weight moves when a delegation is added: a representative too light alone becomes enough",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1394,6 +1445,7 @@
     {
       "id": "Q16",
       "title": "a delegation that is voted on but not added moves no weight",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1538,6 +1590,7 @@
     {
       "id": "EO1",
       "title": "a recovery request that includes our own permanent vote is refused for that before its weight is counted",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
@@ -1733,6 +1786,7 @@
     {
       "id": "EO2",
       "title": "a permanent request on a block already added is refused as no successor before its weight is counted",
+      "basis": "upstream",
       "network": {
         "id": "0",
         "seeds": {
