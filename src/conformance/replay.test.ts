@@ -167,14 +167,14 @@ describe('vote case replay', function() {
 		expect(failures).toEqual([]);
 	});
 
-	// Upstream throws a plain Error inside the ledger transaction, which the driver reports as LEDGER_OTHER.
+	// Upstream throws a plain Error inside the ledger transaction; the driver's LEDGER_OTHER wrapping is unwrapped.
 	test('a node without a representative adds staples but refuses to vote', async function() {
 		const network = await startNetwork();
 		const send = await firstSend(network);
 		const accountNode: CaseNode = { representative: null, fee: { type: 'free' }, mode: 'read-write' };
 		const steps = [
 			...addGenesis(network),
-			at(START, 0, { type: 'vote', blocks: [toBase64(send.toBytes())] }, { outcome: 'refused', error: { type: 'coded', code: 'LEDGER_OTHER', message: 'Cannot vote on block, no private key loaded' } })
+			at(START, 0, { type: 'vote', blocks: [toBase64(send.toBytes())] }, { outcome: 'refused', error: { type: 'plain', message: 'Cannot vote on block, no private key loaded' } })
 		];
 
 		expect(await replayVoteCase(caseOf(steps, [accountNode]), createMemory)).toEqual([]);

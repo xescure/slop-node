@@ -36,8 +36,11 @@ export type CaseBlockHash = ReturnType<BlockHash['toString']>;
 
 export type CaseLedgerMode = NonNullable<LedgerConfig['ledgerWriteMode']>;
 
-/** The one code whose message is pinned, because it wraps errors that have no code of their own. */
-export const WRAPPED_ERROR_CODE: Extract<ErrorCode, 'LEDGER_OTHER'> = 'LEDGER_OTHER';
+/**
+ * The code our storage drivers give an error that has none, keeping the
+ * original as its cause. Cases record the cause, so this code never appears.
+ */
+export const DRIVER_WRAPPING_CODE: Extract<ErrorCode, 'LEDGER_OTHER'> = 'LEDGER_OTHER';
 
 /** Where a staple comes from, as Ledger.add takes it; bootstrap-only ledgers accept only 'bootstrap'. */
 export type AddSource = NonNullable<Parameters<Ledger['add']>[1]>;
@@ -108,14 +111,11 @@ export type CaseVoteFee =
 /**
  * A coded error is matched on its code and on the fields upstream attaches
  * to it; a plain one, an instance of Error itself, on its exact message.
- * LEDGER_OTHER is the code a storage driver gives a plain error raised inside
- * a ledger transaction, so it alone also carries that error's message.
  */
 export type CaseError =
 	{
 		readonly type: 'coded';
 		readonly code: ErrorCode;
-		readonly message?: string;
 		readonly accounts?: readonly CaseAccount[];
 		readonly blockhash?: CaseBlockHash;
 		readonly existingBlockhash?: CaseBlockHash;
@@ -321,9 +321,6 @@ function encodeError(error: CaseError): JSONObject {
 	switch (error.type) {
 		case 'coded': {
 			const encoded: JSONObject = { type: error.type, code: error.code };
-			if (error.message !== undefined) {
-				encoded['message'] = error.message;
-			}
 			if (error.accounts !== undefined) {
 				encoded['accounts'] = [...error.accounts];
 			}
@@ -707,16 +704,13 @@ function readError(value: unknown, path: string): CaseError {
 	const type = readChoice(readObject(value, path, ['type'], ['code', 'accounts', 'blockhash', 'existingBlockhash', 'message']).get('type'), `${path}.type`, { coded: true, plain: true });
 	switch (type) {
 		case 'coded': {
-			const fields = readObject(value, path, ['type', 'code'], ['message', 'accounts', 'blockhash', 'existingBlockhash']);
-			const error: { type: 'coded'; code: ErrorCode; message?: string; accounts?: CaseAccount[]; blockhash?: CaseBlockHash; existingBlockhash?: CaseBlockHash } = {
+			const fields = readObject(value, path, ['type', 'code'], ['accounts', 'blockhash', 'existingBlockhash']);
+			const error: { type: 'coded'; code: ErrorCode; accounts?: CaseAccount[]; blockhash?: CaseBlockHash; existingBlockhash?: CaseBlockHash } = {
 				type,
 				code: readErrorCode(fields.get('code'), fields.at('code'))
 			};
-			if (fields.has('message') !== (error.code === WRAPPED_ERROR_CODE)) {
-				throw(new CaseFormatError(fields.at('message'), `expected a message exactly when the code is ${WRAPPED_ERROR_CODE}`));
-			}
-			if (fields.has('message')) {
-				error.message = readString(fields.get('message'), fields.at('message'));
+			if (error.code === DRIVER_WRAPPING_CODE) {
+				throw(new CaseFormatError(fields.at('code'), `${DRIVER_WRAPPING_CODE} is a driver's wrapping; record its cause`));
 			}
 			if (fields.has('accounts')) {
 				error.accounts = readArray(fields.get('accounts'), fields.at('accounts'), readAccount);

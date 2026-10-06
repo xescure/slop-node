@@ -61,9 +61,12 @@
       "pattern": "^[0-9A-F]{64}$"
     },
     "errorCode": {
-      "description": "The code of a keetanet-client error, such as LEDGER_INVALID_BALANCE.",
+      "description": "The code of a keetanet-client error, such as LEDGER_INVALID_BALANCE. LEDGER_OTHER never appears: it is how a storage driver wraps an error that has no code, and the case records the wrapped error instead.",
       "type": "string",
-      "pattern": "^[A-Z][A-Z0-9_]*$"
+      "pattern": "^[A-Z][A-Z0-9_]*$",
+      "not": {
+        "const": "LEDGER_OTHER"
+      }
     },
     "network": {
       "description": "Representative and user i are the secp256k1 keys of their seed at index i, the trusted root the key of its seed at index 0. User i holds representative i's weight in the base token and delegates to it.",
@@ -418,7 +421,7 @@
       ]
     },
     "error": {
-      "description": "A coded error is matched on its code and the fields upstream attaches to it, and LEDGER_OTHER also on the message of the error it wraps; a plain one, an instance of Error itself, on its exact message.",
+      "description": "A coded error is matched on its code and the fields upstream attaches to it; a plain one, an instance of Error itself, on its exact message.",
       "oneOf": [
         {
           "type": "object",
@@ -433,10 +436,6 @@
             },
             "code": {
               "$ref": "#/$defs/errorCode"
-            },
-            "message": {
-              "description": "Present exactly when the code is LEDGER_OTHER, which wraps an error that has no code of its own.",
-              "type": "string"
             },
             "accounts": {
               "type": "array",

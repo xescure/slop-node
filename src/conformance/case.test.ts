@@ -80,8 +80,7 @@ const steps: readonly CaseStep[] = [
 		expect: { outcome: 'rejectedInput', error: { type: 'coded', code: 'VOTE_EXPIRED' } }
 	},
 	{ moment: toMoment(START), actor: 2, action: { type: 'vote', blocks: [toBase64(bytesOf(4))] }, expect: { outcome: 'rejectedInput', error: { type: 'plain', message: 'not a block' } } },
-	{ moment: toMoment(START), actor: 1, action: { type: 'add', staple: { type: 'step', fromStep: 0 } }, expect: { outcome: 'refused', error: { type: 'coded', code: 'LEDGER_BLOCK_ALREADY_EXISTS' } } },
-	{ moment: toMoment(START), actor: 2, action: { type: 'gc' }, expect: { outcome: 'refused', error: { type: 'coded', code: 'LEDGER_OTHER', message: 'wrapped' } } }
+	{ moment: toMoment(START), actor: 1, action: { type: 'add', staple: { type: 'step', fromStep: 0 } }, expect: { outcome: 'refused', error: { type: 'coded', code: 'LEDGER_BLOCK_ALREADY_EXISTS' } } }
 ];
 
 const voteCase: VoteCase = {
@@ -260,12 +259,12 @@ describe('vote case format', function() {
 		['an add source that is not a string', function(tree: JSONTree): void {
 			setIn(tree, ['cases', 0, 'steps', 9, 'action'], 'from', 5);
 		}, /steps\[9\]\.action\.from: expected a string/, true],
-		['a message on a code that is not LEDGER_OTHER', function(tree: JSONTree): void {
+		['a message on a coded error', function(tree: JSONTree): void {
 			setIn(tree, ['cases', 0, 'steps', 4, 'expect', 'error'], 'message', 'not pinned');
-		}, /steps\[4\]\.expect\.error\.message: expected a message exactly when the code is LEDGER_OTHER/, false],
-		['LEDGER_OTHER without its message', function(tree: JSONTree): void {
-			deleteIn(tree, ['cases', 0, 'steps', 13, 'expect', 'error'], 'message');
-		}, /steps\[13\]\.expect\.error\.message: expected a message exactly when the code is LEDGER_OTHER/, false],
+		}, /steps\[4\]\.expect\.error\.message: unexpected field/, true],
+		['the driver wrapping code', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'steps', 4, 'expect', 'error'], 'code', 'LEDGER_OTHER');
+		}, /steps\[4\]\.expect\.error\.code: LEDGER_OTHER is a driver's wrapping; record its cause/, true],
 		['an unknown error code', function(tree: JSONTree): void {
 			setIn(tree, ['cases', 0, 'steps', 4, 'expect', 'error'], 'code', 'LEDGER_NOPE');
 		}, /error\.code: unknown error code "LEDGER_NOPE"/, false],

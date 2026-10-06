@@ -7,7 +7,7 @@ import type { LedgerStorageDriverBase } from '../ledger/storage/base.js';
 import { createTestLedgerFactory, deriveTestKeys } from '../testing/network.js';
 import type { TestFeePolicy, TestKeys, TestLedgerFactory, TestLedgerOptions } from '../testing/network.js';
 import { assertNever } from '../util/assert-never.js';
-import { WRAPPED_ERROR_CODE, base64Bytes, caseAccount, decimalValue, toCaseAccount, toCaseBlockHash, toDecimal } from './case.js';
+import { DRIVER_WRAPPING_CODE, base64Bytes, caseAccount, decimalValue, toCaseAccount, toCaseBlockHash, toDecimal } from './case.js';
 import type {
 	AddSource,
 	Base64,
@@ -174,17 +174,13 @@ function observeQuote(quote: VoteQuote, representative: Account | null): Perform
  * Upstream's coded errors carry a code, and some also the accounts, or the
  * block hashes, that caused them; its other errors are instances of Error
  * itself. Any other class, such as a TypeError, is a fault, not a decision.
- * A plain error raised inside a ledger transaction reaches the caller as
- * the driver's evaluateError makes it: with our drivers, LEDGER_OTHER with
- * the original message.
- * [Keeta TS] index.js:70351
  */
-function caseErrorOf(error: unknown): CaseError {
+function upstreamErrorOf(error: unknown): CaseError {
 	if (lib.Error.isInstance(error)) {
-		const coded: { type: 'coded'; code: typeof error.code; message?: string; accounts?: CaseAccount[]; blockhash?: CaseBlockHash; existingBlockhash?: CaseBlockHash } = { type: 'coded', code: error.code };
-		if (error.code === WRAPPED_ERROR_CODE) {
-			coded.message = error.message;
+		if (error.code === DRIVER_WRAPPING_CODE) {
+			throw(new BrokenStep(`a ${DRIVER_WRAPPING_CODE} wraps another: ${error.message}`));
 		}
+		const coded: { type: 'coded'; code: typeof error.code; accounts?: CaseAccount[]; blockhash?: CaseBlockHash; existingBlockhash?: CaseBlockHash } = { type: 'coded', code: error.code };
 		if ('accounts' in error) {
 			coded.accounts = error.accounts.toArray().map(toCaseAccount).sort();
 		}
@@ -201,6 +197,25 @@ function caseErrorOf(error: unknown): CaseError {
 		throw(new BrokenStep(`the ledger threw a ${error.constructor.name}: ${error.message}`));
 	}
 	throw(new BrokenStep(`the ledger threw a non-error: ${String(error)}`));
+}
+
+/**
+ * The error upstream raised, as a case records it. An error raised inside a
+ * ledger transaction reaches the caller as the driver's evaluateError makes
+ * it, and our drivers wrap anything without a KeetaNet code as LEDGER_OTHER
+ * with the original as its cause. That wrapping is the driver's, so the
+ * cause is recorded instead, and a wrapping without one is a fault.
+ * [Keeta TS] index.js:70351
+ */
+export function caseErrorOf(error: unknown): CaseError {
+	if (lib.Error.isInstance(error) && error.code === DRIVER_WRAPPING_CODE) {
+		const cause: unknown = error.cause;
+		if (cause === undefined) {
+			throw(new BrokenStep(`a ${DRIVER_WRAPPING_CODE} without a cause: ${error.message}`));
+		}
+		return(upstreamErrorOf(cause));
+	}
+	return(upstreamErrorOf(error));
 }
 
 function parseBlocks(blocks: readonly Base64[]): Block[] {
