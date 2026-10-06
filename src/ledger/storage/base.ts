@@ -165,7 +165,25 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 				waitingOn.set(previous, block.previous);
 			}
 		}
+		/*
+		 * preAdjust also defers a staple that lists a block before its own
+		 * previous; such a staple misses nothing on chain, so no arriving block
+		 * would ever release it.
+		 */
+		if (waitingOn.size === 0) {
+			const message = `staple ${toStapleKey(input.blocksHash)} cannot be applied or deferred: it misses no previous block on chain, so its blocks are out of order`;
+			this.initialized.config.log?.warn(LOG_SOURCE, message);
+			throw(new Error(message));
+		}
 		await this.storeDeferredStaple(transaction, input, [...waitingOn.values()]);
+	}
+
+	/**
+	 * @internal
+	 * Test seam: the deferred staples waiting on these blocks, as replay sees them.
+	 */
+	_testingDeferredStaplesWaitingOn(transaction: Transaction, blockHashes: readonly BlockHash[]): Promise<readonly VoteStaple[]> {
+		return(this.listDeferredStaplesWaitingOn(transaction, blockHashes));
 	}
 
 	/**
@@ -181,6 +199,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	/** Deferred staples waiting on any of these blocks, each listed once. */
 	protected abstract listDeferredStaplesWaitingOn(transaction: Transaction, blockHashes: readonly BlockHash[]): Promise<readonly VoteStaple[]>;
 
+	/** Forgets a deferred staple; a staple that is not deferred is no error. */
 	protected abstract removeDeferredStaple(transaction: Transaction, blocksHash: StapleKey): Promise<void>;
 
 	abstract beginTransaction(options: TransactionOptions): Promise<Transaction>;
@@ -226,8 +245,10 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 
 		const { config, ledger } = this.initialized;
 		// Our temporary side vote is still in place here, which the settlement
-		// time is measured from; the increments are kept until the staple applies.
-		const settlementStatistics = await LedgerInternals.addTimeStatistic(ledger.node, staple.blocks, 'main', this, transaction, true);
+		// time is measured from; the increments are kept until the staple
+		// applies. The node is the transaction's, because Ledger.copy shares one
+		// driver between nodes.
+		const settlementStatistics = await LedgerInternals.addTimeStatistic(transaction.node, staple.blocks, 'main', this, transaction, true);
 		const change = await computeConfirmedStapleChange({
 			transaction,
 			staple,
@@ -239,10 +260,14 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			moment: transaction.moment
 		});
 		await this.persistConfirmedStaple(transaction, change);
+		const stapleKey = toStapleKey(staple.blocksHash);
+		// A staple can arrive again on its own after it was deferred, for example
+		// when its replay was cut short; once applied it must stop waiting.
+		await this.removeDeferredStaple(transaction, stapleKey);
 		for (const increase of settlementStatistics) {
 			transaction.statsPending.incr(...increase);
 		}
-		replay.completed.add(toStapleKey(staple.blocksHash));
+		replay.completed.add(stapleKey);
 
 		const replayed = await this.#replayWaiters(transaction, staple, replay);
 		return([staple, ...replayed]);
@@ -265,17 +290,14 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			if (replay.completed.has(waiterKey)) {
 				continue;
 			}
-			if (Date.now() > replay.deadline) {
+			// A window of zero replays nothing; every waiter stays for a later pass.
+			if (Date.now() >= replay.deadline) {
 				config.log?.warn(LOG_SOURCE, `deferred staple replay window elapsed; ${waiterKey} stays deferred`);
 				break;
 			}
 			try {
 				const effects = LedgerInternals.computeEffectOfBlocks(waiter.blocks, ledger);
-				const result = await this.#applyConfirmedStaple(transaction, waiter, effects, { ...replay, mayDefer: false });
-				if (result.length > 0) {
-					await this.removeDeferredStaple(transaction, waiterKey);
-					applied.push(...result);
-				}
+				applied.push(...await this.#applyConfirmedStaple(transaction, waiter, effects, { ...replay, mayDefer: false }));
 			} catch (error: unknown) {
 				config.log?.error(LOG_SOURCE, `replaying deferred staple ${waiterKey} failed; it stays deferred`, error);
 			}

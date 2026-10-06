@@ -8,7 +8,7 @@ import { assertNever } from '../../../util/assert-never.js';
 import { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
 import type { TransactionOptions } from '../base.js';
 import type { AccountInfoUpdate, ConfirmedStapleChange } from '../confirmed.js';
-import { createIdempotentKeyError } from '../errors.js';
+import { createIdempotentKeyError, createLedgerError } from '../errors.js';
 import {
 	toACLScopeKey,
 	toAccountKey,
@@ -60,15 +60,20 @@ export class MemoryTransaction extends LedgerDriverTransaction {
 		this.#state = { status: 'open', overlay, release };
 	}
 
-	get overlay(): LedgerOverlay {
-		return(this.#open().overlay);
+	/** The transaction's view of the ledger; rejects once the transaction has ended. */
+	view(): Promise<LedgerOverlay> {
+		return(new Promise((resolve) => {
+			resolve(this.#open().overlay);
+		}));
 	}
 
 	/** Ends the transaction and hands back what it held, exactly once. */
-	finish(outcome: 'committed' | 'aborted'): { readonly overlay: LedgerOverlay; readonly release: Release } {
-		const open = this.#open();
-		this.#state = { status: 'finished', outcome };
-		return(open);
+	finish(outcome: 'committed' | 'aborted'): Promise<{ readonly overlay: LedgerOverlay; readonly release: Release }> {
+		return(new Promise((resolve) => {
+			const open = this.#open();
+			this.#state = { status: 'finished', outcome };
+			resolve(open);
+		}));
 	}
 
 	#open(): Extract<TransactionState, { status: 'open' }> {
@@ -96,11 +101,6 @@ function sumOf(values: Iterable<bigint>): bigint {
 		total += value;
 	}
 	return(total);
-}
-
-function isEmptyPermission(permissions: NonNullable<ACLUpdate['permissions']>): boolean {
-	const [base, external] = permissions.toJSON();
-	return(base === 0n && external === 0n);
 }
 
 /*
@@ -180,19 +180,18 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		return(new MemoryTransaction(options, openOverlay(this.#committed), release));
 	}
 
-	commitTransaction(transaction: MemoryTransaction): Promise<void> {
-		const { overlay, release } = transaction.finish('committed');
+	async commitTransaction(transaction: MemoryTransaction): Promise<void> {
+		const { overlay, release } = await transaction.finish('committed');
 		try {
 			commitOverlay(overlay);
 		} finally {
 			release();
 		}
-		return(Promise.resolve());
 	}
 
-	abortTransaction(transaction: MemoryTransaction): Promise<void> {
-		transaction.finish('aborted').release();
-		return(Promise.resolve());
+	async abortTransaction(transaction: MemoryTransaction): Promise<void> {
+		const { release } = await transaction.finish('aborted');
+		release();
 	}
 
 	getNextSerialNumber(_transaction?: MemoryTransaction): Promise<bigint> {
@@ -201,82 +200,87 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		return(Promise.resolve(serial));
 	}
 
-	delegatedWeight(transaction: MemoryTransaction, representative?: Parameters<LedgerStorageAPI['delegatedWeight']>[1]): Promise<bigint> {
-		const weights = transaction.overlay.weights;
+	async delegatedWeight(transaction: MemoryTransaction, representative?: Parameters<LedgerStorageAPI['delegatedWeight']>[1]): Promise<bigint> {
+		const { weights } = await transaction.view();
 		if (representative === undefined) {
-			return(Promise.resolve(sumOf(Array.from(weights.entries(), function([, weight]): bigint {
+			return(sumOf(Array.from(weights.entries(), function([, weight]): bigint {
 				return(weight);
-			}))));
+			})));
 		}
 		if (lib.Account.isInstance(representative)) {
-			return(Promise.resolve(weights.get(toAccountKey(representative)) ?? 0n));
+			return(weights.get(toAccountKey(representative)) ?? 0n);
 		}
 		// Account.Set holds each account once, so no representative counts twice.
-		return(Promise.resolve(sumOf(Array.from(representative, function(account): bigint {
+		return(sumOf(Array.from(representative, function(account): bigint {
 			return(weights.get(toAccountKey(account)) ?? 0n);
-		}))));
-	}
-
-	getBalance(transaction: MemoryTransaction, account: GenericAccount, token: TokenAddress): Promise<bigint> {
-		const row = transaction.overlay.balances.get(toAccountKey(account))?.get(toAccountKey(token));
-		return(Promise.resolve(row?.balance ?? 0n));
-	}
-
-	getAllBalances(transaction: MemoryTransaction, account: GenericAccount): Promise<GetAllBalancesResponse> {
-		const rows = transaction.overlay.balances.get(toAccountKey(account))?.values() ?? [];
-		const nonZero = Array.from(rows).filter(function(row): boolean {
-			return(row.balance !== 0n);
-		});
-		return(Promise.resolve(nonZero.map(function({ token, balance }) {
-			return({ token, balance });
 		})));
 	}
 
-	getAccountInfo<T extends AccountKeyAlgorithm = AccountKeyAlgorithm>(transaction: MemoryTransaction, account: Account<T> | string): Promise<AccountInfoForType<T>> {
+	async getBalance(transaction: MemoryTransaction, account: GenericAccount, token: TokenAddress): Promise<bigint> {
+		const { balances } = await transaction.view();
+		return(balances.get(toAccountKey(account))?.get(toAccountKey(token))?.balance ?? 0n);
+	}
+
+	async getAllBalances(transaction: MemoryTransaction, account: GenericAccount): Promise<GetAllBalancesResponse> {
+		const { balances } = await transaction.view();
+		const rows = Array.from(balances.get(toAccountKey(account))?.values() ?? []);
+		return(rows.filter(function(row): boolean {
+			return(row.balance !== 0n);
+		}).map(function({ token, balance }) {
+			return({ token, balance });
+		}));
+	}
+
+	async getAccountInfo<T extends AccountKeyAlgorithm = AccountKeyAlgorithm>(transaction: MemoryTransaction, account: Account<T> | string): Promise<AccountInfoForType<T>> {
+		const { accountInfo } = await transaction.view();
 		const resolved = resolveAccount(account);
-		return(Promise.resolve(this._formatAccountInfoFromRow(resolved, transaction.overlay.accountInfo.get(toAccountKey(resolved)))));
+		return(this._formatAccountInfoFromRow(resolved, accountInfo.get(toAccountKey(resolved))));
 	}
 
-	getAccountRep(transaction: MemoryTransaction, account: GenericAccount | string): Promise<Account | null> {
-		return(Promise.resolve(transaction.overlay.representatives.get(toAccountKey(account)) ?? null));
+	async getAccountRep(transaction: MemoryTransaction, account: GenericAccount | string): Promise<Account | null> {
+		const { representatives } = await transaction.view();
+		return(representatives.get(toAccountKey(account)) ?? null);
 	}
 
-	listACLsByPrincipal(transaction: MemoryTransaction, principal: ACLRow['principal'], entityList?: GenericAccount[]): Promise<ACLRow[]> {
-		const rows = Array.from(transaction.overlay.acls.get(toPrincipalKey(principal))?.values() ?? []);
+	async listACLsByPrincipal(transaction: MemoryTransaction, principal: ACLRow['principal'], entityList?: GenericAccount[]): Promise<ACLRow[]> {
+		const { acls } = await transaction.view();
+		const rows = Array.from(acls.get(toPrincipalKey(principal))?.values() ?? []);
 		if (entityList === undefined) {
-			return(Promise.resolve(rows));
+			return(rows);
 		}
 		const entities = new Set<AccountKey>(entityList.map(function(entity): AccountKey {
 			return(toAccountKey(entity));
 		}));
-		return(Promise.resolve(rows.filter(function(row): boolean {
+		return(rows.filter(function(row): boolean {
 			return(entities.has(toAccountKey(row.entity)));
-		})));
+		}));
 	}
 
-	getAccountCertificateByHash(transaction: MemoryTransaction, account: GenericAccount, hash: Parameters<LedgerStorageAPI['getAccountCertificateByHash']>[2]): Promise<CertificateWithIntermediates | null> {
-		const certificate = transaction.overlay.certificates.get(toAccountKey(account))?.get(toCertificateHashKey(hash));
-		return(Promise.resolve(certificate ?? null));
+	async getAccountCertificateByHash(transaction: MemoryTransaction, account: GenericAccount, hash: Parameters<LedgerStorageAPI['getAccountCertificateByHash']>[2]): Promise<CertificateWithIntermediates | null> {
+		const { certificates } = await transaction.view();
+		return(certificates.get(toAccountKey(account))?.get(toCertificateHashKey(hash)) ?? null);
 	}
 
-	getBlock(transaction: MemoryTransaction, hash: BlockHash, from: LedgerSelector): Promise<Block | null> {
+	async getBlock(transaction: MemoryTransaction, hash: BlockHash, from: LedgerSelector): Promise<Block | null> {
+		const { blocks } = await transaction.view();
 		switch (from) {
 			case 'main':
-				return(Promise.resolve(transaction.overlay.blocks.get(toBlockHashKey(hash))?.block ?? null));
+				return(blocks.get(toBlockHashKey(hash))?.block ?? null);
 			case 'side':
 			case 'both':
-				return(rejectNotImplemented(`getBlock('${from}')`));
+				return(await rejectNotImplemented(`getBlock('${from}')`));
 			default:
 				return(assertNever(from));
 		}
 	}
 
-	getBlockHeight(transaction: MemoryTransaction, hash: BlockHash, account: GenericAccount): Promise<bigint | null> {
-		const row = transaction.overlay.blocks.get(toBlockHashKey(hash));
+	async getBlockHeight(transaction: MemoryTransaction, hash: BlockHash, account: GenericAccount): Promise<bigint | null> {
+		const { blocks } = await transaction.view();
+		const row = blocks.get(toBlockHashKey(hash));
 		if (row === undefined || !row.block.account.comparePublicKey(account)) {
-			return(Promise.resolve(null));
+			return(null);
 		}
-		return(Promise.resolve(row.height));
+		return(row.height);
 	}
 
 	/*
@@ -284,27 +288,29 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	 * make the permanent vote for that very block fail its successor check.
 	 * [Keeta TS] index.js:69260-69276
 	 */
-	getHeadBlocks(transaction: MemoryTransaction, accounts: GenericAccount[], from: LedgerSelector): Promise<{ [account: string]: Block | null }> {
+	async getHeadBlocks(transaction: MemoryTransaction, accounts: GenericAccount[], from: LedgerSelector): Promise<{ [account: string]: Block | null }> {
+		const overlay = await transaction.view();
 		const heads: { [account: string]: Block | null } = {};
 		for (const account of accounts) {
 			const key = toAccountKey(account);
-			heads[key] = this.#headBlock(transaction.overlay, key, from);
+			heads[key] = this.#headBlock(overlay, key, from);
 		}
-		return(Promise.resolve(heads));
+		return(heads);
 	}
 
-	getBlockFromPrevious(transaction: MemoryTransaction, previous: BlockHash, from: LedgerSelector): Promise<Block | null> {
+	async getBlockFromPrevious(transaction: MemoryTransaction, previous: BlockHash, from: LedgerSelector): Promise<Block | null> {
+		const overlay = await transaction.view();
 		switch (from) {
 			case 'main': {
-				const successor = transaction.overlay.successors.get(toBlockHashKey(previous));
+				const successor = overlay.successors.get(toBlockHashKey(previous));
 				if (successor === undefined) {
-					return(Promise.resolve(null));
+					return(null);
 				}
-				return(Promise.resolve(this.#confirmedBlock(transaction.overlay, successor)));
+				return(this.#confirmedBlock(overlay, successor));
 			}
 			case 'side':
 			case 'both':
-				return(rejectNotImplemented(`getBlockFromPrevious('${from}')`));
+				return(await rejectNotImplemented(`getBlockFromPrevious('${from}')`));
 			default:
 				return(assertNever(from));
 		}
@@ -315,18 +321,19 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	 * blocks of any non-null result.
 	 * [Keeta TS] index.js:69577-69580
 	 */
-	getVotes(transaction: MemoryTransaction, hash: BlockHash, from: LedgerSelector): Promise<Vote[] | null> {
+	async getVotes(transaction: MemoryTransaction, hash: BlockHash, from: LedgerSelector): Promise<Vote[] | null> {
+		const overlay = await transaction.view();
 		switch (from) {
 			case 'main': {
-				const row = transaction.overlay.blocks.get(toBlockHashKey(hash));
+				const row = overlay.blocks.get(toBlockHashKey(hash));
 				if (row === undefined) {
-					return(Promise.resolve(null));
+					return(null);
 				}
-				return(Promise.resolve(Array.from(this.#confirmedStaple(transaction.overlay, row.staple).votes.values())));
+				return(Array.from(this.#confirmedStaple(overlay, row.staple).votes.values()));
 			}
 			case 'side':
 			case 'both':
-				return(rejectNotImplemented(`getVotes('${from}')`));
+				return(await rejectNotImplemented(`getVotes('${from}')`));
 			default:
 				return(assertNever(from));
 		}
@@ -380,8 +387,8 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	 * The writes are staged over the transaction and land together, so a
 	 * change that fails part-way leaves the transaction as it was.
 	 */
-	protected persistConfirmedStaple(transaction: MemoryTransaction, change: ConfirmedStapleChange): Promise<void> {
-		const overlay = openOverlay(transaction.overlay);
+	protected async persistConfirmedStaple(transaction: MemoryTransaction, change: ConfirmedStapleChange): Promise<void> {
+		const overlay = openOverlay(await transaction.view());
 		this.#assertIdempotentKeysFree(overlay, change);
 		const stapleKey = this.#writeStaple(overlay, change);
 		this.#writeBalances(overlay, change);
@@ -394,11 +401,10 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		this.#writeIdempotentKeys(overlay, change);
 		this.#writeAccountsAndHistory(overlay, change, stapleKey);
 		commitOverlay(overlay);
-		return(Promise.resolve());
 	}
 
-	protected storeDeferredStaple(transaction: MemoryTransaction, staple: VoteStaple, waitingOn: readonly BlockHash[]): Promise<void> {
-		const overlay = transaction.overlay;
+	protected async storeDeferredStaple(transaction: MemoryTransaction, staple: VoteStaple, waitingOn: readonly BlockHash[]): Promise<void> {
+		const overlay = await transaction.view();
 		const key = toStapleKey(staple.blocksHash);
 		this.#forgetDeferredStaple(overlay, key);
 		const waitingKeys = waitingOn.map(toBlockHashKey);
@@ -408,11 +414,10 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 			waiters.add(key);
 			overlay.deferredWaiters.set(blockKey, waiters);
 		}
-		return(Promise.resolve());
 	}
 
-	protected listDeferredStaplesWaitingOn(transaction: MemoryTransaction, blockHashes: readonly BlockHash[]): Promise<readonly VoteStaple[]> {
-		const overlay = transaction.overlay;
+	protected async listDeferredStaplesWaitingOn(transaction: MemoryTransaction, blockHashes: readonly BlockHash[]): Promise<readonly VoteStaple[]> {
+		const overlay = await transaction.view();
 		const found = new Map<StapleKey, VoteStaple>();
 		for (const hash of blockHashes) {
 			for (const key of overlay.deferredWaiters.get(toBlockHashKey(hash)) ?? []) {
@@ -422,12 +427,11 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 				}
 			}
 		}
-		return(Promise.resolve(Array.from(found.values())));
+		return(Array.from(found.values()));
 	}
 
-	protected removeDeferredStaple(transaction: MemoryTransaction, blocksHash: StapleKey): Promise<void> {
-		this.#forgetDeferredStaple(transaction.overlay, blocksHash);
-		return(Promise.resolve());
+	protected async removeDeferredStaple(transaction: MemoryTransaction, blocksHash: StapleKey): Promise<void> {
+		this.#forgetDeferredStaple(await transaction.view(), blocksHash);
 	}
 
 	#forgetDeferredStaple(overlay: LedgerOverlay, key: StapleKey): void {
@@ -527,8 +531,17 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 			if (height === undefined) {
 				throw(new Error(`internal error: no height for block ${blockKey}`));
 			}
+			const previousKey = toBlockHashKey(block.previous);
+			// Confirmed history is never overwritten, even if the earlier check raced.
+			if (overlay.blocks.get(blockKey) !== undefined) {
+				throw(createLedgerError('LEDGER_BLOCK_ALREADY_EXISTS', `Block Already Exists: ${blockKey}`));
+			}
+			const successor = overlay.successors.get(previousKey);
+			if (successor !== undefined) {
+				throw(createLedgerError('LEDGER_PREVIOUS_ALREADY_USED', `previous ${previousKey} of block ${blockKey} already has the confirmed successor ${successor}`));
+			}
 			overlay.blocks.set(blockKey, { block, height, staple: stapleKey });
-			overlay.successors.set(toBlockHashKey(block.previous), blockKey);
+			overlay.successors.set(previousKey, blockKey);
 			const account = toAccountKey(block.account);
 			if (this.#headHeight(overlay, account) < height) {
 				overlay.chainHeads.set(account, blockKey);
@@ -583,15 +596,17 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	}
 
 	/*
-	 * A row left without flags is deleted rather than kept empty.
-	 * [Keeta TS] index.js:67467-67486
+	 * Applied exactly as resolved: null deletes the row, while a SET without
+	 * flags keeps an empty row, because deleting an emptied exact-target row
+	 * would let the entity-wide row match again.
+	 * [Keeta TS] index.js:67109-67132, 67467-67486
 	 */
 	#writePermissions(overlay: LedgerOverlay, change: ConfirmedStapleChange): void {
 		for (const update of change.ledgerEffect.permissions) {
 			const principal = toPrincipalKey(update.principal);
 			const scope = toACLScopeKey(update.entity, update.target);
 			const rows = overlay.acls.get(principal);
-			if (update.permissions === null || isEmptyPermission(update.permissions)) {
+			if (update.permissions === null) {
 				setOrDeleteEntries(overlay.acls, principal, withoutEntry(rows, scope));
 				continue;
 			}

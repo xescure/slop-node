@@ -1,10 +1,11 @@
 import { afterEach, vi } from 'vitest';
 import type { Account, GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
-import type { Ledger, LedgerStorageAPI } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
+import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { createTestNetwork, freezeClock } from '../../../testing/network.js';
-import type { TestNetwork } from '../../../testing/network.js';
+import type { TestLedgerOptions, TestNetwork } from '../../../testing/network.js';
+import type { LedgerStorageDriverBase } from '../base.js';
 import type { DriverUnderTest } from './types.js';
 
 export const GENESIS_MOMENT: Date = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
@@ -12,18 +13,18 @@ export const DEFAULT_WEIGHTS: readonly bigint[] = [400n, 300n, 300n];
 
 export type NetworkFixture = {
 	readonly network: TestNetwork;
-	readonly storage: LedgerStorageAPI;
+	readonly storage: LedgerStorageDriverBase;
 	readonly ledger: Ledger;
 };
 
-export type FixtureFactory = (weights?: readonly bigint[]) => Promise<NetworkFixture>;
+export type FixtureFactory = (weights?: readonly bigint[], ledgerOptions?: TestLedgerOptions) => Promise<NetworkFixture>;
 
 /*
  * Registers cleanup for every storage instance a case creates, so a failing
  * case still releases its driver and restores the real clock.
  */
 export function useFixtures(driver: DriverUnderTest): FixtureFactory {
-	const created: LedgerStorageAPI[] = [];
+	const created: LedgerStorageDriverBase[] = [];
 
 	afterEach(async function() {
 		vi.useRealTimers();
@@ -33,12 +34,12 @@ export function useFixtures(driver: DriverUnderTest): FixtureFactory {
 		}
 	});
 
-	return(async function(weights = DEFAULT_WEIGHTS) {
+	return(async function(weights = DEFAULT_WEIGHTS, ledgerOptions = {}) {
 		freezeClock(GENESIS_MOMENT);
 		const network = await createTestNetwork({ representativeWeights: weights });
 		const storage = driver.create();
 		created.push(storage);
-		const ledger = network.createLedger(storage, requireAt(network.representatives, 0));
+		const ledger = network.createLedger(storage, requireAt(network.representatives, 0), ledgerOptions);
 		return({ network, storage, ledger });
 	});
 }

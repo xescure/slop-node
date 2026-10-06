@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
+import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
+import type { Vote } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerInternals } from '../../../upstream/internals.js';
 import { freezeClock } from '../../../testing/network.js';
+import type { TestNetwork } from '../../../testing/network.js';
 import { confirmedStaple, sendBlock } from '../../../testing/blocks.js';
 import { isVoteLive, voteExpirySlopMilliseconds } from '../expiry.js';
 import { GENESIS_MOMENT, headOf, requireAt, useFixtures } from './support.js';
@@ -16,11 +19,29 @@ function constructsAsVote(bytes: ArrayBuffer): boolean {
 		new lib.Vote(bytes);
 		return(true);
 	} catch (error: unknown) {
-		if (lib.Error.isInstance(error) && error.code === 'VOTE_EXPIRED') {
+		if (lib.Error.isInstance(error) && (error.code === 'VOTE_EXPIRED' || error.code === 'VOTE_MOMENT_BEFORE_VALIDITY_FROM')) {
 			return(false);
 		}
 		throw(error);
 	}
+}
+
+async function firstUserSend(network: TestNetwork): Promise<Block> {
+	const user = requireAt(network.users, 0);
+	return(await sendBlock({ from: user, previous: headOf(network.genesis, user), to: requireAt(network.users, 1), amount: 1n, token: network.baseToken, network: network.network }));
+}
+
+/*
+ * Judges a vote one millisecond before, at, and one millisecond after a
+ * boundary, by the shared predicate and by constructing it under a clock
+ * frozen at that moment.
+ */
+function judgeAround(vote: Vote, boundary: number): { readonly predicate: boolean; readonly voteClass: boolean }[] {
+	return([boundary - 1, boundary, boundary + 1].map(function(milliseconds) {
+		const moment = new Date(milliseconds);
+		freezeClock(moment);
+		return({ predicate: isVoteLive(vote, moment), voteClass: constructsAsVote(vote.toBytes()) });
+	}));
 }
 
 export function defineTransactionCases(driver: DriverUnderTest): void {
@@ -60,6 +81,15 @@ export function defineTransactionCases(driver: DriverUnderTest): void {
 			expect(await ledger.votingPower()).toBe(0n);
 			expect(serialInAbandoned).toBeGreaterThan(serialBefore);
 			expect(serialAfter).toBeGreaterThan(serialInAbandoned);
+		});
+
+		test('a finished transaction rejects further use', async function() {
+			const { network, storage } = await startNetwork();
+			const transaction = await storage.beginTransaction({ identifier: 'suite-finished', readOnly: true });
+			await storage.commitTransaction(transaction);
+
+			await expect(storage.getBalance(transaction, requireAt(network.users, 0), network.baseToken)).rejects.toThrow();
+			await expect(storage.abortTransaction(transaction)).rejects.toThrow();
 		});
 
 		test('concurrent calls within one transaction keep every write', async function() {
@@ -111,7 +141,7 @@ export function defineTransactionCases(driver: DriverUnderTest): void {
 
 		test('ledger errors pass through evaluateError and anything else becomes non-retryable', async function() {
 			const { storage, ledger } = await startNetwork();
-			const retryable = lib.Error.fromJSON({ type: 'LEDGER', code: 'LEDGER_TRANSACTION_ABORTED', message: 'conflict', shouldRetry: true, retryDelay: 0 });
+			const retryable = lib.Error.fromJSON({ type: 'LEDGER', code: 'LEDGER_TRANSACTION_ABORTED', message: 'conflict', shouldRetry: true, retryDelay: 1 });
 			const plain = new Error('disk on fire');
 
 			const passed: unknown = await storage.evaluateError(retryable);
@@ -143,24 +173,40 @@ export function defineTransactionCases(driver: DriverUnderTest): void {
 
 		test('expiry boundary matches the Vote class', async function() {
 			const { network } = await startNetwork();
-			const user = requireAt(network.users, 0);
-			const block = await sendBlock({ from: user, previous: headOf(network.genesis, user), to: requireAt(network.users, 1), amount: 1n, token: network.baseToken, network: network.network });
+			const block = await firstUserSend(network);
 			const validTo = new Date(GENESIS_MOMENT.getTime() + TEMPORARY_VOTE_LIFETIME_MILLISECONDS);
 			const vote = await new lib.Vote.Builder(requireAt(network.representatives, 0), [block]).seal(1n, validTo);
 			const edge = validTo.getTime() + voteExpirySlopMilliseconds;
 
-			const verdicts = [edge - 1, edge, edge + 1].map(function(milliseconds) {
-				const moment = new Date(milliseconds);
-				freezeClock(moment);
-				return({ predicate: isVoteLive(vote, moment), voteClass: constructsAsVote(vote.toBytes()) });
-			});
-
 			expect(vote.$permanent).toBe(false);
-			expect(verdicts).toEqual([
+			expect(judgeAround(vote, edge)).toEqual([
 				{ predicate: true, voteClass: true },
 				{ predicate: true, voteClass: true },
 				{ predicate: false, voteClass: false }
 			]);
+		});
+
+		test('issued-in-the-future boundary matches the Vote class', async function() {
+			const { network } = await startNetwork();
+			const block = await firstUserSend(network);
+			const validFrom = new Date(GENESIS_MOMENT.getTime() + TEMPORARY_VOTE_LIFETIME_MILLISECONDS);
+			const validTo = new Date(validFrom.getTime() + TEMPORARY_VOTE_LIFETIME_MILLISECONDS);
+			const signer = requireAt(network.representatives, 0);
+			// Sealed as an issuer whose clock runs ahead would seal them.
+			const issuerClock = { now: validFrom };
+			const temporary = await new lib.Vote.Builder(signer, [block]).seal(1n, validTo, validFrom, issuerClock);
+			const permanent = await new lib.Vote.Builder(signer, [block]).seal(2n, null, validFrom, issuerClock);
+			const edge = validFrom.getTime() - voteExpirySlopMilliseconds;
+			const expected = [
+				{ predicate: false, voteClass: false },
+				{ predicate: true, voteClass: true },
+				{ predicate: true, voteClass: true }
+			];
+
+			expect(temporary.$permanent).toBe(false);
+			expect(permanent.$permanent).toBe(true);
+			expect(judgeAround(temporary, edge)).toEqual(expected);
+			expect(judgeAround(permanent, edge)).toEqual(expected);
 		});
 	});
 }

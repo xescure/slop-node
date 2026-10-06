@@ -2,7 +2,7 @@ import { vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, NetworkAddress, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
-import type { Ledger, LedgerStorageAPI } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
+import type { Ledger, LedgerConfig, LedgerStorageAPI } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 
 const lib = KeetaNet.lib;
@@ -31,6 +31,11 @@ export type TestNetworkOptions = { readonly representativeWeights: readonly bigi
 
 export type TestFeePolicy = { readonly kind: 'free' } | { readonly kind: 'flat'; readonly amount: bigint; readonly payTo: Account };
 
+export type TestLedgerOptions = {
+	readonly fee?: TestFeePolicy;
+	readonly heapProcessWindowMs?: LedgerConfig['heapProcessWindowMs'];
+};
+
 export type TestNetwork = {
 	readonly network: 0n;
 	readonly trustedRoot: Account;
@@ -40,7 +45,7 @@ export type TestNetwork = {
 	readonly baseToken: TokenAddress;
 	readonly networkAddress: NetworkAddress;
 	readonly genesis: VoteStaple;
-	createLedger(storageDriver: LedgerStorageAPI, representative: Account, options?: { readonly fee?: TestFeePolicy }): Ledger;
+	createLedger(storageDriver: LedgerStorageAPI, representative: Account, options?: TestLedgerOptions): Ledger;
 };
 
 type Holder = {
@@ -220,14 +225,18 @@ export async function createTestNetwork(options: TestNetworkOptions): Promise<Te
 		networkAddress,
 		genesis,
 		createLedger(storageDriver, representative, ledgerOptions = {}) {
-			return(new lib.Ledger({
+			const config: LedgerConfig = {
 				kind: lib.Ledger.Kind.REPRESENTATIVE,
 				privateKey: representative,
 				initialTrustedAccount: trustedRoot,
 				network: NETWORK,
 				computeFeeFromBlocks: computeFeeFor(ledgerOptions.fee ?? { kind: 'free' }),
 				storageDriver
-			}));
+			};
+			if (ledgerOptions.heapProcessWindowMs !== undefined) {
+				config.heapProcessWindowMs = ledgerOptions.heapProcessWindowMs;
+			}
+			return(new lib.Ledger(config));
 		}
 	});
 }
