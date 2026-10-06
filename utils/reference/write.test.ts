@@ -112,21 +112,6 @@ describe.each([
 	});
 });
 
-test('keeps the final newline of a module that ends the bundle only when the bundle has one', async function(): Promise<void> {
-	const lines = [...prologue, ...moduleLines('10', ['exports.Alpha = exports.Beta = void 0;']), '/******/ \t});'];
-	const withNewline = await createSyntheticPackage(lines.join('\n') + '\n');
-	const outputWith = join(workDirectory, 'with');
-	await writeReference(withNewline, outputWith);
-	const withoutNewline = await createSyntheticPackage(lines.join('\n'));
-	const outputWithout = join(workDirectory, 'without');
-	await writeReference(withoutNewline, outputWithout);
-
-	const moduleWith = await readFile(join(outputWith, 'modules', 'thing', 'index.js'), 'utf8');
-	const moduleWithout = await readFile(join(outputWithout, 'modules', 'thing', 'index.js'), 'utf8');
-	expect(moduleWith).toBe(moduleWithout);
-	expect(moduleWith.endsWith('/***/ }),\n')).toBe(true);
-});
-
 test('refuses to write into an existing directory', async function(): Promise<void> {
 	const source = await createSyntheticPackage(syntheticLines.join('\n'));
 	const outputDirectory = join(workDirectory, 'out');

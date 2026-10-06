@@ -6,7 +6,7 @@ import type { TypingsPath } from './placement.js';
 
 function buildModule(id: string, names: readonly string[], origin: BundleModuleOrigin = 'keeta'): BundleModule {
 	return({
-		id: convertStringToWebpackModuleID(id),
+		id: convertStringToWebpackModuleID(id, 1),
 		lines: { first: 1, last: 1 },
 		origin,
 		exportedNames: new Set(names)

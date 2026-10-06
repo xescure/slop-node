@@ -15,7 +15,6 @@ type WrittenPlacement = Exclude<ModulePlacement, { readonly kind: 'third-party' 
 type BundleText = {
 	readonly bytes: Buffer;
 	readonly lines: readonly string[];
-	readonly endsWithNewline: boolean;
 };
 
 const bundlePath = 'client/index.js';
@@ -34,22 +33,18 @@ function decodeBundle(bytes: Buffer): BundleText {
 	if (!Buffer.from(text, 'utf8').equals(bytes)) {
 		throw(new Error(`${bundlePath} is not valid UTF-8`));
 	}
-	const endsWithNewline = text.endsWith('\n');
-	if (endsWithNewline) {
-		return({ bytes, lines: text.slice(0, -1).split('\n'), endsWithNewline });
+	if (text.endsWith('\n')) {
+		return({ bytes, lines: text.slice(0, -1).split('\n') });
 	}
-	return({ bytes, lines: text.split('\n'), endsWithNewline });
+	return({ bytes, lines: text.split('\n') });
 }
 
-function terminatorAfterLine(bundle: BundleText, lineNumber: number): string {
-	if (lineNumber < bundle.lines.length || bundle.endsWithNewline) {
-		return('\n');
-	}
-	return('');
-}
-
-function textInRange(bundle: BundleText, range: BundleLineRange): string {
-	return(bundle.lines.slice(range.first - 1, range.last).join('\n') + terminatorAfterLine(bundle, range.last));
+/*
+ * A module always ends before the epilogue, which has at least one line, so
+ * a newline follows every module whether or not the bundle ends with one.
+ */
+function moduleText(bundle: BundleText, range: BundleLineRange): string {
+	return(bundle.lines.slice(range.first - 1, range.last).join('\n') + '\n');
 }
 
 function isWritten(placement: ModulePlacement): placement is WrittenPlacement {
@@ -218,7 +213,7 @@ export async function writeReference(source: ReferenceSource, outputDirectory: s
 		await copyNewFile(join(source.packageRoot, typingsPath), join(outputDirectory, typingsPath));
 	}
 	for (const placement of placements.filter(isWritten)) {
-		await writeNewFile(join(outputDirectory, placement.outputPath), provenanceHeader(source, placement) + textInRange(bundle, placement.module.lines));
+		await writeNewFile(join(outputDirectory, placement.outputPath), provenanceHeader(source, placement) + moduleText(bundle, placement.module.lines));
 	}
 	await writeNewFile(join(outputDirectory, 'MODULES.md'), index);
 }

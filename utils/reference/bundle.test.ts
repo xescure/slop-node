@@ -130,3 +130,12 @@ test('collects only value exports from typings', function(): void {
 		'Color', 'Hidden', 'Reexported', 'Widget', 'build', 'default', 'limit', 'other'
 	]);
 });
+
+test('rejects a module ID that could escape an output directory', function(): void {
+	expect(function(): void {
+		splitBundle(buildBundle([
+			{ id: '10', body: ['exports.Alpha = void 0;'] },
+			{ id: '../escape', body: ['exports.Beta = void 0;'] }
+		]));
+	}).toThrow('unsafe webpack module ID "../escape" on bundle line 7');
+});

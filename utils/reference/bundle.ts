@@ -31,8 +31,16 @@ const exportedNamePatterns: readonly RegExp[] = [
 	/Object\.defineProperty\(exports,\s*"([^"]+)"/g
 ];
 
-/** The only place a plain string becomes a module ID: call it with a webpack module key taken from the bundle. */
-export function convertStringToWebpackModuleID(value: string): WebpackModuleID {
+const safeModuleIDPattern = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * The only place a plain string becomes a module ID: call it with a webpack module key taken from the bundle.
+ * IDs become file names, so anything that could step outside a directory is rejected here.
+ */
+export function convertStringToWebpackModuleID(value: string, lineNumber: number): WebpackModuleID {
+	if (!safeModuleIDPattern.test(value)) {
+		throw(new Error(`unsafe webpack module ID ${JSON.stringify(value)} on bundle line ${String(lineNumber)}`));
+	}
 	return(value as WebpackModuleID);
 }
 
@@ -41,7 +49,7 @@ function findModuleHeaders(lines: readonly string[]): readonly ModuleHeader[] {
 	for (const [index, line] of lines.entries()) {
 		const id = moduleHeaderPattern.exec(line)?.[1];
 		if (id !== undefined) {
-			retval.push({ id: convertStringToWebpackModuleID(id), index });
+			retval.push({ id: convertStringToWebpackModuleID(id, index + 1), index });
 		}
 	}
 	return(retval);
