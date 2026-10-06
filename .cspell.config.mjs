@@ -16,7 +16,8 @@ export default {
 		'retval',
 		'wordlist',
 		'esac',
-		'blockhash'
+		'blockhash',
+		'savepoint'
 	],
 	ignorePaths: [
 		'/reference/',

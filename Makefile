@@ -116,7 +116,7 @@ do-lint: node_modules/.patched
 		exit $$status; \
 	fi
 	npm run eslint -- --config .eslint.config.mjs src utils
-	npm run cspell -- --config .cspell.config.mjs --no-progress 'src/**/*.ts' 'utils/**/*.ts' Makefile
+	npm run cspell -- --config .cspell.config.mjs --no-progress 'src/**/*.ts' 'utils/**/*.ts' 'schema/*.md' Makefile
 
 # The tree is built beside its final name and renamed, so an interrupted run
 # never leaves a partial directory that looks complete. Every version, the
