@@ -1,11 +1,11 @@
 import { afterEach, vi } from 'vitest';
 import type { Account, GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
-import type { BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
+import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { createTestNetwork, freezeClock } from '../../../testing/network.js';
 import type { TestLedgerOptions, TestNetwork } from '../../../testing/network.js';
-import type { LedgerStorageDriverBase } from '../base.js';
+import type { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
 import type { DriverUnderTest } from './types.js';
 
 export const GENESIS_MOMENT: Date = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
@@ -73,5 +73,59 @@ export function chainLengthOf(staple: VoteStaple, account: GenericAccount): bigi
 export function publicKeysOf(accounts: readonly (Account | GenericAccount)[]): string[] {
 	return(accounts.map(function(account): string {
 		return(account.publicKeyString.get());
+	}));
+}
+
+/** Runs storage reads in a transaction of their own, which is then abandoned. */
+export async function readStorage<Result>(storage: LedgerStorageDriverBase, read: (transaction: LedgerDriverTransaction) => Promise<Result>): Promise<Result> {
+	const transaction = await storage.beginTransaction({ identifier: 'suite-read-storage', readOnly: true });
+	try {
+		return(await read(transaction));
+	} finally {
+		await storage.abortTransaction(transaction);
+	}
+}
+
+/**
+ * Tracks each account's chain head while a case builds blocks, starting from
+ * genesis; an account genesis never touched opens its chain.
+ */
+export class ChainCursor {
+	readonly #genesis: VoteStaple;
+	readonly #heads = new Map<string, BlockHash>();
+
+	constructor(genesis: VoteStaple) {
+		this.#genesis = genesis;
+	}
+
+	previous(account: GenericAccount): BlockHash | null {
+		const key = account.publicKeyString.get();
+		const head = this.#heads.get(key);
+		if (head !== undefined) {
+			return(head);
+		}
+		if (chainLengthOf(this.#genesis, account) === 0n) {
+			return(null);
+		}
+		return(headOf(this.#genesis, account));
+	}
+
+	append<Built extends Block>(block: Built): Built {
+		this.#heads.set(block.account.publicKeyString.get(), block.hash);
+		return(block);
+	}
+}
+
+export function blocksHashesOf(staples: readonly VoteStaple[]): string[] {
+	return(staples.map(function(staple): string {
+		return(staple.blocksHash.toString());
+	}));
+}
+
+export function blockHashesOf(staples: readonly VoteStaple[]): string[] {
+	return(staples.flatMap(function(staple): string[] {
+		return(staple.blocks.map(function(block): string {
+			return(block.hash.toString());
+		}));
 	}));
 }

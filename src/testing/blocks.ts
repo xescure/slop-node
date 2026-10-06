@@ -1,6 +1,7 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import type { Account, GenericAccount, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
+import type { Account, GenericAccount, MultisigAddress, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block, BlockHash, BlockJSONIncomplete } from '@keetanetwork/keetanet-client/lib/block/index.js';
+import type { MultisigConfig } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
 import type {
 	BlockJSONOperationMANAGE_CERTIFICATE,
 	BlockJSONOperationMODIFY_PERMISSIONS,
@@ -42,7 +43,8 @@ async function seal(input: SealInput): Promise<Block> {
 	return(await new lib.Block.Builder(fields).seal());
 }
 
-export function sendBlock(input: BlockContext & { readonly from: Account; readonly to: GenericAccount; readonly amount: bigint; readonly token: TokenAddress }): Promise<Block> {
+/** An identifier such as a token sends with its owner as the signer. */
+export function sendBlock(input: BlockContext & { readonly from: GenericAccount; readonly signer?: Account; readonly to: GenericAccount; readonly amount: bigint; readonly token: TokenAddress }): Promise<Block> {
 	const { from, to, amount, token, ...context } = input;
 	return(seal({
 		...context,
@@ -73,6 +75,26 @@ export async function createTokenBlock(input: BlockContext & { readonly owner: A
 		operations: [{ type: lib.Block.OperationType.CREATE_IDENTIFIER, identifier: token }]
 	});
 	return({ block, token });
+}
+
+/*
+ * A multisig identifier carries its signers and quorum in the creation
+ * arguments; its address derives like any other identifier's.
+ * [Keeta TS] index.js:68305-68320
+ */
+export async function createMultisigBlock(input: BlockContext & { readonly owner: Account; readonly signers: readonly MultisigConfig['signers'][number][]; readonly quorum: bigint }): Promise<{ readonly block: Block; readonly multisig: MultisigAddress }> {
+	const { owner, signers, quorum, ...context } = input;
+	const multisig = owner.generateIdentifier(lib.Account.AccountKeyAlgorithm.MULTISIG, context.previous ?? undefined, 0);
+	const block = await seal({
+		...context,
+		account: owner,
+		operations: [{
+			type: lib.Block.OperationType.CREATE_IDENTIFIER,
+			identifier: multisig,
+			createArguments: { type: lib.Account.AccountKeyAlgorithm.MULTISIG, signers: [...signers], quorum }
+		}]
+	});
+	return({ block, multisig });
 }
 
 export function tokenSupplyBlock(input: BlockContext & { readonly owner: Account; readonly token: TokenAddress; readonly amount: bigint; readonly method?: BlockJSONOperationTOKEN_ADMIN_SUPPLY['method'] }): Promise<Block> {
@@ -111,17 +133,25 @@ export function setInfoBlock(input: SignedBlockContext & Omit<BlockJSONOperation
 
 /*
  * Adding a certificate requires the intermediate certificates field to be
- * present, and null states that there are none.
+ * present, and null states that there are none; removing one requires it to
+ * be absent.
+ * [Keeta TS] index.js:65684-65686
  */
 export function manageCertificateBlock(input: SignedBlockContext & Omit<BlockJSONOperationMANAGE_CERTIFICATE, 'type'>): Promise<Block> {
-	const { account, signer, previous, network, idempotent, intermediateCertificates = null, ...operation } = input;
+	const { account, signer, previous, network, idempotent, intermediateCertificates, ...fields } = input;
+	const operation: BlockJSONOperationMANAGE_CERTIFICATE = { type: lib.Block.OperationType.MANAGE_CERTIFICATE, ...fields };
+	if (fields.method === lib.Block.AdjustMethod.ADD) {
+		operation.intermediateCertificates = intermediateCertificates ?? null;
+	} else if (intermediateCertificates !== undefined) {
+		operation.intermediateCertificates = intermediateCertificates;
+	}
 	return(seal({
 		account,
 		signer,
 		previous,
 		network,
 		idempotent,
-		operations: [{ type: lib.Block.OperationType.MANAGE_CERTIFICATE, intermediateCertificates, ...operation }]
+		operations: [operation]
 	}));
 }
 

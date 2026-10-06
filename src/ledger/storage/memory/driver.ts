@@ -1,9 +1,9 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import type { Account, AccountKeyAlgorithm, GenericAccount, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
+import type { Account, AccountKeyAlgorithm, GenericAccount, IdentifierAddress, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
-import type { LedgerSelector, LedgerStorageAPI } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
+import type { GetVotesAfterOptions, IdempotentKey, LedgerSelector, LedgerStorageAPI, ListACLsByEntityFilters, PaginatedVotes } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { ACLRow, ACLUpdate, AccountInfoForType, CertificateWithIntermediates, GetAllBalancesResponse } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
-import type { Vote, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import type { Vote, VoteBlockHash, VoteBlockHashMap, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { assertNever } from '../../../util/assert-never.js';
 import { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
 import type { TransactionOptions } from '../base.js';
@@ -14,15 +14,24 @@ import {
 	toAccountKey,
 	toBlockHashKey,
 	toCertificateHashKey,
+	toIdempotentKeyString,
 	toPrincipalKey,
 	toStapleKey,
 	toVoteKey
 } from '../keys.js';
 import type { AccountKey, BlockHashKey, IdempotentKeyString, StapleKey, VoteKey } from '../keys.js';
 import { commitOverlay, createCommittedLedger, openOverlay } from './state.js';
-import type { AccountInfoRow, BalanceRow, CommittedLedger, LedgerOverlay, TableOverlay } from './state.js';
+import type { AccountInfoRow, BalanceRow, CommittedLedger, LedgerOverlay, StapleRow, TableOverlay } from './state.js';
 
 const lib = KeetaNet.lib;
+
+// Upstream's own default for the number of history entries per request.
+// [Keeta TS] index.js:69532
+const DEFAULT_HISTORY_LIMIT = 25;
+
+// The largest page upstream's only caller ever asks for.
+// [Keeta TS] index.js:69650-69658
+const DEFAULT_VOTES_PER_PAGE = 200;
 
 type Release = () => void;
 
@@ -129,6 +138,54 @@ function toACLRow(update: ACLUpdate, permissions: NonNullable<ACLUpdate['permiss
 		default:
 			return(assertNever(update));
 	}
+}
+
+/** Where a staple sits in the order it entered this node's main ledger. */
+type ConfirmationOrder = Pick<StapleRow, 'moment' | 'sequence'>;
+
+/*
+ * The moment the staple was confirmed here, with the node-local sequence
+ * breaking ties between staples confirmed at the same moment.
+ */
+function compareConfirmationOrder(left: ConfirmationOrder, right: ConfirmationOrder): number {
+	const byMoment = left.moment.getTime() - right.moment.getTime();
+	if (byMoment !== 0) {
+		return(byMoment);
+	}
+	if (left.sequence < right.sequence) {
+		return(-1);
+	}
+	if (left.sequence > right.sequence) {
+		return(1);
+	}
+	return(0);
+}
+
+function encodeVotesAfterKey(order: ConfirmationOrder): string {
+	return(`${String(order.moment.getTime())}:${order.sequence.toString()}`);
+}
+
+/** Keys come only from earlier pages of the same read, so a malformed one is a caller bug. */
+function decodeVotesAfterKey(key: string): ConfirmationOrder {
+	const match = /^(\d+):(\d+)$/u.exec(key);
+	const moment = match?.[1];
+	const sequence = match?.[2];
+	if (moment === undefined || sequence === undefined) {
+		throw(new Error(`invalid getVotesAfter key: ${key}`));
+	}
+	return({ moment: new Date(Number(moment)), sequence: BigInt(sequence) });
+}
+
+function rowsOfEntity(overlay: LedgerOverlay, entity: GenericAccount): ACLRow[] {
+	const rows: ACLRow[] = [];
+	for (const [, scopes] of overlay.acls.entries()) {
+		for (const row of scopes.values()) {
+			if (row.entity.comparePublicKey(entity)) {
+				rows.push(row);
+			}
+		}
+	}
+	return(rows);
 }
 
 function mergeAccountInfo(row: AccountInfoRow | undefined, update: AccountInfoUpdate): AccountInfoRow {
@@ -346,36 +403,174 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		}
 	}
 
-	getVotesFromMultiplePrevious(..._args: Parameters<LedgerStorageAPI['getVotesFromMultiplePrevious']>): ReturnType<LedgerStorageAPI['getVotesFromMultiplePrevious']> {
-		return(rejectNotImplemented('getVotesFromMultiplePrevious'));
+	async getVotesFromMultiplePrevious(transaction: MemoryTransaction, previousBlocks: BlockHash[], from: LedgerSelector, issuer?: Account): Promise<{ [hash: string]: Vote[] | null }> {
+		const overlay = await transaction.view();
+		switch (from) {
+			case 'main': {
+				const votes: { [hash: string]: Vote[] | null } = {};
+				for (const previous of previousBlocks) {
+					votes[toBlockHashKey(previous)] = this.#successorVotes(overlay, previous, issuer);
+				}
+				return(votes);
+			}
+			case 'side':
+			case 'both':
+				return(await rejectNotImplemented(`getVotesFromMultiplePrevious('${from}')`));
+			default:
+				return(assertNever(from));
+		}
 	}
 
-	getVoteStaples(..._args: Parameters<LedgerStorageAPI['getVoteStaples']>): ReturnType<LedgerStorageAPI['getVoteStaples']> {
-		return(rejectNotImplemented('getVoteStaples'));
+	/*
+	 * Staples are identified by the hash of their blocks, and every requested
+	 * hash gets an entry: upstream reads each one back and treats a missing
+	 * entry as an internal error.
+	 * [Keeta TS] index.js:69512-69548
+	 */
+	async getVoteStaples(transaction: MemoryTransaction, voteBlockHashes: VoteBlockHash[], from: LedgerSelector): Promise<VoteBlockHashMap<VoteStaple | null>> {
+		const overlay = await transaction.view();
+		switch (from) {
+			case 'main': {
+				const staples = new lib.Vote.VoteBlocksHash.Map<VoteStaple | null>();
+				for (const voteBlockHash of voteBlockHashes) {
+					const row = overlay.staples.get(toStapleKey(voteBlockHash));
+					if (row === undefined) {
+						staples.set(voteBlockHash, null);
+					} else {
+						staples.set(voteBlockHash, this.#voteStapleOf(overlay, row));
+					}
+				}
+				return(staples);
+			}
+			case 'side':
+			case 'both':
+				return(await rejectNotImplemented(`getVoteStaples('${from}')`));
+			default:
+				return(assertNever(from));
+		}
 	}
 
-	getHistory(..._args: Parameters<LedgerStorageAPI['getHistory']>): ReturnType<LedgerStorageAPI['getHistory']> {
-		return(rejectNotImplemented('getHistory'));
+	/*
+	 * Newest first in the order staples entered this ledger. The start is
+	 * exclusive, so a caller can pass the last staple of one page to get the
+	 * next; a start outside the listed history has no position and gives
+	 * nothing.
+	 * [Keeta TS] index.js:69532-69548, 58992-58994
+	 */
+	async getHistory(transaction: MemoryTransaction, account: GenericAccount | null, start: VoteBlockHash | null, limit: number = DEFAULT_HISTORY_LIMIT): Promise<VoteBlockHash[]> {
+		const overlay = await transaction.view();
+		const newestFirst = this.#historyOf(overlay, account).sort(function(left, right): number {
+			return(compareConfirmationOrder(right, left));
+		});
+		let first = 0;
+		if (start !== null) {
+			const startKey = toStapleKey(start);
+			const position = newestFirst.findIndex(function(row): boolean {
+				return(toStapleKey(row.blocksHash) === startKey);
+			});
+			if (position < 0) {
+				return([]);
+			}
+			first = position + 1;
+		}
+		return(newestFirst.slice(first, first + limit).map(function(row): VoteBlockHash {
+			return(row.blocksHash);
+		}));
 	}
 
-	getVotesAfter(..._args: Parameters<LedgerStorageAPI['getVotesAfter']>): ReturnType<LedgerStorageAPI['getVotesAfter']> {
-		return(rejectNotImplemented('getVotesAfter'));
+	/*
+	 * Pages end only between staples, so a staple whose votes straddle a page
+	 * is never returned twice; a page therefore holds at least one whole
+	 * staple even when that exceeds the page size. The key is omitted on the
+	 * last page, because the caller stops only when it is undefined.
+	 * [Keeta TS] index.js:69633-69702
+	 */
+	async getVotesAfter(transaction: MemoryTransaction, moment: Date, startKey?: string, options?: GetVotesAfterOptions): Promise<PaginatedVotes> {
+		const overlay = await transaction.view();
+		const maximumVotes = options?.maxVotesPerPage ?? DEFAULT_VOTES_PER_PAGE;
+		let resumeAfter: ConfirmationOrder | undefined;
+		if (startKey !== undefined) {
+			resumeAfter = decodeVotesAfterKey(startKey);
+		}
+		const remaining = this.#confirmedStaplesInOrder(overlay).filter(function(row): boolean {
+			if (row.moment.getTime() < moment.getTime()) {
+				return(false);
+			}
+			return(resumeAfter === undefined || compareConfirmationOrder(row, resumeAfter) > 0);
+		});
+		const votes: Vote[] = [];
+		let last: StapleRow | undefined;
+		let taken = 0;
+		for (const row of remaining) {
+			if (last !== undefined && votes.length >= maximumVotes) {
+				break;
+			}
+			votes.push(...row.votes.values());
+			last = row;
+			taken++;
+		}
+		const page: PaginatedVotes = { votes };
+		if (last !== undefined && taken < remaining.length) {
+			page.nextKey = encodeVotesAfterKey(last);
+		}
+		return(page);
 	}
 
-	getIdempotentBlockHash(..._args: Parameters<LedgerStorageAPI['getIdempotentBlockHash']>): ReturnType<LedgerStorageAPI['getIdempotentBlockHash']> {
-		return(rejectNotImplemented('getIdempotentBlockHash'));
+	/*
+	 * The confirmed holder of a key, unless it is the block the caller asked
+	 * to exclude.
+	 * [Keeta TS] index.js:69254-69259, 69711-69716
+	 */
+	async getIdempotentBlockHash(transaction: MemoryTransaction, idempotent: IdempotentKey, from: LedgerSelector, excludeBlockHash?: BlockHash): Promise<BlockHash | null> {
+		const overlay = await transaction.view();
+		switch (from) {
+			case 'main': {
+				const holder = overlay.idempotentKeys.get(toIdempotentKeyString(idempotent));
+				if (holder === undefined || (excludeBlockHash !== undefined && holder.compare(excludeBlockHash))) {
+					return(null);
+				}
+				return(holder);
+			}
+			case 'side':
+			case 'both':
+				return(await rejectNotImplemented(`getIdempotentBlockHash('${from}')`));
+			default:
+				return(assertNever(from));
+		}
 	}
 
-	listOwners(..._args: Parameters<LedgerStorageAPI['listOwners']>): ReturnType<LedgerStorageAPI['listOwners']> {
-		return(rejectNotImplemented('listOwners'));
+	/*
+	 * Distinct accounts holding OWNER on the identifier: the ledger requires
+	 * exactly one owner to remain, so a principal listed twice would refuse a
+	 * valid staple. Certificates cannot own an identifier.
+	 * [Keeta TS] index.js:70046-70078
+	 */
+	async listOwners(transaction: MemoryTransaction, identifier: IdentifierAddress, target?: GenericAccount): Promise<GenericAccount[]> {
+		const overlay = await transaction.view();
+		const owners = new Map<AccountKey, GenericAccount>();
+		for (const row of rowsOfEntity(overlay, identifier)) {
+			if (row.principalType !== 'ACCOUNT' || !row.permissions.has(['OWNER'])) {
+				continue;
+			}
+			if (target !== undefined && !row.target.comparePublicKey(target)) {
+				continue;
+			}
+			owners.set(toAccountKey(row.principal), row.principal);
+		}
+		return(Array.from(owners.values()));
 	}
 
-	listACLsByEntity(..._args: Parameters<LedgerStorageAPI['listACLsByEntity']>): ReturnType<LedgerStorageAPI['listACLsByEntity']> {
-		return(rejectNotImplemented('listACLsByEntity'));
+	async listACLsByEntity(transaction: MemoryTransaction, entity: GenericAccount, options?: ListACLsByEntityFilters): Promise<ACLRow[]> {
+		const overlay = await transaction.view();
+		const principalType = options?.principalType;
+		return(rowsOfEntity(overlay, entity).filter(function(row): boolean {
+			return(principalType === undefined || row.principalType === principalType);
+		}));
 	}
 
-	getAccountCertificates(..._args: Parameters<LedgerStorageAPI['getAccountCertificates']>): ReturnType<LedgerStorageAPI['getAccountCertificates']> {
-		return(rejectNotImplemented('getAccountCertificates'));
+	async getAccountCertificates(transaction: MemoryTransaction, account: GenericAccount): Promise<CertificateWithIntermediates[]> {
+		const { certificates } = await transaction.view();
+		return(Array.from(certificates.get(toAccountKey(account))?.values() ?? []));
 	}
 
 	addPendingVote(..._args: Parameters<LedgerStorageAPI['addPendingVote']>): ReturnType<LedgerStorageAPI['addPendingVote']> {
@@ -458,6 +653,46 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		}
 	}
 
+	#successorVotes(overlay: LedgerOverlay, previous: BlockHash, issuer: Account | undefined): Vote[] | null {
+		const successor = overlay.successors.get(toBlockHashKey(previous));
+		if (successor === undefined) {
+			return(null);
+		}
+		const row = overlay.blocks.get(successor);
+		if (row === undefined) {
+			throw(new Error(`internal error: confirmed block ${successor} is referenced but not stored`));
+		}
+		const votes = Array.from(this.#confirmedStaple(overlay, row.staple).votes.values()).filter(function(vote): boolean {
+			return(issuer === undefined || vote.issuer.comparePublicKey(issuer));
+		});
+		if (votes.length === 0) {
+			return(null);
+		}
+		return(votes);
+	}
+
+	#voteStapleOf(overlay: LedgerOverlay, row: StapleRow): VoteStaple {
+		const blocks = row.blocks.map((hash): Block => {
+			return(this.#confirmedBlock(overlay, hash));
+		});
+		return(lib.Vote.Staple.fromVotesAndBlocks(Array.from(row.votes.values()), blocks));
+	}
+
+	#historyOf(overlay: LedgerOverlay, account: GenericAccount | null): StapleRow[] {
+		if (account === null) {
+			return(this.#confirmedStaplesInOrder(overlay));
+		}
+		return((overlay.history.get(toAccountKey(account)) ?? []).map((key): StapleRow => {
+			return(this.#confirmedStaple(overlay, key));
+		}));
+	}
+
+	#confirmedStaplesInOrder(overlay: LedgerOverlay): StapleRow[] {
+		return(Array.from(overlay.staples.entries(), function([, row]): StapleRow {
+			return(row);
+		}).sort(compareConfirmationOrder));
+	}
+
 	#headBlock(overlay: LedgerOverlay, account: AccountKey, from: LedgerSelector): Block | null {
 		switch (from) {
 			case 'side':
@@ -492,7 +727,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		return(row.block);
 	}
 
-	#confirmedStaple(overlay: LedgerOverlay, key: StapleKey): NonNullable<ReturnType<LedgerOverlay['staples']['get']>> {
+	#confirmedStaple(overlay: LedgerOverlay, key: StapleKey): StapleRow {
 		const row = overlay.staples.get(key);
 		if (row === undefined) {
 			throw(new Error(`internal error: confirmed staple ${key} is referenced but not stored`));

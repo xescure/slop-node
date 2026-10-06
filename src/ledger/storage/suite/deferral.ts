@@ -1,10 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
-import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { confirmedStaple, sendBlock } from '../../../testing/blocks.js';
 import type { TestNetwork } from '../../../testing/network.js';
 import type { LedgerStorageDriverBase } from '../base.js';
-import { TESTING_KEY, headOf, requireAt, useFixtures } from './support.js';
+import { TESTING_KEY, blockHashesOf, blocksHashesOf, headOf, readStorage, requireAt, useFixtures } from './support.js';
 import type { DriverUnderTest } from './types.js';
 
 type UserChain = {
@@ -20,22 +19,23 @@ async function chainOfTwoSends(network: TestNetwork): Promise<UserChain> {
 	return({ first, second });
 }
 
-async function deferredWaitingOn(storage: LedgerStorageDriverBase, hash: BlockHash): Promise<string[]> {
-	const transaction = await storage.beginTransaction({ identifier: 'suite-inspect-deferred', readOnly: true });
-	try {
-		const waiting = await storage._Testing(TESTING_KEY).deferredStaplesWaitingOn(transaction, [hash]);
-		return(waiting.map(function(staple): string {
-			return(staple.blocksHash.toString());
-		}));
-	} finally {
-		await storage.abortTransaction(transaction);
-	}
+function deferredWaitingOn(storage: LedgerStorageDriverBase, hash: BlockHash): Promise<string[]> {
+	return(readStorage(storage, async function(transaction) {
+		return(blocksHashesOf(await storage._Testing(TESTING_KEY).deferredStaplesWaitingOn(transaction, [hash])));
+	}));
 }
 
-function blocksHashesOf(staples: readonly VoteStaple[]): string[] {
-	return(staples.map(function(staple): string {
-		return(staple.blocksHash.toString());
-	}));
+async function sendsAfter(network: TestNetwork, previous: BlockHash, amounts: readonly bigint[]): Promise<Block[]> {
+	const from = requireAt(network.users, 0);
+	const to = requireAt(network.users, 1);
+	const blocks: Block[] = [];
+	let head = previous;
+	for (const amount of amounts) {
+		const block = await sendBlock({ from, previous: head, to, amount, token: network.baseToken, network: network.network });
+		blocks.push(block);
+		head = block.hash;
+	}
+	return(blocks);
 }
 
 export function defineDeferralCases(driver: DriverUnderTest): void {
@@ -87,6 +87,96 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 
 			await expect(ledger.add(outOfOrder)).rejects.toMatchObject({ code: 'LEDGER_PREVIOUS_NOT_SEEN', shouldRetry: false });
 			expect(await deferredWaitingOn(storage, missing.hash)).toEqual([]);
+		});
+		test('deferred staple applies exactly once when its previous arrives', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			await ledger.add(network.genesis);
+			const { first, second } = await chainOfTwoSends(network);
+			const firstStaple = await confirmedStaple([first], network.representatives);
+			const secondStaple = await confirmedStaple([second], network.representatives);
+
+			expect(await ledger.add(secondStaple)).toEqual([]);
+			expect(await ledger.getBalance(user, network.baseToken)).toBe(400n);
+			expect(await deferredWaitingOn(storage, first.hash)).toEqual(blocksHashesOf([secondStaple]));
+
+			const applied = await ledger.add(firstStaple);
+
+			// Ledger.add folds every returned block into the ledger checksum, so each must appear once.
+			expect(blocksHashesOf(applied)).toEqual(blocksHashesOf([firstStaple, secondStaple]));
+			expect(blockHashesOf(applied)).toEqual([first.hash.toString(), second.hash.toString()]);
+			expect(await deferredWaitingOn(storage, first.hash)).toEqual([]);
+			expect(await ledger.getBalance(user, network.baseToken)).toBe(388n);
+			expect((await ledger.getHeadBlock(user, 'main'))?.hash.toString()).toBe(second.hash.toString());
+			await expect(ledger.add(secondStaple)).rejects.toMatchObject({ code: 'LEDGER_BLOCK_ALREADY_EXISTS' });
+			expect(await ledger.getBalance(user, network.baseToken)).toBe(388n);
+		});
+
+		test('deferred chains replay in order exactly once', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			await ledger.add(network.genesis);
+			const blocks = await sendsAfter(network, headOf(network.genesis, user), [5n, 7n, 9n]);
+			const staples = await Promise.all(blocks.map(function(block) {
+				return(confirmedStaple([block], network.representatives));
+			}));
+			const [firstStaple, secondStaple, thirdStaple] = staples;
+			if (firstStaple === undefined || secondStaple === undefined || thirdStaple === undefined) {
+				throw(new Error('three staples expected'));
+			}
+
+			expect(await ledger.add(thirdStaple)).toEqual([]);
+			expect(await ledger.add(secondStaple)).toEqual([]);
+			const applied = await ledger.add(firstStaple);
+
+			expect(blocksHashesOf(applied)).toEqual(blocksHashesOf([firstStaple, secondStaple, thirdStaple]));
+			expect(blockHashesOf(applied)).toEqual(blocks.map(function(block): string {
+				return(block.hash.toString());
+			}));
+			expect(await ledger.getBalance(user, network.baseToken)).toBe(379n);
+			expect((await ledger.getHeadBlock(user, 'main'))?.hash.toString()).toBe(blocks.at(-1)?.hash.toString());
+			for (const block of blocks) {
+				expect(await deferredWaitingOn(storage, block.hash)).toEqual([]);
+			}
+		});
+
+		test('a replayed staple that conflicts stays deferred while its trigger applies', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			await ledger.add(network.genesis);
+			const [trigger, ...unused] = await sendsAfter(network, headOf(network.genesis, user), [1n]);
+			if (trigger === undefined || unused.length > 0) {
+				throw(new Error('one trigger block expected'));
+			}
+			const forks = await Promise.all([5n, 7n].map(async function(amount) {
+				const [fork] = await sendsAfter(network, trigger.hash, [amount]);
+				if (fork === undefined) {
+					throw(new Error('one fork block expected'));
+				}
+				return({ amount, staple: await confirmedStaple([fork], network.representatives) });
+			}));
+			for (const { staple } of forks) {
+				expect(await ledger.add(staple)).toEqual([]);
+			}
+			expect([...await deferredWaitingOn(storage, trigger.hash)].sort()).toEqual(blocksHashesOf(forks.map(function({ staple }) {
+				return(staple);
+			})).sort());
+
+			const applied = await ledger.add(await confirmedStaple([trigger], network.representatives));
+
+			expect(applied).toHaveLength(2);
+			const [, replayed] = applied;
+			const winner = forks.find(function({ staple }): boolean {
+				return(staple.blocksHash.toString() === replayed?.blocksHash.toString());
+			});
+			const loser = forks.find(function(fork): boolean {
+				return(fork !== winner);
+			});
+			if (winner === undefined || loser === undefined) {
+				throw(new Error('exactly one fork should have replayed'));
+			}
+			expect(await deferredWaitingOn(storage, trigger.hash)).toEqual(blocksHashesOf([loser.staple]));
+			expect(await ledger.getBalance(user, network.baseToken)).toBe(400n - 1n - winner.amount);
 		});
 	});
 }
