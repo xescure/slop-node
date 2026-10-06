@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import { LedgerInternals } from './internals.js';
+import { LedgerInternals, StatsPending } from './internals.js';
 
 const Account = KeetaNet.lib.Account;
 
@@ -62,5 +62,17 @@ describe('LedgerInternals', function() {
 		const effect = LedgerInternals.computeEffectOfBlocks([block]);
 
 		expect(effect.touched.has(sender)).toBe(true);
+	});
+
+	test('StatsPending is the accumulator that Stats merges', async function() {
+		const pending = new StatsPending();
+		pending.incr('ledger', 'probe', 2);
+		const stats = new KeetaNet.lib.Stats({ kv: null });
+
+		stats.merge(pending);
+		await stats.sync();
+
+		expect(pending).not.toBeInstanceOf(KeetaNet.lib.Stats);
+		expect(await stats.get('ledger', 'probe')).toBe(2);
 	});
 });
