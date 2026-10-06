@@ -26,22 +26,33 @@ ifeq ($(filter-out null,$(KEETANET_CLIENT_VERSION)),)
 $(error cannot read the keetanet-client version from package.json)
 endif
 
+# A version names a directory that the reference rule deletes, so it is
+# accepted only when it is made of version characters and starts with a letter
+# or digit. Deleting every permitted character leaves just the offending ones.
+version-characters := 0 1 2 3 4 5 6 7 8 9 a b c d e f g h i j k l m n o p q r s t u v w x y z A B C D E F G H I J K L M N O P Q R S T U V W X Y Z . + -
+remove-version-characters = $(if $(2),$(call remove-version-characters,$(subst $(firstword $(2)),,$(1)),$(wordlist 2,$(words $(2)),$(2))),$(1))
+is-invalid-version = $(or $(if $(1),,empty),$(filter .% +% -%,$(1)),$(word 2,$(1)),$(strip $(call remove-version-characters,$(1),$(version-characters))))
+
+ifneq ($(filter reference-diff,$(MAKECMDGOALS)),)
+$(foreach side,FROM TO,$(if $($(side)),$(if $(call is-invalid-version,$($(side))),$(error $(side) is not an exact version: $($(side))))))
+endif
+
 all: dist .nvmrc
 
 help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all           - Builds the project"
-	@echo "  dist          - Builds the distribution directory"
-	@echo "  test          - Type-checks and runs the test suite"
-	@echo "                  Specify extra flags with SLOP_NODE_TEST_EXTRA_ARGS"
-	@echo "  do-lint       - Runs the ASCII check, eslint and cspell"
-	@echo "  reference     - Extracts the reference tree for the installed keetanet-client"
+	@echo "  all            - Builds the project"
+	@echo "  dist           - Builds the distribution directory"
+	@echo "  test           - Type-checks and runs the test suite"
+	@echo "                   Specify extra flags with SLOP_NODE_TEST_EXTRA_ARGS"
+	@echo "  do-lint        - Runs the ASCII check, eslint and cspell"
+	@echo "  reference      - Extracts the reference tree for the installed keetanet-client"
 	@echo "  reference-diff - Diffs the reference trees of two versions"
-	@echo "                  Specify FROM=<version> TO=<version>"
-	@echo "  clean         - Removes build artifacts"
-	@echo "  distclean     - Removes all build artifacts and dependencies"
+	@echo "                   Specify FROM=<version> TO=<version>"
+	@echo "  clean          - Removes build artifacts"
+	@echo "  distclean      - Removes all build artifacts and dependencies"
 
 .nvmrc: package.json Makefile
 	rm -f .nvmrc .nvmrc.new
@@ -75,10 +86,18 @@ test: dist/.done build/utils/.done
 	npm run tsc -- --noEmit -p utils
 	npm run vitest -- run --config .vitest.config.js $(SLOP_NODE_TEST_EXTRA_ARGS)
 
+# git grep exits 1 when nothing matches and 128 when it fails, and only the
+# first means the tree is clean.
 do-lint: node_modules/.done
-	@if LC_ALL=C git grep -I -n --untracked '[^[:print:][:space:]]' -- . ':!LICENSE'; then \
+	@LC_ALL=C git grep -I -n --untracked '[^[:print:][:space:]]' -- . ':!LICENSE'; \
+	status=$$?; \
+	if [ $$status -eq 0 ]; then \
 		echo "Error: Found non-ASCII characters in the source code." >&2; \
 		exit 1; \
+	fi; \
+	if [ $$status -ne 1 ]; then \
+		echo "Error: git grep failed with status $$status." >&2; \
+		exit $$status; \
 	fi
 	npm run eslint -- --config .eslint.config.mjs src utils
 	npm run cspell -- --config .cspell.config.mjs --no-progress 'src/**/*.ts' 'utils/**/*.ts' Makefile
@@ -86,18 +105,25 @@ do-lint: node_modules/.done
 # The tree is built beside its final name and renamed, so an interrupted run
 # never leaves a partial directory that looks complete. Versions other than the
 # installed one come from the registry, each into its own directory so that
-# parallel runs do not collide.
+# parallel runs do not collide. The stem goes through the environment rather
+# than into the shell text, and is validated before anything is deleted.
+reference/%/.done: export REFERENCE_VERSION = $*
 reference/%/.done: node_modules/.done build/utils/.done utils/fetch-keetanet-client
-	rm -rf reference/$* reference/$*.tmp
+	@case "$$REFERENCE_VERSION" in \
+		''|[!0-9A-Za-z]*|*[!0-9A-Za-z.+-]*) \
+			echo "Error: not an exact version: $$REFERENCE_VERSION" >&2; \
+			exit 2;; \
+	esac
+	rm -rf "reference/$$REFERENCE_VERSION" "reference/$$REFERENCE_VERSION.tmp"
 	@package=node_modules/@keetanetwork/keetanet-client; \
-	if [ "$*" != "$(KEETANET_CLIENT_VERSION)" ]; then \
-		package=reference/.packages/$*; \
-		rm -rf $$package; \
-		utils/fetch-keetanet-client $* $$package || exit 1; \
+	if [ "$$REFERENCE_VERSION" != "$(KEETANET_CLIENT_VERSION)" ]; then \
+		package="reference/.packages/$$REFERENCE_VERSION"; \
+		rm -rf "$$package"; \
+		utils/fetch-keetanet-client "$$REFERENCE_VERSION" "$$package" || exit 1; \
 	fi; \
-	node build/utils/reference/main.js --package $$package --out reference/$*.tmp
-	mv reference/$*.tmp reference/$*
-	@touch reference/$*/.done
+	node build/utils/reference/main.js --package "$$package" --out "reference/$$REFERENCE_VERSION.tmp"
+	mv "reference/$$REFERENCE_VERSION.tmp" "reference/$$REFERENCE_VERSION"
+	@touch "reference/$$REFERENCE_VERSION/.done"
 
 reference: reference/$(KEETANET_CLIENT_VERSION)/.done
 

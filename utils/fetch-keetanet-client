@@ -15,7 +15,9 @@ fi
 version=$1
 destination=$2
 
-[[ $version =~ ^[0-9A-Za-z][0-9A-Za-z.+-]*$ ]] || fail "invalid version: $version"
+# A tag such as "latest" or a range such as "0.18" would resolve to whatever the
+# registry says today, so the directory named after it could hold any release.
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || fail "not an exact version: $version"
 [ ! -e "$destination" ] || fail "destination already exists: $destination"
 
 mkdir -p "$(dirname "$destination")"
@@ -23,14 +25,20 @@ mkdir -p "$(dirname "$destination")"
 work=$(mktemp -d "$destination.fetch.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
-expected=$(npm view "$package@$version" dist.integrity 2>/dev/null) || expected=''
-[ -n "$expected" ] || fail "cannot resolve $package@$version on the npm registry"
+# Depending on the npm release, an unknown version is either an E404 failure or
+# an empty answer with a zero exit; both mean the version does not exist, as
+# opposed to a registry that could not be queried at all.
+if ! expected=$(npm view "$package@$version" dist.integrity 2>"$work/view.err"); then
+	grep -q 'E404' "$work/view.err" || fail "cannot query the npm registry for $package@$version"
+	fail "$package@$version does not exist on the npm registry"
+fi
+[ -n "$expected" ] || fail "$package@$version does not exist on the npm registry"
 
 mkdir "$work/pack" "$work/extract"
 npm pack "$package@$version" --json --pack-destination "$work/pack" >"$work/pack.json" 2>/dev/null ||
 	fail "cannot download $package@$version"
 
-actual=$(jq -r '.[0].integrity' "$work/pack.json")
+actual=$(jq -r '.[0].integrity' "$work/pack.json") || fail "cannot read the integrity of $package@$version"
 [ "$actual" = "$expected" ] || fail "integrity mismatch for $package@$version"
 
 # The tarball is only ever read by our extractor, never run.

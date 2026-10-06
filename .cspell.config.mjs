@@ -13,7 +13,9 @@ export default {
 		'jaccard',
 		'nvmrc',
 		'vitest',
-		'retval'
+		'retval',
+		'wordlist',
+		'esac'
 	],
 	ignorePaths: [
 		'/reference/',
