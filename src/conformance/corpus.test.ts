@@ -6,6 +6,7 @@ import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { driversUnderTest } from '../ledger/storage/suite/drivers.js';
 import { VOTE_CASE_FORMAT, decodeVoteCaseFile, encodeVoteCaseFile } from './case.js';
 import type { VoteCase } from './case.js';
+import { EXCLUDED_ROWS } from './exclusions.js';
 import type { Scenario } from './record.js';
 import { replayVoteCase } from './replay.js';
 import type { ReplayFailure } from './replay.js';
@@ -13,7 +14,10 @@ import { schemaViolations } from './schema.js';
 import { balanceScenarios } from './scenarios/balances.js';
 import { clockScenarios } from './scenarios/clock.js';
 import { conflictScenarios } from './scenarios/conflicts.js';
+import { feeScenarios } from './scenarios/fees.js';
 import { kindScenarios } from './scenarios/kind.js';
+import { modeScenarios } from './scenarios/modes.js';
+import { networkScenarios } from './scenarios/network.js';
 import { permissionScenarios } from './scenarios/permissions.js';
 import { quorumScenarios } from './scenarios/quorum.js';
 
@@ -35,7 +39,10 @@ const groups: readonly Group[] = [
 	{ name: 'clock', scenarios: clockScenarios },
 	{ name: 'conflicts', scenarios: conflictScenarios },
 	{ name: 'balances', scenarios: balanceScenarios },
-	{ name: 'permissions', scenarios: permissionScenarios }
+	{ name: 'permissions', scenarios: permissionScenarios },
+	{ name: 'fees', scenarios: feeScenarios },
+	{ name: 'network', scenarios: networkScenarios },
+	{ name: 'modes', scenarios: modeScenarios }
 ];
 
 const UPDATE = process.env['SLOP_NODE_UPDATE_CONFORMANCE'] === '1';
@@ -120,6 +127,17 @@ describe('vote-decision corpus', function() {
 
 		expect(new Set(scenarioIDs).size).toBe(scenarioIDs.length);
 		expect(new Set(committedIDs).size).toBe(committedIDs.length);
+	});
+
+	test('each excluded row is listed once, with a reason', function() {
+		const excludedIDs = EXCLUDED_ROWS.map(function(row): string {
+			return(row.id);
+		});
+
+		expect(new Set(excludedIDs).size).toBe(excludedIDs.length);
+		for (const row of EXCLUDED_ROWS) {
+			expect(row.reason).not.toBe('');
+		}
 	});
 
 	test('every committed file belongs to a group', async function() {

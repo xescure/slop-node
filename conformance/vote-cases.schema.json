@@ -111,7 +111,7 @@
       }
     },
     "feePolicy": {
-      "description": "What the node's ledger charges for a temporary vote or quote. A flat fee without a token is in the base token, and without a payee is paid to the voter.",
+      "description": "What the node's ledger charges for every temporary vote and quote, whatever the blocks: nothing, one amount, or a list of amounts the payer chooses from. An amount without a token is in the base token, and without a payee is paid to the voter. An empty list of choices would mean no fee, which free states.",
       "oneOf": [
         {
           "type": "object",
@@ -146,6 +146,26 @@
               "$ref": "#/$defs/account"
             }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "choices"
+          ],
+          "properties": {
+            "type": {
+              "const": "choices"
+            },
+            "choices": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/feeAmount"
+              }
+            }
+          }
         }
       ]
     },
@@ -157,8 +177,25 @@
         "read-only"
       ]
     },
+    "operations": {
+      "description": "The node's operation settings. enableTokenAdminModifyBalance admits TOKEN_ADMIN_MODIFY_BALANCE operations, which are otherwise refused. setRep answers every delegation the same way: allowAll admits it, refuseAll refuses it. Without setRep any delegation is admitted. Empty settings are written by leaving the field out.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "enableTokenAdminModifyBalance": {
+          "type": "boolean"
+        },
+        "setRep": {
+          "enum": [
+            "allowAll",
+            "refuseAll"
+          ]
+        }
+      }
+    },
     "node": {
-      "description": "One node of the case: a representative's, or with a null representative one that holds no key and so never votes. A representative runs at most one node. A step's actor indexes the case's nodes.",
+      "description": "One node of the case: a representative's, or with a null representative one that holds no key and so never votes. A representative runs at most one node. A step's actor indexes the case's nodes. The optional settings mirror the ledger's configuration; an absent one keeps the ledger's default.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -184,6 +221,13 @@
         },
         "mode": {
           "$ref": "#/$defs/mode"
+        },
+        "subnet": {
+          "description": "The subnet the node's ledger runs on. Without it the node accepts only blocks without a subnet.",
+          "$ref": "#/$defs/decimal"
+        },
+        "operations": {
+          "$ref": "#/$defs/operations"
         }
       }
     },

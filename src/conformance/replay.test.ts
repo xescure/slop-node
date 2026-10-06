@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { LedgerStorageDriverBase } from '../ledger/storage/base.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
-import { sendBlock } from '../testing/blocks.js';
+import { sendBlock, setRepresentativeBlock } from '../testing/blocks.js';
 import { TEST_NETWORK_SEEDS, createTestNetwork, freezeClock } from '../testing/network.js';
 import type { TestNetwork } from '../testing/network.js';
 import { toBase64, toCaseBlockHash, toCaseSeed, toDecimal, toMoment } from './case.js';
@@ -179,6 +179,29 @@ describe('vote case replay', function() {
 		];
 
 		expect(await replayVoteCase(caseOf(steps, [accountNode]), createMemory)).toEqual([]);
+	});
+
+	test('each node\'s fee choices, subnet and operations reach its own ledger', async function() {
+		const network = await startNetwork();
+		const send = await firstSend(network);
+		const [user, , other] = network.users;
+		if (user === undefined || other === undefined) {
+			throw(new Error('the network has no users'));
+		}
+		const delegation = await setRepresentativeBlock({ account: user, representative: other, previous: send.hash, network: network.network });
+		const choices = [{ amount: toDecimal(0n) }, { amount: toDecimal(5n) }];
+		const nodes: readonly CaseNode[] = [
+			{ representative: 0, fee: { type: 'choices', choices }, mode: 'read-write', operations: { setRep: 'refuseAll' } },
+			{ representative: 1, fee: { type: 'free' }, mode: 'read-write', subnet: toDecimal(5n) }
+		];
+		const steps = [
+			...addGenesis(network),
+			at(START, 0, { type: 'vote', blocks: [toBase64(send.toBytes()), toBase64(delegation.toBytes())] }, { outcome: 'refused', error: { type: 'coded', code: 'LEDGER_INVALID_SET_REP' } }),
+			at(START, 0, { type: 'vote', blocks: [toBase64(send.toBytes())] }, { outcome: 'temporary', blocks: [toCaseBlockHash(send.hash)], fee: { type: 'choices', choices } }),
+			at(START, 1, { type: 'add', staple: { type: 'step', fromStep: 0 } }, { outcome: 'refused', error: { type: 'plain', message: 'Cannot process block for a different subnet' } })
+		];
+
+		expect(await replayVoteCase(caseOf(steps, nodes), createMemory)).toEqual([]);
 	});
 });
 

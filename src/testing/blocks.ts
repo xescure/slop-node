@@ -18,6 +18,8 @@ const lib = KeetaNet.lib;
 type BlockContext = {
 	readonly previous: BlockHash | null;
 	readonly network: bigint;
+	/** Without a subnet a block is accepted only by a ledger without one. */
+	readonly subnet?: bigint | undefined;
 	readonly idempotent?: string | undefined;
 	/** Without a date a block is dated at the moment it is sealed. */
 	readonly date?: Date | undefined;
@@ -39,6 +41,9 @@ async function seal(input: SealInput): Promise<Block> {
 	};
 	if (input.signer !== undefined) {
 		fields.signer = input.signer;
+	}
+	if (input.subnet !== undefined) {
+		fields.subnet = input.subnet;
 	}
 	if (input.idempotent !== undefined) {
 		fields.idempotent = input.idempotent;
@@ -66,12 +71,13 @@ export function sendBlock(input: BlockContext & { readonly from: GenericAccount;
 
 /** The account requires that `from` sent it, earlier in the request, at least the amount stated, or with `exact` exactly that amount. */
 export function receiveBlock(input: SignedBlockContext & Omit<BlockJSONOperationRECEIVE, 'type' | 'forward'>): Promise<Block> {
-	const { account, signer, previous, network, idempotent, date, ...operation } = input;
+	const { account, signer, previous, network, subnet, idempotent, date, ...operation } = input;
 	return(seal({
 		account,
 		signer,
 		previous,
 		network,
+		subnet,
 		idempotent,
 		date,
 		operations: [{ type: lib.Block.OperationType.RECEIVE, ...operation }]
@@ -86,7 +92,7 @@ export type MultisigSigner = Extract<BlockV2JSON['signer'], readonly unknown[]>;
  * [Keeta TS] index.js:64140-64166
  */
 export function multisigSendBlock(input: BlockContext & { readonly from: GenericAccount; readonly signer: MultisigSigner; readonly to: GenericAccount; readonly amount: bigint; readonly token: TokenAddress }): Promise<Block> {
-	const { from, signer, to, amount, token, previous, network, idempotent, date } = input;
+	const { from, signer, to, amount, token, previous, network, subnet, idempotent, date } = input;
 	const fields: BlockJSONIncomplete = {
 		version: 2,
 		purpose: lib.Block.Purpose.GENERIC,
@@ -96,6 +102,9 @@ export function multisigSendBlock(input: BlockContext & { readonly from: Generic
 		previous: previous ?? lib.Block.NO_PREVIOUS,
 		operations: [{ type: lib.Block.OperationType.SEND, to, amount, token }]
 	};
+	if (subnet !== undefined) {
+		fields.subnet = subnet;
+	}
 	if (idempotent !== undefined) {
 		fields.idempotent = idempotent;
 	}
@@ -172,12 +181,13 @@ export function tokenSupplyBlock(input: BlockContext & { readonly owner: Account
 }
 
 export function modifyPermissionsBlock(input: SignedBlockContext & Omit<BlockJSONOperationMODIFY_PERMISSIONS, 'type'>): Promise<Block> {
-	const { account, signer, previous, network, idempotent, date, ...operation } = input;
+	const { account, signer, previous, network, subnet, idempotent, date, ...operation } = input;
 	return(seal({
 		account,
 		signer,
 		previous,
 		network,
+		subnet,
 		idempotent,
 		date,
 		operations: [{ type: lib.Block.OperationType.MODIFY_PERMISSIONS, ...operation }]
@@ -185,12 +195,13 @@ export function modifyPermissionsBlock(input: SignedBlockContext & Omit<BlockJSO
 }
 
 export function setInfoBlock(input: SignedBlockContext & Omit<BlockJSONOperationSET_INFO, 'type'>): Promise<Block> {
-	const { account, signer, previous, network, idempotent, date, ...operation } = input;
+	const { account, signer, previous, network, subnet, idempotent, date, ...operation } = input;
 	return(seal({
 		account,
 		signer,
 		previous,
 		network,
+		subnet,
 		idempotent,
 		date,
 		operations: [{ type: lib.Block.OperationType.SET_INFO, ...operation }]
@@ -204,7 +215,7 @@ export function setInfoBlock(input: SignedBlockContext & Omit<BlockJSONOperation
  * [Keeta TS] index.js:65684-65686
  */
 export function manageCertificateBlock(input: SignedBlockContext & Omit<BlockJSONOperationMANAGE_CERTIFICATE, 'type'>): Promise<Block> {
-	const { account, signer, previous, network, idempotent, date, intermediateCertificates, ...fields } = input;
+	const { account, signer, previous, network, subnet, idempotent, date, intermediateCertificates, ...fields } = input;
 	const operation: BlockJSONOperationMANAGE_CERTIFICATE = { type: lib.Block.OperationType.MANAGE_CERTIFICATE, ...fields };
 	if (fields.method === lib.Block.AdjustMethod.ADD) {
 		operation.intermediateCertificates = intermediateCertificates ?? null;
@@ -216,6 +227,7 @@ export function manageCertificateBlock(input: SignedBlockContext & Omit<BlockJSO
 		signer,
 		previous,
 		network,
+		subnet,
 		idempotent,
 		date,
 		operations: [operation]
@@ -228,7 +240,7 @@ export function manageCertificateBlock(input: SignedBlockContext & Omit<BlockJSO
  * [Keeta TS] index.js:57612-57681
  */
 export function feeBlock(input: BlockContext & { readonly from: Account; readonly payments: readonly Pick<BlockJSONOperationSEND, 'to' | 'token' | 'amount'>[] }): Promise<Block> {
-	const { from, payments, previous, network, idempotent, date } = input;
+	const { from, payments, previous, network, subnet, idempotent, date } = input;
 	const fields: BlockJSONIncomplete = {
 		version: 2,
 		purpose: lib.Block.Purpose.FEE,
@@ -239,6 +251,9 @@ export function feeBlock(input: BlockContext & { readonly from: Account; readonl
 			return({ type: lib.Block.OperationType.SEND, ...payment });
 		})
 	};
+	if (subnet !== undefined) {
+		fields.subnet = subnet;
+	}
 	if (idempotent !== undefined) {
 		fields.idempotent = idempotent;
 	}

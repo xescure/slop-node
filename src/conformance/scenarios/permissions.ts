@@ -1,7 +1,7 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, GenericAccount, MultisigAddress, StorageAddress, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
-import type { BlockJSONOperationMODIFY_PERMISSIONS } from '@keetanetwork/keetanet-client/lib/block/operations.js';
+import type { BlockJSONOperationMODIFY_PERMISSIONS, BlockJSONOperationTOKEN_ADMIN_MODIFY_BALANCE } from '@keetanetwork/keetanet-client/lib/block/operations.js';
 import type { ChainCursor } from '../../ledger/storage/suite/support.js';
 import {
 	createMultisigBlock,
@@ -40,6 +40,8 @@ const lib = KeetaNet.lib;
 type Certificate = InstanceType<typeof lib.Utils.Certificate.Certificate>;
 
 type PermissionFlags = ConstructorParameters<typeof lib.Permissions>[0];
+
+type BalanceAdjustment = BlockJSONOperationTOKEN_ADMIN_MODIFY_BALANCE['method'];
 
 const DAY = 24 * HOUR;
 
@@ -305,14 +307,14 @@ function narrowNetworkDefault(recorder: CaseRecorder): Promise<Block> {
 }
 
 /** One more unit of the base token for user 0, as genesis grants balances, signed by the key given. */
-function modifyBalance(recorder: CaseRecorder, signer: Account): Promise<Block> {
+function modifyBalance(recorder: CaseRecorder, signer: Account, method: BalanceAdjustment = lib.Block.AdjustMethod.ADD): Promise<Block> {
 	const account = recorder.user(0);
 	return(operationsBlock({
 		account,
 		signer,
 		previous: recorder.genesisHead(account),
 		network: recorder.network.network,
-		operations: [{ type: lib.Block.OperationType.TOKEN_ADMIN_MODIFY_BALANCE, token: recorder.network.baseToken, amount: 1n, method: lib.Block.AdjustMethod.ADD }]
+		operations: [{ type: lib.Block.OperationType.TOKEN_ADMIN_MODIFY_BALANCE, token: recorder.network.baseToken, amount: 1n, method }]
 	}));
 }
 
@@ -567,6 +569,37 @@ export const permissionScenarios: readonly Scenario[] = [
 	scenario('OP1', 'a TOKEN_ADMIN_MODIFY_BALANCE, signed by the token\'s owner, is refused as unsupported', {}, async function(recorder) {
 		await recorder.addGenesis(0);
 		await recorder.vote(0, [await modifyBalance(recorder, recorder.network.trustedSigner)]);
+	}),
+	/*
+	 * Once enabled, the operation needs TOKEN_ADMIN_MODIFY_BALANCE on the
+	 * token, and moves the amount between the account and the token's own
+	 * balance, which genesis leaves empty.
+	 * [Keeta TS] index.js:68240-68283, 68590-68599
+	 */
+	scenario('OP2', 'a node that enables TOKEN_ADMIN_MODIFY_BALANCE refuses it signed without rights, refuses an owner-signed ADD the token cannot fund, and gives an owner-signed SUBTRACT a temporary vote; a node with default operations refuses it as unsupported', {
+		nodes: [
+			{ representative: 0, fee: { type: 'free' }, mode: 'read-write' },
+			{ representative: 1, fee: { type: 'free' }, mode: 'read-write', operations: { enableTokenAdminModifyBalance: true } }
+		]
+	}, async function(recorder) {
+		await recorder.addGenesis(0, 1);
+		const added = await modifyBalance(recorder, recorder.network.trustedSigner);
+		await recorder.vote(0, [added]);
+		await recorder.vote(1, [await modifyBalance(recorder, recorder.user(1), lib.Block.AdjustMethod.SUBTRACT)]);
+		await recorder.vote(1, [added]);
+		await recorder.vote(1, [await modifyBalance(recorder, recorder.network.trustedSigner, lib.Block.AdjustMethod.SUBTRACT)]);
+	}),
+	scenario('OP3', 'a node whose setRep policy refuses every delegation refuses one, and a node whose policy admits every delegation gives it a temporary vote', {
+		nodes: [
+			{ representative: 0, fee: { type: 'free' }, mode: 'read-write', operations: { setRep: 'refuseAll' } },
+			{ representative: 1, fee: { type: 'free' }, mode: 'read-write', operations: { setRep: 'allowAll' } }
+		]
+	}, async function(recorder) {
+		await recorder.addGenesis(0, 1);
+		const account = recorder.user(0);
+		const delegation = await setRepresentativeBlock({ account, representative: recorder.user(1), previous: recorder.genesisHead(account), network: recorder.network.network });
+		await recorder.vote(0, [delegation]);
+		await recorder.vote(1, [delegation]);
 	}),
 	scenario('OP4', 'delegating to an account that is no representative and has no weight gets a temporary vote', {}, async function(recorder) {
 		await recorder.addGenesis(0);

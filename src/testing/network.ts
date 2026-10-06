@@ -44,13 +44,21 @@ export type TestNetworkOptions = {
 	readonly seeds?: TestNetworkSeeds;
 };
 
-/** A flat fee without a payee is paid to the issuer of each vote, and without a token in the base token. */
-export type TestFeePolicy = { readonly kind: 'free' } | { readonly kind: 'flat'; readonly amount: bigint; readonly token?: TokenAddress; readonly payTo?: Account | StorageAddress };
+/** A fee without a payee is paid to the issuer of each vote, and without a token in the base token. */
+export type TestFeeAmount = { readonly amount: bigint; readonly token?: TokenAddress; readonly payTo?: Account | StorageAddress };
+
+/** Nothing, one amount, or a list of amounts the payer chooses from, the same for every request. */
+export type TestFeePolicy =
+	{ readonly kind: 'free' } |
+	({ readonly kind: 'flat' } & TestFeeAmount) |
+	{ readonly kind: 'choices'; readonly choices: readonly TestFeeAmount[] };
 
 export type TestLedgerOptions = {
 	readonly fee?: TestFeePolicy;
 	readonly heapProcessWindowMs?: LedgerConfig['heapProcessWindowMs'];
 	readonly ledgerWriteMode?: LedgerConfig['ledgerWriteMode'];
+	readonly subnet?: LedgerConfig['subnet'];
+	readonly operations?: LedgerConfig['operations'];
 	/** Where a ledger without a node logs; a node keeps its own log. */
 	readonly log?: LedgerConfig['log'];
 };
@@ -90,25 +98,32 @@ type Holder = {
 
 type ComputeFee = ConstructorParameters<typeof lib.Ledger>[0]['computeFeeFromBlocks'];
 
+function feeAmountAndToken(fee: TestFeeAmount): FeeAmountAndToken {
+	const { amount, token, payTo } = fee;
+	const result: FeeAmountAndToken = { amount };
+	if (token !== undefined) {
+		result.token = token;
+	}
+	if (payTo !== undefined) {
+		result.payTo = payTo;
+	}
+	return(result);
+}
+
 function computeFeeFor(policy: TestFeePolicy): ComputeFee {
 	switch (policy.kind) {
 		case 'free':
 			return(function() {
 				return(null);
 			});
-		case 'flat': {
-			const { amount, token, payTo } = policy;
-			const fee: FeeAmountAndToken = { amount };
-			if (token !== undefined) {
-				fee.token = token;
-			}
-			if (payTo !== undefined) {
-				fee.payTo = payTo;
-			}
+		case 'flat':
 			return(function() {
-				return({ ...fee });
+				return(feeAmountAndToken(policy));
 			});
-		}
+		case 'choices':
+			return(function() {
+				return(policy.choices.map(feeAmountAndToken));
+			});
 		default:
 			return(assertNever(policy));
 	}
@@ -124,6 +139,12 @@ function ledgerSettings(storageDriver: LedgerStorageAPI, options: TestLedgerOpti
 	}
 	if (options.ledgerWriteMode !== undefined) {
 		settings.ledgerWriteMode = options.ledgerWriteMode;
+	}
+	if (options.subnet !== undefined) {
+		settings.subnet = options.subnet;
+	}
+	if (options.operations !== undefined) {
+		settings.operations = options.operations;
 	}
 	return(settings);
 }

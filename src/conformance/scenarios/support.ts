@@ -27,12 +27,21 @@ export const MAXIMUM_SUPPLY: bigint = (10n ** 200n) - 1n;
 /** Blocks dated from this moment on may not carry a negative amount. [Keeta TS] index.js:61330 */
 export const NEGATIVE_AMOUNTS_REFUSED_FROM: Date = new Date(Date.UTC(2025, 10, 21));
 
+/** An idempotent key as a block carries it: the base64 of the text's bytes. */
+export function idempotentKey(text: string): string {
+	return(Buffer.from(text).toString('base64'));
+}
+
 export type SendOptions = {
 	/** Without a previous block, the sender's last genesis block; null opens the account. */
 	readonly previous?: BlockHash | null;
 	readonly to?: GenericAccount;
 	readonly amount?: bigint;
 	readonly date?: Date;
+	/** The case's network unless stated. */
+	readonly network?: bigint;
+	readonly subnet?: bigint;
+	readonly idempotent?: string;
 };
 
 /** User `from` sends the base token, one unit unless stated. */
@@ -45,7 +54,7 @@ export function send(recorder: CaseRecorder, from: number, options: SendOptions 
 
 /** Any key sends the base token, to the first user unless stated. */
 export function sendFrom(recorder: CaseRecorder, sender: Account, options: SendOptions = {}): Promise<Block> {
-	const { to = recorder.user(0), amount = 1n, date } = options;
+	const { to = recorder.user(0), amount = 1n, date, network = recorder.network.network, subnet, idempotent } = options;
 	let { previous } = options;
 	if (previous === undefined) {
 		previous = recorder.genesisHead(sender);
@@ -56,7 +65,9 @@ export function sendFrom(recorder: CaseRecorder, sender: Account, options: SendO
 		amount,
 		token: recorder.network.baseToken,
 		previous,
-		network: recorder.network.network,
+		network,
+		subnet,
+		idempotent,
 		date
 	}));
 }

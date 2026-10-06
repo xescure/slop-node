@@ -1,11 +1,11 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, GenericAccount, StorageAddress, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
-import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
+import type { Ledger, LedgerConfig } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { FeeAmountAndToken, Vote, VoteQuote, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import type { LedgerStorageDriverBase } from '../ledger/storage/base.js';
 import { createTestLedgerFactory, deriveTestKeys } from '../testing/network.js';
-import type { TestFeePolicy, TestKeys, TestLedgerFactory, TestLedgerOptions } from '../testing/network.js';
+import type { TestFeeAmount, TestFeePolicy, TestKeys, TestLedgerFactory, TestLedgerOptions } from '../testing/network.js';
 import { assertNever } from '../util/assert-never.js';
 import { DRIVER_WRAPPING_CODE, base64Bytes, caseAccount, decimalValue, toCaseAccount, toCaseBlockHash, toDecimal } from './case.js';
 import type {
@@ -19,6 +19,8 @@ import type {
 	CaseFeeAmount,
 	CaseFeePolicy,
 	CaseNode,
+	CaseNodeOperations,
+	CaseSetRepPolicy,
 	CaseVoteFee,
 	StapleReference,
 	VoteCase,
@@ -84,23 +86,70 @@ function requirePayee(account: GenericAccount, what: string): Account | StorageA
 	throw(new BrokenStep(`${what} can neither sign nor be a storage account`));
 }
 
+function testFeeAmount(fee: CaseFeeAmount): TestFeeAmount {
+	const amount: { amount: bigint; token?: TokenAddress; payTo?: Account | StorageAddress } = { amount: decimalValue(fee.amount) };
+	if (fee.token !== undefined) {
+		amount.token = requireToken(caseAccount(fee.token), 'the fee token');
+	}
+	if (fee.payTo !== undefined) {
+		amount.payTo = requirePayee(caseAccount(fee.payTo), 'the fee payee');
+	}
+	return(amount);
+}
+
 function testFeePolicy(fee: CaseFeePolicy): TestFeePolicy {
 	switch (fee.type) {
 		case 'free':
 			return({ kind: 'free' });
-		case 'flat': {
-			const policy: { kind: 'flat'; amount: bigint; token?: TokenAddress; payTo?: Account | StorageAddress } = { kind: 'flat', amount: decimalValue(fee.amount) };
-			if (fee.token !== undefined) {
-				policy.token = requireToken(caseAccount(fee.token), 'the fee token');
-			}
-			if (fee.payTo !== undefined) {
-				policy.payTo = requirePayee(caseAccount(fee.payTo), 'the fee payee');
-			}
-			return(policy);
-		}
+		case 'flat':
+			return({ kind: 'flat', ...testFeeAmount(fee) });
+		case 'choices':
+			return({ kind: 'choices', choices: fee.choices.map(testFeeAmount) });
 		default:
 			return(assertNever(fee));
 	}
+}
+
+type LedgerOperations = NonNullable<LedgerConfig['operations']>;
+
+/** Upstream's setRep hook answering every delegation the same way. */
+function setRepHook(policy: CaseSetRepPolicy): NonNullable<LedgerOperations['setRep']> {
+	let answer: boolean;
+	switch (policy) {
+		case 'allowAll':
+			answer = true;
+			break;
+		case 'refuseAll':
+			answer = false;
+			break;
+		default:
+			return(assertNever(policy));
+	}
+	return(function() {
+		return(Promise.resolve(answer));
+	});
+}
+
+function ledgerOperations(operations: CaseNodeOperations): LedgerOperations {
+	const settings: LedgerOperations = {};
+	if (operations.enableTokenAdminModifyBalance !== undefined) {
+		settings.enableTokenAdminModifyBalance = operations.enableTokenAdminModifyBalance;
+	}
+	if (operations.setRep !== undefined) {
+		settings.setRep = setRepHook(operations.setRep);
+	}
+	return(settings);
+}
+
+function testLedgerOptions(node: CaseNode): TestLedgerOptions {
+	const options: { -readonly [Key in keyof TestLedgerOptions]: TestLedgerOptions[Key] } = { fee: testFeePolicy(node.fee), ledgerWriteMode: node.mode };
+	if (node.subnet !== undefined) {
+		options.subnet = decimalValue(node.subnet);
+	}
+	if (node.operations !== undefined) {
+		options.operations = ledgerOperations(node.operations);
+	}
+	return(options);
 }
 
 function feeAmountOf(fee: FeeAmountAndToken): CaseFeeAmount {
@@ -391,7 +440,7 @@ export class CaseRunner {
 		if (existing !== undefined) {
 			return(existing);
 		}
-		const options: TestLedgerOptions = { fee: testFeePolicy(node.fee), ledgerWriteMode: node.mode };
+		const options = testLedgerOptions(node);
 		const storage = await this.#createDriver();
 		let ledger: Ledger;
 		if (representative === null) {

@@ -97,8 +97,19 @@ const voteCase: VoteCase = {
 		representativeWeights: [toDecimal(400n), toDecimal(300n)]
 	},
 	nodes: [
-		{ representative: 0, fee: { type: 'flat', amount: toDecimal(5n), token: baseToken, payTo: representative }, mode: 'read-write' },
-		{ representative: 1, fee: { type: 'free' }, mode: 'no-voting' },
+		{
+			representative: 0,
+			fee: { type: 'flat', amount: toDecimal(5n), token: baseToken, payTo: representative },
+			mode: 'read-write',
+			operations: { enableTokenAdminModifyBalance: true, setRep: 'refuseAll' }
+		},
+		{
+			representative: 1,
+			fee: { type: 'choices', choices: [{ amount: toDecimal(0n) }, { amount: toDecimal(7n), token: baseToken, payTo: holder }] },
+			mode: 'no-voting',
+			subnet: toDecimal(5n),
+			operations: { setRep: 'allowAll' }
+		},
 		{ representative: null, fee: { type: 'free' }, mode: 'bootstrap-only' }
 	],
 	steps
@@ -179,6 +190,17 @@ describe('vote case format', function() {
 		});
 		expect(nodeAt(encodedTree(), ['cases', 0, 'steps', 9, 'action'])).toEqual({ type: 'add', staple: { fromStep: 0 }, from: 'bootstrap' });
 		expect(nodeAt(encodedTree(), ['cases', 0, 'nodes', 2])).toEqual({ representative: null, fee: { type: 'free' }, mode: 'bootstrap-only' });
+	});
+
+	test('a node\'s subnet and operations follow its mode, and are absent unless set', function() {
+		const tree = encodedTree();
+
+		expect(Object.keys(nodeAt(tree, ['cases', 0, 'nodes', 0]))).toEqual(['representative', 'fee', 'mode', 'operations']);
+		expect(Object.keys(nodeAt(tree, ['cases', 0, 'nodes', 1]))).toEqual(['representative', 'fee', 'mode', 'subnet', 'operations']);
+		expect(Object.keys(nodeAt(tree, ['cases', 0, 'nodes', 2]))).toEqual(['representative', 'fee', 'mode']);
+		expect(nodeAt(tree, ['cases', 0, 'nodes', 0, 'operations'])).toEqual({ enableTokenAdminModifyBalance: true, setRep: 'refuseAll' });
+		expect(Reflect.get(nodeAt(tree, ['cases', 0, 'nodes', 1]), 'subnet')).toBe('5');
+		expect(nodeAt(tree, ['cases', 0, 'nodes', 1, 'fee'])).toEqual({ type: 'choices', choices: [{ amount: '0' }, { amount: '7', token: baseToken, payTo: holder }] });
 	});
 
 	test('every case states its basis, after its title', function() {
@@ -283,6 +305,27 @@ describe('vote case format', function() {
 		['an account that does not parse', function(tree: JSONTree): void {
 			setIn(tree, ['cases', 0, 'nodes', 0, 'fee'], 'payTo', 'keeta_nope');
 		}, /cases\[0\]\.nodes\[0\]\.fee\.payTo: expected a keeta_ account/, false],
+		['a fee policy with no choices', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'nodes', 1, 'fee'], 'choices', []);
+		}, /cases\[0\]\.nodes\[1\]\.fee\.choices: expected at least one choice/, true],
+		['a fee choice with a field of the policy', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'nodes', 1, 'fee', 'choices', 0], 'type', 'flat');
+		}, /nodes\[1\]\.fee\.choices\[0\]\.type: unexpected field/, true],
+		['a subnet that is not a decimal', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'nodes', 1], 'subnet', 5);
+		}, /cases\[0\]\.nodes\[1\]\.subnet: expected a string/, true],
+		['empty operations', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'nodes', 1], 'operations', {});
+		}, /cases\[0\]\.nodes\[1\]\.operations: expected at least one setting/, true],
+		['an unknown operations setting', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'nodes', 0, 'operations'], 'setRepPolicy', 'allowAll');
+		}, /nodes\[0\]\.operations\.setRepPolicy: unexpected field/, true],
+		['an operations switch that is not a boolean', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'nodes', 0, 'operations'], 'enableTokenAdminModifyBalance', 'true');
+		}, /nodes\[0\]\.operations\.enableTokenAdminModifyBalance: expected a boolean/, true],
+		['a setRep policy that is not a constant', function(tree: JSONTree): void {
+			setIn(tree, ['cases', 0, 'nodes', 0, 'operations'], 'setRep', 'weightedOnly');
+		}, /nodes\[0\]\.operations\.setRep: unknown value "weightedOnly"/, true],
 		['an unknown ledger mode', function(tree: JSONTree): void {
 			setIn(tree, ['cases', 0, 'nodes', 0], 'mode', 'write-only');
 		}, /cases\[0\]\.nodes\[0\]\.mode: unknown value "write-only"/, true],

@@ -60,20 +60,49 @@ export type CaseNetwork = {
 	readonly representativeWeights: readonly Decimal[];
 };
 
-/** A flat fee without a token is in the base token, and without a payee is paid to the voter. */
+export type CaseFeeAmount = {
+	readonly amount: Decimal;
+	readonly token?: CaseAccount;
+	readonly payTo?: CaseAccount;
+};
+
+/**
+ * What a node charges for every temporary vote and quote, whatever its
+ * blocks: nothing, one amount, or a list of amounts the payer chooses from.
+ * An amount without a token is in the base token, and without a payee is
+ * paid to the voter.
+ */
 export type CaseFeePolicy =
 	{ readonly type: 'free' } |
-	{ readonly type: 'flat'; readonly amount: Decimal; readonly token?: CaseAccount; readonly payTo?: CaseAccount };
+	({ readonly type: 'flat' } & CaseFeeAmount) |
+	{ readonly type: 'choices'; readonly choices: readonly CaseFeeAmount[] };
+
+type LedgerOperations = NonNullable<LedgerConfig['operations']>;
+
+/**
+ * A constant answer of upstream's setRep hook for every delegation. A hook
+ * that inspects the account or the representative is code, not data.
+ */
+export type CaseSetRepPolicy = 'allowAll' | 'refuseAll';
+
+/** The node's operation settings, as upstream's LedgerConfig.operations; an absent setting keeps upstream's default. */
+export type CaseNodeOperations = {
+	readonly enableTokenAdminModifyBalance?: NonNullable<LedgerOperations['enableTokenAdminModifyBalance']>;
+	readonly setRep?: CaseSetRepPolicy;
+};
 
 /**
  * One node of the case: a representative's, or with a null representative
  * one that holds no key. A representative runs at most one node, so the
- * issuer of a vote names the node that produced it.
+ * issuer of a vote names the node that produced it. Without a subnet the
+ * node accepts only blocks without one.
  */
 export type CaseNode = {
 	readonly representative: number | null;
 	readonly fee: CaseFeePolicy;
 	readonly mode: CaseLedgerMode;
+	readonly subnet?: Decimal;
+	readonly operations?: CaseNodeOperations;
 };
 
 /**
@@ -95,12 +124,6 @@ export type CaseAction =
 	{ readonly type: 'vote'; readonly blocks: readonly Base64[]; readonly otherVotes?: readonly VoteReference[]; readonly quote?: VoteReference } |
 	{ readonly type: 'quote'; readonly blocks: readonly Base64[] } |
 	{ readonly type: 'gc' };
-
-export type CaseFeeAmount = {
-	readonly amount: Decimal;
-	readonly token?: CaseAccount;
-	readonly payTo?: CaseAccount;
-};
 
 /** The fee a vote or quote carries: none, one amount, or a list of choices. */
 export type CaseVoteFee =
@@ -185,6 +208,11 @@ const LEDGER_MODES = {
 	'read-only': true
 } satisfies Record<CaseLedgerMode, true>;
 
+const SET_REP_POLICIES = {
+	allowAll: true,
+	refuseAll: true
+} satisfies Record<CaseSetRepPolicy, true>;
+
 const CASE_BASES = {
 	upstream: true,
 	contract: true
@@ -258,7 +286,7 @@ export function toCaseBlockHash(hash: BlockHash): CaseBlockHash {
 
 /* Encoding. Objects are built field by field, so key order never depends on the input. */
 
-type JSONValue = string | number | null | readonly JSONValue[] | { readonly [key: string]: JSONValue };
+type JSONValue = string | number | boolean | null | readonly JSONValue[] | { readonly [key: string]: JSONValue };
 
 type JSONObject = { [key: string]: JSONValue };
 
@@ -273,15 +301,45 @@ function encodeFeeAmount(fee: CaseFeeAmount, into: JSONObject): JSONObject {
 	return(into);
 }
 
+function encodeFeeChoices(choices: readonly CaseFeeAmount[]): JSONObject[] {
+	return(choices.map(function(choice): JSONObject {
+		return(encodeFeeAmount(choice, {}));
+	}));
+}
+
 function encodeFeePolicy(fee: CaseFeePolicy): JSONObject {
 	switch (fee.type) {
 		case 'free':
 			return({ type: fee.type });
 		case 'flat':
 			return(encodeFeeAmount(fee, { type: fee.type }));
+		case 'choices':
+			return({ type: fee.type, choices: encodeFeeChoices(fee.choices) });
 		default:
 			return(assertNever(fee));
 	}
+}
+
+function encodeOperations(operations: CaseNodeOperations): JSONObject {
+	const encoded: JSONObject = {};
+	if (operations.enableTokenAdminModifyBalance !== undefined) {
+		encoded['enableTokenAdminModifyBalance'] = operations.enableTokenAdminModifyBalance;
+	}
+	if (operations.setRep !== undefined) {
+		encoded['setRep'] = operations.setRep;
+	}
+	return(encoded);
+}
+
+function encodeNode(node: CaseNode): JSONObject {
+	const encoded: JSONObject = { representative: node.representative, fee: encodeFeePolicy(node.fee), mode: node.mode };
+	if (node.subnet !== undefined) {
+		encoded['subnet'] = node.subnet;
+	}
+	if (node.operations !== undefined) {
+		encoded['operations'] = encodeOperations(node.operations);
+	}
+	return(encoded);
 }
 
 function encodeVoteFee(fee: CaseVoteFee): JSONObject {
@@ -291,12 +349,7 @@ function encodeVoteFee(fee: CaseVoteFee): JSONObject {
 		case 'single':
 			return(encodeFeeAmount(fee, { type: fee.type }));
 		case 'choices':
-			return({
-				type: fee.type,
-				choices: fee.choices.map(function(choice): JSONObject {
-					return(encodeFeeAmount(choice, {}));
-				})
-			});
+			return({ type: fee.type, choices: encodeFeeChoices(fee.choices) });
 		default:
 			return(assertNever(fee));
 	}
@@ -404,9 +457,7 @@ function encodeCase(voteCase: VoteCase): JSONObject {
 			},
 			representativeWeights: [...network.representativeWeights]
 		},
-		nodes: voteCase.nodes.map(function(node): JSONObject {
-			return({ representative: node.representative, fee: encodeFeePolicy(node.fee), mode: node.mode });
-		}),
+		nodes: voteCase.nodes.map(encodeNode),
 		steps: voteCase.steps.map(encodeStep)
 	});
 }
@@ -585,17 +636,55 @@ function readFeeAmount(fields: Fields): CaseFeeAmount {
 	return(fee);
 }
 
+function readFeeChoices(fields: Fields): CaseFeeAmount[] {
+	return(readArray(fields.get('choices'), fields.at('choices'), function(choice, choicePath): CaseFeeAmount {
+		return(readFeeAmount(readObject(choice, choicePath, ['amount'], ['token', 'payTo'])));
+	}));
+}
+
 function readFeePolicy(value: unknown, path: string): CaseFeePolicy {
-	const type = readChoice(readObject(value, path, ['type'], ['amount', 'token', 'payTo']).get('type'), `${path}.type`, { free: true, flat: true });
+	const type = readChoice(readObject(value, path, ['type'], ['amount', 'token', 'payTo', 'choices']).get('type'), `${path}.type`, { free: true, flat: true, choices: true });
 	switch (type) {
 		case 'free':
 			readObject(value, path, ['type']);
 			return({ type });
 		case 'flat':
 			return({ type, ...readFeeAmount(readObject(value, path, ['type', 'amount'], ['token', 'payTo'])) });
+		case 'choices': {
+			// Upstream treats an empty list as no fee at all, which 'free' already states.
+			const fields = readObject(value, path, ['type', 'choices']);
+			const choices = readFeeChoices(fields);
+			if (choices.length === 0) {
+				throw(new CaseFormatError(fields.at('choices'), 'expected at least one choice'));
+			}
+			return({ type, choices });
+		}
 		default:
 			return(assertNever(type));
 	}
+}
+
+function readBoolean(value: unknown, path: string): boolean {
+	if (typeof value !== 'boolean') {
+		throw(new CaseFormatError(path, 'expected a boolean'));
+	}
+	return(value);
+}
+
+// Upstream treats empty operations as absent ones, so only the absent form is written.
+function readOperations(value: unknown, path: string): CaseNodeOperations {
+	const fields = readObject(value, path, [], ['enableTokenAdminModifyBalance', 'setRep']);
+	const operations: { enableTokenAdminModifyBalance?: boolean; setRep?: CaseSetRepPolicy } = {};
+	if (fields.has('enableTokenAdminModifyBalance')) {
+		operations.enableTokenAdminModifyBalance = readBoolean(fields.get('enableTokenAdminModifyBalance'), fields.at('enableTokenAdminModifyBalance'));
+	}
+	if (fields.has('setRep')) {
+		operations.setRep = readChoice(fields.get('setRep'), fields.at('setRep'), SET_REP_POLICIES);
+	}
+	if (Object.keys(operations).length === 0) {
+		throw(new CaseFormatError(path, 'expected at least one setting'));
+	}
+	return(operations);
 }
 
 function readVoteFee(value: unknown, path: string): CaseVoteFee {
@@ -606,15 +695,8 @@ function readVoteFee(value: unknown, path: string): CaseVoteFee {
 			return({ type });
 		case 'single':
 			return({ type, ...readFeeAmount(readObject(value, path, ['type', 'amount'], ['token', 'payTo'])) });
-		case 'choices': {
-			const fields = readObject(value, path, ['type', 'choices']);
-			return({
-				type,
-				choices: readArray(fields.get('choices'), fields.at('choices'), function(choice, choicePath): CaseFeeAmount {
-					return(readFeeAmount(readObject(choice, choicePath, ['amount'], ['token', 'payTo'])));
-				})
-			});
-		}
+		case 'choices':
+			return({ type, choices: readFeeChoices(readObject(value, path, ['type', 'choices'])) });
 		default:
 			return(assertNever(type));
 	}
@@ -816,7 +898,7 @@ function readNetwork(value: unknown, path: string): CaseNetwork {
 function readNodes(value: unknown, path: string, representatives: number): CaseNode[] {
 	const running = new Set<number>();
 	const nodes = readArray(value, path, function(item, nodePath): CaseNode {
-		const fields = readObject(item, nodePath, ['representative', 'fee', 'mode']);
+		const fields = readObject(item, nodePath, ['representative', 'fee', 'mode'], ['subnet', 'operations']);
 		let representative: number | null = null;
 		if (fields.get('representative') !== null) {
 			representative = readIndex(fields.get('representative'), fields.at('representative'), representatives, `expected null or a representative index below ${String(representatives)}`);
@@ -825,11 +907,18 @@ function readNodes(value: unknown, path: string, representatives: number): CaseN
 			}
 			running.add(representative);
 		}
-		return({
+		const node: { representative: number | null; fee: CaseFeePolicy; mode: CaseLedgerMode; subnet?: Decimal; operations?: CaseNodeOperations } = {
 			representative,
 			fee: readFeePolicy(fields.get('fee'), fields.at('fee')),
 			mode: readChoice(fields.get('mode'), fields.at('mode'), LEDGER_MODES)
-		});
+		};
+		if (fields.has('subnet')) {
+			node.subnet = readDecimal(fields.get('subnet'), fields.at('subnet'));
+		}
+		if (fields.has('operations')) {
+			node.operations = readOperations(fields.get('operations'), fields.at('operations'));
+		}
+		return(node);
 	});
 	if (nodes.length === 0) {
 		throw(new CaseFormatError(path, 'expected at least one node'));
