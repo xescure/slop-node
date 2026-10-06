@@ -783,7 +783,7 @@
           "minLength": 1
         },
         "basis": {
-          "description": "What decides the outcomes: \"upstream\", the Ledger alone; or \"contract\", which also depends on a rule of the storage contract that the case's title names.",
+          "description": "What decides the outcomes: \"upstream\", the Ledger and the meaning of the storage interface; or \"contract\", which also depends on a rule of the storage contract that the case's title names.",
           "enum": [
             "upstream",
             "contract"

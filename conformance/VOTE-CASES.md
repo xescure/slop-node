@@ -81,7 +81,7 @@ A case is:
 
 ### 3.1 `basis`
 
-- `"upstream"`: the outcomes follow from `Ledger` and the meaning of the storage interface alone. Any storage that answers each read as the interface means it gives the same outcomes.
+- `"upstream"`: the outcomes follow from `Ledger` and the meaning of the storage interface alone. Any storage that answers each read as the interface means it gives the same outcomes. For this node's expired votes, that meaning bounds when storage stops returning them (section 6.2).
 - `"contract"`: an outcome also depends on a choice that `Ledger` leaves to its storage and that `CONTRACT.md` makes. The title names the rule, as in "storage contract D4: ...". Section 5 lists these cases and what each rule decides.
 
 A replay against storage that makes another choice may skip the contract cases, or run them as checks of the named rule.
@@ -264,7 +264,7 @@ Inputs are parsed in a fixed order, and the first failure decides:
 
 Blocks parse as Keeta blocks, votes as `Vote`, quotes as `VoteQuote`, staples as `VoteStaple`, each at the step's moment. A parse failure is `rejectedInput {error}`, where `error` has exactly the shape of a refusal's. The cases record these parse failures:
 
-- `VOTE_EXPIRED`: a vote more than 60 s past its `validityTo` (C7, C9, F11, EO6)
+- `VOTE_EXPIRED`: a vote or quote more than 60 s past its `validityTo` (C7, C9, F11, EO6)
 - `VOTE_MOMENT_BEFORE_VALIDITY_FROM`: a vote whose `validityFrom` is more than 60 s ahead (C10, EO6)
 - `VOTE_STAPLE_DUPLICATE_VOTE_ISSUER` and `VOTE_STAPLE_PERMANENCE_MISMATCH`: staples built without validation (Q5, Q9)
 
@@ -318,7 +318,7 @@ A broken step is a replay failure and ends the case, because the steps after it 
 | I3-D12 | `network.json` | D4, D12 | A side claim counts only while an unexpired vote of this node covers its block, so it refuses another block until 60 s after the vote's `validityTo`. |
 | I3c-D12 | `network.json` | D12 | When the main ledger and the side ledger both hold a key, `'both'` answers with the main block, so `existingBlockhash` names it. |
 
-C11 itself is an upstream case: it pins only the moments at which every storage agrees, exactly at `validityTo` (still refused) and 60 s and 1 ms after it (given).
+C11 itself is an upstream case: it pins only the bounds that every storage must meet (section 6.2), exactly at `validityTo` (still refused) and 60 s and 1 ms after it (given).
 
 ## 6. Upstream behavior the cases pin
 
@@ -338,7 +338,7 @@ Parsing accepts a vote from 60 s before its `validityFrom` until 60 s after its 
 - a vote issued 60 s ahead parses, and 60.001 s ahead is `VOTE_MOMENT_BEFORE_VALIDITY_FROM` (C10)
 - `Ledger.vote` checks no expiry of the other votes itself, so votes past their `validityTo` but within the slop still support a permanent vote (C8)
 
-The slop is the parser's. The votes this node stored earlier are a different matter: `Ledger.vote` reads them back from storage to find competing votes [Keeta TS] index.js:69281-69305 and checks no expiry on them, so when they stop counting is the storage's rule. C11 pins what any storage does: the vote still counts at `validityTo`, and no longer 60 s and 1 ms after it. C11-D4 and I3-D12 pin the contract's edge between the two (section 5).
+The slop is the parser's. The votes this node stored earlier are a different matter: `Ledger.vote` reads them back from storage to find competing votes [Keeta TS] index.js:69281-69305 and checks no expiry on them, so when they stop counting is the storage's rule. Answering as the storage interface means (section 3.1) bounds that rule on both sides: storage must keep returning this node's temporary vote at least until its `validityTo`, and must stop returning it once the moment is more than 60 s past its `validityTo`, when no node parses it any more. C11 pins those two bounds: the vote still counts at `validityTo`, and no longer 60 s and 1 ms after it. Storage that never expires votes fails C11. Between the bounds the edge is the storage's choice: `CONTRACT.md` D4 places it at the latest the bounds allow, so the vote counts while the moment is at most 60 s past `validityTo`, which C11-D4 and I3-D12 pin (section 5).
 
 ### 6.3 Fees
 
@@ -542,7 +542,7 @@ Every row of the catalog is a case, an exclusion, or both:
 | C8 | C8 | `clock.json` | Adapted: a 7-minute-old vote cannot be passed as bytes. At +6 min, other votes past their validity but within the slop give a permanent vote, which shows that `Ledger.vote` checks no expiry itself. |
 | C9 | C9 | `clock.json` | |
 | C10 | C10 | `clock.json` | Pinned at the boundary: +60 s parses, +60.001 s does not. |
-| C11 | C11 | `clock.json` | Pins only the moments at which every storage answers alike; C11-D4 pins the contract's edge between them. |
+| C11 | C11 | `clock.json` | Pins only the bounds that every storage must meet (section 6.2); C11-D4 pins the contract's edge between them. |
 | CE5 | CE5 | `permissions.json` | Kept with the other certificate cases. A holder whose certificate is still valid is admitted at the same moment. |
 
 #### Conflicts
