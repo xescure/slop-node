@@ -5,6 +5,7 @@ import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { Ledger, LedgerConfig, LedgerStorageAPI } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { Node, NodeConfig } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import { assertNever } from '../util/assert-never.js';
 
 const lib = KeetaNet.lib;
 
@@ -64,10 +65,6 @@ type Holder = {
 };
 
 type ComputeFee = ConstructorParameters<typeof lib.Ledger>[0]['computeFeeFromBlocks'];
-
-function assertNever(value: never): never {
-	throw(new Error(`Unexpected value: ${String(value)}`));
-}
 
 function computeFeeFor(policy: TestFeePolicy): ComputeFee {
 	switch (policy.kind) {

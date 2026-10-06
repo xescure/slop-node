@@ -15,7 +15,6 @@ export type ConfirmedLedgerEffect = Awaited<ReturnType<ComputeLedgerEffect>>;
 /** The storage reads computeLedgerEffect makes. */
 export type LedgerEffectReader = Parameters<ComputeLedgerEffect>[2];
 
-
 /** Account info fields a staple sets; an absent field keeps the stored value. */
 export type AccountInfoUpdate = {
 	readonly name?: AccountInfo['name'];
