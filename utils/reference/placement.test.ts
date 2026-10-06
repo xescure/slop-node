@@ -83,3 +83,23 @@ test('never splits out third-party modules', function(): void {
 
 	expect(placement).toEqual({ kind: 'third-party', module: vendor });
 });
+
+test.each([
+	'lib/ledger/index.js',
+	'src/ledger/index.d.ts',
+	'lib/../../etc/passwd.d.ts',
+	'api/../lib/a.d.ts',
+	'/lib/a.d.ts',
+	'lib/.d.ts.txt',
+	'library/a.d.ts',
+	''
+])('rejects the typings path %j', function(value): void {
+	expect(function(): TypingsPath {
+		return(convertStringToTypingsPath(value));
+	}).toThrow(/unsafe typings path/);
+});
+
+test('accepts nested lib and api typings paths', function(): void {
+	expect(convertStringToTypingsPath('lib/ledger/index.d.ts')).toBe('lib/ledger/index.d.ts');
+	expect(convertStringToTypingsPath('api/node.d.ts')).toBe('api/node.d.ts');
+});

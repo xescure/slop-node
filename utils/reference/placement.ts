@@ -14,8 +14,16 @@ export type ModulePlacement =
 
 type TypingsScore = { readonly typingsPath: TypingsPath; readonly score: number };
 
-/** The only place a plain string becomes a typings path: call it with a path taken from the published package listing. */
+const typingsPathPattern = /^(lib|api)\/.+\.d\.ts$/;
+
+/**
+ * The only place a plain string becomes a typings path: call it with a path taken from the published package listing.
+ * Typings paths become output file names, so anything that could step outside a directory is rejected here.
+ */
 export function convertStringToTypingsPath(value: string): TypingsPath {
+	if (!typingsPathPattern.test(value) || value.split('/').includes('..')) {
+		throw(new Error(`unsafe typings path ${JSON.stringify(value)}: expected lib/ or api/ followed by a .d.ts file`));
+	}
 	return(value as TypingsPath);
 }
 
