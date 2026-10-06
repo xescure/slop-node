@@ -26,9 +26,9 @@
 
 **Temporary and permanent votes.** A temporary vote is valid until five minutes after it is issued [Keeta TS] index.js:70204-70207. A permanent vote is valid for about a thousand years [Keeta TS] index.js:81526-81529 and is flagged `$permanent` [Keeta TS] index.js:80376-80380.
 
-**Live.** A stored vote is live at a moment when Keeta's `Vote` class would accept it at that moment (D4). A side block counts only while a live side vote covers it, and a side idempotent key counts only while its block counts.
+**Live and unexpired.** A stored vote is live at a moment when Keeta's `Vote` class would accept it at that moment. One of this node's side votes is unexpired at moment m unless it is temporary and m - 60 s > `validityTo`. Side reads and gc use only the expiry bound, never the start of validity (D4). A side block counts only while an unexpired side vote covers it, and a side idempotent key counts only while its block counts.
 
-**Transaction moment.** `transaction.moment`, which `Ledger.beginTransaction` sets to the wall clock when an attempt starts [Keeta TS] index.js:70393-70396. Each retry is a new attempt with a new moment. The transaction moment is the "now" of every liveness decision in the transaction, and the confirmation moment of every staple the transaction applies. A driver never substitutes the wall clock or a database clock for it.
+**Transaction moment.** `transaction.moment`, which `Ledger.beginTransaction` sets to the wall clock when an attempt starts [Keeta TS] index.js:70393-70396. Each retry is a new attempt with a new moment. The transaction moment is the "now" of every expiry decision in the transaction, and the confirmation moment of every staple the transaction applies. A driver never substitutes the wall clock or a database clock for it.
 
 **Selector.** `LedgerSelector` is `'main' | 'side' | 'both'`. Members that take one answer from the main ledger, the side ledger, or both (D7). Members that take none read the main ledger only.
 
@@ -49,7 +49,7 @@ The walkthrough follows representative R, which runs a node with its private key
 1. `beginTransaction({ node, moment, identifier: 'db-add', readOnly: false })`.
 2. `delegatedWeight(tx)` returns `0n`, so the quorum is a vote by the initial trusted account [Keeta TS] index.js:69740-69751.
 3. `adjust(tx, genesis, effects)`, where `computeEffectOfBlocks` has computed `effects` in memory [Keeta TS] index.js:69404-69407:
-   1. Base: the chain-order check, which makes no storage call (D14).
+   1. Base: the chain-order and shared-previous checks, which make no storage call (D14).
    2. Base, `preAdjust`: `getBlockHeights` for every block, all `null`, then for the previous blocks outside the staple. Opening blocks get height 0, and each later block of the same chain gets its previous block's height plus one [Keeta TS] index.js:67678-67732.
    3. Base, the confirmed-history check: `getHeadBlock(tx, account, 'main')` for each opening block and `getBlockFromPrevious(tx, previous, 'main')` for every other block whose previous lies outside the staple. All are `null` (D14).
    4. Base, settlement statistics: on a ledger with a node and a private key, `getVotes(tx, hash, 'side')` for each block [Keeta TS] index.js:67593-67632.
@@ -67,7 +67,7 @@ The walkthrough follows representative R, which runs a node with its private key
 1. `beginTransaction({ identifier: 'db-vote', readOnly: false })`.
 2. If B carries an idempotent value: `getIdempotentBlockHash(tx, key, 'both', B.hash)`. A non-null answer refuses the vote with `LEDGER_IDEMPOTENT_KEY_EXISTS` [Keeta TS] index.js:69254-69259.
 3. Base: `getHeadBlockHashes(tx, {U})` calls `getHeadBlocks(tx, [U], 'both')`, which must return A. Otherwise the vote is refused with `LEDGER_NOT_SUCCESSOR`, `LEDGER_NOT_OPENING` or `LEDGER_NOT_EMPTY` [Keeta TS] index.js:69260-69276.
-4. `getVotesFromMultiplePrevious(tx, [A], 'both', R)` returns `null`, so no successor of A has a live vote by R [Keeta TS] index.js:69281-69306.
+4. `getVotesFromMultiplePrevious(tx, [A], 'both', R)` returns `null`, so no successor of A has an unexpired vote by R [Keeta TS] index.js:69281-69306.
 5. Outcome validation reads the account state the blocks need: `getAccountInfo`, `listACLsByPrincipal`, `listACLsByEntity`, `getAccountCertificates`, `getAccountCertificateByHash`, `listOwners` and `getBalance` [Keeta TS] index.js:69760-69880, 69982-70095.
 6. `getNextSerialNumber(tx)` [Keeta TS] index.js:70202.
 7. `addPendingVote(tx, staple of [temporary vote] on [B])`: B gets a side copy, and the vote is indexed by B, by A (B's previous) and by its `blocksHash`. B's idempotent key, if any, is claimed on the side [Keeta TS] index.js:69310-69316.
@@ -97,7 +97,7 @@ From now on, `getVotesFromMultiplePrevious(tx, [A], 'both', R)` returns two vote
    1. Base, `preAdjust`: B and FEE have no height, because side blocks never have one (D5). B gets A's height plus one, and FEE, whose previous is B, gets B's height plus one.
    2. Base, the confirmed-history check: A has no main successor.
    3. Base, settlement statistics: `getVotes(tx, B.hash, 'side')` finds R's temporary vote, and the time since its `validityFrom` is recorded. The increments are held until the staple is persisted [Keeta TS] index.js:67593-67632.
-   4. `persistConfirmedStaple(tx, change)` writes the main rows. In the same write it removes the side copies of the staple's votes that are R's own, the side copies of B and FEE, and their side idempotent claims. R's temporary vote on B stays on the side until gc collects it (D6, D20).
+   4. `persistConfirmedStaple(tx, change)` writes the main rows. In the same write it removes the side copies of the staple's votes that are R's own, the side copies of B and FEE, and their side idempotent claims. R's temporary vote on B stays on the side until it expires or gc collects it (D6, D20).
    5. `removeDeferredStaple`, then `listDeferredStaplesWaitingOn(tx, [B, FEE])`.
    6. `adjust` returns `[S]`.
 3. Checksum fold and `commitTransaction(tx)`, as in 2.1.
@@ -120,10 +120,11 @@ Node N lacks A and receives S.
 `Ledger.gc(timeLimitMS)` runs upstream's loop in one read-write transaction (`'db-gc'`). The loop calls `gcBatch` until a batch reports that no work remains, or until `timeLimitMS` (default 280000 ms) has elapsed [Keeta TS] index.js:70517-70521, 67852-67862. Each base batch makes these calls:
 
 1. `listReleasedDeferredStaples(tx, 100, retried)`: deferred staples whose awaited blocks are all on the main ledger. Each is retried through the `adjust` template with deferral disabled. The staples it applies, chained replays included, are folded into `ledgerChecksum`. A failed retry is logged and stays deferred, and the same gc transaction does not retry it again.
-2. `collectObsoleteSideVotes(tx, 100)`: removes side votes that are expired at the transaction moment or that cover a block now on the main ledger, together with the side blocks and side idempotent claims that only they held.
-3. The batch reports whether either kind of work remains.
+2. `listReleasedDeferredStaples(tx, 1, retried)`: whether a released staple not yet retried in this transaction remains, counting staples released by this batch's retries.
+3. `collectObsoleteSideVotes(tx, 100)`: removes side votes that have expired at the transaction moment, or that cover a block whose `previous` has a confirmed successor, together with the side blocks and side idempotent claims that only they held.
+4. The batch reports whether either kind of work remains.
 
-After 2.4, gc collects R's temporary vote on B, because B is on the main ledger. Once expired, it also collects a temporary vote on a competitor C of B. A permanent side vote whose blocks never reach the main ledger stays.
+After 2.4, gc collects R's temporary vote on B, because B is on the main ledger. It also collects R's votes on a competitor C of B, temporary or permanent, because C's previous A now has the confirmed successor B. A permanent side vote whose staple can still be published stays.
 
 ## 3. Transactions and isolation
 
@@ -143,7 +144,7 @@ This is the shape of upstream's `LedgerStorageTransactionBase` [Keeta TS] index.
 
 `Ledger.run` opens one driver transaction per attempt and runs the request in it. On success it commits; if the request throws, it aborts. The error from the request, the commit or the abort goes through `evaluateError`. The whole attempt runs again with a new transaction when the evaluated error is upstream's ledger error with `shouldRetry` set and the retry budget allows it. The budget defaults to 5000 ms from the first attempt, and the delay is `retryDelay`, or 20 ms [Keeta TS] index.js:70294-70389.
 
-- **Exactly once.** A transaction is committed or aborted exactly once. `Ledger` never aborts after a failed commit [Keeta TS] index.js:70337-70347, so a driver whose commit fails must release the transaction's resources itself. After commit or abort, every member called with the transaction must reject, including a second commit or abort. Tested by `transactions.ts: "a finished transaction rejects further use"`.
+- **Exactly once.** A transaction is committed or aborted exactly once. `Ledger` never aborts after a failed commit [Keeta TS] index.js:70337-70347, so a driver whose commit fails must release the transaction's resources itself. After commit or abort, every member called with the transaction must reject, including a second commit or abort. Tested by `transactions.ts: "a finished transaction rejects further use"`, after a commit and after an abort.
 - **Commit** makes every write of the transaction visible to later transactions at once.
 - **Abort** discards every write of the transaction. Tested by `transactions.ts: "abort discards writes but never reuses a serial"`.
 - **A commit that fails** never yields a retryable error unless the driver knows that nothing was committed (D17). A retried `add` of a staple that did commit fails with `LEDGER_BLOCK_ALREADY_EXISTS`. A retried `vote` signs a second vote under a new serial. Untested.
@@ -159,14 +160,14 @@ A driver must provide the following.
    - One transaction defers S on A while another applies A. Under weaker isolation each misses the other's write, and S waits until a gc retry. Untested.
 2. **Read-your-writes.** Every read in a transaction sees that transaction's earlier writes. Replay depends on this, because a replayed staple reads the heights, balances and representatives its trigger has just written. Tested by `transactions.ts: "reads see the transaction's own writes"`, and by every replay case in `deferral.ts`.
 3. **Concurrent calls within one transaction.** Upstream issues reads on one transaction concurrently [Keeta TS] index.js:67332-67339, 67638-67646, 69935-69945, and `Promise.all` over `add` within one transaction is legal. A driver must accept overlapping calls on one transaction and lose no write. Tested by `transactions.ts: "concurrent calls within one transaction keep every write"`.
-4. **Atomic staple application.** `persistConfirmedStaple` applies a whole change or nothing, even inside a transaction that continues afterwards: a replayed staple that fails is skipped while its trigger commits. In a database where a failed statement aborts the enclosing transaction, each replayed staple's statements need a savepoint of their own, or one failing waiter prevents its trigger from committing. Tested by `deferral.ts: "a replayed staple that conflicts stays deferred while its trigger applies"`, and by `src/ledger/storage/memory/driver.test.ts: "persisting never overwrites a confirmed block or successor"`, which is memory-only.
+4. **Atomic staple application.** `persistConfirmedStaple` applies a whole change or nothing, even inside a transaction that continues afterwards: a replayed staple that fails is skipped while its trigger commits. In a database where a failed statement aborts the enclosing transaction, each replayed staple's statements need a savepoint of their own, or one failing waiter prevents its trigger from committing. Tested by `deferral.ts: "a replayed staple whose idempotent key is taken stays deferred while its trigger applies"`, where the replay fails inside `persistConfirmedStaple`; by `deferral.ts: "a replayed staple that conflicts stays deferred while its trigger applies"`, where it fails before the write; and by `src/ledger/storage/memory/driver.test.ts: "persisting never overwrites a confirmed block or successor"`, which is memory-only.
 
-The memory driver meets 1 by holding one first-come, first-served lock from `beginTransaction` until commit or abort. It meets 2 and 4 with a copy-on-write overlay per transaction, and with a nested overlay for each staged group of writes. It meets 3 by keeping every overlay operation synchronous.
+The memory driver meets 1 by holding one first-come, first-served lock from `beginTransaction` until commit or abort. It meets 2 and 4 with a copy-on-write overlay per transaction, applied on commit and dropped on abort, and with a nested overlay for each staged group of writes. It meets 3 by keeping every overlay operation synchronous. It records a commit as done only after the overlay has been applied, and a failed commit leaves the transaction finished with a non-retryable error (untested).
 
 ### 3.4 `evaluateError` mapping
 
 - An error that is a KeetaNet error (`lib.Error.isInstance`) is returned unchanged. That covers ledger errors, vote errors, idempotent-key errors and block errors. Callers depend on their codes, and `Ledger.run` then retries exactly the ones that ask for it.
-- Any other error becomes a non-retryable `LEDGER_OTHER` with the original message, and the original error as its `cause`.
+- Any other error becomes a non-retryable `LEDGER_OTHER` with the original message, and the original error as its `cause`. The case below checks both.
 - `Ledger.run` retries only instances of upstream's own ledger error class [Keeta TS] index.js:70360-70370. The package does not export that class, so `createLedgerError` (`src/ledger/storage/errors.ts`) builds it through `lib.Error.fromJSON` [Keeta TS] index.js:66340-66396. Codes are restricted to upstream's list [Keeta TS] index.js:66453-66492.
 
 Tested by `transactions.ts: "ledger errors pass through evaluateError and anything else becomes non-retryable"`.
@@ -190,7 +191,7 @@ Tested by:
 - `votes.ts: "quote consumes a serial and stores nothing on the side ledger"`
 - `votes.ts: "a permanent vote with a fee block joins the temporary vote"`
 
-Persistence across restarts is required and untested: the memory driver does not persist.
+Persistence across restarts is required and untested. The memory driver keeps its counter only in memory and restarts it at 1, so it must never back a representative key that has signed votes before: its serials would repeat earlier ones.
 
 ## 4. Members
 
@@ -198,7 +199,7 @@ Persistence across restarts is required and untested: the memory driver does not
 
 - Every member except `init`, `destroy`, `beginTransaction`, `evaluateError`, `getNextSerialNumber` and `stats` takes the transaction first. It must reject once that transaction has ended.
 - Members without a selector read the main ledger.
-- Selector members answer as D7 states. `'main'` reads the main ledger. `'side'` reads the side ledger, counting only live side votes and the side blocks and keys they cover. `'both'` returns the main answer when the main ledger has one, and the side answer otherwise, decided for each requested key.
+- Selector members answer as D7 states. `'main'` reads the main ledger. `'side'` reads the side ledger, counting only unexpired side votes and the side blocks and keys they cover. `'both'` returns the main answer when the main ledger has one, and the side answer otherwise, decided for each requested key.
 - Members that return maps return an entry for every requested key, with `null` for an absent one (D7).
 - `getVotes` returns `null`, never `[]`, when there is nothing to return. List members return `[]`.
 - Amounts, supplies, weights, heights and serials are `bigint`. Stored values are returned as stored, negative ones included (D9).
@@ -267,7 +268,7 @@ evaluateError: (error: any) => Promise<any>;
 ```
 
 - **Semantics.** Section 3.4, plus the conflict mapping of section 3.5 for drivers with concurrent transactions. Implemented by the base. A driver with database conflicts extends it, mapping its own transient errors and delegating everything else.
-- **Tested by** `transactions.ts: "ledger errors pass through evaluateError and anything else becomes non-retryable"`.
+- **Tested by** `transactions.ts: "ledger errors pass through evaluateError and anything else becomes non-retryable"`, including the `LEDGER_OTHER` code and the `cause`.
 - **Upstream.** [Keeta TS] index.js:70350-70372.
 
 ### `delegatedWeight`
@@ -385,6 +386,7 @@ listACLsByEntity: (transaction: any, entity: GenericAccount, options?: ListACLsB
   - `confirmed.ts: "modify permissions: add, set, null deletes, entity-wide fallback"`
   - `confirmed.ts: "set info merges defined keys only"`
   - `confirmed.ts: "an ACL granted to a certificate this node lacks is rejected"`
+  - `confirmed.ts: "subtract to empty stores an empty row (entity-wide row does not re-apply)"`, which lists the empty row
 
 ### `adjust`
 
@@ -393,7 +395,7 @@ adjust: (transaction: any, input: VoteStaple, changes: ComputedEffectOfBlocks) =
 ```
 
 - **Semantics.** Applies a confirmed staple, and every deferred staple that it releases, inside the caller's transaction. `Ledger.add` has already checked the write mode, network, permanence and quorum, and checks nothing else [Keeta TS] index.js:69361-69402. Implemented by the base as a template, run once for the input and once for each replayed waiter:
-  1. Refuse a staple that lists a block before its own previous (D14).
+  1. Refuse a staple that lists a block before its own previous, or whose blocks share a previous (D14).
   2. Run `preAdjust`. It refuses the staple if any block has a main height, and otherwise assigns heights or defers. An empty result returns `[]` [Keeta TS] index.js:67678-67732.
   3. Refuse a staple that would overwrite confirmed history (D14).
   4. Compute the settlement statistics while R's temporary side vote is still readable [Keeta TS] index.js:67593-67632.
@@ -441,7 +443,7 @@ getBlock: (transaction: any, block: BlockHash, from: LedgerSelector) => Promise<
 
 - **Semantics.**
   - `'main'`: the confirmed block.
-  - `'side'`: the side copy of the block, while at least one live side vote covers it.
+  - `'side'`: the side copy of the block, while at least one unexpired side vote covers it.
   - `'both'`: the main answer, or else the side answer.
   - `null` when absent.
 
@@ -494,7 +496,7 @@ getVotes: (transaction: any, block: BlockHash, from: LedgerSelector) => Promise<
 
 - **Semantics.**
   - `'main'`: every vote of the confirmed staple that contains the block, or `null` if the block is not on the main ledger.
-  - `'side'`: every live side vote that covers the block, from whichever staples hold it, or `null`. A temporary vote on [B] and a permanent vote on [B, FEE] are both returned for B. After publish, R's temporary vote on B is still returned until it expires or gc collects it, although `getBlock(B, 'side')` is then `null`.
+  - `'side'`: every unexpired side vote that covers the block, from whichever staples hold it, or `null`. A temporary vote on [B] and a permanent vote on [B, FEE] are both returned for B. After publish, R's temporary vote on B is still returned until it expires or gc collects it, although `getBlock(B, 'side')` is then `null`.
   - `'both'`: the main answer, or else the side answer (D7).
 - Never `[]`. The staple fallback reads the blocks of the first vote of any non-null answer [Keeta TS] index.js:69576-69580. A main answer always covers one block set.
 - **Ordering.** Unspecified.
@@ -523,13 +525,13 @@ getVotesFromMultiplePrevious: (transaction: any, prevBlocks: BlockHash[], from: 
 
 - **Semantics.** For each requested hash p, keyed by p in uppercase hex:
   - `'main'`: the votes of the confirmed staple that holds p's main successor, restricted to `issuer` when given. `null` when p has no main successor, or when no vote matches.
-  - `'side'`: the live side votes covering a block whose `previous` is p, restricted to `issuer`, or `null`.
+  - `'side'`: the unexpired side votes covering a block whose `previous` is p, restricted to `issuer`, or `null`.
   - `'both'`: for each p separately, the main answer, or else the side answer.
 
   p may be an opening sentinel. One vote may appear under several keys when its blocks chain.
 - **Why expired votes are excluded.** The answer is the equivocation guard of `vote`. A non-empty answer permits a vote only when it holds exactly one vote, the vote is this node's and temporary, and the request is for a permanent vote [Keeta TS] index.js:69281-69306. An expired vote left in the answer would block the account until gc ran.
-- **Why main-wins never changes a vote decision.** Every main vote is permanent [Keeta TS] index.js:69388-69395, and `vote` always passes its own key as `issuer`. A non-null main answer therefore holds only this node's permanent votes, and it refuses the request whatever a side answer would add: a single permanent vote may not be replaced, and two or more votes exceed the limit [Keeta TS] index.js:69288-69305. When the main answer is `null`, `'both'` returns the side answer, which is what a union would return.
-- Under `'both'`, the main answer hides this node's live side vote on a competitor of p's main successor from API reads (provisional: confirmed by the live parity checks).
+- **Why main-wins never changes a vote decision.** Every main vote is permanent [Keeta TS] index.js:69388-69395, and `vote` always passes its own key as `issuer`. A non-null main answer therefore holds only this node's permanent votes, and it refuses the request whatever a side answer would add: a single permanent vote may not be replaced, and two or more votes exceed the limit [Keeta TS] index.js:69288-69305. When the main answer is `null`, `'both'` returns the side answer, which is what a union would return. The proof needs `'main'` to answer `null`, not `[]`, when the successor's staple holds no vote of `issuer`.
+- Under `'both'`, the main answer hides this node's unexpired side vote on a competitor of p's main successor from API reads, until gc collects it (provisional: confirmed by the live parity checks).
 - **Tested by**:
   - `votes.ts: "a temporary vote is stored on the side ledger and is not a head"`
   - `votes.ts: "a permanent vote with a fee block joins the temporary vote"`
@@ -537,6 +539,8 @@ getVotesFromMultiplePrevious: (transaction: any, prevBlocks: BlockHash[], from: 
   - `votes.ts: "after expiry a competing vote is allowed"`
   - `confirmed.ts: "map reads return every requested key with null for absent"`
   - `concurrency.ts: "concurrent competing votes produce exactly one temporary vote"`
+  - `concurrency.ts: "a vote queued behind a long transaction still sees a competing vote committed meanwhile"`
+  - `confirmed.ts: "successor votes filtered to a representative outside the confirming quorum are null"`, for the `null` premise above
 
   Untested: `'both'` when main and side both answer for one p.
 - **Upstream.** The wrapper [Keeta TS] index.js:69468-69472.
@@ -549,7 +553,7 @@ getVoteStaples: (transaction: any, voteBlockHashes: VoteBlockHash[], from: Ledge
 
 - **Semantics.** A `VoteBlockHashMap` with an entry for every requested `blocksHash`:
   - `'main'`: the confirmed staple, with its blocks in staple order and every stored vote.
-  - `'side'`: a staple built from the live side votes with that `blocksHash` and the block list stored with them. If any of those votes is permanent, only the permanent ones are used [Keeta TS] index.js:80795-80827. `null` when none is live.
+  - `'side'`: a staple built from the unexpired side votes with that `blocksHash` and the block list stored with them. If any of those votes is permanent, only the permanent ones are used [Keeta TS] index.js:80795-80827. `null` when none is unexpired.
   - `'both'`: for each key, the main answer, or else the side answer.
 - Upstream never passes an empty list or more than 10,000 hashes [Keeta TS] index.js:69521-69531. A missing entry is an internal error to upstream, and a `null` entry is an internal error to history [Keeta TS] index.js:69512-69520, 69540-69548.
 - **Tested by**:
@@ -559,7 +563,7 @@ getVoteStaples: (transaction: any, voteBlockHashes: VoteBlockHash[], from: Ledge
   - `votes.ts: "publishing promotes the staple and deletes side copies of promoted rows"`
   - `gc.ts: "gc removes side votes whose blocks were all confirmed under another staple"`
 
-  Untested: `'both'` when the main ledger and a live side vote both hold one `blocksHash`.
+  Untested: `'both'` when the main ledger and an unexpired side vote both hold one `blocksHash`.
 
 ### `getHistory`
 
@@ -618,7 +622,7 @@ getBlockFromPrevious: (transaction: any, block: BlockHash, from: LedgerSelector)
 
 - **Semantics.** The block whose `previous` is the given hash. The hash may be an opening sentinel.
   - `'main'`: the unique confirmed successor.
-  - `'side'`: a side block whose `previous` matches and which a live side vote covers. At most one exists, because voting refuses a competing successor while one is live.
+  - `'side'`: a side block whose `previous` matches and which an unexpired side vote covers. At most one exists, because voting refuses a competing successor until that vote expires.
   - `'both'`: the main answer, or else the side answer.
   - `null` when absent.
 
@@ -630,7 +634,7 @@ getBlockFromPrevious: (transaction: any, block: BlockHash, from: LedgerSelector)
   - `confirmed.ts: "send moves balances and credits the receiver"`
   - `confirmed.ts: "fork in confirmed history is rejected with LEDGER_PREVIOUS_ALREADY_USED"`
 
-  Untested: `'both'` when a main successor and a live side successor coexist.
+  Untested: `'both'` when a main successor and an unexpired side successor coexist.
 
 ### `getAccountRep`
 
@@ -730,7 +734,7 @@ getIdempotentBlockHash: (transaction: any, idempotent: IdempotentKey, from: Ledg
 
 - **Semantics.** The hash of a block other than `excludeBlockHash` that holds the key (D12):
   - `'main'`: the main block holding the key. `null` when there is none, or when it is the excluded block.
-  - `'side'`: a side block that claims the key, is covered by a live side vote, and is not the excluded block. Otherwise `null`.
+  - `'side'`: a side block that claims the key, is covered by an unexpired side vote, and is not the excluded block. Otherwise `null`.
   - `'both'`: the main answer, or else the side answer. Each is computed with the exclusion applied.
 
   `vote` excludes each block's own hash, so a permanent vote can follow the temporary vote that claimed the key on the side [Keeta TS] index.js:69254-69259.
@@ -792,7 +796,7 @@ Writes everything that one confirmed staple changes, all of it or none of it (se
 - **`ledgerEffect.permissions`.** Each update is already resolved against the stored row. The row is identified by principal, entity and target, where a missing target means the entity itself. A `null` permission deletes the row. Any other permission stores the row with exactly those flags, even when they are empty (D10). An update whose method is not SET is an internal error.
 - **`infoUpdates`.** Merge into the stored info. A present field replaces the stored one, and an absent field keeps it (D11). `defaultPermission` is stored as its base and external sets. `multisigQuorum: null` clears the quorum.
 - **`certificateUpdates`.** ADD stores the certificate and its intermediates under the holder and hash. SUBTRACT deletes them.
-- **`idempotentKeys`.** Store each key with its block hash. Refuse with `LEDGER_IDEMPOTENT_KEY_EXISTS` when a different block holds the key, either on the main ledger or earlier in the same change (D12).
+- **`idempotentKeys`.** Store each key with its block hash. Refuse with `LEDGER_IDEMPOTENT_KEY_EXISTS` when a different block holds the key, either on the main ledger or earlier in the same change (D12). Both are tested by `confirmed.ts: "idempotent keys resolve on main"`; a refusal during replay by `deferral.ts: "a replayed staple whose idempotent key is taken stays deferred while its trigger applies"`.
 - **`historyAccounts`, `newAccounts`.** Append the staple to the history of every account in `historyAccounts`. Create an account row for every account in either set (D18).
 - **Promotion.** In the same write:
   - Remove the side copies of the staple's votes, matched by `$uid`.
@@ -806,7 +810,7 @@ Writes everything that one confirmed staple changes, all of it or none of it (se
 protected abstract storeDeferredStaple(transaction: Transaction, staple: VoteStaple, waitingOn: readonly BlockHash[]): Promise<void>;
 ```
 
-Stores a staple that waits on the listed missing previous blocks, replacing an earlier entry with the same `blocksHash` and its index. Several staples may wait on one block, because the index is keyed by the pair of awaited block and staple (D13). The base's `adjustDefer` computes `waitingOn` from `getBlockHeights`: it lists the previous blocks outside the staple that have no main height. It refuses an empty list, because no arrival could ever release such a staple. Tested by every case in `deferral.ts`.
+Stores a staple that waits on the listed missing previous blocks, replacing an earlier entry with the same `blocksHash` and its index, so a staple added again while it waits is stored once. Several staples may wait on one block, because the index is keyed by the pair of awaited block and staple (D13). The base's `adjustDefer` computes `waitingOn` from `getBlockHeights`: it lists the previous blocks outside the staple that have no main height. It refuses an empty list, because no arrival could ever release such a staple. Tested by every case in `deferral.ts`, including `deferral.ts: "a deferred staple added again stays deferred once"`.
 
 #### `listDeferredStaplesWaitingOn`
 
@@ -838,9 +842,9 @@ Lists up to `limit` deferred staples, other than those in `exclude`, whose await
 protected abstract collectObsoleteSideVotes(transaction: Transaction, limit: number): Promise<boolean>;
 ```
 
-Removes up to `limit` obsolete side votes, then the side blocks and side idempotent claims that no remaining side vote covers. Reports whether more obsolete votes remain. A side vote is obsolete when either holds:
-- it is not live at the transaction moment
-- any block it covers is on the main ledger, because `preAdjust` refuses a staple with an existing block, so its staple can never be added [Keeta TS] index.js:67682-67688
+Removes up to `limit` obsolete side votes, then the side blocks and side idempotent claims that no remaining side vote covers. Reports whether more obsolete votes remain. A side vote is obsolete when either holds (D6):
+- it has expired at the transaction moment, judged by the expiry bound alone (D4)
+- the `previous` of any block it covers has a confirmed successor: the block itself is on the main ledger, or it competes with a block that is, and either way its staple can never be added
 
 Main rows, and side blocks still covered by another side vote, are never touched (D20).
 
@@ -848,9 +852,11 @@ Tested by:
 - `gc.ts: "gc removes expired side votes and their unreferenced blocks but keeps permanent ones"`
 - `gc.ts: "gc removes side votes whose blocks were all confirmed under another staple"`
 - `gc.ts: "gc removes side votes whose staple can no longer be published"`
+- `gc.ts: "gc removes our votes on a competitor of a confirmed block and frees its idempotent key"`
 - `gc.ts: "gc reports whether more work remains"`
+- `concurrency.ts: "gc queued behind a long transaction keeps a vote committed meanwhile"`
 
-Deletion of a side block that no vote covers any more is untested. No read can observe such a block, because side reads require a live vote, so only the size of the store shows whether it was removed.
+Deletion of a side block that no vote covers any more is untested. No read can observe such a block, because side reads require an unexpired vote, so only the size of the store shows whether it was removed.
 
 #### `countLedger`
 
@@ -872,24 +878,28 @@ Provided by the base, not implemented by drivers. Logs a network integrity alarm
 
 Each rule keeps its identifier, which comments in the source cite.
 
-### D4. Vote liveness
+### D4. Vote liveness and expiry
 
 A stored vote is live at moment m exactly when Keeta's `Vote` class would construct it at m:
 - It is not live if m + 60 s < `validityFrom`.
 - Otherwise, a permanent vote is live.
 - A temporary vote is live while m - 60 s <= `validityTo`.
 
-m is the transaction moment. One predicate, `isVoteLive` (`src/ledger/storage/expiry.ts`), serves every read filter and gc.
+This node's own side votes are judged by the expiry bound alone: side reads and gc drop a side vote only when it is temporary and m - 60 s > `validityTo`, and never because m + 60 s < `validityFrom`.
+
+m is the transaction moment. `isVoteLive` (`src/ledger/storage/expiry.ts`) implements the first predicate and `isVoteUnexpired` the second; every side read filter and gc use `isVoteUnexpired`.
 
 **Reason.**
-- The `Vote` constructor rejects a vote outside these bounds with `VOTE_EXPIRED` or `VOTE_MOMENT_BEFORE_VALIDITY_FROM` [Keeta TS] index.js:80370-80374, 80641-80653, and upstream's own staple builder drops expired votes [Keeta TS] index.js:80795-80799.
-- Judging at the transaction moment makes every read in one transaction agree, and lets correctness not depend on gc.
-- It also makes a transaction opened with an earlier moment see the votes that were live then, if they are still stored. The gc cases read stored rows this way.
+- The `Vote` constructor rejects a vote outside the first predicate's bounds with `VOTE_MOMENT_BEFORE_VALIDITY_FROM` or `VOTE_EXPIRED` [Keeta TS] index.js:80370-80374, 80676-80679, and upstream's own staple builder drops expired votes [Keeta TS] index.js:80795-80799.
+- `Ledger` fixes the transaction moment before the driver admits the transaction [Keeta TS] index.js:70393-70396. A transaction that waited behind a long one, such as a gc pass, carries a moment from before the wait, and a competing vote committed during the wait has a later `validityFrom`. Dropping that vote as issued in the future would let the waiting `vote` sign a competitor, which is equivocation; a gc pass would likewise delete a vote that still guards its previous. A stale moment can only delay expiry, so the expiry bound alone is always safe.
+- Judging at the transaction moment makes every read in one transaction agree, and lets correctness not depend on gc. It also makes a transaction opened with an earlier moment see the side votes that had not expired then, if they are still stored. The gc cases read stored rows this way.
 
 **Tested by**:
 - `transactions.ts: "expiry boundary matches the Vote class"`
-- `transactions.ts: "issued-in-the-future boundary matches the Vote class"`
+- `transactions.ts: "issued-in-the-future boundary matches the Vote class"`, for `isVoteLive`
 - `votes.ts: "after expiry a competing vote is allowed"`: refused at `validityTo` + 60 s, allowed 1 ms later
+- `concurrency.ts: "a vote queued behind a long transaction still sees a competing vote committed meanwhile"`
+- `concurrency.ts: "gc queued behind a long transaction keeps a vote committed meanwhile"`
 - the `gc.ts` cases, which read through a transaction opened at the vote's moment
 
 ### D5. Heads and heights are main-only
@@ -903,41 +913,44 @@ Heights and heads count main-ledger blocks only, under every selector. `getHeadB
 ### D6. The side ledger holds only this node's pending votes
 
 - The side ledger holds this node's own pending votes, the blocks they cover, and those blocks' idempotent keys.
-- A permanent vote is stored beside this node's temporary vote on the same blocks. The temporary vote stays until it expires, or until gc collects it because its block reached the main ledger.
-- When a staple is applied, the side copies of its votes, its blocks and their keys are removed in the same write.
-- Side entries for competing blocks are left to expire.
+- A permanent vote is stored beside this node's temporary vote on the same blocks. The temporary vote stays until it expires or gc collects it.
+- When a staple is applied, the side copies of its votes, its blocks and their keys are removed in the same write. Side entries for competing blocks are left in place.
+- gc collects every side vote that can never be published, with the side blocks and idempotent claims only it held: a vote is collected once the `previous` of any block it covers has a confirmed successor. That successor is either the block itself, now on the main ledger, or a competitor that won.
 
 **Reason.**
 - The temporary vote is what the settlement statistic measures from at publish [Keeta TS] index.js:67593-67632.
 - Once a permanent vote exists, keeping or deleting the temporary vote gives the same vote decisions: one remaining permanent vote, or two votes, both refuse further successors [Keeta TS] index.js:69288-69305.
 - A row that moves to the main ledger exists once, so `'both'` never sees two copies.
-
-A permanent side vote on a competitor of a confirmed block is never collected, because it never expires and none of its blocks reaches the main ledger. It arises when this node votes permanently on a block whose staple is never published, and the network later confirms a competitor. Untested.
+- `preAdjust` refuses a staple any of whose blocks is already on the main ledger [Keeta TS] index.js:67682-67688, and `adjust` refuses one whose block competes with a confirmed successor (D14), so such a vote can never be published. A permanent vote never expires: kept on a dead competitor, it would hold its blocks' idempotent keys forever, and this node would refuse every later block carrying one of those keys with `LEDGER_IDEMPOTENT_KEY_EXISTS` [Keeta TS] index.js:69254-69259. Such a vote arises with honest representatives: this node votes permanently, the client abandons the staple, and the network later confirms a competitor.
 
 **Tested by**:
 - `votes.ts: "a permanent vote with a fee block joins the temporary vote"`
 - `votes.ts: "without a fee block the permanent vote shares its staple with the temporary vote"`
 - `votes.ts: "publishing promotes the staple and deletes side copies of promoted rows"`
-- `votes.ts: "side idempotent keys are visible under both and lose to main"`, where a competing entry is left to expire
+- `votes.ts: "side idempotent keys are visible under both and lose to main"`, where a competing entry is left in place by publish
+- `gc.ts: "gc removes side votes whose blocks were all confirmed under another staple"`
+- `gc.ts: "gc removes side votes whose staple can no longer be published"`
+- `gc.ts: "gc removes our votes on a competitor of a confirmed block and frees its idempotent key"`
 
 ### D7. Map completeness and the `'both'` selector
 
 - Members that return maps return an entry for every requested key, with `null` for an absent one.
 - `getVotes` returns `null`, never `[]`.
 - Under `'both'`, every selector member returns the main answer when the main ledger has one, and the side answer otherwise. `getVotesFromMultiplePrevious` and `getVoteStaples` decide this per requested key.
-- `getVotes(..., 'side')` returns every live side vote on the block.
+- `getVotes(..., 'side')` returns every unexpired side vote on the block.
 
 **Reason.**
 - Upstream callers index results directly, and treat a missing entry as a crash [Keeta TS] index.js:69263-69273, 69284-69285, 69512-69520. The staple fallback reads the first vote of any non-null `getVotes` answer [Keeta TS] index.js:69576-69580.
 - Returning one ledger's answer keeps a `getVotes` answer from mixing the main staple's votes with side votes on other block sets.
 - What has been confirmed reads as confirmed, and main-wins never changes a vote decision (see `getVotesFromMultiplePrevious`).
 
-The main answer hides this node's live side votes on a competitor from API reads (provisional: confirmed by the live parity checks).
+The main answer hides this node's unexpired side votes on a competitor from API reads until gc collects them (provisional: confirmed by the live parity checks).
 
 **Tested by**:
 - `confirmed.ts: "map reads return every requested key with null for absent"`
 - `votes.ts: "getVotes selectors: side returns all live side votes, both prefers main, absent gives null"`
 - `votes.ts: "side idempotent keys are visible under both and lose to main"`
+- `confirmed.ts: "successor votes filtered to a representative outside the confirming quorum are null"`
 
 For `getVoteStaples`, `getVotesFromMultiplePrevious` and `getBlockFromPrevious`, `'both'` with both ledgers answering is untested.
 
@@ -950,7 +963,7 @@ The order key of a main staple is the moment this node applied it, which is the 
 
 **Reason.**
 - Upstream's caller stops paging only when `nextKey` is `undefined`, and removes duplicates only within one page. A staple split across pages would be returned twice [Keeta TS] index.js:69633-69702.
-- The client pages history by passing the last returned staple as the next start [Keeta TS] index.js:58992-58994, which works without duplicates only if `start` is exclusive.
+- The client passes the previous page's `nextKey` as the next start [Keeta TS] index.js:58986-58990, and its fallback passes the last returned staple's ID [Keeta TS] index.js:58992-58994. Paging by the last returned staple works without duplicates only if `start` is exclusive.
 - The moment a staple entered this node orders a catch-up feed by what this node can serve.
 
 **Tested by** `confirmed.ts: "getVotesAfter pages on staple boundaries"` and `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, unknown start empty"`.
@@ -986,7 +999,7 @@ Negative weights are untested.
 
 A field that an info effect carries replaces the stored field. A field it lacks, or carries as `undefined`, keeps the stored value.
 
-**Reason.** Upstream builds info effects whose fields may be present but `undefined`, for example when a multisig identifier is created [Keeta TS] index.js:68168-68173, 68305-68320.
+**Reason.** Upstream builds info effects whose fields may be present but `undefined`, for example when a multisig identifier is created [Keeta TS] index.js:68140-68145, 68309.
 
 Only partly testable through blocks. SET_INFO on an identifier must carry `defaultPermission` [Keeta TS] index.js:65426-65428, and no block can be built for a multisig account [Keeta TS] index.js:63818-63823. Multisig creation is therefore the only effect with present-but-undefined fields. A SET_INFO that leaves a field undefined is untested.
 
@@ -995,13 +1008,13 @@ Only partly testable through blocks. SET_INFO on an identifier must carry `defau
 ### D12. Idempotent keys
 
 - Keys are upstream's `IdempotentKey`, spelled in uppercase hex [Keeta TS] index.js:68920-68951.
-- The main ledger holds a key for at most one block. A second main block with the same key is refused with `LEDGER_IDEMPOTENT_KEY_EXISTS`.
-- A side claim counts only while its block has a live side vote, so a claim whose votes expired is ignored, and may remain stored until gc.
+- The main ledger holds a key for at most one block. A second main block with the same key is refused with `LEDGER_IDEMPOTENT_KEY_EXISTS`, whether it arrives in a later staple or in the same one.
+- A side claim counts only while its block has an unexpired side vote, so a claim whose votes expired is ignored, and may remain stored until gc.
 - A main claim and a side claim of one key can coexist, and `'both'` returns the main one. A storage schema with one row per key and ledger must therefore let a new side claim replace one whose votes have expired.
 
 **Reason.** Voting refuses a block whose key another block holds on either ledger [Keeta TS] index.js:69254-69259. A competing block can still be confirmed by the network, and then holds the key on the main ledger while this node's expired claim lingers.
 
-**Tested by** `confirmed.ts: "idempotent keys resolve on main"` and `votes.ts: "side idempotent keys are visible under both and lose to main"`.
+**Tested by** `confirmed.ts: "idempotent keys resolve on main"`, `votes.ts: "side idempotent keys are visible under both and lose to main"` and `gc.ts: "gc removes our votes on a competitor of a confirmed block and frees its idempotent key"`.
 
 ### D13. Deferral
 
@@ -1024,6 +1037,8 @@ Only partly testable through blocks. SET_INFO on an identifier must carry `defau
 - `deferral.ts: "deferred chains replay in order exactly once"`
 - `deferral.ts: "a replayed staple that conflicts stays deferred while its trigger applies"`
 - `deferral.ts: "a deferred staple applied on its own stops waiting"`
+- `deferral.ts: "a deferred staple added again stays deferred once"`
+- `deferral.ts: "a replayed staple whose idempotent key is taken stays deferred while its trigger applies"`
 - `gc.ts: "gc retries deferred staples whose previous is now on main"`
 - `gc.ts: "gc reports whether more work remains"`
 
@@ -1034,18 +1049,20 @@ Only partly testable through blocks. SET_INFO on an identifier must carry `defau
 - an opening block arrives for an account that already has a chain
 - two blocks of one staple share a `previous`
 
-Nothing is overwritten. `persistConfirmedStaple` refuses the same conditions at write time.
+Nothing is overwritten. `persistConfirmedStaple` refuses the same conditions at write time. The third case needs no stored state, so it is checked before `preAdjust`, and a staple whose two blocks share a missing previous is refused rather than deferred.
 
-A staple that lists a block before its own previous is refused with a non-retryable `LEDGER_PREVIOUS_NOT_SEEN`, and is never deferred.
+A staple that lists a block before its own previous is refused with a non-retryable `LEDGER_PREVIOUS_NOT_SEEN`, also before `preAdjust`, and is never deferred.
 
 **Reason.**
 - `preAdjust` assigns heights but does not detect forks [Keeta TS] index.js:67678-67732, so applying such a staple would silently replace confirmed history. Two quorums confirming a fork is a network integrity failure.
 - `preAdjust` defers an out-of-order staple on a block that the staple itself carries, so no arrival would ever release it. Upstream's vote validation uses the same code for the same ordering fault [Keeta TS] index.js:70150-70160.
+- A deferred staple that can only fail would be retried, and fail, on every replay and every gc pass.
 
 **Tested by**:
 - `confirmed.ts: "fork in confirmed history is rejected with LEDGER_PREVIOUS_ALREADY_USED"`
 - `deferral.ts: "a staple listing a block before its previous is refused, not deferred"`
 - `deferral.ts: "an out-of-order staple that also misses a previous is refused, not deferred"`
+- `deferral.ts: "two blocks sharing a missing previous are refused, not deferred"`
 - `src/ledger/storage/memory/driver.test.ts: "persisting never overwrites a confirmed block or successor"`, for the write-time check (memory-only)
 
 ### D14a. Race conflicts under real concurrency
@@ -1070,9 +1087,7 @@ Section 3.6.
 
 ### D17. Transaction isolation and error evaluation
 
-Sections 3.2 to 3.4.
-
-The memory driver serializes transactions with one lock and isolates each in a copy-on-write overlay. It applies a transaction's overlay on commit and drops it on abort. It records a commit as done only after the overlay has been applied, and a failed commit leaves the transaction finished with a non-retryable error (untested).
+Sections 3.2 to 3.4, which also describe how the memory driver meets them.
 
 **Tested by** every case in `transactions.ts` and `concurrency.ts`.
 
@@ -1116,7 +1131,7 @@ A batch reports whether work remains. A deferred retry that failed in this trans
 **Reason.**
 - Upstream's loop checks its time budget only between batches, so batches stay small [Keeta TS] index.js:67852-67862.
 - A staple applied by gc would otherwise never enter the node's checksum, which `Ledger.add` maintains only for the staples it receives [Keeta TS] index.js:69413-69417.
-- A side vote with a block on the main ledger can never be published [Keeta TS] index.js:67682-67688.
+- A side vote that can never be published only holds idempotent keys and storage (D6).
 - Reporting a failing retry as remaining work would keep the loop, and its transaction, running until the time budget ran out.
 
-**Tested by** every case in `gc.ts`.
+**Tested by** every case in `gc.ts`, and by `concurrency.ts: "gc queued behind a long transaction keeps a vote committed meanwhile"`.
