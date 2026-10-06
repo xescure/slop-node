@@ -22,11 +22,13 @@ export type ConfirmedBlockRow = {
 	readonly staple: StapleKey;
 };
 
-/** A confirmed staple: its blocks in order, its votes, and when this node confirmed it. */
+/** A confirmed staple: its blocks in order, its votes, its staple time, and when this node confirmed it. */
 export type StapleRow = {
 	readonly blocksHash: VoteBlockHash;
 	readonly blocks: readonly BlockHashKey[];
 	readonly votes: ReadonlyMap<VoteKey, Vote>;
+	/** `VoteStaple.timestamp()` with no preferred representative, taken when the staple is stored. */
+	readonly stapleTime: Date;
 	readonly moment: Date;
 	/** Node-local confirmation order; breaks ties between equal moments. */
 	readonly sequence: bigint;
@@ -98,7 +100,7 @@ export type LedgerTables = {
 	readonly certificates: Table<AccountKey, ReadonlyMap<CertificateHashKey, CertificateWithIntermediates>>;
 	readonly idempotentKeys: Table<IdempotentKeyString, BlockHash>;
 	readonly accounts: Table<AccountKey, AccountRow>;
-	/** Staples involving each account, oldest first. */
+	/** Staples involving each account, in the order this node applied them. */
 	readonly history: Table<AccountKey, readonly StapleKey[]>;
 	readonly deferredStaples: Table<StapleKey, DeferredStapleRow>;
 	readonly deferredWaiters: Table<BlockHashKey, ReadonlySet<StapleKey>>;

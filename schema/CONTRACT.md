@@ -584,13 +584,16 @@ getHistory: (transaction: any, account: GenericAccount | null, start: VoteBlockH
 ```
 
 - **Semantics.** The `blocksHash` of each main staple that touched the account, or of every main staple when `account` is `null`. A staple touches every account in the effects' `touched` set (D18). At most `limit` entries are returned; upstream always passes a number, and the default is 25 [Keeta TS] index.js:69532. Every returned hash must resolve through `getVoteStaples(..., 'main')` [Keeta TS] index.js:69540-69548.
-- **Ordering and paging.** Newest first, in confirmation order (D8):
-  - The order is the moment the staple was applied on this node, then a node-local sequence.
+- **Ordering and paging.** Newest first in history order (D8):
+  - The key is the ordered pair (staple time, `blocksHash`), descending. The staple time is `VoteStaple.timestamp()` with no argument [Keeta TS] index.js:81070-81096, and `blocksHash` is compared as bytes (provisional: confirmed by the live parity checks).
   - `start` is exclusive.
   - A `start` that is unknown, or not in the listed history, gives `[]`.
-  - A staple applied late, for example after deferral, sorts by when this node applied it (provisional: confirmed by the live parity checks).
 - **Selector.** Main only.
-- **Tested by** `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, unknown start empty"` and `concurrency.ts: "concurrent adds of one staple apply it once"`.
+- **Tested by**:
+  - `confirmed.ts: "history lists the staple for every touched account, exclusive start, unknown start empty"`
+  - `confirmed.ts: "history orders staples by staple time, not by when they were applied"`
+  - `confirmed.ts: "history breaks staple-time ties by blocks hash, descending, and pages across a tie"`
+  - `concurrency.ts: "concurrent adds of one staple apply it once"`
 
 ### `getHeadBlocks`
 
@@ -666,7 +669,7 @@ getAccountRep: (transaction: any, account: GenericAccount | string) => Promise<A
 getVotesAfter: (transaction: any, moment: Date, startKey?: string, options?: GetVotesAfterOptions) => Promise<PaginatedVotes>;
 ```
 
-- **Semantics.** The votes of main staples confirmed at or after `moment`, page by page (D8). The confirmation moment is the transaction moment of the transaction that applied the staple. `options.bloomFilter` and `options.timeout` may be ignored.
+- **Semantics.** The votes of main staples confirmed at or after `moment`, page by page (D8, catch-up order). The confirmation moment is the transaction moment of the transaction that applied the staple. `options.bloomFilter` and `options.timeout` may be ignored.
 - **Ordering and paging.**
   - Staples ascend in confirmation order: moment, then the node-local sequence.
   - A page ends only between staples, so a page may exceed `maxVotesPerPage`, and always holds at least one whole staple when any remains. The default page size is 200, the largest upstream requests.
@@ -990,17 +993,39 @@ For `getVoteStaples`, `getVotesFromMultiplePrevious` and `getBlockFromPrevious`,
 
 ### D8. Ordering and paging
 
-The order key of a main staple is the moment this node applied it, which is the transaction moment, followed by a node-local sequence number that breaks ties and is never reused.
+Main staples have two order keys. History is ordered by the staple itself; the catch-up feed is ordered by when this node applied each staple.
+
+#### History order
+
+The history key of a main staple is the ordered pair:
+1. its staple time: `VoteStaple.timestamp()` called with no `preferRep`, which is the earliest `validityFrom` of its votes plus the floored mean offset of every vote's `validityFrom` from it [Keeta TS] index.js:81070-81096;
+2. its `blocksHash`, compared as bytes (equivalently, as equal-length uppercase hex).
+
+- `getHistory` descends by the whole key. `start` is exclusive. A `start` that is unknown, or not in the listed history, gives `[]`. (provisional: confirmed by the live parity checks)
+- The key is computed once, when the staple is stored, and kept with it. A staple applied late, for example after deferral, sorts by its staple time.
+
+**Reason.**
+- Without `preferRep`, the staple time depends only on the staple's votes, so every node lists the same history in the same order, however late it applied each staple. With `preferRep`, `timestamp` returns that representative's own vote time instead [Keeta TS] index.js:81070-81096, which would make the order depend on the node asking.
+- `blocksHash` identifies a main staple, so the pair is a total order: a page boundary falls between two definite staples, even inside a tie on staple time.
+- The pair fits one ordered value: a fixed-width big-endian staple time followed by the `blocksHash` bytes compares in the same order. Upstream's unused `LedgerStorageBase._generateNoisyTimestamp` builds keys of this time-major shape [Keeta TS] index.js:67815.
+- The client passes the previous page's `nextKey` as the next start [Keeta TS] index.js:58986-58990, and its fallback passes the last returned staple's ID [Keeta TS] index.js:58992-58994. Paging by the last returned staple works without duplicates only if `start` is exclusive.
+
+**Tested by**:
+- `confirmed.ts: "history lists the staple for every touched account, exclusive start, unknown start empty"`
+- `confirmed.ts: "history orders staples by staple time, not by when they were applied"`
+- `confirmed.ts: "history breaks staple-time ties by blocks hash, descending, and pages across a tie"`
+
+#### Catch-up order
+
+The catch-up key of a main staple is the moment this node applied it, which is the transaction moment, followed by a node-local sequence number that breaks ties and is never reused.
 
 - `getVotesAfter` ascends by this key and includes staples whose moment is at or after the requested moment. Pages break only between staples. `nextKey` is omitted on the last page. (provisional: confirmed by the live parity checks)
-- `getHistory` descends by this key. `start` is exclusive. A `start` that is unknown, or not in the listed history, gives `[]`. (provisional: confirmed by the live parity checks)
 
 **Reason.**
 - Upstream's caller stops paging only when `nextKey` is `undefined`, and removes duplicates only within one page. A staple split across pages would be returned twice [Keeta TS] index.js:69633-69702.
-- The client passes the previous page's `nextKey` as the next start [Keeta TS] index.js:58986-58990, and its fallback passes the last returned staple's ID [Keeta TS] index.js:58992-58994. Paging by the last returned staple works without duplicates only if `start` is exclusive.
 - The moment a staple entered this node orders a catch-up feed by what this node can serve.
 
-**Tested by** `confirmed.ts: "getVotesAfter pages on staple boundaries"` and `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, unknown start empty"`.
+**Tested by** `confirmed.ts: "getVotesAfter pages on staple boundaries"`.
 
 ### D9. Balances and weights are stored values
 
@@ -1137,7 +1162,7 @@ Sections 3.2 to 3.4, which also describe how the memory driver meets them.
 
 No member reads account rows, so their creation is untested.
 
-**Tested by** `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, unknown start empty"`, which also checks that a delegation does not touch the representative it names.
+**Tested by** `confirmed.ts: "history lists the staple for every touched account, exclusive start, unknown start empty"`, which also checks that a delegation does not touch the representative it names.
 
 ### D19. Statistics
 

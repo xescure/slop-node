@@ -169,6 +169,23 @@ function toACLRow(update: ACLUpdate, permissions: NonNullable<ACLUpdate['permiss
 	}
 }
 
+/** Where a staple sits in history, the same on every node. */
+type HistoryOrder = Pick<StapleRow, 'stapleTime' | 'blocksHash'>;
+
+/*
+ * The staple time is a property of the staple alone, so it orders history
+ * the same way however late a node applied each staple; the blocks hash,
+ * compared as bytes, breaks ties between equal staple times.
+ * [Keeta TS] index.js:81070-81096
+ */
+function compareHistoryOrder(left: HistoryOrder, right: HistoryOrder): number {
+	const byStapleTime = left.stapleTime.getTime() - right.stapleTime.getTime();
+	if (byStapleTime !== 0) {
+		return(byStapleTime);
+	}
+	return(left.blocksHash.getBuffer().compare(right.blocksHash.getBuffer()));
+}
+
 /** Where a staple sits in the order it entered this node's main ledger. */
 type ConfirmationOrder = Pick<StapleRow, 'moment' | 'sequence'>;
 
@@ -561,16 +578,15 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	}
 
 	/*
-	 * Newest first in the order staples entered this ledger. The start is
-	 * exclusive, so a caller can pass the last staple of one page to get the
-	 * next; a start outside the listed history has no position and gives
-	 * nothing.
-	 * [Keeta TS] index.js:69532-69548, 58992-58994
+	 * Newest first by staple time. The start is exclusive, so a caller can
+	 * pass the last staple of one page to get the next; a start outside the
+	 * listed history has no position and gives nothing.
+	 * [Keeta TS] index.js:69532-69548, 58992-58994, 81070-81096
 	 */
 	async getHistory(transaction: MemoryTransaction, account: GenericAccount | null, start: VoteBlockHash | null, limit: number = DEFAULT_HISTORY_LIMIT): Promise<VoteBlockHash[]> {
 		const overlay = await transaction.view();
 		const newestFirst = this.#historyOf(overlay, account).sort(function(left, right): number {
-			return(compareConfirmationOrder(right, left));
+			return(compareHistoryOrder(right, left));
 		});
 		let first = 0;
 		if (start !== null) {
@@ -1006,17 +1022,21 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 
 	#historyOf(overlay: LedgerOverlay, account: GenericAccount | null): StapleRow[] {
 		if (account === null) {
-			return(this.#confirmedStaplesInOrder(overlay));
+			return(this.#confirmedStaples(overlay));
 		}
 		return((overlay.history.get(toAccountKey(account)) ?? []).map((key): StapleRow => {
 			return(this.#confirmedStaple(overlay, key));
 		}));
 	}
 
-	#confirmedStaplesInOrder(overlay: LedgerOverlay): StapleRow[] {
+	#confirmedStaples(overlay: LedgerOverlay): StapleRow[] {
 		return(Array.from(overlay.staples.entries(), function([, row]): StapleRow {
 			return(row);
-		}).sort(compareConfirmationOrder));
+		}));
+	}
+
+	#confirmedStaplesInOrder(overlay: LedgerOverlay): StapleRow[] {
+		return(this.#confirmedStaples(overlay).sort(compareConfirmationOrder));
 	}
 
 	#headBlock(overlay: LedgerOverlay, account: AccountKey, from: LedgerSelector): Block | null {
@@ -1089,6 +1109,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 				return(toBlockHashKey(block.hash));
 			}),
 			votes,
+			stapleTime: staple.timestamp(),
 			moment,
 			sequence: this.#takeStapleSequence()
 		});

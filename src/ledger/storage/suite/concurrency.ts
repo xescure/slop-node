@@ -186,7 +186,8 @@ export function defineConcurrencyCases(driver: DriverUnderTest): void {
 			expect(settledValues(outcomes).map(blocksHashesOf)).toEqual([blocksHashesOf([staple])]);
 			expect(settledReasons(outcomes)).toEqual([expect.objectContaining({ code: 'LEDGER_BLOCK_ALREADY_EXISTS' })]);
 			expect(await node.ledger.getBalance(user, network.baseToken)).toBe(395n);
-			expect(blocksHashesOf(await node.ledger.getHistory(user, null))).toEqual(blocksHashesOf([staple, network.genesis]));
+			// The staple shares genesis's staple time, so history lists them by blocks hash, descending.
+			expect(blocksHashesOf(await node.ledger.getHistory(user, null))).toEqual(blocksHashesOf([network.genesis, staple]));
 			// Each applied block enters the checksum by XOR, so a second application would cancel the first.
 			expect(await ledgerChecksumOf(node)).toBe(checksumOf([network.genesis, staple]));
 		});

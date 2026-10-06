@@ -162,7 +162,8 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			expect((await ledger.getHeadBlock(from, 'main'))?.hash.toString()).toBe(trigger.hash.toString());
 			expect(await ledger.getBalance(from, network.baseToken)).toBe(397n);
 			expect(await ledger.getBalance(to, network.baseToken)).toBe(303n);
-			expect(blocksHashesOf(await ledger.getHistory(from, null))).toEqual(blocksHashesOf([triggerStaple, keyedStaple, network.genesis]));
+			// These staples share genesis's staple time, so history lists them by blocks hash, descending.
+			expect(blocksHashesOf(await ledger.getHistory(from, null))).toEqual(blocksHashesOf([triggerStaple, network.genesis, keyedStaple]));
 			expect((await ledger.getIdempotentBlockHash(from, idempotent, 'main'))?.toString()).toBe(keyed.hash.toString());
 		});
 
@@ -243,7 +244,8 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			expect((await node.ledger.getVoteStaples([thirdStaple.blocksHash], 'main')).get(thirdStaple.blocksHash)).toBeNull();
 			expect(hashOf(await node.ledger.getHeadBlock(user, 'main'))).toBe(hashOf(second));
 			expect(await node.ledger.getBalance(user, network.baseToken)).toBe(388n);
-			expect(blocksHashesOf(await node.ledger.getHistory(user, null))).toEqual(blocksHashesOf([secondStaple, firstStaple, network.genesis]));
+			// These staples share genesis's staple time, so history lists them by blocks hash, descending.
+			expect(blocksHashesOf(await node.ledger.getHistory(user, null))).toEqual(blocksHashesOf([network.genesis, secondStaple, firstStaple]));
 			expect(await deferredWaitingOn(storage, second.hash)).toEqual(blocksHashesOf([thirdStaple]));
 			expect(await ledgerChecksumOf(node)).toBe(checksumOf([network.genesis, firstStaple, secondStaple]));
 		});

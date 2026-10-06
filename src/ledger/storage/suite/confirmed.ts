@@ -79,6 +79,10 @@ function byTarget(left: ACLSummary, right: ACLSummary): number {
 	return(left.target.localeCompare(right.target));
 }
 
+function byBlocksHashDescending(left: VoteStaple, right: VoteStaple): number {
+	return(right.blocksHash.getBuffer().compare(left.blocksHash.getBuffer()));
+}
+
 function newcomerAccount(): Account {
 	return(lib.Account.fromSeed(NEWCOMER_SEED, 0));
 }
@@ -401,7 +405,7 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(await ledger.getIdempotentBlockHash(user, twice, 'main')).toBeNull();
 		});
 
-		test('history lists the staple for every touched account, newest first, exclusive start, unknown start empty', async function() {
+		test('history lists the staple for every touched account, exclusive start, unknown start empty', async function() {
 			const { network, ledger } = await startNetwork();
 			const first = requireAt(network.users, 0);
 			const second = requireAt(network.users, 1);
@@ -417,22 +421,86 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			}
 			const unknown = await confirmedStaple([await sendBlock({ from: third, previous: cursor.previous(third), to: first, amount: 1n, token: network.baseToken, network: network.network })], network.representatives);
 
-			expect(blocksHashesOf(await ledger.getHistory(first, null))).toEqual(blocksHashesOf([firstDelegates, firstToSecond, network.genesis]));
-			expect(blocksHashesOf(await ledger.getHistory(second, null))).toEqual(blocksHashesOf([secondToThird, firstToSecond, network.genesis]));
-			expect(blocksHashesOf(await ledger.getHistory(third, null))).toEqual(blocksHashesOf([secondToThird, network.genesis]));
-			expect(blocksHashesOf(await ledger.getHistory(null, null))).toEqual(blocksHashesOf([firstDelegates, secondToThird, firstToSecond, network.genesis]));
+			// Genesis and these staples share one staple time, so history lists them by blocks hash, descending.
+			expect(blocksHashesOf(await ledger.getHistory(first, null))).toEqual(blocksHashesOf([network.genesis, firstToSecond, firstDelegates]));
+			expect(blocksHashesOf(await ledger.getHistory(second, null))).toEqual(blocksHashesOf([network.genesis, firstToSecond, secondToThird]));
+			expect(blocksHashesOf(await ledger.getHistory(third, null))).toEqual(blocksHashesOf([network.genesis, secondToThird]));
+			expect(blocksHashesOf(await ledger.getHistory(null, null))).toEqual(blocksHashesOf([network.genesis, firstToSecond, firstDelegates, secondToThird]));
 			// A delegation does not touch the representative it names.
 			expect(await ledger.getHistory(requireAt(network.representatives, 2), null)).toEqual([]);
 
-			expect(blocksHashesOf(await ledger.getHistory(first, null, 2))).toEqual(blocksHashesOf([firstDelegates, firstToSecond]));
-			expect(blocksHashesOf(await ledger.getHistory(first, firstDelegates.blocksHash, 1))).toEqual(blocksHashesOf([firstToSecond]));
-			expect(blocksHashesOf(await ledger.getHistory(first, firstToSecond.blocksHash))).toEqual(blocksHashesOf([network.genesis]));
-			expect(await ledger.getHistory(first, network.genesis.blocksHash)).toEqual([]);
-			expect(blocksHashesOf(await ledger.getHistory(null, secondToThird.blocksHash, 1))).toEqual(blocksHashesOf([firstToSecond]));
+			expect(blocksHashesOf(await ledger.getHistory(first, null, 2))).toEqual(blocksHashesOf([network.genesis, firstToSecond]));
+			expect(await ledger.getHistory(first, firstDelegates.blocksHash, 1)).toEqual([]);
+			expect(blocksHashesOf(await ledger.getHistory(first, firstToSecond.blocksHash))).toEqual(blocksHashesOf([firstDelegates]));
+			expect(blocksHashesOf(await ledger.getHistory(first, network.genesis.blocksHash))).toEqual(blocksHashesOf([firstToSecond, firstDelegates]));
+			expect(await ledger.getHistory(null, secondToThird.blocksHash, 1)).toEqual([]);
 			expect(await ledger.getHistory(first, unknown.blocksHash)).toEqual([]);
 			expect(await ledger.getHistory(null, unknown.blocksHash)).toEqual([]);
 			// A staple the account is not part of is unknown to that account's history.
 			expect(await ledger.getHistory(first, secondToThird.blocksHash)).toEqual([]);
+		});
+
+		test('history orders staples by staple time, not by when they were applied', async function() {
+			const { network, ledger } = await startNetwork();
+			const sender = requireAt(network.users, 0);
+			const receiver = requireAt(network.users, 1);
+			const other = requireAt(network.users, 2);
+			await ledger.add(network.genesis);
+			advanceClock(1000);
+			const missingBlock = await sendBlock({ from: sender, previous: headOf(network.genesis, sender), to: receiver, amount: 1n, token: network.baseToken, network: network.network });
+			advanceClock(1000);
+			const deferredBlock = await sendBlock({ from: sender, previous: missingBlock.hash, to: receiver, amount: 2n, token: network.baseToken, network: network.network });
+			advanceClock(1000);
+			const newerBlock = await sendBlock({ from: other, previous: headOf(network.genesis, other), to: receiver, amount: 4n, token: network.baseToken, network: network.network });
+			const missing = await confirmedStaple([missingBlock], network.representatives);
+			const deferred = await confirmedStaple([deferredBlock], network.representatives);
+			const newer = await confirmedStaple([newerBlock], network.representatives);
+
+			expect(await ledger.add(deferred)).toEqual([]);
+			advanceClock(1000);
+			await ledger.add(newer);
+			advanceClock(1000);
+			expect(blocksHashesOf(await ledger.add(missing))).toEqual(blocksHashesOf([missing, deferred]));
+
+			const byStapleTime = blocksHashesOf([newer, deferred, missing, network.genesis]);
+			expect(blocksHashesOf(await ledger.getHistory(null, null))).toEqual(byStapleTime);
+			expect(blocksHashesOf(await ledger.getHistory(receiver, null))).toEqual(byStapleTime);
+			expect(blocksHashesOf(await ledger.getHistory(sender, null))).toEqual(blocksHashesOf([deferred, missing, network.genesis]));
+			expect(blocksHashesOf(await ledger.getHistory(receiver, newer.blocksHash, 1))).toEqual(blocksHashesOf([deferred]));
+		});
+
+		test('history breaks staple-time ties by blocks hash, descending, and pages across a tie', async function() {
+			const { network, ledger } = await startNetwork();
+			const receiver = requireAt(network.users, 2);
+			await ledger.add(network.genesis);
+			advanceClock(1000);
+			const tied = await Promise.all([0, 1].map(async function(index) {
+				const sender = requireAt(network.users, index);
+				return(await confirmedStaple([await sendBlock({ from: sender, previous: headOf(network.genesis, sender), to: receiver, amount: 1n, token: network.baseToken, network: network.network })], network.representatives));
+			}));
+			const [higher, lower] = tied.sort(byBlocksHashDescending);
+			if (higher === undefined || lower === undefined) {
+				throw(new Error('two tied staples expected'));
+			}
+			expect(higher.timestamp().valueOf()).toBe(lower.timestamp().valueOf());
+			advanceClock(1000);
+			const newest = await confirmedStaple([await sendBlock({ from: receiver, previous: headOf(network.genesis, receiver), to: requireAt(network.users, 0), amount: 1n, token: network.baseToken, network: network.network })], network.representatives);
+			// The lower hash is applied last, so an order by application would list it first.
+			for (const staple of [higher, newest, lower]) {
+				advanceClock(1000);
+				await ledger.add(staple);
+			}
+
+			const expected = blocksHashesOf([newest, higher, lower, network.genesis]);
+			expect(blocksHashesOf(await ledger.getHistory(null, null))).toEqual(expected);
+			expect(blocksHashesOf(await ledger.getHistory(receiver, null))).toEqual(expected);
+			const paged: VoteStaple[] = [];
+			let page = await ledger.getHistory(null, null, 1);
+			while (page.length > 0 && paged.length <= expected.length) {
+				paged.push(...page);
+				page = await ledger.getHistory(null, requireAt(page, 0).blocksHash, 1);
+			}
+			expect(blocksHashesOf(paged)).toEqual(expected);
 		});
 
 		test('getVotesAfter pages on staple boundaries', async function() {
@@ -544,7 +612,8 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 				expect((await storage.getVoteStaples(transaction, [forkStaple.blocksHash], 'main')).get(forkStaple.blocksHash)).toBeNull();
 				expect(await storage.getBalance(transaction, user, network.baseToken)).toBe(395n);
 				expect(await storage.getBalance(transaction, other, network.baseToken)).toBe(305n);
-				expect((await storage.getHistory(transaction, user, null, 25)).map(String)).toEqual(blocksHashesOf([keptStaple, network.genesis]));
+				// The kept staple shares genesis's staple time, so history lists them by blocks hash, descending.
+				expect((await storage.getHistory(transaction, user, null, 25)).map(String)).toEqual(blocksHashesOf([network.genesis, keptStaple]));
 			} finally {
 				await storage.abortTransaction(transaction);
 			}
