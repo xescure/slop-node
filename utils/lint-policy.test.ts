@@ -1,5 +1,12 @@
 import { ESLint } from 'eslint';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
+
+/*
+ * The first lint loads the type-aware configuration and builds a TypeScript
+ * program, which alone can outlast the default 5 s while the rest of the
+ * suite loads the machine under make -j8.
+ */
+vi.setConfig({ testTimeout: 60000 });
 
 const linter = new ESLint({ overrideConfigFile: '.eslint.config.mjs', ignore: false });
 
