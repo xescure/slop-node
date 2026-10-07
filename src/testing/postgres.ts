@@ -396,8 +396,8 @@ export class TestDatabase {
 	}
 
 	/** A new pool on this database, ended by drop. */
-	pool(): pg.Pool {
-		const pool = new pg.Pool(clientConfig(this.#cluster, this.name));
+	pool(options: pg.PoolConfig = {}): pg.Pool {
+		const pool = new pg.Pool({ ...options, ...clientConfig(this.#cluster, this.name) });
 		pool.on('error', function() {
 			// drop terminates idle connections; the pool discards them.
 		});

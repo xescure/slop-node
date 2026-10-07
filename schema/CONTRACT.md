@@ -229,7 +229,7 @@ Tested by:
 
 Persistence across restarts is required and untested. The memory driver keeps its counter only in memory and restarts it at 1, so it must never back a representative key that has signed votes before: its serials would repeat earlier ones.
 
-**Postgres.** One sequence, `vote_serials` (`bigint`, starting at 1, `CACHE 1`, no cycle), read with `nextval` on a pooled connection outside the transaction. `nextval` never rolls back, so an aborted attempt's serial is never issued again. `CACHE 1` makes every call take the next value of the one shared counter, so the serials of all processes together strictly increase; a larger cache would hand each connection its own block of values, and serials from two processes would no longer follow the order they were taken in.
+**Postgres.** One sequence, `vote_serials` (`bigint`, starting at 1, `CACHE 1`, no cycle), read with `nextval`. Given a transaction, the driver runs `nextval` on that transaction's connection; without one, on a connection of its own. Upstream takes the serial inside the read-write transaction of `vote` or `quote` [Keeta TS] index.js:69342, 70202, which already holds a pooled connection: taking a second one would wait forever once every connection of the pool is held by a transaction doing the same. `nextval` never rolls back, so an aborted attempt's serial is never issued again. Tested by `src/ledger/storage/postgres/driver.test.ts: "votes complete on a pool of one connection, alone and concurrently"`. `CACHE 1` makes every call take the next value of the one shared counter, so the serials of all processes together strictly increase; a larger cache would hand each connection its own block of values, and serials from two processes would no longer follow the order they were taken in.
 
 ## 4. Members
 
@@ -254,7 +254,7 @@ init: (config: LedgerConfig, ledger: Ledger) => void;
 - **Errors.** A second call throws `storage driver is already initialized`. A member that needs the configuration before `init` rejects with `StorageDriverNotInitializedError`.
 - **Tested by** `transactions.ts: "a driver serves exactly one ledger"`.
 - Implemented by the base.
-- **Postgres.** Opens the pool and starts migrating the database (section 6.3) without waiting. The first transaction waits for the migration; one that fails is reported by that transaction and tried again by the next.
+- **Postgres.** Opens the pool and starts migrating the database (section 6.3) without waiting. The first transaction waits for the migration; one that fails is reported by that transaction and tried again by the next. An injected pool keeps its owner's settings. A pool opened from a connection string holds at most 10 connections; a checkout fails after waiting 5 s, which is `Ledger.run`'s whole retry budget [Keeta TS] index.js:70294-70389; connections use TCP keepalive; and every session starts with `statement_timeout` at 30 s and `idle_in_transaction_session_timeout` at 10 s. Between the statements of one attempt the process only computes, so a session idle in a transaction that long belongs to a stalled process, and ending it frees the row locks other attempts wait on. A statement may outlast the retry budget: `stats` counts the whole main ledger in one statement, and gc runs its batches for up to its time limit, one batch per statement. Each setting can be overridden. Tested by `src/ledger/storage/postgres/pool.test.ts`.
 
 ### `destroy`
 
@@ -789,9 +789,9 @@ gc: (transaction: any, timeLimitMS?: number) => Promise<boolean>;
 getNextSerialNumber: (transaction?: any) => Promise<bigint>;
 ```
 
-- **Semantics.** Section 3.6 (D16). The transaction argument is accepted and ignored.
+- **Semantics.** Section 3.6 (D16). The transaction argument is optional. The memory driver ignores it.
 - **Tested by** the cases listed in section 3.6.
-- **Postgres.** `nextval('vote_serials')`, section 3.6.
+- **Postgres.** `nextval('vote_serials')`, on the given transaction's connection when there is one (section 3.6).
 
 ### `getAccountCertificates`
 
@@ -1368,6 +1368,7 @@ Tested by `src/ledger/storage/sql-clock.test.ts: "no SQL uses the database clock
 
 - **Files.** Each migration is a plain SQL file, `schema/migrations/NNNN_<name>.sql`, numbered from `0001` without gaps; `<name>` is lowercase letters, digits and single underscores. A file is applied as its exact bytes, which must be valid UTF-8. Once a file has been applied anywhere it is never edited: a change is a new file.
 - **Record.** The table `schema_version (version integer PRIMARY KEY, sha256 bytea NOT NULL, applied_at timestamptz NOT NULL)` holds one row per applied file: its number, the SHA-256 of its bytes, and when it was applied, by the migrating process's clock.
+- **Timeout.** The migrating session runs with `statement_timeout` set to 0 until it releases the lock, then resets it: waiting for another process's migration, or a migration itself, may take longer than any statement of the ledger. Tested by `src/ledger/storage/postgres/migrations.test.ts: "a migration runs without the session's statement timeout, which the session gets back afterwards"`.
 - **Lock.** Every process that migrates takes the session advisory lock `pg_advisory_lock(7738703085231170663)`, which is `0x6b656574616c6467`, the ASCII bytes `keetaldg` read as a big-endian `bigint`, before it creates or reads `schema_version`, and releases it when done, whether it succeeded or refused. An implementation in another language must use the same key and the same table, so that processes of both start safely together.
 - **Procedure.** Under the lock: create `schema_version` if it does not exist; read its rows in version order; refuse if the recorded versions are not 1, 2, 3 and so on without a gap, if the newest of them is newer than the newest file this build has, or if a recorded SHA-256 differs from its file's; then apply each file the database lacks, in order, each in a transaction of its own that also inserts its `schema_version` row. A file that fails leaves nothing of itself and stops the migration. Several processes starting at once apply each file exactly once.
 

@@ -8,13 +8,16 @@ import type { TestNetwork } from '../../../testing/network.js';
 import { createDatabase } from '../../../testing/postgres.js';
 import type { TestDatabase } from '../../../testing/postgres.js';
 import { MemoryLedgerStorage } from '../memory/driver.js';
-import { GENESIS_MOMENT, headOf, requireAt } from '../suite/support.js';
+import { DEFAULT_WEIGHTS, GENESIS_MOMENT, headOf, requireAt } from '../suite/support.js';
 import type { TransactionOptions } from '../base.js';
 import { PostgresLedgerStorage } from './driver.js';
 import type { PostgresTransaction } from './driver.js';
 import type { PostgresPoolSource } from './pool.js';
 
 const lib = KeetaNet.lib;
+
+// A vote on a test database takes tens of milliseconds.
+const ONE_CONNECTION_TIMEOUT_MILLISECONDS = 10000;
 
 /** Keeps every transaction it opens, so a case can act on the one Ledger.run is using. */
 class RecordingStorage extends PostgresLedgerStorage {
@@ -294,6 +297,40 @@ describe('the Postgres driver', function() {
 
 		await expect(storage.commitTransaction(transaction)).rejects.toMatchObject({ code: 'LEDGER_TRANSACTION_ABORTED', shouldRetry: true });
 		expect(await rowsOf(pool, 'accounts')).toEqual([]);
+	});
+
+	/*
+	 * Upstream takes the serial inside the vote's own transaction, so a serial
+	 * taken on another pooled connection would wait for the connection the
+	 * vote holds. A hang shows as the test timing out.
+	 */
+	test('votes complete on a pool of one connection, alone and concurrently', { timeout: ONE_CONNECTION_TIMEOUT_MILLISECONDS }, async function() {
+		const database = await ledgerDatabase();
+		const pool = database.pool({ max: 1 });
+		const storage = storageOn({ kind: 'injected', pool: function() {
+			return(Promise.resolve(pool));
+		} });
+		freezeClock(GENESIS_MOMENT);
+		const network = await createTestNetwork({ representativeWeights: DEFAULT_WEIGHTS });
+		const ledger = network.createLedger(storage, requireAt(network.representatives, 0));
+		await ledger.add(network.genesis);
+		const [first, ...others] = await Promise.all(network.users.map(function(from, index) {
+			const to = requireAt(network.users, (index + 1) % network.users.length);
+			return(sendBlock({ from, previous: headOf(network.genesis, from), to, amount: 1n, token: network.baseToken, network: network.network }));
+		}));
+		if (first === undefined) {
+			throw(new Error('the network has no users'));
+		}
+
+		const alone = await ledger.vote([first]);
+		const concurrent = await Promise.all(others.map(function(send) {
+			return(ledger.vote([send]));
+		}));
+
+		const serials = [alone, ...concurrent].map(function(vote) {
+			return(vote.serial);
+		});
+		expect(new Set(serials).size).toBe(network.users.length);
 	});
 
 	test('serials strictly increase across processes and survive rolled-back attempts', async function() {

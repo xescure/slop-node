@@ -703,13 +703,22 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	}
 
 	/*
-	 * Taken outside the transaction: nextval never rolls back, so a serial
-	 * taken by an aborted attempt is never issued again (D16).
+	 * Upstream takes the serial inside the vote's or quote's own transaction
+	 * [Keeta TS] index.js:69342, 70202, which holds a pooled connection, so the
+	 * serial is taken on that connection: a second checkout would wait for
+	 * the connection the caller holds once the pool is exhausted. nextval
+	 * never rolls back, so a serial taken by an aborted attempt is still never
+	 * issued again (D16).
 	 */
-	async getNextSerialNumber(_transaction?: PostgresTransaction): Promise<bigint> {
-		const { pool } = await this.#connection();
-		const result = await pool.query<{ serial: IntegerText }>({ name: nextSerial.name, text: nextSerial.text });
-		const row = onlyRow(result.rows);
+	async getNextSerialNumber(transaction?: PostgresTransaction): Promise<bigint> {
+		let rows: { serial: IntegerText }[];
+		if (transaction === undefined) {
+			const { pool } = await this.#connection();
+			rows = (await pool.query<{ serial: IntegerText }>({ name: nextSerial.name, text: nextSerial.text })).rows;
+		} else {
+			rows = await transaction.run(nextSerial, []);
+		}
+		const row = onlyRow(rows);
 		if (row === undefined) {
 			throw(new Error('internal error: nextval returned no row'));
 		}

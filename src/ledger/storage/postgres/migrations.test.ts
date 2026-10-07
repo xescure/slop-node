@@ -116,6 +116,18 @@ describe('applyMigrations', function() {
 		})).toEqual(digests);
 	});
 
+	test('a migration runs without the session\'s statement timeout, which the session gets back afterwards', async function() {
+		const database = await freshDatabase();
+		// One connection, so the setting read afterwards is the migrating session's.
+		const pool = database.pool({ max: 1, statement_timeout: 100 });
+		const directory = await migrationDirectory({ '0001_slow.sql': 'SELECT pg_sleep(0.3);\n' });
+
+		expect(await applyMigrations(pool, directory, clockAt(FIRST_START))).toBe(1);
+
+		const setting = await pool.query<{ statement_timeout: string }>('SHOW statement_timeout');
+		expect(setting.rows).toEqual([{ statement_timeout: '100ms' }]);
+	});
+
 	test('migrations re-run as a no-op', async function() {
 		const database = await freshDatabase();
 		const pool = database.pool();

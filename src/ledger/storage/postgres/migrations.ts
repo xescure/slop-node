@@ -215,14 +215,15 @@ const ignoreConnectionError = function(): void {
 };
 
 /**
- * Unlocks and returns the connection to the pool, or, if the session cannot
- * unlock, closes it: closing a session releases its locks and rolls back its
- * transaction.
+ * Unlocks, gives the session back its own statement timeout, and returns the
+ * connection to the pool, or, if the session cannot do both, closes it:
+ * closing a session releases its locks and rolls back its transaction.
  */
 const releaseLock = async function(client: pg.PoolClient): Promise<void> {
 	let unlocked = true;
 	try {
 		await client.query('SELECT pg_advisory_unlock($1::bigint)', [MIGRATION_LOCK_KEY.toString()]);
+		await client.query('RESET statement_timeout');
 	} catch {
 		unlocked = false;
 	}
@@ -248,6 +249,9 @@ export const applyMigrations = async function(pool: pg.Pool, directory: URL, clo
 	client.on('error', ignoreConnectionError);
 	let version: SchemaVersion;
 	try {
+		// Waiting for another process's migration, and a migration itself, may
+		// rightly take longer than any one statement of the ledger.
+		await client.query('SET statement_timeout = 0');
 		await client.query('SELECT pg_advisory_lock($1::bigint)', [MIGRATION_LOCK_KEY.toString()]);
 		version = await migrateLocked(client, migrations, clock);
 	} catch (error: unknown) {
