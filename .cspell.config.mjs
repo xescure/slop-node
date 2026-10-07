@@ -38,6 +38,8 @@ export default {
 		// Names in upstream's API: a route segment and a switch statistic.
 		'clearstats',
 		'ungreeted',
+		// The capture of the account that holds a key pair is named for it.
+		'keypair',
 		// Elliptic curve names in upstream's key algorithms.
 		'secp',
 		// The migration lock key, 0x6b656574616c6467, read as ASCII.

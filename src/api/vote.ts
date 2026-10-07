@@ -2,6 +2,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { Vote, VoteQuote } from '@keetanetwork/keetanet-client/lib/vote.js';
 import type { DeclaredResult, DeclaredVoteGroup } from './declared.js';
+import { votesByID } from './order.js';
 import { parseBase64, parseBlockHash, parseLedgerStorage } from './parameters.js';
 import { asPayload, optionalString, optionalStringList, requiredStringList } from './payload.js';
 import type { Payload } from './payload.js';
@@ -47,13 +48,17 @@ async function createVoteQuote(request: APIRequest, body: unknown): Promise<Decl
 }
 
 /**
- * The votes the node holds for the block on one ledger, null when it holds
- * none [Keeta TS] index.js:59915-59919.
+ * The votes the node holds for the block on one ledger, by their ID, null
+ * when it holds none [Keeta TS] index.js:59915-59919.
  * [node-lite] adapted from getVotes.
  */
 async function getVotes(request: APIRequest, text: string): Promise<DeclaredResult<DeclaredVoteGroup[':blockhash']['GET']>> {
 	const blockhash = parseBlockHash(text);
-	return({ blockhash, votes: await request.node.ledger.getVotes(blockhash, parseLedgerStorage(request.query)) });
+	const votes = await request.node.ledger.getVotes(blockhash, parseLedgerStorage(request.query));
+	if (votes === null) {
+		return({ blockhash, votes });
+	}
+	return({ blockhash, votes: votesByID(votes) });
 }
 
 /** The routes that ask the node for votes and quotes, below /vote. */

@@ -396,6 +396,73 @@ describe('requests a representative answers without a failure', function() {
 	});
 });
 
+function texts(entries: readonly unknown[], name: string): readonly string[] {
+	return(entries.map(function(entry): string {
+		return(text(entry, name));
+	}));
+}
+
+/** The texts in the order a representative lists them: by their characters' codes, as strings compare. */
+function ordered(values: readonly string[]): readonly string[] {
+	return([...values].sort());
+}
+
+describe('lists, in the order a representative gives them', function() {
+	test('permissions are listed by entity, and the permissions on an entity by principal', async function() {
+		const node = await populated();
+		const user = keyOf(node.user);
+		const byPrincipal = list((await request(node, `/node/ledger/account/${user}/acl`)).body, 'permissions');
+		const byEntity = list((await request(node, `/node/ledger/account/${keyOf(node.multisig)}/acl/granted`)).body, 'permissions');
+		const access = list((await request(node, `/node/ledger/account/${user}/acl/additional`)).body, 'access');
+
+		expect(byPrincipal.length).toBeGreaterThan(1);
+		expect(texts(byPrincipal, 'entity')).toEqual(ordered(texts(byPrincipal, 'entity')));
+		expect(byEntity.length).toBeGreaterThan(1);
+		expect(texts(byEntity, 'principal')).toEqual(ordered(texts(byEntity, 'principal')));
+		expect(texts(access, 'entity')).toEqual(ordered(texts(access, 'entity')));
+		for (const entry of access) {
+			expect(texts(list(entry, 'principals'), 'principal')).toEqual(ordered(texts(list(entry, 'principals'), 'principal')));
+			expect(texts(list(entry, 'balances'), 'token')).toEqual(ordered(texts(list(entry, 'balances'), 'token')));
+		}
+	});
+
+	test('balances are listed by token', async function() {
+		const node = await populated();
+		const other = keyOf(node.other);
+		const balances = list((await request(node, `/node/ledger/account/${other}/balance`)).body, 'balances');
+		const state = list((await request(node, `/node/ledger/account/${other}`)).body, 'balances');
+
+		expect(balances.length).toBeGreaterThan(1);
+		expect(texts(balances, 'token')).toEqual(ordered(texts(balances, 'token')));
+		expect(state).toEqual(balances);
+	});
+
+	test('the votes for a block are listed by their ID, whatever their order in the staple', async function() {
+		const node = await nodes.start({ representativeWeights: [500n, 500n] });
+		const user = requireAt(node.network.users, 0);
+		const previous = node.network.genesis.blocks.filter(function(block): boolean {
+			return(block.account.comparePublicKey(user));
+		}).at(-1);
+		const send = await sendBlock({ from: user, to: requireAt(node.network.representatives, 1), amount: 1n, token: node.network.baseToken, previous: previous?.hash ?? null, network: node.network.network });
+		const representatives = [...node.network.representatives];
+		let staple = await confirmedStaple([send], representatives);
+		const idsOf = function(votes: readonly { readonly $id: string }[]): readonly string[] {
+			return(votes.map(function(vote): string {
+				return(vote.$id);
+			}));
+		};
+		if (idsOf(staple.votes).join() === ordered(idsOf(staple.votes)).join()) {
+			staple = await confirmedStaple([send], representatives.reverse());
+		}
+		expect(idsOf(staple.votes)).not.toEqual(ordered(idsOf(staple.votes)));
+		expect((await postJSON(node, '/node/publish', { votesAndBlocks: base64(staple.toBytes()) })).body).toEqual({ publish: true });
+
+		const votes = list((await request(node, `/vote/${send.hash.toString()}`)).body, 'votes');
+
+		expect(texts(votes, '$id')).toEqual(ordered(idsOf(staple.votes)));
+	});
+});
+
 describe('requests a representative refuses', function() {
 	test.each([
 		{ path: '/node/bootstrap/votes', code: 'API_START_MISSING', message: '"start" parameter must be supplied' },

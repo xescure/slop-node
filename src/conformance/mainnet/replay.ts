@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Ledger, LedgerStorageAPI } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
+import type { Node, NodeConfig } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { freezeClock } from '../../testing/network.js';
 import { MAINNET_NETWORK, mainnetLedgerSettings, mainnetReplayRepresentative, mainnetTrustedRoot } from './fixture.js';
@@ -53,15 +54,9 @@ export function replayOrder<Staple extends Orderable>(staples: readonly Staple[]
 	}));
 }
 
-type ReplayNode = InstanceType<typeof lib.Node>;
-
-/*
- * The ledger belongs to a node so that the checksum its adds and gc passes
- * fold is recorded: a bare ledger discards those statistics.
- * [Keeta TS] index.js:69001-69006
- */
-function createReplayNode(storage: LedgerStorageAPI): ReplayNode {
-	return(new lib.Node({
+/** A representative of the mainnet holding the replay key, its ledger on the storage. */
+export function mainnetNodeConfig(storage: LedgerStorageAPI): NodeConfig {
+	return({
 		kind: lib.Node.Kind.REPRESENTATIVE,
 		// A log without targets discards everything.
 		log: new lib.Log(),
@@ -71,7 +66,16 @@ function createReplayNode(storage: LedgerStorageAPI): ReplayNode {
 		networkAlias: 'main',
 		ledger: mainnetLedgerSettings(storage),
 		stats: { kv: null }
-	}));
+	});
+}
+
+/*
+ * The ledger belongs to a node so that the checksum its adds and gc passes
+ * fold is recorded: a bare ledger discards those statistics.
+ * [Keeta TS] index.js:69001-69006
+ */
+function createReplayNode(storage: LedgerStorageAPI): Node {
+	return(new lib.Node(mainnetNodeConfig(storage)));
 }
 
 /** gc reports whether more work remains once its time budget is spent. */
@@ -106,7 +110,11 @@ export async function addInReplayOrder(ledger: Ledger, staples: readonly VoteSta
 	}
 }
 
-async function replayOnNode(node: ReplayNode, staples: readonly VoteStaple[], options: ReplayOptions): Promise<ReplayResult> {
+/**
+ * Adds every staple to the node's ledger as replayMainnet does, without
+ * stopping the node, so that it can go on to serve the replayed ledger.
+ */
+export async function replayMainnetOn(node: Node, staples: readonly VoteStaple[], options: ReplayOptions = {}): Promise<ReplayResult> {
 	const { ledger } = node;
 	await addInReplayOrder(ledger, staples, async function(staple) {
 		await options.beforeAdd?.(staple, ledger);
@@ -137,7 +145,7 @@ async function replayOnNode(node: ReplayNode, staples: readonly VoteStaple[], op
 export async function replayMainnet(storage: LedgerStorageAPI, staples: readonly VoteStaple[], options: ReplayOptions = {}): Promise<ReplayResult> {
 	const node = createReplayNode(storage);
 	try {
-		return(await replayOnNode(node, staples, options));
+		return(await replayMainnetOn(node, staples, options));
 	} finally {
 		/*
 		 * Stopping flushes the node's statistics and closes its switch, which

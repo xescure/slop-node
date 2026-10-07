@@ -1,5 +1,6 @@
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import { assertNever } from '../util/assert-never.js';
+import { compareText } from '../util/compare-text.js';
 
 /**
  * One request as a handler sees it: the node it runs on, its path and query
@@ -122,16 +123,6 @@ function segmentRank(segment: string): readonly [number, string] {
 		return([1, '']);
 	}
 	return([0, segment]);
-}
-
-function compareText(left: string, right: string): number {
-	if (left < right) {
-		return(-1);
-	}
-	if (left > right) {
-		return(1);
-	}
-	return(0);
 }
 
 /**

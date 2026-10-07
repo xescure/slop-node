@@ -6,6 +6,7 @@ import { assertNever } from '../util/assert-never.js';
 import type { DeclaredAccountGroup, DeclaredResult } from './declared.js';
 import { historyPage } from './history.js';
 import type { HistoryPage } from './history.js';
+import { balancesByToken, permissionsByEntity, permissionsByPrincipal } from './order.js';
 import {
 	parseAccount,
 	parseAccountList,
@@ -69,7 +70,7 @@ async function accountState(ledger: LedgerReader, account: GenericAccount): Prom
 	const heights = await ledger.getAccountsBlockHeightInfo([{ account }]);
 	const head = heights[account.publicKeyString.get()] ?? null;
 	const representative = await ledger.getAccountRep(account);
-	const balances = await ledger.getAllBalances(account);
+	const balances = balancesByToken(await ledger.getAllBalances(account));
 	const info = await ledger.getAccountInfo(account);
 	return({
 		account,
@@ -197,7 +198,7 @@ function getAccountHistoryFrom(request: APIRequest, text: string, start: string)
 /** [node-lite] adapted from getAllBalances. */
 async function getAllBalances(request: APIRequest, text: string): Promise<DeclaredResult<DeclaredAccountGroup['balance']['GET']>> {
 	const account = parseAccount(text);
-	return({ account, balances: await request.node.ledger.getAllBalances(account) });
+	return({ account, balances: balancesByToken(await request.node.ledger.getAllBalances(account)) });
 }
 
 /** [node-lite] adapted from getAccountBalance. */
@@ -211,17 +212,17 @@ type PermissionsList = DeclaredResult<DeclaredAccountGroup['acl']['GET']>;
 
 /** The permissions the account holds as principal. [node-lite] adapted from listACLsByPrincipal. */
 async function listACLsByPrincipal(request: APIRequest, text: string): Promise<PermissionsList> {
-	return({ permissions: await request.node.ledger.listACLsByPrincipal(parseAccount(text)) });
+	return({ permissions: permissionsByEntity(await request.node.ledger.listACLsByPrincipal(parseAccount(text))) });
 }
 
 /** The permissions the account holds as principal on the listed entities. [node-lite] adapted from listACLsByPrincipal. */
 async function listACLsByPrincipalForEntities(request: APIRequest, text: string, entityList: string): Promise<PermissionsList> {
-	return({ permissions: await request.node.ledger.listACLsByPrincipal(parseAccount(text), parseAccountList(entityList)) });
+	return({ permissions: permissionsByEntity(await request.node.ledger.listACLsByPrincipal(parseAccount(text), parseAccountList(entityList))) });
 }
 
 /** The permissions any principal holds on the account as entity [Keeta TS] index.js:58637-58644. [node-lite] adapted from listACLsByEntity. */
 async function listACLsByEntity(request: APIRequest, text: string): Promise<DeclaredResult<DeclaredAccountGroup['acl']['granted']['GET']>> {
-	return({ permissions: await request.node.ledger.listACLsByEntity(parseAccount(text)) });
+	return({ permissions: permissionsByPrincipal(await request.node.ledger.listACLsByEntity(parseAccount(text))) });
 }
 
 type PrincipalAccess = DeclaredResult<DeclaredAccountGroup['acl']['additional']['GET']>;
@@ -254,12 +255,12 @@ function principalAccess(request: APIRequest, text: string, entityList: string |
 		requested = parseAccountList(entityList);
 	}
 	return(readLedger(request, 'account-acl-additional', async function(ledger): Promise<PrincipalAccess> {
-		const rows = await ledger.listACLsByPrincipal(account, requested);
+		const rows = permissionsByEntity(await ledger.listACLsByPrincipal(account, requested));
 		const access: PrincipalAccess['access'] = [];
 		for (const entity of distinctEntities(rows)) {
 			const info = await ledger.getAccountInfo(entity);
-			const balances = await ledger.getAllBalances(entity);
-			const principals = await ledger.listACLsByEntity(entity);
+			const balances = balancesByToken(await ledger.getAllBalances(entity));
+			const principals = permissionsByPrincipal(await ledger.listACLsByEntity(entity));
 			access.push({ entity, info, balances, principals });
 		}
 		return({ account, access });
