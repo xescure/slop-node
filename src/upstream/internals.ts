@@ -4,7 +4,7 @@ import type { LedgerStorageBase, computeLedgerEffect, addTimeStatistic } from '@
 import type { computeEffectOfBlocks } from '@keetanetwork/keetanet-client/lib/ledger/effects.js';
 import type { KVStorageProviderMemory } from '@keetanetwork/keetanet-client/lib/kv/kv_memory.js';
 import type { IdempotentKey } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
-import type { P2PHttpConnection as HTTPConnectionClass, P2PPeerFromJSO, P2PWebSocket } from '@keetanetwork/keetanet-client/lib/p2p.js';
+import type { P2PHttpConnection as HTTPConnectionClass, P2PPeerFromJSO, P2PPeerToJSO, P2PWebSocket } from '@keetanetwork/keetanet-client/lib/p2p.js';
 import type { StatsPending as StatsPendingClass } from '@keetanetwork/keetanet-client/lib/stats.js';
 
 export type LedgerInternalsAPI = {
@@ -81,6 +81,7 @@ export type P2PInternalsAPI = {
 	readonly P2PWebSocket: typeof P2PWebSocket;
 	readonly HTTPConnection: typeof HTTPConnectionClass;
 	readonly P2PPeerFromJSO: typeof P2PPeerFromJSO;
+	readonly P2PPeerToJSO: typeof P2PPeerToJSO;
 	readonly P2P_WEBSOCKET_MAX_PAYLOAD_BYTES: number;
 	readonly WebSocketServer: BundledWebSocketServerConstructor;
 };
@@ -89,6 +90,7 @@ const requiredP2PInternals = {
 	P2PWebSocket: true,
 	HTTPConnection: true,
 	P2PPeerFromJSO: true,
+	P2PPeerToJSO: true,
 	P2P_WEBSOCKET_MAX_PAYLOAD_BYTES: true,
 	WebSocketServer: true
 } satisfies Record<keyof P2PInternalsAPI, true>;
@@ -118,6 +120,7 @@ export const P2PInternals: P2PInternalsAPI = {
 	P2PWebSocket: KeetaNet.lib.P2PInternals.P2PWebSocket,
 	HTTPConnection: KeetaNet.lib.P2PInternals.HTTPConnection,
 	P2PPeerFromJSO: KeetaNet.lib.P2PInternals.P2PPeerFromJSO,
+	P2PPeerToJSO: KeetaNet.lib.P2PInternals.P2PPeerToJSO,
 	P2P_WEBSOCKET_MAX_PAYLOAD_BYTES: KeetaNet.lib.P2PInternals.P2P_WEBSOCKET_MAX_PAYLOAD_BYTES,
 	WebSocketServer: exposedWebSocketServer
 };

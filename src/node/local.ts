@@ -408,7 +408,7 @@ export class LocalNode extends ClientNode {
 		if (listening !== undefined) {
 			await close(listening.server);
 		}
-		await settleDeliveries(this.switch);
+		await settleDeliveries(this);
 		this.#running = false;
 		await super.stop();
 		await this.#connections.closed();

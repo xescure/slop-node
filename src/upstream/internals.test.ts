@@ -88,10 +88,11 @@ describe('KVInternals', function() {
 });
 
 describe('P2PInternals', function() {
-	test('exposes the switch\'s connection classes, peer parser, frame bound and WebSocket server', function() {
+	test('exposes the switch\'s connection classes, peer parser and serializer, frame bound and WebSocket server', function() {
 		expect(typeof P2PInternals.P2PWebSocket.connectToSwitch).toBe('function');
 		expect(typeof P2PInternals.HTTPConnection.isInstance).toBe('function');
 		expect(P2PInternals.P2PPeerFromJSO({ kind: KeetaNet.lib.Node.Kind.PARTICIPANT })).toEqual({ kind: KeetaNet.lib.Node.Kind.PARTICIPANT, id: '' });
+		expect(P2PInternals.P2PPeerToJSO({ kind: KeetaNet.lib.Node.Kind.PARTICIPANT, id: '' })).toEqual({ kind: KeetaNet.lib.Node.Kind.PARTICIPANT });
 		expect(P2PInternals.P2P_WEBSOCKET_MAX_PAYLOAD_BYTES).toBe(16 * 1024 * 1024);
 		expect(P2PInternals.WebSocketServer.name).toBe('WebSocketServer');
 	});
