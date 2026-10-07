@@ -1,0 +1,10 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"outDir": "./build/devnet",
+		"tsBuildInfoFile": "./build/devnet/.tsbuildinfo"
+	},
+	"include": [
+		"src/devnet/main.ts"
+	]
+}

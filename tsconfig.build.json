@@ -4,6 +4,7 @@
 		"src/**/*.test.ts",
 		"src/testing/**",
 		"src/conformance/**",
+		"src/devnet/**",
 		"src/**/suite/**"
 	]
 }

@@ -6,7 +6,7 @@ import type { Permissions } from '@keetanetwork/keetanet-client/lib/permissions.
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerInternals } from '../../upstream/internals.js';
 import { assertNever } from '../../util/assert-never.js';
-import { compareText } from './replay.js';
+import { compareText } from '../../util/compare-text.js';
 import type { ReplayResult } from './replay.js';
 
 const lib = KeetaNet.lib;

@@ -47,6 +47,7 @@ help:
 	@echo "  dist           - Builds the distribution directory"
 	@echo "  test           - Type-checks and runs the test suite"
 	@echo "                   Specify extra flags with SLOP_NODE_TEST_EXTRA_ARGS"
+	@echo "  devnet-test    - Runs the suites of the four-node devnet only"
 	@echo "  do-lint        - Runs the ASCII check, eslint and cspell"
 	@echo "  conformance    - Regenerates the vote-decision corpus, and the mainnet"
 	@echo "                   head state, shadow-vote exceptions and edge-case"
@@ -87,10 +88,10 @@ node_modules: node_modules/.patched
 # removing dist removes it too; without the stamp the directory may be partial,
 # which an incremental build would not notice, so it starts from scratch. The
 # prerequisites are the sources tsconfig.build.json compiles: it leaves out the
-# tests, src/testing, src/conformance and the storage suites, and nothing it
-# compiles imports them. The command's entry, the package's bin, runs as a
-# program of its own.
-dist/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts' -not -path 'src/testing/*' -not -path 'src/conformance/*' -not -path '*/suite/*') tsconfig.json tsconfig.build.json node_modules/.patched
+# tests, src/testing, src/conformance, src/devnet and the storage suites, and
+# nothing it compiles imports them. The command's entry, the package's bin,
+# runs as a program of its own.
+dist/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts' -not -path 'src/testing/*' -not -path 'src/conformance/*' -not -path 'src/devnet/*' -not -path '*/suite/*') tsconfig.json tsconfig.build.json node_modules/.patched
 	@[ -e dist/.done ] || rm -f dist/.tsbuildinfo
 	npm run tsc -- -p tsconfig.build.json
 	chmod +x dist/main.js
@@ -104,13 +105,26 @@ build/utils/.done: $(shell find utils -type f -name '*.ts' -not -path 'utils/lin
 	npm run tsc -- -p utils
 	@touch build/utils/.done
 
+# utils/devnet runs the devnet's command, which reaches into the test support
+# and the conformance code for its databases and dumps, so it is built apart
+# from the distribution, from what its entry imports.
+build/devnet/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts') tsconfig.json tsconfig.devnet.json node_modules/.patched
+	@[ -e build/devnet/.done ] || rm -f build/devnet/.tsbuildinfo
+	npm run tsc -- -p tsconfig.devnet.json
+	@touch build/devnet/.done
+
 # The type checks cover the tests that the builds exclude, so they must not
 # write the build info that the builds read. Asked for together, the corpus is
 # regenerated before the tests read it.
-test: dist/.done build/utils/.done | $(filter conformance,$(MAKECMDGOALS))
+test: dist/.done build/utils/.done build/devnet/.done | $(filter conformance,$(MAKECMDGOALS))
 	npm run tsc -- --noEmit --incremental false
 	npm run tsc -- --noEmit --incremental false -p utils
 	npm run vitest -- run --config .vitest.config.js $(SLOP_NODE_TEST_EXTRA_ARGS)
+
+# The devnet runs the built node as separate processes, and utils/devnet's
+# test runs the built command.
+devnet-test: dist/.done build/devnet/.done
+	npm run vitest -- run --config .vitest.config.js --project devnet $(SLOP_NODE_TEST_EXTRA_ARGS)
 
 # The corpus records what upstream's ledger decides, the mainnet head state
 # what it reaches, the shadow-vote exceptions which head staples it refuses to
@@ -182,6 +196,6 @@ clean:
 distclean: clean
 	rm -rf node_modules .nvmrc reference
 
-.PHONY: all help test conformance do-lint reference reference-diff reference-diff-usage clean distclean
+.PHONY: all help test devnet-test conformance do-lint reference reference-diff reference-diff-usage clean distclean
 
 endif
