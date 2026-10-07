@@ -16,13 +16,18 @@ import { postJSON, useLocalNodes } from '../testing/local-node.js';
 import type { RunningLocalNode } from '../testing/local-node.js';
 import type { TestNetwork } from '../testing/network.js';
 import { watchOpenHandles } from '../testing/open-handles.js';
+import { NODE_ENVIRONMENT, useSDKNodes } from '../testing/sdk.js';
+import type { ServingNode } from '../testing/sdk.js';
 import { P2PInternals } from '../upstream/internals.js';
+import type { LedgerWriteMode } from './config.js';
 import type { LocalNode } from './local.js';
 import { MESSAGE_SETTLE_MILLISECONDS, SwitchMessages } from './messages.js';
+import { rememberedPeerArenas } from './peer-store.js';
 
 const lib = KeetaNet.lib;
 
 const nodes = useLocalNodes();
+const sdkNodes = useSDKNodes();
 
 const api = new APIDocument();
 
@@ -717,6 +722,64 @@ describe('peers over HTTP republish', function() {
 		await settleDeliveries(second.node);
 		expect(delivered).toEqual(['greeting']);
 		expect(representativeKeys(await second.node.switch.peers({ includeUnverified: true }))).toEqual([keyOf(representativeOf(first, 0))]);
+	});
+});
+
+/** A representative configured from its environment, as the command builds one, on that network and in that mode. */
+function startConfigured(network: string, mode: LedgerWriteMode): Promise<ServingNode> {
+	return(sdkNodes.start({ ...NODE_ENVIRONMENT, KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: mode }));
+}
+
+/** A representative of the local network, posting over HTTP, whose genuine greeting the node under test is sent. */
+async function senderGreeting(): Promise<JSONSerializableObject> {
+	const sender = await sdkNodes.start({ ...NODE_ENVIRONMENT, KEETANET_LOCAL_NODE_SEED_INDEX: '1', KEETANET_LOCAL_NODE_PREFER_UPDATES: 'http' });
+	return(await sender.node.switch.getOutgoingGreetingInfo());
+}
+
+function apiOf(serving: ServingNode): { readonly apiURL: string } {
+	return({ apiURL: endpointsOf(serving.node).api.replace(/\/$/, '') });
+}
+
+describe('a node configured from its environment', function() {
+	test.each(['dev', 'staging'])('serves no /p2p WebSocket on %s while it votes, the network being closed to peers', async function(network) {
+		const serving = await startConfigured(network, 'read-write');
+
+		await expect(opened(new WebSocket(p2pEndpointOf(serving.node)))).rejects.toThrow('did not open');
+	});
+
+	test.each(['dev', 'staging'])('refuses a message posted over HTTP on %s while it votes, handing the switch nothing and keeping no peer', async function(network) {
+		const serving = await startConfigured(network, 'read-write');
+		const greeting = await senderGreeting();
+		const handle = vi.spyOn(serving.node.switch, 'recvMessageFromPeer');
+
+		const answer = await postJSON(apiOf(serving), '/p2p/message', { message: peerMessage('hello', greeting, 0), greeting });
+
+		expect(answer.status).toBe(200);
+		expect(answer.body).toEqual({ success: false });
+		expect(api.responseViolations(MESSAGE_ROUTE, answer.status, answer.body)).toEqual([]);
+		expect(handle).not.toHaveBeenCalled();
+		expect(await serving.node.switch.peers({ includeUnverified: true, includeStale: true })).toEqual([]);
+		expect(await rememberedPeerArenas(serving.node.switch.config.kv)).toEqual([]);
+	});
+
+	test.each([
+		{ network: 'local', mode: 'read-write' },
+		{ network: 'dev', mode: 'read-only' },
+		{ network: 'staging', mode: 'bootstrap-only' }
+	] as const)('serves peers over /p2p and HTTP on $network in $mode mode, which the network is open to', async function({ network, mode }) {
+		const serving = await startConfigured(network, mode);
+		const greeting = await senderGreeting();
+		const socket = new WebSocket(p2pEndpointOf(serving.node));
+		await opened(socket);
+		socket.close();
+		const greeted = nextHandled(serving.node, 'greeting');
+
+		const answer = await postJSON(apiOf(serving), '/p2p/message', { message: peerMessage('hello', greeting, 0), greeting });
+
+		expect(answer.body).toEqual({ success: true });
+		await greeted;
+		expect(await serving.node.switch.peers({ includeUnverified: true })).toHaveLength(1);
+		expect(await rememberedPeerArenas(serving.node.switch.config.kv)).toContain('potentialPeers');
 	});
 });
 

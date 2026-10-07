@@ -12,6 +12,7 @@ import { assertNever } from '../util/assert-never.js';
 import type { AssertNever } from '../util/assert-never.js';
 import type { ClassSurface } from '../util/class-surface.js';
 import { BootstrapClient } from './bootstrap.js';
+import { nodeNetworkClosedToPeers } from './config.js';
 import { SwitchConnections } from './connections.js';
 import { LocalNodeError } from './errors.js';
 import { SwitchMessages } from './messages.js';
@@ -344,8 +345,11 @@ export class LocalNode extends ClientNode {
 	/**
 	 * Mounts the routes, listens, advertises where it listens if no endpoints
 	 * are configured, so that the node describes itself to peers correctly,
-	 * then serves peers on "/p2p" unless told not to, dials its manual peers,
-	 * and starts bootstrapping from its peers.
+	 * then serves peers on "/p2p" unless told not to or its network is closed
+	 * to peers, dials its manual peers, and starts bootstrapping from its
+	 * peers. A peer's greeting on "/p2p" would make it a peer the node
+	 * broadcasts to [Keeta TS] index.js:73250, 73563-73567, and one it
+	 * remembers.
 	 */
 	override async run(options?: RunOptions): Promise<void> {
 		if (this.#running) {
@@ -364,7 +368,7 @@ export class LocalNode extends ClientNode {
 			if (target !== undefined) {
 				this.#listening = await listen(this.#app, target);
 				this.#advertise(target, this.#listening.address);
-				if (options?.startWebSocketServer !== false) {
+				if (options?.startWebSocketServer !== false && this.#openToPeers()) {
 					this.#peers = new PeerServer(this.#listening.server, this.switch, this.log);
 				}
 			}
@@ -376,6 +380,10 @@ export class LocalNode extends ClientNode {
 			this.#running = false;
 			throw(error);
 		}
+	}
+
+	#openToPeers(): boolean {
+		return(nodeNetworkClosedToPeers(this.config.network, this.ledger.ledgerWriteMode) === undefined);
 	}
 
 	/** A ledger that is read-only adds nothing, bootstrapped or not [Keeta TS] index.js:69363-69365. */

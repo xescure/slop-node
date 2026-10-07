@@ -857,6 +857,18 @@ export function networkClosedToPeers(network: NetworkSelection, ledgerWriteMode:
 	return(network.alias);
 }
 
+/**
+ * networkClosedToPeers for a node as it was built, from its network ID. An ID
+ * the client does not know names no network of Keeta's.
+ */
+export function nodeNetworkClosedToPeers(network: bigint, ledgerWriteMode: LedgerWriteMode): Networks | undefined {
+	const selection = networkWithID(network);
+	if (selection === undefined) {
+		return(undefined);
+	}
+	return(networkClosedToPeers(selection, ledgerWriteMode));
+}
+
 function refusePeersOnKeetaNetwork(reader: EnvironmentReader, network: NetworkSelection, ledgerWriteMode: LedgerWriteMode): void {
 	const closed = networkClosedToPeers(network, ledgerWriteMode);
 	if (closed === undefined) {

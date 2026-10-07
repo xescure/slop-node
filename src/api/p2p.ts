@@ -2,6 +2,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { P2PConnection, P2PPeer, P2PPeerRep, P2PSwitch } from '@keetanetwork/keetanet-client/lib/p2p.js';
 import type { JSONSerializableObject } from '@keetanetwork/keetanet-client/lib/utils/conversion.js';
+import { nodeNetworkClosedToPeers } from '../node/config.js';
 import { P2PInternals } from '../upstream/internals.js';
 import type { DeclaredP2PGroup, DeclaredResult } from './declared.js';
 import { asPayload, requiredObject, requiredString } from './payload.js';
@@ -240,15 +241,22 @@ function deliver(node: Node, connection: P2PConnection, message: Buffer): void {
  * one sender posts are handled in the order they arrive, as on a WebSocket,
  * rather than a message whose greeting the switch has already seen
  * overtaking the one before it.
+ *
+ * A node whose network is closed to peers refuses every message unread: the
+ * greeting alone would make the sender a peer the node broadcasts to
+ * [Keeta TS] index.js:73250, 73563-73567, and one it remembers.
  */
 function handleMessage(request: APIRequest, body: unknown): Promise<DeclaredResult<DeclaredP2PGroup['message']['POST']>> {
+	const node = request.node;
+	if (nodeNetworkClosedToPeers(node.config.network, node.ledger.ledgerWriteMode) !== undefined) {
+		return(Promise.resolve({ success: false }));
+	}
 	const payload = asPayload(body);
 	const text = requiredString(payload, 'message');
 	const advertisement = signedAdvertisementOf(requiredObject(payload, 'greeting'));
 	if (advertisement === undefined) {
 		return(Promise.resolve({ success: false }));
 	}
-	const node = request.node;
 	const connection = new P2PInternals.HTTPConnection(advertisement.peer, node.switch);
 	deliver(node, connection, greetingMessage(advertisement));
 	const message = republishedMessage(text);
