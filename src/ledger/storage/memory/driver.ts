@@ -669,15 +669,17 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	 * Voting stores each vote it issues here, a temporary vote and later the
 	 * permanent one for the same blocks plus a fee block; the permanent vote
 	 * is added beside the temporary vote, which stays until it expires. The
-	 * writes are staged so the vote and its indexes land together.
+	 * writes land together as a unit of their own, taken in the transaction's
+	 * turn so that they never join a unit that is open and may still fail.
 	 * [Keeta TS] index.js:69310-69316, 69342-69354
 	 */
 	async addPendingVote(transaction: MemoryTransaction, staple: VoteStaple): Promise<void> {
-		const overlay = openOverlay(await transaction.view());
-		for (const vote of staple.votes) {
-			this.#writeSideVote(overlay, vote, staple.blocks);
-		}
-		commitOverlay(overlay);
+		await this.runIsolatedInTurn(transaction, async () => {
+			const overlay = await transaction.view();
+			for (const vote of staple.votes) {
+				this.#writeSideVote(overlay, vote, staple.blocks);
+			}
+		});
 	}
 
 	/*

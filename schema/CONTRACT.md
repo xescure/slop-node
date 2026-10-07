@@ -163,7 +163,8 @@ A driver must provide the following.
 3. **Concurrent calls within one transaction.** Upstream issues reads on one transaction concurrently [Keeta TS] index.js:67332-67339, 67638-67646, 69935-69945, and `Promise.all` over `add` within one transaction is legal. A driver must accept overlapping calls on one transaction and lose no write. The base runs overlapping `adjust` calls, and gc batches, on one transaction one after another (item 4). Tested by `transactions.ts: "concurrent calls within one transaction keep every write"`.
 4. **Per-staple isolation.** `runIsolated(tx, unit)` (section 4.2) is the isolation boundary of a deferred staple. The base runs each replayed staple, and each staple a gc pass retries, as one unit, together with everything that staple releases in turn, so units nest. If a unit throws at any point, none of its writes may remain while the transaction continues: before the write, in `persistConfirmedStaple`, or after it, in `removeDeferredStaple` or a nested replay. The staple then stays deferred. It is neither returned by `adjust` nor folded into `ledgerChecksum`, and its settlement statistics are not recorded. Its trigger still commits. A database driver implements `runIsolated` with a savepoint, released when the unit succeeds and rolled back when it fails. Without one, a failed statement aborts the whole transaction, or a staple that failed after its write stays half-applied.
    - `persistConfirmedStaple` must still apply a whole change or nothing, because the staple at the top of `adjust` runs in no unit, and the base's default `runIsolated` adds no isolation.
-   - Rolling a unit back undoes every write made while it was open. The base therefore runs `adjust` and gc batches one at a time per transaction, so no other `adjust` writes into an open unit. Other calls on the same transaction are not held back: while a unit is open they see its writes, and an `addPendingVote` overlapping it would be undone with it. Untested: the overlap needs a particular interleaving, which no case can force on every driver.
+   - Rolling a unit back undoes every write made while it was open. The base therefore runs `adjust` and gc batches one at a time per transaction, so no other `adjust` writes into an open unit.
+   - A write made outside a unit must never land inside an open one, because a unit that fails takes the write with it although its caller was told it succeeded. A member that upstream may call on a transaction while `adjust` or gc runs on it must therefore take its turn with `runIsolatedInTurn` (section 4.2) instead of writing at once. `addPendingVote` is the only such member. `runIsolatedInTurn` must not be called from work the base has queued (`adjust`, gc, a replayed staple, `persistConfirmedStaple`), because it would wait for its own turn.
 
    Tested by:
    - `deferral.ts: "a replayed staple that fails after its write leaves nothing behind and stays deferred"`, where a nested unit fails after its write and only it is undone
@@ -172,6 +173,7 @@ A driver must provide the following.
    - `deferral.ts: "a replayed staple that conflicts stays deferred while its trigger applies"`, where it fails before the write
    - `stats.ts: "a replayed staple that rolls back does not record a settlement time"`, where the unit that rolls back would have earned a settlement time from this node's temporary vote, and earns it once a later retry succeeds
    - `confirmed.ts: "persisting never overwrites a confirmed block or successor"`, which calls the primitive directly
+   - `votes.ts: "a pending vote added while a unit that later fails is open survives the unit"`, where a unit opened through the base's test hook fails after `addPendingVote` was issued beside it
 
 The memory driver meets 1 by holding one first-come, first-served lock from `beginTransaction` until commit or abort. It meets 2 and 4 with a copy-on-write overlay per transaction, applied on commit and dropped on abort, and with a nested overlay for each staged group of writes and for each isolated unit. While a unit is open, the transaction reads and writes through the unit's overlay, which is applied to the enclosing view when the unit succeeds and dropped when it fails. It meets 3 by keeping every overlay operation synchronous. It records a commit as done only after the overlay has been applied, and a failed commit leaves the transaction finished with a non-retryable error (untested).
 
@@ -439,7 +441,7 @@ addPendingVote: (transaction: any, blocksAndVote: VoteStaple) => Promise<void>;
   - by each block's `previous`, including the opening sentinel
   - by its `blocksHash`
 
-  Each block not already on the main ledger gets a side copy, and the block's idempotent key, if any, is claimed on the side. A block already on the main ledger gets neither (untested: voting refuses such a block first). The vote and its indexes land together or not at all. A driver that isolates this write runs it with `runIsolatedInTurn`, so it never overlaps a unit that `adjust` or gc has open on the same transaction.
+  Each block not already on the main ledger gets a side copy, and the block's idempotent key, if any, is claimed on the side. A block already on the main ledger gets neither (untested: voting refuses such a block first). The vote and its indexes land together or not at all. Every driver runs this write with `runIsolatedInTurn` (section 3.3, item 4), so it never lands inside a unit that `adjust` or gc has open on the same transaction.
 - No other side vote is removed. A permanent vote is stored beside the temporary vote on the same blocks (D6). The issuer is not checked.
 - **Selector.** Writes to the side ledger only.
 - **Tested by**:
@@ -447,7 +449,8 @@ addPendingVote: (transaction: any, blocksAndVote: VoteStaple) => Promise<void>;
   - `votes.ts: "a permanent vote with a fee block joins the temporary vote"`
   - `votes.ts: "without a fee block the permanent vote shares its staple with the temporary vote"`
   - `votes.ts: "quote consumes a serial and stores nothing on the side ledger"`
-  - `src/ledger/storage/postgres/driver.test.ts: "pending votes added concurrently on one transaction open their units one at a time"`, for the Postgres driver's use of `runIsolatedInTurn`
+  - `votes.ts: "a pending vote added while a unit that later fails is open survives the unit"`
+  - `src/ledger/storage/postgres/driver.test.ts: "pending votes added concurrently on one transaction open their units one at a time"`, for two such votes on one transaction
 - Replacement of a stored vote with the same `$uid` is untested.
 - **Upstream.** [Keeta TS] index.js:69310-69316, 69342-69354.
 
@@ -826,7 +829,7 @@ Writes everything that one confirmed staple changes, all of it or none of it (se
 
   Every other side vote stays, including this node's temporary vote on these blocks and its votes on competing blocks (D6).
 
-  No side row may outlive its promotion: a side block that is also on the main ledger, and its side idempotent claims, are leaks even while a side vote still covers them. Tested by `votes.ts: "publishing promotes the staple and deletes side copies of promoted rows"`, `votes.ts: "publishing a voted block that holds an idempotent key leaves no orphaned side rows"` and `deferral.ts: "a replayed staple that promotes a voted block and then fails keeps its side rows, and applies when it arrives again"`, each through `countOrphanedSideRows`.
+  No side row may outlive its promotion: a side block that is also on the main ledger, and its side idempotent claims, are leaks even while a side vote still covers them. Tested by `votes.ts: "publishing promotes the staple and deletes side copies of promoted rows"`, `votes.ts: "publishing a voted block that holds an idempotent key leaves no orphaned side rows"` and `deferral.ts: "a replayed staple that promotes a voted block and then fails keeps its side rows, and applies when it arrives again"` and `deferral.ts: "a staple released by replay promotes a block this node voted on and leaves no side rows"`, each through `countOrphanedSideRows`. A replayed staple is written by the same primitive as any other, so promotion has no separate replay path.
 
 #### `runIsolated`
 
@@ -842,7 +845,7 @@ Runs `unit` so that its writes join the transaction if it succeeds, and none of 
 protected runIsolatedInTurn<Result>(transaction: Transaction, unit: () => Promise<Result>): Promise<Result>;
 ```
 
-Provided by the base, not implemented by drivers. Runs `unit` as `runIsolated` does, after the work the base has already queued on the transaction (`adjust`, gc, replayed staples). A member that upstream may call on a transaction while `adjust` is running uses it, so units of one transaction never overlap. It must not be called from work the base has queued, which would wait for itself. `addPendingVote` is its only caller. Tested by `src/ledger/storage/postgres/driver.test.ts: "pending votes added concurrently on one transaction open their units one at a time"`.
+Provided by the base, not implemented by drivers. Runs `unit` as `runIsolated` does, after the work the base has already queued on the transaction (`adjust`, gc, replayed staples). A member that upstream may call on a transaction while `adjust` is running uses it, so units of one transaction never overlap. It must not be called from work the base has queued, which would wait for itself. `addPendingVote` is its only caller. Tested by `votes.ts: "a pending vote added while a unit that later fails is open survives the unit"`, which opens the unit through the base's key-gated test hook, and by `src/ledger/storage/postgres/driver.test.ts: "pending votes added concurrently on one transaction open their units one at a time"`.
 
 #### `storeDeferredStaple`
 
@@ -919,7 +922,7 @@ Counts the side rows that no side vote accounts for. Only the base's key-gated t
 - a side block that is also on the main ledger
 - a side idempotent claim whose block is not a side block covered by a side vote
 
-A vote that has expired but is not yet collected still covers its blocks, so it is not counted. A healthy store reports 0 after every member, and gc brings it back to 0. Tested by every case that asserts the count: `votes.ts: "publishing promotes the staple and deletes side copies of promoted rows"`, `votes.ts: "publishing a voted block that holds an idempotent key leaves no orphaned side rows"`, `deferral.ts: "a replayed staple that promotes a voted block and then fails keeps its side rows, and applies when it arrives again"`, `gc.ts: "gc removes expired side votes and their unreferenced blocks but keeps permanent ones"`, `gc.ts: "gc removes side votes whose blocks were all confirmed under another staple"`, `gc.ts: "gc removes side votes whose staple can no longer be published"` and `gc.ts: "gc removes our votes on a competitor of a confirmed block and frees its idempotent key"`.
+A vote that has expired but is not yet collected still covers its blocks, so it is not counted. A healthy store reports 0 after every member, and gc brings it back to 0. Tested by every case that asserts the count: `votes.ts: "publishing promotes the staple and deletes side copies of promoted rows"`, `votes.ts: "publishing a voted block that holds an idempotent key leaves no orphaned side rows"`, `deferral.ts: "a replayed staple that promotes a voted block and then fails keeps its side rows, and applies when it arrives again"`, `deferral.ts: "a staple released by replay promotes a block this node voted on and leaves no side rows"`, `gc.ts: "gc removes expired side votes and their unreferenced blocks but keeps permanent ones"`, `gc.ts: "gc removes side votes whose blocks were all confirmed under another staple"`, `gc.ts: "gc removes side votes whose staple can no longer be published"` and `gc.ts: "gc removes our votes on a competitor of a confirmed block and frees its idempotent key"`.
 
 #### `countLedger`
 

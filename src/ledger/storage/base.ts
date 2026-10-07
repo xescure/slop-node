@@ -261,6 +261,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	_Testing(key: string): {
 		deferredStaplesWaitingOn(transaction: Transaction, blockHashes: readonly BlockHash[]): Promise<readonly VoteStaple[]>;
 		gcBatch(transaction: Transaction, limit: number): Promise<boolean>;
+		isolatedInTurn(transaction: Transaction, unit: () => Promise<void>): Promise<void>;
 		orphanedSideRows(transaction: Transaction): Promise<number>;
 		persist(transaction: Transaction, change: ConfirmedStapleChange): Promise<void>;
 	} {
@@ -273,6 +274,9 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			},
 			gcBatch: (transaction, limit) => {
 				return(this.#gcBatch(transaction, limit));
+			},
+			isolatedInTurn: (transaction, unit) => {
+				return(this.runIsolatedInTurn(transaction, unit));
 			},
 			orphanedSideRows: (transaction) => {
 				return(this.countOrphanedSideRows(transaction));
@@ -298,11 +302,14 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 
 	/**
 	 * Runs a unit for a member that upstream may call while the base is
-	 * applying a staple on the same transaction. The unit waits for its turn
-	 * behind that work, so units of one transaction never overlap, and then
-	 * runs as runIsolated does. It must not be called from inside work the
-	 * base has already queued on the transaction (adjust, gc, a replayed
-	 * staple, persistConfirmedStaple), which would wait for itself.
+	 * applying a staple on the same transaction. A write made while a unit is
+	 * open lands in that unit and is undone with it if it fails, even though
+	 * its caller has already been told it succeeded. The unit therefore waits
+	 * for its turn behind the queued work, so units of one transaction never
+	 * overlap and the write never joins one, and then runs as runIsolated
+	 * does. Every driver's addPendingVote uses it. It must not be called from
+	 * inside work the base has already queued on the transaction (adjust, gc,
+	 * a replayed staple, persistConfirmedStaple), which would wait for itself.
 	 */
 	protected runIsolatedInTurn<Result>(transaction: Transaction, unit: () => Promise<Result>): Promise<Result> {
 		return(this.#exclusively(transaction, () => {

@@ -21,6 +21,7 @@ import {
 	orphanedSideRowsOf,
 	readStorage,
 	readStorageAt,
+	TESTING_KEY,
 	requireAt,
 	useFixtures
 } from './support.js';
@@ -410,6 +411,49 @@ export const voteLifecycleCases: readonly SuiteCase[] = [
 			expect(hashOf(await ledger.getIdempotentBlockHash(user, idempotent, 'main'))).toBe(hashOf(held));
 			expect(await orphanedSideRowsOf(storage)).toBe(0);
 			advancePastExpiry(vote);
+			expect(await orphanedSideRowsOf(storage)).toBe(0);
+		}
+	},
+	{
+		name: 'a pending vote added while a unit that later fails is open survives the unit',
+		async run(startNetwork: FixtureFactory): Promise<void> {
+			const { network, storage, ledger, startPeer } = await startNetwork();
+			await ledger.add(network.genesis);
+			const peer = await startPeer(1);
+			const send = await sendFromFirstUser(network, headOf(network.genesis, requireAt(network.users, 0)), 5n);
+			const peerVote = await peer.vote([send]);
+			const staple = lib.Vote.Staple.fromVotesAndBlocks([peerVote], [send]);
+			const transaction = await storage.beginTransaction({ identifier: 'suite-pending-vote-beside-unit', readOnly: false });
+			let release: () => void = function() {
+				throw(new Error('the unit has not started'));
+			};
+			const gate = new Promise<void>(function(resolve) {
+				release = resolve;
+			});
+			let opened: () => void = function() {
+				throw(new Error('the unit has not started'));
+			};
+			const started = new Promise<void>(function(resolve) {
+				opened = resolve;
+			});
+			const failing = storage._Testing(TESTING_KEY).isolatedInTurn(transaction, async function() {
+				opened();
+				await gate;
+				throw(new Error('the unit fails after the vote was added'));
+			});
+			const failed = expect(failing).rejects.toThrow('after the vote was added');
+			await started;
+
+			const adding = storage.addPendingVote(transaction, staple);
+			release();
+			await failed;
+			await adding;
+
+			// The vote was added outside the unit, so undoing the unit does not undo it.
+			const stored = identitiesOf(await storage.getVotes(transaction, send.hash, 'side'));
+			await storage.commitTransaction(transaction);
+			expect(stored).toEqual([peerVote.$uid]);
+			expect(hashOf(await ledger.getBlock(send.hash, 'side'))).toBe(hashOf(send));
 			expect(await orphanedSideRowsOf(storage)).toBe(0);
 		}
 	},

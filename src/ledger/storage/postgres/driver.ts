@@ -1181,11 +1181,6 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 		return((await transaction.run(releasedDeferredStaples, [limit, Array.from(exclude, stapleKeyBytes)])).map(decodeDeferredStaple));
 	}
 
-	/*
-	 * Removes the obsolete votes, then the side copies and side claims of the
-	 * blocks they covered that no remaining side vote covers. Main rows are
-	 * never touched (D20).
-	 */
 	protected async countOrphanedSideRows(transaction: PostgresTransaction): Promise<number> {
 		const row = onlyRow(await transaction.run(orphanedSideRows, []));
 		if (row === undefined) {
@@ -1194,6 +1189,11 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 		return(Number(fromInteger(row.orphaned)));
 	}
 
+	/*
+	 * Removes the obsolete votes, then the side copies and side claims of the
+	 * blocks they covered that no remaining side vote covers. Main rows are
+	 * never touched (D20).
+	 */
 	protected async collectObsoleteSideVotes(transaction: PostgresTransaction, limit: number): Promise<boolean> {
 		const obsolete = await transaction.run(obsoleteSideVotes, [unexpiredSince(transaction.moment), limit + 1]);
 		const collected = obsolete.slice(0, limit).map(function(row) {
