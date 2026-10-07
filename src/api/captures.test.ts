@@ -11,6 +11,7 @@ import { LocalNode } from '../node/local.js';
 import { request } from '../testing/local-node.js';
 import type { HTTPAnswer } from '../testing/local-node.js';
 import { assertNever } from '../util/assert-never.js';
+import { compareText } from '../util/compare-text.js';
 
 const lib = KeetaNet.lib;
 
@@ -52,7 +53,14 @@ type Normalization =
 
 /** Why a capture is not something the head determines. */
 type Exclusion =
-	/** The account, or an account the answer describes, had blocks after the head, as the evidence capture shows. */
+	/**
+	 * The account, or an account the answer describes, had blocks after the
+	 * head, as the evidence capture shows. A permission row has the entity
+	 * whose chain holds the block that set it [Keeta TS] index.js:68355-68360,
+	 * so a listing that holds a row of an account that moved is not
+	 * determined by the head: a later block of that account may have changed
+	 * the row, and a principal's listing may also gain rows from any entity.
+	 */
 	| { readonly kind: 'later-activity'; readonly account: string; readonly evidence: string }
 	/** The answer serves blocks added after the head. */
 	| { readonly kind: 'later-staples' }
@@ -76,7 +84,7 @@ function excluded(exclusion: Exclusion): Verdict {
 /** The key pair account the captures name, whose head on mainnet moved past the head's 1C8C24... */
 const USER = 'keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a';
 
-/** The base token, KTA, whose chain and supply moved on after the head. */
+/** The base token, KTA, whose chain and supply moved on after the head, and which sets the permissions its listings show. */
 const BASE_TOKEN = 'keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg';
 
 const MULTISIG = 'keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm';
@@ -93,13 +101,20 @@ const BASE_TOKEN_LATER = excluded({ kind: 'later-activity', account: BASE_TOKEN,
  * blocks: a chain page that starts at the user's head in the head reads only
  * blocks below it, which never change, and a refusal, an empty page or a
  * hash nothing has is answered before any state is read.
+ *
+ * One rule covers the permission listings: the head determines one only when
+ * every account whose chain sets a row it holds, or could hold, is quiet after
+ * the head. Rows are set on the entity's chain, so a listing by entity needs
+ * that entity quiet, and a listing by principal needs every entity quiet,
+ * which no head shows. KTA is an entity in all five and moved, so all five are
+ * excluded; the multisig, which is only a principal, sets none of them.
  */
 const VERDICTS: Readonly<Record<string, Verdict>> = {
 	'ledger-account-acl-additional-of-entities.json': BASE_TOKEN_LATER,
 	'ledger-account-acl-additional.json': BASE_TOKEN_LATER,
 	'ledger-account-acl-granted.json': BASE_TOKEN_LATER,
-	'ledger-account-acl-of-entities.json': replayed(),
-	'ledger-account-acl.json': replayed(),
+	'ledger-account-acl-of-entities.json': BASE_TOKEN_LATER,
+	'ledger-account-acl.json': BASE_TOKEN_LATER,
 	'ledger-account-balance-of-token.json': USER_LATER,
 	'ledger-account-balance.json': USER_LATER,
 	'ledger-account-certificate-unknown.json': replayed(),
@@ -376,6 +391,32 @@ describe('a node holding the mainnet head', function() {
 		expect(chains.length).toBeGreaterThan(0);
 		for (const name of chains) {
 			expect({ name, start: readCapture(name).request.query['start'] }).toEqual({ name, start: head });
+		}
+	});
+
+	test('the permission captures hold a row set on the chain of KTA, which moved, and list it in the order the handlers give', function() {
+		const names = [
+			'ledger-account-acl-granted.json',
+			'ledger-account-acl-of-entities.json',
+			'ledger-account-acl.json'
+		];
+		const orders: Readonly<Record<string, readonly string[]>> = {
+			'ledger-account-acl-granted.json': ['principal', 'target'],
+			'ledger-account-acl-of-entities.json': ['entity', 'target'],
+			'ledger-account-acl.json': ['entity', 'target']
+		};
+		for (const name of names) {
+			const rows = list(readCapture(name).body, 'permissions');
+			const keys = rows.map(function(row): string {
+				return((orders[name] ?? []).map(function(column): string {
+					return(text(row, column));
+				}).join('\0'));
+			});
+
+			expect({ name, kta: rows.some(function(row): boolean {
+				return(text(row, 'entity') === BASE_TOKEN);
+			}) }).toEqual({ name, kta: true });
+			expect({ name, keys }).toEqual({ name, keys: [...keys].sort(compareText) });
 		}
 	});
 
