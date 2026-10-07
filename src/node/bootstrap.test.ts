@@ -452,13 +452,17 @@ describe('a node that bootstraps', function() {
 		expect(BootstrapClient.isInstance(late.node.bootstrap)).toBe(true);
 	});
 
-	test('bootstraps from the representatives its switch knows only when they hold voting weight on its ledger', async function() {
-		const running = await representative();
-		const weighted = verifiedPeer(requireAt(running.network.representatives, 1), 1);
-		const stranger = verifiedPeer(lib.Account.fromSeed('0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0', 0), 2);
-		vi.spyOn(running.node.switch, 'peers').mockResolvedValue([weighted, stranger]);
+	test('bootstraps from the representatives its switch knows only when they hold a hundredth of the voting weight on its ledger', async function() {
+		const running = await nodes.start({ representativeWeights: [1000n, 960n, 20n, 19n, 1n] });
+		const [, second, third, fourth, fifth] = running.network.representatives.map(function(key, index): P2PPeer {
+			return(verifiedPeer(key, index));
+		});
+		const stranger = verifiedPeer(lib.Account.fromSeed('0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0', 0), 9);
+		vi.spyOn(running.node.switch, 'peers').mockResolvedValue([second, third, fourth, fifth, stranger].filter(function(peer): peer is P2PPeer {
+			return(peer !== undefined);
+		}));
 
-		expect(await bootstrapSources(running.node)).toEqual([apiOf(1)]);
+		expect(await bootstrapSources(running.node)).toEqual([apiOf(1), apiOf(2)]);
 	});
 
 	test('stops bootstrapping before it stops its switch', async function() {

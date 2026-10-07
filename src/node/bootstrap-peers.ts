@@ -45,16 +45,32 @@ function switchListsPeers(config: NodeConfig): boolean {
 }
 
 /**
- * The representatives among the peers that hold voting weight on the node's
- * own ledger. A representative that merely greeted the node chose its own
- * endpoints, so polling it would let anyone with a key point the node's
- * requests anywhere; one the network gave weight to is one the node already
- * trusts to vote.
+ * The share of all voting weight, one part in this many, a representative
+ * the node only heard of must hold to be polled. Weight is what makes a
+ * representative's votes count, so one below a hundredth of it is no
+ * source the network relies on; where weight is cheap, as on a test
+ * network, a key that merely holds some is not enough to point the node's
+ * requests anywhere. At most this many representatives qualify, which also
+ * bounds how many the node polls, whatever the network's size.
+ */
+const MIN_WEIGHT_SHARE = 100n;
+
+/**
+ * The representatives among the peers that hold at least MIN_WEIGHT_SHARE
+ * of the voting weight on the node's own ledger. A representative that
+ * merely greeted the node chose its own endpoints, so polling it would let
+ * anyone with a key point the node's requests anywhere; one the network gave
+ * that much weight to is one the node already trusts to vote.
  */
 async function weightedRepresentatives(node: BootstrapNode, peers: readonly P2PPeer[]): Promise<P2PPeer[]> {
+	const total = await node.ledger.votingPower();
 	const weighted: P2PPeer[] = [];
 	for (const peer of peers) {
-		if (peer.kind === lib.Node.Kind.REPRESENTATIVE && await node.ledger.votingPower(peer.key) > 0n) {
+		if (peer.kind !== lib.Node.Kind.REPRESENTATIVE) {
+			continue;
+		}
+		const weight = await node.ledger.votingPower(peer.key);
+		if (weight > 0n && weight * MIN_WEIGHT_SHARE >= total) {
 			weighted.push(peer);
 		}
 	}
@@ -65,9 +81,9 @@ async function weightedRepresentatives(node: BootstrapNode, peers: readonly P2PP
  * The API endpoints of the representatives the node bootstraps from, each
  * once: those it was given, its manual peers, which its operator chose
  * whether or not their advertisements are signed, and the representatives
- * its switch has verified that hold voting weight on its ledger, even those
- * it has not heard from lately, since a node that was offline is the one
- * with most to catch up on. The staples a peer sends are checked by the
+ * its switch has verified that hold a share of the voting weight on its
+ * ledger, even those it has not heard from lately, since a node that was
+ * offline is the one with most to catch up on. The staples a peer sends are checked by the
  * ledger like any other.
  */
 export async function bootstrapSources(node: BootstrapNode): Promise<string[]> {
