@@ -118,9 +118,9 @@ export class PostgresTransaction extends LedgerDriverTransaction {
 	// and its caller handled: what the attempt read may already be stale.
 	#conflict: KeetaNetLedgerError | undefined;
 
+	/** Takes a client that has run BEGIN, with ignoreConnectionError listening for its errors. */
 	constructor(options: TransactionOptions, client: pg.PoolClient) {
 		super(options);
-		client.on('error', ignoreConnectionError);
 		this.#state = { status: 'open', client };
 	}
 
@@ -270,11 +270,23 @@ function decodeBlock(bytes: Buffer): Block {
 /*
  * A stored vote is judged by the driver's own predicates at the transaction's
  * moment; decoding it as of its own issue time keeps the Vote class from
- * judging it again against the wall clock.
+ * judging it again against the wall clock. The class then recomputes
+ * permanence from that moment, which must agree with what was stored.
  * [Keeta TS] index.js:80376-80390, 80640-80648
  */
-function decodeVote({ bytes, validity_from }: VoteColumns): Vote {
-	return(new lib.Vote(bytes, { now: validity_from }));
+function decodeVote({ bytes, validity_from, permanent }: VoteColumns): Vote {
+	const vote = new lib.Vote(bytes, { now: validity_from });
+	if (vote.$permanent !== permanent) {
+		throw(new Error(`storage integrity error: vote ${vote.$uid} is stored as ${describePermanence(permanent)} but its bytes decode as ${describePermanence(vote.$permanent)}`));
+	}
+	return(vote);
+}
+
+function describePermanence(permanent: boolean): string {
+	if (permanent) {
+		return('permanent');
+	}
+	return('temporary');
 }
 
 function nullWhenEmpty<Item>(items: Item[]): Item[] | null {
@@ -496,6 +508,8 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	async beginTransaction(options: TransactionOptions): Promise<PostgresTransaction> {
 		const { pool } = await this.#connection();
 		const client = await pool.connect();
+		// The pool stopped listening at checkout, and a connection can be lost while BEGIN runs.
+		client.on('error', ignoreConnectionError);
 		let begin = 'BEGIN ISOLATION LEVEL SERIALIZABLE';
 		// Upstream opens read-only transactions only for reads (CONTRACT 3.2), which lets Postgres track fewer conflicts.
 		if (options.readOnly ?? true) {
@@ -504,6 +518,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 		try {
 			await client.query(begin);
 		} catch (error: unknown) {
+			client.removeListener('error', ignoreConnectionError);
 			client.release(true);
 			throw(mapDatabaseError(error).error);
 		}

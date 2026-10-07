@@ -30,7 +30,9 @@ export default {
 		'pgport',
 		'nextval',
 		'ordinality',
-		'datname'
+		'datname',
+		'pkey',
+		'cmdline'
 	],
 	// Account strings are base32 public keys, not words.
 	ignoreRegExpList: ['/keeta_[a-z2-7]+/g'],

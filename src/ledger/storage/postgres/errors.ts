@@ -12,12 +12,22 @@ const DEADLOCK_DETECTED = '40P01';
 const UNIQUE_VIOLATION = '23505';
 
 /*
- * The tables where two processes of one node can insert the same row at once:
- * the same staple, block, vote or idempotent key arriving through both, or one
- * account interned by both. A unique violation anywhere else is a bug, and
- * retrying it would only repeat it.
+ * The unique constraints two processes of one node can race to: the same
+ * staple, block or vote arriving through both, two blocks claiming one
+ * previous, or two blocks one idempotent key. Account interning cannot race
+ * here: its insert skips existing rows, and under SERIALIZABLE a row it
+ * cannot see yet fails with 40001 instead. A unique violation anywhere else
+ * is a bug, and retrying it would only repeat it.
  */
-const CONCURRENTLY_INSERTED_TABLES: ReadonlySet<string> = new Set(['staples', 'blocks', 'votes', 'idempotent_keys', 'accounts']);
+const RACED_CONSTRAINTS = ['staples_pkey', 'blocks_pkey', 'blocks_main_successor', 'votes_main', 'votes_side', 'idempotent_keys_main'] as const;
+
+type RacedConstraint = typeof RACED_CONSTRAINTS[number];
+
+const isRacedConstraint = function(constraint: string | undefined): constraint is RacedConstraint {
+	return(RACED_CONSTRAINTS.some(function(raced): boolean {
+		return(raced === constraint);
+	}));
+};
 
 const conflictWith = function(error: pg.DatabaseError, reason: string): MappedDatabaseError {
 	const conflict = createLedgerError('LEDGER_TRANSACTION_ABORTED', `${reason}: ${describeError(error)}`, { retry: true });
@@ -43,8 +53,8 @@ export function mapDatabaseError(error: unknown): MappedDatabaseError {
 		case DEADLOCK_DETECTED:
 			return(conflictWith(error, 'deadlock with a concurrent transaction'));
 		case UNIQUE_VIOLATION:
-			if (error.table !== undefined && CONCURRENTLY_INSERTED_TABLES.has(error.table)) {
-				return(conflictWith(error, `concurrent insert into ${error.table}`));
+			if (isRacedConstraint(error.constraint)) {
+				return(conflictWith(error, `concurrent insert violating ${error.constraint}`));
 			}
 			return({ kind: 'other', error });
 		default:

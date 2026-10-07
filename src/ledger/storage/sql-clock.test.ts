@@ -14,18 +14,25 @@ const OPTIONAL_ROOTS = ['src/kv/'] as const;
 // Whitespace and comments may separate a function name from its parenthesis.
 const GAP = String.raw`(?:\s|/\*[\s\S]*?\*/|--[^\n]*(?:\n|$))*`;
 
+// The special date inputs, which Postgres reads as the current time in any quoting.
+const SPECIAL_DATES = 'now|today|tomorrow|yesterday';
+
 /*
  * Every way SQL can read the database server's clock: the functions, quoted
- * or not, the SQL-standard keywords, the special input strings, and age,
- * whose one-argument form measures from the current date. JavaScript's
- * Date.now is the caller's clock, which is the one the schema is meant to use.
+ * or not, the SQL-standard keywords, the special date inputs in single or
+ * dollar quotes, and age, whose one-argument form measures from the current
+ * date. Escape strings are refused outright. JavaScript's Date.now is the
+ * caller's clock, which is the one the schema is meant to use.
  */
 const DATABASE_CLOCK = new RegExp([
 	String.raw`(?<![\w$])(?<!Date\.)(?:now|"now")${GAP}\(`,
 	String.raw`(?<![\w$])(?:age|"age")${GAP}\(`,
 	String.raw`\b(?:current_timestamp|current_time|current_date|localtimestamp|localtime)\b`,
 	String.raw`(?<![\w$])(?:clock_timestamp|statement_timestamp|transaction_timestamp|timeofday)\b`,
-	String.raw`'(?:now|today|tomorrow|yesterday)'`
+	String.raw`'\s*(?:${SPECIAL_DATES})\s*\\?'`,
+	String.raw`\$(?<tag>\w*)\$\s*(?:${SPECIAL_DATES})\s*\$\k<tag>\$`,
+	// Escape strings and Unicode escapes can spell any of the above.
+	String.raw`(?<![\w$])(?:[eE]'|[uU]&['"])`
 ].join('|'), 'gi');
 
 const matchesClock = function(text: string): boolean {
@@ -77,7 +84,15 @@ describe('the database clock', function() {
 			'SELECT "now"()',
 			'SELECT pg_catalog."now" ()',
 			'SELECT age(applied_at)',
-			'SELECT AGE (\n\tapplied_at)'
+			'SELECT AGE (\n\tapplied_at)',
+			'SELECT \' now\'::timestamptz',
+			'SELECT \'now \'::timestamptz',
+			'SELECT \'Tomorrow\'::date',
+			'SELECT $$now$$::timestamptz',
+			'SELECT $tag$ yesterday $tag$::date',
+			'SELECT E\'\\x6e\\x6f\\x77\'::timestamptz',
+			'SELECT e\'today\'::date',
+			'SELECT U&\'\\006e\\006f\\0077\'::timestamptz'
 		];
 		const allowed = [
 			'const moment = Date.now();',
@@ -85,7 +100,10 @@ describe('the database clock', function() {
 			'applied_at timestamptz NOT NULL',
 			'nowhere',
 			'storage(usage(1))',
-			'known(1)'
+			'known(1)',
+			'WHERE ledger = \'side\'',
+			'SELECT $$ known $$',
+			'SELECT $now$ x $now$'
 		];
 
 		expect(forbidden.filter(function(text) {

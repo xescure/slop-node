@@ -3,8 +3,9 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import { createLedgerError } from '../ledger/storage/errors.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
-import { TEST_NETWORK_SEEDS, advanceClock, createTestNetwork, deriveTestKeys, freezeClock } from './network.js';
+import { TEST_NETWORK_SEEDS, TEST_TRANSACTION_RETRIES, advanceClock, createTestNetwork, deriveTestKeys, freezeClock } from './network.js';
 import type { TestNetwork } from './network.js';
 import {
 	createTokenBlock,
@@ -209,6 +210,27 @@ describe('test network', function() {
 
 		expect(ledger).toBeInstanceOf(KeetaNet.lib.Ledger);
 		expect(init).toHaveBeenCalledTimes(1);
+	});
+
+	test('ledgers and nodes give up a retryable failure after a bounded number of retries, though the clock is frozen', async function() {
+		const network = await createTestNetwork({ representativeWeights: WEIGHTS });
+		const representative = requireAt(network.representatives, 0);
+		const ledgers = [
+			network.createLedger(new MemoryLedgerStorage(), representative),
+			network.createAccountLedger(new MemoryLedgerStorage()),
+			network.createNode(new MemoryLedgerStorage(), representative).ledger
+		];
+
+		for (const ledger of ledgers) {
+			let attempts = 0;
+			const failure = ledger.run('always-conflicts', function() {
+				attempts++;
+				return(Promise.reject(createLedgerError('LEDGER_TRANSACTION_ABORTED', 'always conflicts', { retry: true, delayMilliseconds: 1 })));
+			});
+
+			await expect(failure).rejects.toMatchObject({ code: 'LEDGER_TRANSACTION_ABORTED' });
+			expect(attempts).toBe(TEST_TRANSACTION_RETRIES + 1);
+		}
 	});
 
 	test('clock helpers move the system time', function() {

@@ -3,6 +3,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type pg from 'pg';
 import { createTestNetwork, freezeClock } from '../../../testing/network.js';
+import type { TestNetwork } from '../../../testing/network.js';
 import { createDatabase } from '../../../testing/postgres.js';
 import type { TestDatabase } from '../../../testing/postgres.js';
 import { GENESIS_MOMENT, requireAt } from '../suite/support.js';
@@ -53,6 +54,24 @@ const ledgerOn = async function(storage: PostgresLedgerStorage): Promise<Ledger>
 	freezeClock(GENESIS_MOMENT);
 	const network = await createTestNetwork({ representativeWeights: [1000n] });
 	return(network.createLedger(storage, requireAt(network.representatives, 0)));
+};
+
+/** A storage on a fresh database whose ledger has applied genesis, with the network that made it. */
+const genesisOn = async function(database: TestDatabase): Promise<{ readonly storage: RecordingStorage; readonly network: TestNetwork }> {
+	freezeClock(GENESIS_MOMENT);
+	const network = await createTestNetwork({ representativeWeights: [1000n] });
+	const storage = ownedStorageOn(database);
+	await network.createLedger(storage, requireAt(network.representatives, 0)).add(network.genesis);
+	return({ storage, network });
+};
+
+const readOn = async function<Result>(storage: PostgresLedgerStorage, read: (transaction: PostgresTransaction) => Promise<Result>): Promise<Result> {
+	const transaction = await storage.beginTransaction({ identifier: 'read', readOnly: true });
+	try {
+		return(await read(transaction));
+	} finally {
+		await storage.abortTransaction(transaction);
+	}
 };
 
 const createSkewTable = async function(pool: pg.Pool): Promise<void> {
@@ -276,5 +295,61 @@ describe('the Postgres driver', function() {
 		await expect(injected.beginTransaction({ identifier: 'after', readOnly: true })).rejects.toThrow('destroyed');
 		expect(injectedPool.ended).toBe(false);
 		expect((await injectedPool.query<{ one: number }>('SELECT 1 AS one')).rows).toEqual([{ one: 1 }]);
+	});
+
+	test('an error event while BEGIN runs does not end the process', async function() {
+		const database = await ledgerDatabase();
+		const pool = database.pool();
+		// pg emits error on an unexpected end even while a query is running, and the pool stops listening at checkout.
+		pool.on('acquire', function(client) {
+			const query: unknown = Reflect.get(client, 'query');
+			if (typeof query !== 'function') {
+				throw(new Error('the client has no query method'));
+			}
+			Reflect.set(client, 'query', function(...input: unknown[]): unknown {
+				Reflect.deleteProperty(client, 'query');
+				client.emit('error', new Error('the connection was lost'));
+				const running: unknown = Reflect.apply(query, client, input);
+				return(running);
+			});
+		});
+		const storage = storageOn({ kind: 'injected', pool: function() {
+			return(Promise.resolve(pool));
+		} });
+
+		const transaction = await storage.beginTransaction({ identifier: 'lost', readOnly: true });
+
+		await storage.abortTransaction(transaction);
+	});
+
+	test('a negative external permission set round-trips', async function() {
+		const database = await ledgerDatabase();
+		const { storage, network } = await genesisOn(database);
+		// Upstream decodes a negative ASN.1 INTEGER as a negative set, and validation accepts it.
+		const negative = new lib.Permissions(['ACCESS'], -1n);
+		expect(negative.validate(network.network)).toBe(true);
+
+		await database.pool().query('UPDATE acls SET external_permissions = $1', [String(negative.external.bigint)]);
+		const rows = await readOn(storage, function(transaction) {
+			return(storage.listACLsByPrincipal(transaction, network.trustedRoot));
+		});
+
+		expect(rows.length).toBeGreaterThan(0);
+		for (const row of rows) {
+			expect(row.permissions.external.bigint).toBe(-1n);
+		}
+	});
+
+	test('a stored vote whose permanence disagrees with its bytes is an integrity error', async function() {
+		const database = await ledgerDatabase();
+		const { storage, network } = await genesisOn(database);
+		const block = requireAt(network.genesis.blocks, 0);
+		await database.pool().query('UPDATE votes SET permanent = false');
+
+		const read = readOn(storage, function(transaction) {
+			return(storage.getVotes(transaction, block.hash, 'main'));
+		});
+
+		await expect(read).rejects.toThrow('integrity');
 	});
 });

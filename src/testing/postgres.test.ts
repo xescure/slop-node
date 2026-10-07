@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, inject, onTestFinished, test } from 'vitest';
 import pg from 'pg';
-import { createDatabase, startCluster, sweepAbandonedClusters } from './postgres.js';
+import { createDatabase, currentBootID, startCluster, sweepAbandonedClusters } from './postgres.js';
 import type { ClusterConnection } from './postgres.js';
 
 /** A process ID that no running process holds: that of a child which has already exited. */
@@ -21,6 +21,38 @@ const deadProcessID = function(): Promise<number> {
 			resolve(child.pid);
 		});
 	}));
+};
+
+/** A process that stays up until the case ends, standing for an unrelated process that reused a PID. */
+const bystander = function(): number {
+	const child = spawn(process.execPath, ['--eval', 'setInterval(function() {}, 1 << 30);']);
+	onTestFinished(function() {
+		child.kill('SIGKILL');
+	});
+	if (child.pid === undefined) {
+		throw(new Error('the bystander did not start'));
+	}
+	return(child.pid);
+};
+
+const isAlive = function(processID: number): boolean {
+	try {
+		process.kill(processID, 0);
+	} catch {
+		return(false);
+	}
+	return(true);
+};
+
+/** A cluster directory as a dead run would leave it, whose server PID file names the given process. */
+const leftCluster = async function(parent: string, name: string, owner: { readonly pid: number; readonly boot: string }, serverPID: number): Promise<string> {
+	const directory = join(parent, name);
+	await mkdir(join(directory, 'data'), { recursive: true });
+	await writeFile(join(directory, 'owner.pid'), `${String(owner.pid)}\n`);
+	await writeFile(join(directory, 'owner.boot'), `${owner.boot}\n`);
+	await writeFile(join(directory, 'data', 'PG_VERSION'), '18\n');
+	await writeFile(join(directory, 'data', 'postmaster.pid'), `${String(serverPID)}\n${join(directory, 'data')}\n`);
+	return(directory);
 };
 
 const temporaryParent = async function(): Promise<string> {
@@ -87,6 +119,33 @@ describe('the test cluster', function() {
 		await sweepAbandonedClusters(parent);
 
 		expect(await readFile(join(cluster.socketDirectory, 'owner.pid'), 'utf-8')).toBe(`${String(process.pid)}\n`);
+		expect(await readFile(join(cluster.socketDirectory, 'owner.boot'), 'utf-8')).toBe(`${String(await currentBootID())}\n`);
 		expect(await connects(cluster)).toBe(true);
+	});
+
+	test('a cluster from an earlier boot is removed without signalling anything', async function() {
+		const parent = await temporaryParent();
+		const unrelated = bystander();
+		const directory = await leftCluster(parent, 'slop-pg-earlier-boot', { pid: await deadProcessID(), boot: 'an-earlier-boot' }, unrelated);
+
+		await sweepAbandonedClusters(parent);
+
+		expect(existsSync(directory)).toBe(false);
+		expect(isAlive(unrelated)).toBe(true);
+	});
+
+	test('a server PID that now names another process is never signalled', async function() {
+		const parent = await temporaryParent();
+		const unrelated = bystander();
+		const boot = await currentBootID();
+		if (boot === undefined) {
+			throw(new Error('this host reports no boot ID'));
+		}
+		const directory = await leftCluster(parent, 'slop-pg-reused-pid', { pid: await deadProcessID(), boot }, unrelated);
+
+		await sweepAbandonedClusters(parent);
+
+		expect(existsSync(directory)).toBe(false);
+		expect(isAlive(unrelated)).toBe(true);
 	});
 });

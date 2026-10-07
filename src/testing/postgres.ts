@@ -3,10 +3,11 @@ import { randomUUID } from 'node:crypto';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import pg from 'pg';
 import { SCHEMA_MIGRATIONS, applyMigrations } from '../ledger/storage/postgres/migrations.js';
+import { assertNever } from '../util/assert-never.js';
 
 /**
  * What a test needs to reach the cluster. It is plain data so that vitest can
@@ -39,6 +40,8 @@ const MAINTENANCE_DATABASE = 'postgres';
 const CLUSTER_DIRECTORY_PREFIX = 'slop-pg-';
 const DATA_DIRECTORY = 'data';
 const OWNER_FILE = 'owner.pid';
+const OWNER_BOOT_FILE = 'owner.boot';
+const BOOT_ID = '/proc/sys/kernel/random/boot_id';
 
 const runFile = promisify(execFile);
 
@@ -142,24 +145,49 @@ const readLog = async function(logFile: string): Promise<string> {
 	}
 };
 
+/** This boot's ID, where the host reports one; a process ID means nothing across boots. */
+export const currentBootID = async function(): Promise<string | undefined> {
+	try {
+		return((await readFile(BOOT_ID, 'utf-8')).trim());
+	} catch {
+		return(undefined);
+	}
+};
+
 const stopClusterServer = function(directory: string): Promise<void> {
 	// The data is thrown away, so nothing needs a clean shutdown.
 	return(runTool('pg_ctl', ['stop', '--pgdata', join(directory, DATA_DIRECTORY), '--mode', 'immediate', '--wait']));
 };
 
-/** The process that started the cluster in this directory, if it says. */
-const ownerOf = async function(directory: string): Promise<number | undefined> {
-	let recorded: string;
+type ClusterOwner = {
+	readonly processID: number;
+	/** Absent where the host reports no boot ID. */
+	readonly boot: string | undefined;
+};
+
+const readTrimmed = async function(path: string): Promise<string | undefined> {
 	try {
-		recorded = await readFile(join(directory, OWNER_FILE), 'utf-8');
+		return((await readFile(path, 'utf-8')).trim());
 	} catch {
 		return(undefined);
 	}
-	const owner = Number(recorded.trim());
-	if (!Number.isSafeInteger(owner) || owner < 1) {
+};
+
+const asProcessID = function(text: string | undefined): number | undefined {
+	const processID = Number(text);
+	if (text === undefined || !Number.isSafeInteger(processID) || processID < 1) {
 		return(undefined);
 	}
-	return(owner);
+	return(processID);
+};
+
+/** The process that started the cluster in this directory, and in which boot, if it says. */
+const ownerOf = async function(directory: string): Promise<ClusterOwner | undefined> {
+	const processID = asProcessID(await readTrimmed(join(directory, OWNER_FILE)));
+	if (processID === undefined) {
+		return(undefined);
+	}
+	return({ processID, boot: await readTrimmed(join(directory, OWNER_BOOT_FILE)) });
 };
 
 // Signal 0 only checks that the process exists; EPERM means it exists under another user.
@@ -172,11 +200,44 @@ const isRunning = function(processID: number): boolean {
 	return(true);
 };
 
+/*
+ * pg_ctl signals whatever process the server's PID file names. Once the
+ * server has died that PID may belong to anything, so it is signalled only
+ * while its command line is still a postgres serving this data directory.
+ */
+const isClusterServer = async function(directory: string): Promise<boolean> {
+	const dataDirectory = join(directory, DATA_DIRECTORY);
+	const serverFile = await readTrimmed(join(dataDirectory, 'postmaster.pid'));
+	const processID = asProcessID(serverFile?.split('\n')[0]);
+	if (processID === undefined) {
+		return(false);
+	}
+	const commandLine = await readTrimmed(`/proc/${String(processID)}/cmdline`);
+	if (commandLine === undefined) {
+		return(false);
+	}
+	const [program, ...args] = commandLine.split('\0');
+	return(program !== undefined && basename(program) === 'postgres' && args.includes(dataDirectory));
+};
+
+const ownershipOf = async function(owner: ClusterOwner): Promise<'earlier-boot' | 'owner-died' | 'owned'> {
+	const boot = await currentBootID();
+	if (owner.boot !== undefined && boot !== undefined && owner.boot !== boot) {
+		return('earlier-boot');
+	}
+	if (isRunning(owner.processID)) {
+		return('owned');
+	}
+	return('owner-died');
+};
+
 /**
  * A run killed outright never reaches its teardown, and leaves its server
- * running. Each cluster names the process that started it, so a later run
- * stops and removes those whose owner has died. A directory that names no
- * owner may belong to a run that is still starting its cluster, and is left.
+ * running. Each cluster names the process that started it and the boot it ran
+ * in, so a later run stops and removes those whose owner has died. Nothing of
+ * an earlier boot is still running, so its directory is only removed. A
+ * directory that names no owner may belong to a run that is still starting
+ * its cluster, and is left.
  */
 export const sweepAbandonedClusters = async function(parent: string = tmpdir()): Promise<void> {
 	const entries = await readdir(parent, { withFileTypes: true });
@@ -186,12 +247,25 @@ export const sweepAbandonedClusters = async function(parent: string = tmpdir()):
 		}
 		const directory = join(parent, entry.name);
 		const owner = await ownerOf(directory);
-		if (owner === undefined || isRunning(owner)) {
+		if (owner === undefined) {
 			continue;
 		}
-		await stopClusterServer(directory).catch(function() {
-			// A server that already died has nothing to stop.
-		});
+		const state = await ownershipOf(owner);
+		switch (state) {
+			case 'owned':
+				continue;
+			case 'owner-died':
+				if (await isClusterServer(directory)) {
+					await stopClusterServer(directory).catch(function() {
+						// A server that died meanwhile has nothing to stop.
+					});
+				}
+				break;
+			case 'earlier-boot':
+				break;
+			default:
+				assertNever(state);
+		}
 		await rm(directory, { recursive: true, force: true });
 	}
 };
@@ -215,6 +289,10 @@ export const startCluster = async function(parent: string = tmpdir()): Promise<C
 	let port: number;
 	try {
 		await writeFile(join(directory, OWNER_FILE), `${String(process.pid)}\n`);
+		const boot = await currentBootID();
+		if (boot !== undefined) {
+			await writeFile(join(directory, OWNER_BOOT_FILE), `${boot}\n`);
+		}
 		assertShellSafePath(directory);
 		port = await findFreePort();
 		await runTool('initdb', [

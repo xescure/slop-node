@@ -16,10 +16,11 @@ CREATE DOMAIN hash32 AS bytea CHECK (octet_length(VALUE) = 32);
 -- while its funding staple is missing.
 CREATE DOMAIN amount AS numeric CHECK (VALUE = trunc(VALUE));
 
--- A permission set is a bit field held as an unbounded non-negative integer,
--- and travels in blocks as an ASN.1 INTEGER; external offsets are capped only
--- by the network's validation [Keeta TS] index.js:76540-76593, 64673-64696, 61321.
-CREATE DOMAIN permission_bits AS numeric CHECK (VALUE >= 0 AND VALUE = trunc(VALUE));
+-- A permission set is a bit field held as an unbounded integer. It travels in
+-- blocks as an ASN.1 INTEGER, which decodes to a negative set when its sign
+-- bit is set, and the network's validation accepts one, so the sign is kept
+-- [Keeta TS] index.js:76540-76593, 64673-64696, 74662-74679, 74110-74115.
+CREATE DOMAIN permission_bits AS numeric CHECK (VALUE = trunc(VALUE));
 
 -- CACHE 1 makes every call take the next value of the one shared counter, so
 -- serials issued by all processes strictly increase, and a serial taken by an

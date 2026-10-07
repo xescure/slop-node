@@ -189,16 +189,16 @@ export const sideSuccessor: Statement<[Buffer, Date], { bytes: Buffer }> = state
 	ORDER BY votes.validity_from DESC, blocks.hash DESC
 	LIMIT 1`);
 
-export type VoteColumns = { readonly bytes: Buffer; readonly validity_from: Date };
+export type VoteColumns = { readonly bytes: Buffer; readonly validity_from: Date; readonly permanent: boolean };
 
 export const mainVotesOfBlock: Statement<[Buffer], VoteColumns> = statement('main_votes_of_block', `
-	SELECT votes.bytes, votes.validity_from
+	SELECT votes.bytes, votes.validity_from, votes.permanent
 	FROM blocks JOIN votes ON votes.blocks_hash = blocks.staple AND votes.ledger = 'main'
 	WHERE blocks.hash = $1 AND blocks.ledger = 'main'
 	ORDER BY votes.id`);
 
 export const sideVotesOfBlock: Statement<[Buffer, Date], VoteColumns> = statement('side_votes_of_block', `
-	SELECT votes.bytes, votes.validity_from
+	SELECT votes.bytes, votes.validity_from, votes.permanent
 	FROM vote_blocks JOIN votes ON votes.id = vote_blocks.vote_id
 	WHERE vote_blocks.block_hash = $1 AND ${UNEXPIRED_SIDE_VOTE}
 	ORDER BY votes.id`);

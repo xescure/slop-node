@@ -129,10 +129,22 @@ function computeFeeFor(policy: TestFeePolicy): ComputeFee {
 	}
 }
 
+/*
+ * How often Ledger.run retries a retryable failure. Upstream's default budget
+ * is 5 s of wall clock, which never runs out while a test freezes the clock,
+ * so a failure that is retryable but certain to recur would loop until the
+ * test timed out. Counting attempts makes it fail at once instead. Four is
+ * enough for the races two processes of one representative can lose, each
+ * attempt seeing the winner's commit.
+ * [Keeta TS] index.js:70307-70330, 70361-70368
+ */
+export const TEST_TRANSACTION_RETRIES = 4;
+
 function ledgerSettings(storageDriver: LedgerStorageAPI, options: TestLedgerOptions): NodeConfig['ledger'] {
 	const settings: NodeConfig['ledger'] = {
 		computeFeeFromBlocks: computeFeeFor(options.fee ?? { kind: 'free' }),
-		storageDriver
+		storageDriver,
+		transactionRetries: { maxRetries: TEST_TRANSACTION_RETRIES }
 	};
 	if (options.heapProcessWindowMs !== undefined) {
 		settings.heapProcessWindowMs = options.heapProcessWindowMs;

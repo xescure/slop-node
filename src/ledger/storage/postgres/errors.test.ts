@@ -2,6 +2,7 @@ import { describe, expect, inject, onTestFinished, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import pg from 'pg';
 import { createDatabase } from '../../../testing/postgres.js';
+import { PostgresLedgerStorage } from './driver.js';
 import { mapDatabaseError } from './errors.js';
 
 const lib = KeetaNet.lib;
@@ -27,24 +28,33 @@ const failureOf = async function(attempt: Promise<unknown>): Promise<unknown> {
 	}));
 };
 
-/** One row in every table whose rows two processes can race to insert, and a balance. */
-const insertOneOfEach = async function(pool: pg.Pool): Promise<Readonly<Record<string, () => Promise<unknown>>>> {
-	const statements = {
-		accounts: ['INSERT INTO accounts (public_key, key_type) VALUES (\'keeta_probe\', 0)', []],
-		staples: ['INSERT INTO staples (blocks_hash, staple_time, moment) VALUES ($1, $2, $2)', [HASH, MOMENT]],
-		blocks: ['INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position) VALUES ($1, \'main\', 1, $2, 1, \'\\x00\', $1, 0)', [HASH, PREVIOUS]],
-		votes: ['INSERT INTO votes (ledger, uid, blocks_hash, issuer_id, validity_from, validity_to, permanent, bytes) VALUES (\'main\', \'probe\', $1, 1, $2, $2, true, \'\\x00\')', [HASH, MOMENT]],
-		idempotent_keys: ['INSERT INTO idempotent_keys (key, ledger, block_hash) VALUES ($1, \'main\', $1)', [HASH]],
-		balances: ['INSERT INTO balances (account_id, token_id, balance) VALUES (1, 1, 0)', []]
-	} as const;
-	const again: Record<string, () => Promise<unknown>> = {};
-	for (const [table, [text, values]] of Object.entries(statements)) {
-		await pool.query(text, [...values]);
-		again[table] = function() {
-			return(pool.query(text, [...values]));
-		};
-	}
-	return(again);
+const OTHER = Buffer.alloc(32, 0xef);
+const THIRD = Buffer.alloc(32, 0x12);
+
+type Statement = readonly [text: string, values: readonly unknown[]];
+
+/** A ledger with one row of each kind that two processes can race to insert. */
+const SETUP: readonly Statement[] = [
+	['INSERT INTO accounts (public_key, key_type) VALUES (\'keeta_probe\', 0)', []],
+	['INSERT INTO staples (blocks_hash, staple_time, moment) VALUES ($1, $2, $2)', [HASH, MOMENT]],
+	['INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position) VALUES ($1, \'main\', 1, $2, 1, \'\\x00\', $1, 0)', [HASH, PREVIOUS]],
+	['INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes) VALUES ($1, \'side\', 1, $1, 1, \'\\x00\')', [OTHER]],
+	['INSERT INTO votes (ledger, uid, blocks_hash, issuer_id, validity_from, validity_to, permanent, bytes) VALUES (\'main\', \'probe\', $1, 1, $2, $2, true, \'\\x00\')', [HASH, MOMENT]],
+	['INSERT INTO votes (ledger, uid, blocks_hash, issuer_id, validity_from, validity_to, permanent, bytes) VALUES (\'side\', \'probe\', $1, 1, $2, $2, false, \'\\x00\')', [OTHER, MOMENT]],
+	['INSERT INTO idempotent_keys (key, ledger, block_hash) VALUES ($1, \'main\', $1)', [HASH]],
+	['INSERT INTO balances (account_id, token_id, balance) VALUES (1, 1, 0)', []]
+];
+
+/** For each unique constraint, an insert that violates it. */
+const VIOLATIONS: Readonly<Record<string, Statement>> = {
+	staples_pkey: ['INSERT INTO staples (blocks_hash, staple_time, moment) VALUES ($1, $2, $2)', [HASH, MOMENT]],
+	blocks_pkey: ['INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes) VALUES ($1, \'side\', 1, $2, 1, \'\\x00\')', [HASH, THIRD]],
+	blocks_main_successor: ['INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position) VALUES ($1, \'main\', 1, $2, 1, \'\\x00\', $3, 1)', [THIRD, PREVIOUS, HASH]],
+	votes_main: ['INSERT INTO votes (ledger, uid, blocks_hash, issuer_id, validity_from, validity_to, permanent, bytes) VALUES (\'main\', \'probe\', $1, 1, $2, $2, true, \'\\x00\')', [HASH, MOMENT]],
+	votes_side: ['INSERT INTO votes (ledger, uid, blocks_hash, issuer_id, validity_from, validity_to, permanent, bytes) VALUES (\'side\', \'probe\', $1, 1, $2, $2, false, \'\\x00\')', [HASH, MOMENT]],
+	idempotent_keys_main: ['INSERT INTO idempotent_keys (key, ledger, block_hash) VALUES ($1, \'main\', $2)', [HASH, OTHER]],
+	accounts_public_key_key: ['INSERT INTO accounts (public_key, key_type) VALUES (\'keeta_probe\', 0)', []],
+	balances_pkey: ['INSERT INTO balances (account_id, token_id, balance) VALUES (1, 1, 0)', []]
 };
 
 const expectRetryable = function(error: unknown): void {
@@ -118,20 +128,25 @@ describe('mapDatabaseError', function() {
 		}
 	});
 
-	test('a unique violation (23505) is a retryable conflict only where a concurrent insert of the same row is expected', async function() {
+	test('a unique violation (23505) is a retryable conflict only on a constraint two processes can race to', async function() {
 		const pool = await ledgerPool();
-		const again = await insertOneOfEach(pool);
+		for (const [text, values] of SETUP) {
+			await pool.query(text, [...values]);
+		}
 		const failures: Record<string, unknown> = {};
-		for (const [table, insert] of Object.entries(again)) {
-			failures[table] = await failureOf(insert());
+		for (const [constraint, [text, values]] of Object.entries(VIOLATIONS)) {
+			failures[constraint] = await failureOf(pool.query(text, [...values]));
+			expect(failures[constraint], constraint).toMatchObject({ code: '23505', constraint });
 		}
 
-		for (const table of ['accounts', 'staples', 'blocks', 'votes', 'idempotent_keys']) {
-			expect(failures[table], table).toMatchObject({ code: '23505', table });
-			expectRetryable(failures[table]);
+		for (const constraint of ['staples_pkey', 'blocks_pkey', 'blocks_main_successor', 'votes_main', 'votes_side', 'idempotent_keys_main']) {
+			expectRetryable(failures[constraint]);
 		}
-		expect(failures['balances']).toMatchObject({ code: '23505', table: 'balances' });
-		expectUnchanged(failures['balances']);
+		// Interning skips existing rows, and under SERIALIZABLE a row it cannot see yet fails with 40001 instead.
+		expectUnchanged(failures['accounts_public_key_key']);
+		expectUnchanged(failures['balances_pkey']);
+		const unused = new PostgresLedgerStorage({ kind: 'connection-string', connectionString: 'postgresql://unused' });
+		expect(await unused.evaluateError(failures['balances_pkey'])).toMatchObject({ code: 'LEDGER_OTHER', shouldRetry: false });
 	});
 
 	test('a terminated connection and other errors are returned unchanged', async function() {
