@@ -26,7 +26,7 @@ const CLUSTER_TEST_TIMEOUT_MILLISECONDS = 60_000;
 /** Two thirds of the weight is no quorum, so with equal weights every staple needs the votes of all three. */
 const EQUAL_WEIGHTS: readonly bigint[] = [1000n, 1000n, 1000n];
 
-/** Any two holding four fifths reach quorum without the third. */
+/** The first two, holding four fifths, reach quorum without the third. */
 const PARTITION_WEIGHTS: readonly bigint[] = [2000n, 2000n, 1000n];
 
 /** An account no staple touches until a scenario sends to it, from a fixed seed. */
@@ -96,105 +96,6 @@ async function knownPeersOf(member: ClusterMember): Promise<string[]> {
 		return([keyOf(peer.key)]);
 	}).sort());
 }
-
-describe.each(STORAGES_UNDER_TEST)('representatives on %s', function(storage: StorageUnderTest) {
-	test.each([
-		{ transport: 'the WebSocket', preferUpdates: 'websocket' },
-		{ transport: 'HTTP republish', preferUpdates: 'http' }
-	] as const satisfies readonly { readonly transport: string; readonly preferUpdates: PreferUpdates }[])('know each other over $transport, and each applies a send voted by all of them, reaching one state', async function({ preferUpdates }) {
-		const cluster = await clusters.start({ storage, weights: EQUAL_WEIGHTS, preferUpdates });
-		const representatives = cluster.representatives;
-		for (const member of representatives) {
-			expect(await knownPeersOf(member)).toEqual(keysOf(representatives.filter(function(other): boolean {
-				return(other !== member);
-			})));
-			for (const peer of await member.node.switch.peers()) {
-				expect(peer).toMatchObject({ kind: lib.Node.Kind.REPRESENTATIVE, preferUpdates });
-			}
-		}
-
-		const staple = await spend(cluster, RECEIVER, 100n);
-
-		expect(issuersOf(staple)).toEqual(keysOf(representatives));
-		// The client publishes to one representative; the others take the staple from their peers.
-		const blocksHash = staple.blocksHash.toString();
-		expect(representatives.filter(function(member): boolean {
-			return(member.deliveredStaples.includes(blocksHash));
-		}).length).toBeGreaterThanOrEqual(representatives.length - 1);
-		const dump = await convergedDump(representatives);
-		expect(dump).toContain(balanceLine(RECEIVER, 100n));
-		expect(dump).toContain(balanceLine(SPENDER, SPENDING - 100n));
-	}, CLUSTER_TEST_TIMEOUT_MILLISECONDS);
-
-	test.each(['read-write', 'bootstrap-only'] as const satisfies readonly JoinerMode[])('let a node that joins later in %s mode, with no peer, catch up by bootstrap alone', async function(mode) {
-		const cluster = await clusters.start({ storage, weights: EQUAL_WEIGHTS });
-		for (const amount of [10n, 20n, 30n]) {
-			await spend(cluster, RECEIVER, amount);
-		}
-		const [first] = cluster.representatives;
-		if (first === undefined) {
-			throw(new Error('the cluster has no representative'));
-		}
-
-		const joiner = await cluster.join(mode);
-		await cluster.caughtUp(joiner, first);
-
-		expect(joiner.node.ledger.ledgerWriteMode).toBe(mode);
-		expect(joiner.deliveredStaples).toEqual([]);
-		expect(await joiner.node.switch.peers({ includeUnverified: true, includeStale: true })).toEqual([]);
-		expect((await joiner.stapleHashes()).length).toBe((await first.stapleHashes()).length);
-		const dump = await convergedDump([...cluster.representatives, joiner]);
-		expect(dump).toContain(balanceLine(RECEIVER, 60n));
-	}, CLUSTER_TEST_TIMEOUT_MILLISECONDS);
-
-	test('keep a quorum while one is offline, which catches up when it comes back and then votes again', async function() {
-		const cluster = await clusters.start({ storage, weights: PARTITION_WEIGHTS });
-		const [first, second, third] = cluster.representatives;
-		if (first === undefined || second === undefined || third === undefined) {
-			throw(new Error('the cluster has fewer than three representatives'));
-		}
-		await spend(cluster, RECEIVER, 10n);
-
-		await third.takeOffline();
-		/*
-		 * The client tries a representative it cannot reach 33 times, waiting
-		 * up to half a second between tries [Keeta TS] index.js:59570-59572,
-		 * 59700-59708, so while one is offline the client knows the reachable
-		 * ones, as a wallet would after failing to reach it.
-		 */
-		const reachable = [first, second];
-		const missed: VoteStaple[] = [];
-		for (const amount of [20n, 30n]) {
-			missed.push(await spend(cluster, RECEIVER, amount, reachable));
-		}
-		for (const staple of missed) {
-			expect(issuersOf(staple)).toEqual(keysOf(reachable));
-		}
-
-		await third.start();
-		await cluster.caughtUp(third, first);
-		for (const staple of missed) {
-			expect(await third.node.ledger.getVoteStaple(staple.blocksHash, 'main')).not.toBeNull();
-		}
-		const healed = await spend(cluster, RECEIVER, 40n);
-
-		expect(issuersOf(healed)).toEqual(keysOf(cluster.representatives));
-		// Back where its peers know it, it takes new staples from them again.
-		expect(third.deliveredStaples).toContain(healed.blocksHash.toString());
-		const dump = await convergedDump(cluster.representatives);
-		expect(dump).toContain(balanceLine(RECEIVER, 100n));
-	}, CLUSTER_TEST_TIMEOUT_MILLISECONDS);
-
-	test('stop every node, leaving no server, socket or timer open', async function() {
-		const handles = watchOpenHandles();
-		const cluster = await clusters.start({ storage, weights: EQUAL_WEIGHTS });
-		await spend(cluster, RECEIVER, 10n);
-
-		await cluster.stop();
-
-		expect(await handles.open()).toEqual([]);
-	}, CLUSTER_TEST_TIMEOUT_MILLISECONDS);
-});
 
 type Listener = {
 	/** The IDs of the staples the node has sent the listener, which are their blocks hashes. */
@@ -290,9 +191,96 @@ function filteredOnce(member: ClusterMember): Promise<void> {
 	}));
 }
 
-describe('representatives in memory', function() {
+describe.each(STORAGES_UNDER_TEST)('representatives on %s', function(storage: StorageUnderTest) {
+	test.each([
+		{ transport: 'the WebSocket', preferUpdates: 'websocket' },
+		{ transport: 'HTTP republish', preferUpdates: 'http' }
+	] as const satisfies readonly { readonly transport: string; readonly preferUpdates: PreferUpdates }[])('know each other over $transport, and each applies a send voted by all of them, reaching one state', async function({ preferUpdates }) {
+		const cluster = await clusters.start({ storage, weights: EQUAL_WEIGHTS, preferUpdates });
+		const representatives = cluster.representatives;
+		for (const member of representatives) {
+			expect(await knownPeersOf(member)).toEqual(keysOf(representatives.filter(function(other): boolean {
+				return(other !== member);
+			})));
+			for (const peer of await member.node.switch.peers()) {
+				expect(peer).toMatchObject({ kind: lib.Node.Kind.REPRESENTATIVE, preferUpdates });
+			}
+		}
+
+		const staple = await spend(cluster, RECEIVER, 100n);
+
+		expect(issuersOf(staple)).toEqual(keysOf(representatives));
+		// The client publishes to one representative; the others take the staple from their peers.
+		const blocksHash = staple.blocksHash.toString();
+		expect(representatives.filter(function(member): boolean {
+			return(member.deliveredStaples.includes(blocksHash));
+		}).length).toBeGreaterThanOrEqual(representatives.length - 1);
+		const dump = await convergedDump(representatives);
+		expect(dump).toContain(balanceLine(RECEIVER, 100n));
+		expect(dump).toContain(balanceLine(SPENDER, SPENDING - 100n));
+	}, CLUSTER_TEST_TIMEOUT_MILLISECONDS);
+
+	test.each(['read-write', 'bootstrap-only'] as const satisfies readonly JoinerMode[])('let a node that joins later in %s mode, with no peer, catch up by bootstrap alone', async function(mode) {
+		const cluster = await clusters.start({ storage, weights: EQUAL_WEIGHTS });
+		for (const amount of [10n, 20n, 30n]) {
+			await spend(cluster, RECEIVER, amount);
+		}
+		const [first] = cluster.representatives;
+		if (first === undefined) {
+			throw(new Error('the cluster has no representative'));
+		}
+
+		const joiner = await cluster.join(mode);
+		await cluster.caughtUp(joiner, first);
+
+		expect(joiner.node.ledger.ledgerWriteMode).toBe(mode);
+		expect(joiner.deliveredStaples).toEqual([]);
+		expect(await joiner.node.switch.peers({ includeUnverified: true, includeStale: true })).toEqual([]);
+		expect((await joiner.stapleHashes()).length).toBe((await first.stapleHashes()).length);
+		const dump = await convergedDump([...cluster.representatives, joiner]);
+		expect(dump).toContain(balanceLine(RECEIVER, 60n));
+	}, CLUSTER_TEST_TIMEOUT_MILLISECONDS);
+
+	test('keep a quorum while one is offline, which catches up when it comes back and then votes again', async function() {
+		const cluster = await clusters.start({ storage, weights: PARTITION_WEIGHTS });
+		const [first, second, third] = cluster.representatives;
+		if (first === undefined || second === undefined || third === undefined) {
+			throw(new Error('the cluster has fewer than three representatives'));
+		}
+		await spend(cluster, RECEIVER, 10n);
+
+		await third.takeOffline();
+		/*
+		 * The client tries a representative it cannot reach 33 times, waiting
+		 * up to half a second between tries [Keeta TS] index.js:59570-59572,
+		 * 59700-59708, so while one is offline the client knows the reachable
+		 * ones, as a wallet would after failing to reach it.
+		 */
+		const reachable = [first, second];
+		const missed: VoteStaple[] = [];
+		for (const amount of [20n, 30n]) {
+			missed.push(await spend(cluster, RECEIVER, amount, reachable));
+		}
+		for (const staple of missed) {
+			expect(issuersOf(staple)).toEqual(keysOf(reachable));
+		}
+
+		await third.start();
+		await cluster.caughtUp(third, first);
+		for (const staple of missed) {
+			expect(await third.node.ledger.getVoteStaple(staple.blocksHash, 'main')).not.toBeNull();
+		}
+		const healed = await spend(cluster, RECEIVER, 40n);
+
+		expect(issuersOf(healed)).toEqual(keysOf(cluster.representatives));
+		// Back where its peers know it, it takes new staples from them again.
+		expect(third.deliveredStaples).toContain(healed.blocksHash.toString());
+		const dump = await convergedDump(cluster.representatives);
+		expect(dump).toContain(balanceLine(RECEIVER, 100n));
+	}, CLUSTER_TEST_TIMEOUT_MILLISECONDS);
+
 	test('send a listener that filters on an account only the staples that touch it', async function() {
-		const cluster = await clusters.start({ storage: 'memory', weights: EQUAL_WEIGHTS });
+		const cluster = await clusters.start({ storage, weights: EQUAL_WEIGHTS });
 		const representatives = cluster.representatives;
 		const listeners: Listener[] = [];
 		for (const member of representatives) {
@@ -318,7 +306,7 @@ describe('representatives in memory', function() {
 		const fees = FEE_ACCOUNTS.map(function(payTo, index): RepresentativeFee {
 			return({ kind: 'flat', amountPerBlock: FEES_PER_BLOCK[index] ?? 0n, payTo });
 		});
-		const cluster = await clusters.start({ storage: 'memory', weights: EQUAL_WEIGHTS, fees });
+		const cluster = await clusters.start({ storage, weights: EQUAL_WEIGHTS, fees });
 		const [first] = cluster.representatives;
 		if (first === undefined) {
 			throw(new Error('the cluster has no representative'));
@@ -345,5 +333,15 @@ describe('representatives in memory', function() {
 		for (const [index, account] of FEE_ACCOUNTS.entries()) {
 			expect(dump).toContain(balanceLine(account, feesAfter[index] ?? 0n));
 		}
+	}, CLUSTER_TEST_TIMEOUT_MILLISECONDS);
+
+	test('stop every node, leaving no server, socket or timer open', async function() {
+		const handles = watchOpenHandles();
+		const cluster = await clusters.start({ storage, weights: EQUAL_WEIGHTS });
+		await spend(cluster, RECEIVER, 10n);
+
+		await cluster.stop();
+
+		expect(await handles.open()).toEqual([]);
 	}, CLUSTER_TEST_TIMEOUT_MILLISECONDS);
 });
