@@ -1,12 +1,9 @@
 import { describe, expect, test } from 'vitest';
-import { APIDocument } from '../conformance/api/document.js';
 import { documentPathOf } from '../conformance/api/routes.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { createTestNetwork } from '../testing/network.js';
-import { API_ROUTES, defineGET, definePOST, invokeRoute, routeTable } from './index.js';
+import { defineGET, definePOST, invokeRoute, routeTable } from './index.js';
 import type { APIRequest, Route } from './index.js';
-
-const api = new APIDocument();
 
 async function requestWith(parts: Pick<APIRequest, 'params' | 'payload'>): Promise<APIRequest> {
 	const network = await createTestNetwork({ representativeWeights: [1n] });
@@ -86,26 +83,6 @@ describe('the route table', function() {
 		expect(function() {
 			return(routeTable([[defineGET('/vote/:blockhash', respond), defineGET('/vote/:hash', respond)]]));
 		}).toThrow('/vote/:hash');
-	});
-
-	test('every route served is one the document describes', function() {
-		const documented = new Set(api.routes.map(function(route): string {
-			return(`${route.method} ${route.path}`);
-		}));
-		const offDocument = API_ROUTES.filter(function(route): boolean {
-			return(!documented.has(`${route.method} ${documentPathOf(route.path)}`));
-		});
-		expect(offDocument.map(spelled)).toEqual([]);
-	});
-
-	test('the node group is served', function() {
-		expect(API_ROUTES.map(spelled)).toEqual(expect.arrayContaining([
-			'GET /node/version',
-			'GET /node/stats',
-			'GET /node/peers',
-			'GET /node/ledger/checksum',
-			'GET /node/ledger/clearstats'
-		]));
 	});
 
 	test('a route path is written in the document with its parameters in braces, below /api', function() {

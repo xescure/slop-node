@@ -1,20 +1,19 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import type { APITree } from '@keetanetwork/keetanet-client/api/index.js';
+import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { NodeKind } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { P2PPeer } from '@keetanetwork/keetanet-client/lib/p2p.js';
 import { LEDGER_CHECKSUM_KEY, LedgerStorageDriverBase } from '../ledger/storage/base.js';
 import { assertNever } from '../util/assert-never.js';
 import type { AssertNever } from '../util/assert-never.js';
 import { NODE_VERSION } from '../version.js';
-import { defineGET } from './route.js';
+import type { DeclaredNodeGroup, DeclaredResult } from './declared.js';
+import { apiError, parseBase64, parseLimit } from './parameters.js';
+import type { LimitBounds } from './parameters.js';
+import { asPayload, requiredString } from './payload.js';
+import { defineGET, definePOST } from './route.js';
 import type { APIRequest, Route } from './route.js';
 
 const lib = KeetaNet.lib;
-
-/** What upstream's typings say a handler of the node group answers. */
-type DeclaredResult<Handler> = Handler extends (...parameters: never[]) => Promise<infer Result> ? Result : never;
-
-type DeclaredNodeGroup = APITree['node'];
 
 type PeerEndpoints = { readonly p2p: string; readonly api: string };
 
@@ -103,8 +102,54 @@ function getVersion(): Promise<DeclaredResult<DeclaredNodeGroup['version']['GET'
 	return(Promise.resolve({ node: NODE_VERSION }));
 }
 
+/**
+ * Adds a staple of blocks and the votes that confirm them to the ledger, and
+ * passes on to peers the staples that adding it created; publish says
+ * whether the staple sent was among them [Keeta TS] index.js:71384-71410,
+ * 58481-58485.
+ * [node-lite] adapted from publishVoteStaple.
+ */
+async function publishVoteStaple(request: APIRequest, body: unknown): Promise<DeclaredResult<DeclaredNodeGroup['publish']['POST']>> {
+	const staple = new lib.Vote.Staple(parseBase64(requiredString(asPayload(body), 'votesAndBlocks')));
+	return({ publish: await request.node.addToLedger(staple) });
+}
+
+/** A page of a bootstrap holds 1000 staples, the ledger's own default, unless the request asks for fewer [Keeta TS] index.js:69633. */
+const BOOTSTRAP_LIMIT: LimitBounds = { defaultLimit: 1000, maximum: 1000 };
+
+/** The moment a bootstrap page starts from, as the client writes a date [Keeta TS] index.js:59166-59168. */
+function parseBootstrapStart(text: string | undefined): Date {
+	if (text === undefined) {
+		throw(apiError('API_START_MISSING', '"start" parameter must be supplied'));
+	}
+	const start = new Date(text);
+	if (Number.isNaN(start.getTime())) {
+		throw(apiError('API_INVALID_START', `Invalid start: ${text}`));
+	}
+	return(start);
+}
+
+/**
+ * The staples added to the ledger on or after the moment, leaving out those
+ * the bloom filter says the client already holds; a page is empty once every
+ * staple has been sent [Keeta TS] index.js:59140-59182, 69633-69700.
+ * [node-lite] adapted from getVoteStaplesAfter.
+ */
+async function getVoteStaplesAfter(request: APIRequest): Promise<DeclaredResult<DeclaredNodeGroup['bootstrap']['votes']['GET']>> {
+	const start = parseBootstrapStart(request.query['start']);
+	const limit = parseLimit(request.query, BOOTSTRAP_LIMIT);
+	const options: Parameters<Ledger['getVoteStaplesAfter']>[2] = {};
+	const bloomFilter = request.query['bloomFilter'];
+	if (bloomFilter !== undefined) {
+		options.bloomFilter = lib.Utils.Bloom.deserializeBloomFilter(bloomFilter);
+	}
+	return({ voteStaples: await request.node.ledger.getVoteStaplesAfter(start, limit, options) });
+}
+
 /** The routes about the node itself rather than the ledger's contents. */
 export const nodeRoutes: readonly Route[] = [
+	definePOST('/node/publish', publishVoteStaple),
+	defineGET('/node/bootstrap/votes', getVoteStaplesAfter),
 	defineGET('/node/version', getVersion),
 	defineGET('/node/stats', getNodeStats),
 	defineGET('/node/peers', getPeers),
