@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, rename, writeFile } from 'node:fs/promises';
 import { afterAll, describe, expect, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { GenericAccount, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
@@ -192,7 +192,10 @@ function headReplaysOn(driver: DriverUnderTest): HeadReplays {
 	/** Only the reference driver writes the files, so a replay on another driver is always checked against them. */
 	async function updatedThenRead(file: URL, generate: (replay: HeadReplay) => string): Promise<string> {
 		if (UPDATE && driver.name === REFERENCE_DRIVER_NAME) {
-			await writeFile(file, generate(await shared()));
+			// A file of another driver's run may be reading the file meanwhile, so it only ever sees a whole file.
+			const partial = new URL(`${file.href}.partial`);
+			await writeFile(partial, generate(await shared()));
+			await rename(partial, file);
 		}
 		return(await readCommitted(file));
 	}
