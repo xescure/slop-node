@@ -187,6 +187,24 @@ describe.each(driversUnderTest)('the node group on the $name driver', function(d
 		const answer = await get(running, '/node/ledger/checksum');
 		expect(field(answer.body, 'checksum')).toBe(`0x${checksumOf([running.network.genesis]).toString(16).toUpperCase()}`);
 	});
+
+	test('the checksum and the moment it is reported with are read between commits', async function() {
+		const running = await startNode({ driver });
+		const between = vi.spyOn(running.storage, 'betweenCommits');
+		const statistics = vi.spyOn(lib.Ledger.prototype, 'stats');
+		const checksum = vi.spyOn(lib.Stats.prototype, 'getXor');
+		between.mockImplementation(async function(read) {
+			expect(statistics).not.toHaveBeenCalled();
+			expect(checksum).not.toHaveBeenCalled();
+			const result = await read();
+			expect(statistics).toHaveBeenCalledTimes(1);
+			expect(checksum).toHaveBeenCalledTimes(1);
+			return(result);
+		});
+		const answer = await get(running, '/node/ledger/checksum');
+		expect(answer.status).toBe(200);
+		expect(between).toHaveBeenCalledTimes(1);
+	});
 });
 
 describe('the node group', function() {

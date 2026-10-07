@@ -316,7 +316,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		return(new MemoryTransaction(options, openOverlay(this.#committed), release));
 	}
 
-	commitTransaction(transaction: MemoryTransaction): Promise<void> {
+	protected commitStorage(transaction: MemoryTransaction): Promise<void> {
 		return(transaction.end('committed', commitOverlay));
 	}
 

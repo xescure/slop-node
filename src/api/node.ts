@@ -2,7 +2,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { APITree } from '@keetanetwork/keetanet-client/api/index.js';
 import type { NodeKind } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { P2PPeer } from '@keetanetwork/keetanet-client/lib/p2p.js';
-import { LEDGER_CHECKSUM_KEY } from '../ledger/storage/base.js';
+import { LEDGER_CHECKSUM_KEY, LedgerStorageDriverBase } from '../ledger/storage/base.js';
 import { assertNever } from '../util/assert-never.js';
 import type { AssertNever } from '../util/assert-never.js';
 import { NODE_VERSION } from '../version.js';
@@ -72,6 +72,7 @@ async function getNodeStats(request: APIRequest): Promise<DeclaredResult<Declare
 /**
  * Clearing the statistics is a debugging aid that this node does not offer,
  * and the answer says that nothing was cleared.
+ * [node-lite] adapted from debugClearStats.
  */
 function debugClearStats(): Promise<DeclaredResult<DeclaredNodeGroup['ledger']['clearstats']['GET']>> {
 	return(Promise.resolve({ clearStats: false }));
@@ -85,10 +86,19 @@ function debugClearStats(): Promise<DeclaredResult<DeclaredNodeGroup['ledger']['
  * ledger writes.
  */
 async function getLedgerChecksum(request: APIRequest): Promise<DeclaredResult<DeclaredNodeGroup['ledger']['checksum']['GET']>> {
-	const [statistics, checksum] = await Promise.all([request.node.ledger.stats(), request.node.stats.getXor(LEDGER_CHECKSUM_KEY)]);
-	return({ moment: new Date(statistics.moment), momentRange: statistics.momentRange, checksum: checksum.toBigInt() });
+	const read = async function(): Promise<DeclaredResult<DeclaredNodeGroup['ledger']['checksum']['GET']>> {
+		const [statistics, checksum] = await Promise.all([request.node.ledger.stats(), request.node.stats.getXor(LEDGER_CHECKSUM_KEY)]);
+		return({ moment: new Date(statistics.moment), momentRange: statistics.momentRange, checksum: checksum.toBigInt() });
+	};
+	const storage = request.node.config.ledger.storageDriver;
+	// Only this node's own drivers can hold commits back; another driver's checksum may run ahead of its counts.
+	if (storage instanceof LedgerStorageDriverBase) {
+		return(await storage.betweenCommits(read));
+	}
+	return(await read());
 }
 
+/** [node-lite] adapted from getVersion. */
 function getVersion(): Promise<DeclaredResult<DeclaredNodeGroup['version']['GET']>> {
 	return(Promise.resolve({ node: NODE_VERSION }));
 }

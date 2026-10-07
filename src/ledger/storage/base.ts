@@ -12,6 +12,7 @@ import type { AccountInfoForType, LedgerStatistics } from '@keetanetwork/keetane
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerInternals, StatsPending } from '../../upstream/internals.js';
 import { assertNever } from '../../util/assert-never.js';
+import { SharedExclusiveGate } from '../../util/shared-exclusive-gate.js';
 import { blockHeightsOf, computeConfirmedStapleChange } from './confirmed.js';
 import type { ConfirmedStapleChange } from './confirmed.js';
 import { createLedgerError, describeError, isKeetaNetError } from './errors.js';
@@ -132,6 +133,8 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	readonly #retriedByGc = new WeakMap<Transaction, Set<StapleKey>>();
 	// The tail of the work queued on each transaction that may open isolated units; it never rejects.
 	readonly #exclusiveWork = new WeakMap<Transaction, Promise<void>>();
+	// Commits pass together; a reader between commits waits for them and holds new ones back.
+	readonly #commits = new SharedExclusiveGate();
 
 	/**
 	 * Called once, synchronously, by the Ledger constructor; Ledger.copy shares
@@ -377,8 +380,30 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	/** The counts stats() reports, as of one consistent snapshot of the main ledger. */
 	protected abstract countLedger(): Promise<LedgerCountsSnapshot>;
 
+	/**
+	 * Commits, and folds the transaction's statistics into its node before any
+	 * reader between commits can run, so that the ledger checksum, a node
+	 * statistic, always covers exactly the commits the stored ledger holds.
+	 * Ledger merges the statistics again once this returns, and then finds
+	 * nothing left to merge.
+	 * [Keeta TS] index.js:69001-69006, 74340-74350
+	 */
+	async commitTransaction(transaction: Transaction): Promise<void> {
+		await this.#commits.shared(async () => {
+			await this.commitStorage(transaction);
+			transaction.node?.stats.merge(transaction.statsPending);
+		});
+	}
+
+	/** Runs reads that no commit lands in the middle of, such as the ledger's counts and its checksum. */
+	betweenCommits<Result>(read: () => Promise<Result>): Promise<Result> {
+		return(this.#commits.exclusive(read));
+	}
+
+	/** Makes the transaction's writes permanent and ends it. */
+	protected abstract commitStorage(transaction: Transaction): Promise<void>;
+
 	abstract beginTransaction(options: TransactionOptions): Promise<Transaction>;
-	abstract commitTransaction(transaction: Transaction): MemberResult<'commitTransaction'>;
 	abstract abortTransaction(transaction: Transaction): MemberResult<'abortTransaction'>;
 	abstract delegatedWeight(transaction: Transaction, ...input: ArgumentsAfterTransaction<'delegatedWeight'>): MemberResult<'delegatedWeight'>;
 	abstract getBalance(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getBalance'>): MemberResult<'getBalance'>;

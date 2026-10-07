@@ -677,7 +677,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 		return(new PostgresTransaction(options, client));
 	}
 
-	commitTransaction(transaction: PostgresTransaction): Promise<void> {
+	protected commitStorage(transaction: PostgresTransaction): Promise<void> {
 		return(transaction.commit());
 	}
 

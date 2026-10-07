@@ -1,11 +1,11 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { LedgerStatistics } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { advanceClock } from '../../../testing/network.js';
 import { confirmedStaple, sendBlock, setRepresentativeBlock } from '../../../testing/blocks.js';
-import { blocksHashesOf, failAfterPersisting, headOf, requireAt, useFixtures } from './support.js';
+import { blocksHashesOf, checksumOf, failAfterPersisting, headOf, ledgerChecksumOf, requireAt, useFixtures } from './support.js';
 import type { DriverUnderTest } from './types.js';
 
 const lib = KeetaNet.lib;
@@ -142,6 +142,42 @@ export function defineStatsCases(driver: DriverUnderTest): void {
 			const stats = await node.ledger.stats();
 			expect(settledCount(stats)).toBe(1);
 			expect(stats.settlementTimes['1000ms'].count).toBe(1);
+		});
+
+		test('reads between commits see the ledger and its checksum at the same commit', async function() {
+			const { network, startNode } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			const { node, storage } = await startNode(0);
+			const send = await sendBlock({ from: user, previous: headOf(network.genesis, user), to: requireAt(network.users, 1), amount: 5n, token: network.baseToken, network: network.network });
+			const staple = await confirmedStaple([send], network.representatives);
+			let commitStarted: () => void = function() {
+				throw(new Error('the commit started before anything waited for it'));
+			};
+			const committing = new Promise<void>(function(resolve) {
+				commitStarted = resolve;
+			});
+			const commit = storage.commitTransaction.bind(storage);
+			const commits = vi.spyOn(storage, 'commitTransaction').mockImplementation(function(transaction) {
+				commitStarted();
+				return(commit(transaction));
+			});
+			const read = async function(): Promise<{ readonly blockCount: number; readonly checksum: bigint }> {
+				return({ blockCount: (await node.ledger.stats()).blockCount, checksum: await ledgerChecksumOf(node) });
+			};
+			const before = { blockCount: blocksOf([network.genesis]), checksum: checksumOf([network.genesis]) };
+			let added: Promise<unknown> = Promise.resolve();
+
+			const between = await storage.betweenCommits(async function() {
+				const first = await read();
+				added = node.ledger.add(staple);
+				await committing;
+				return({ first, second: await read() });
+			});
+			await added;
+
+			expect(commits).toHaveBeenCalled();
+			expect(between).toEqual({ first: before, second: before });
+			expect(await read()).toEqual({ blockCount: before.blockCount + 1, checksum: checksumOf([network.genesis, staple]) });
 		});
 	});
 }
