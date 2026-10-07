@@ -148,9 +148,10 @@ export async function writeStorage<Result>(storage: LedgerStorageDriverBase, wri
  * Makes the driver fail just after it has written the staple, when the base
  * stops it waiting as a deferred staple, the way a lost connection could. The
  * base calls its primitives through the instance, so a method set on the
- * instance reaches every driver without knowing its class.
+ * instance reaches every driver without knowing its class. The function it
+ * returns puts the driver's own primitive back.
  */
-export function failAfterPersisting(storage: LedgerStorageDriverBase, staple: VoteStaple): void {
+export function failAfterPersisting(storage: LedgerStorageDriverBase, staple: VoteStaple): () => void {
 	const removeDeferredStaple: unknown = Reflect.get(storage, 'removeDeferredStaple');
 	if (typeof removeDeferredStaple !== 'function') {
 		throw(new Error('the driver has no removeDeferredStaple primitive'));
@@ -162,6 +163,9 @@ export function failAfterPersisting(storage: LedgerStorageDriverBase, staple: Vo
 		}
 		const removed: unknown = Reflect.apply(removeDeferredStaple, storage, [transaction, blocksHash]);
 		await removed;
+	});
+	return(function(): void {
+		Reflect.set(storage, 'removeDeferredStaple', removeDeferredStaple);
 	});
 }
 

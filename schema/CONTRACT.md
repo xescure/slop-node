@@ -170,6 +170,7 @@ A driver must provide the following.
    - `gc.ts: "a gc retry that fails after its write leaves nothing behind and stays deferred"`
    - `deferral.ts: "a replayed staple whose idempotent key is taken stays deferred while its trigger applies"`, where the replay fails inside `persistConfirmedStaple`
    - `deferral.ts: "a replayed staple that conflicts stays deferred while its trigger applies"`, where it fails before the write
+   - `stats.ts: "a replayed staple that rolls back does not record a settlement time"`, where the unit that rolls back would have earned a settlement time from this node's temporary vote, and earns it once a later retry succeeds
    - `confirmed.ts: "persisting never overwrites a confirmed block or successor"`, which calls the primitive directly
 
 The memory driver meets 1 by holding one first-come, first-served lock from `beginTransaction` until commit or abort. It meets 2 and 4 with a copy-on-write overlay per transaction, applied on commit and dropped on abort, and with a nested overlay for each staged group of writes and for each isolated unit. While a unit is open, the transaction reads and writes through the unit's overlay, which is applied to the enclosing view when the unit succeeds and dropped when it fails. It meets 3 by keeping every overlay operation synchronous. It records a commit as done only after the overlay has been applied, and a failed commit leaves the transaction finished with a non-retryable error (untested).
@@ -423,7 +424,7 @@ adjust: (transaction: any, input: VoteStaple, changes: ComputedEffectOfBlocks) =
   - `StorageDriverNotInitializedError` before `init`
 
   Errors of replayed staples are logged, leave none of their writes, and do not fail the call.
-- **Tested by** every case of `genesis.ts`, `confirmed.ts` and `deferral.ts`; `votes.ts: "publishing promotes the staple and deletes side copies of promoted rows"`; `concurrency.ts: "concurrent adds of one staple apply it once"`.
+- **Tested by** every case of `genesis.ts`, `confirmed.ts` and `deferral.ts`; `votes.ts: "publishing promotes the staple and deletes side copies of promoted rows"`; `concurrency.ts: "concurrent adds of one staple apply it once"`; `stats.ts: "a replayed staple that rolls back does not record a settlement time"`.
 
 ### `addPendingVote`
 
@@ -768,7 +769,7 @@ stats: () => Promise<LedgerStatistics>;
 
 - **Semantics.** Implemented by the base over the driver's `countLedger` (section 4.2). It takes no transaction, and `Ledger.stats` calls it without one and without retries [Keeta TS] index.js:70537-70551. The field definitions are in D19.
 - `ledger.node` is read from the ledger passed to `init`. After `Ledger.copy`, which shares the driver, `stats` still reports the original ledger's node. Untested.
-- **Tested by** `stats.ts: "stats returns the upstream shape with counts that follow the staples added"` and `stats.ts: "stats reads settlement times and retries from the node"`.
+- **Tested by** `stats.ts: "stats returns the upstream shape with counts that follow the staples added"`, `stats.ts: "stats reads settlement times and retries from the node"` and `stats.ts: "a replayed staple that rolls back does not record a settlement time"`.
 
 ### 4.1 Members inherited from upstream's base class
 
@@ -858,7 +859,7 @@ Forgets a deferred staple and its index entries. A staple that is not deferred i
 protected abstract collectDeadDeferredStaples(transaction: Transaction, limit: number): Promise<CollectedDeferredStaples>;
 ```
 
-Removes up to `limit` deferred staples that can never apply, with their index entries, and returns them as `collected`, with `more` reporting whether more such staples remain. A deferred staple can never apply once the `previous` of any of its blocks has a confirmed successor: the block itself is on the main ledger, or it competes with a block that is. This is the rule of D6, and it applies whether or not the staple still waits on a missing block. The base logs each collected staple once (D20). Tested by `gc.ts: "gc drops deferred staples that can never apply and reports each once"` and `gc.ts: "gc reports whether more work remains"`.
+Removes up to `limit` deferred staples that can never apply, with their index entries, and returns them as `collected`, with `more` reporting whether more such staples remain. A deferred staple can never apply once the `previous` of any of its blocks has a confirmed successor: the block itself is on the main ledger, or it competes with a block that is. This is the rule of D6, and it applies whether or not the staple still waits on a missing block. The base logs each collected staple once (D20). Tested by `gc.ts: "gc drops deferred staples that can never apply and reports each once"`, `gc.ts: "gc reports whether more work remains"` and `gc.ts: "a deferred staple that is not dead survives gc and unrelated releases, then applies"`, where a staple is kept while this node has only a pending vote on one of its blocks and only one of its two awaited blocks has arrived.
 
 #### `listReleasedDeferredStaples`
 
@@ -968,6 +969,7 @@ Heights and heads count main-ledger blocks only, under every selector. `getHeadB
 - `gc.ts: "gc removes our votes on a competitor of a confirmed block and frees its idempotent key"`
 - `gc.ts: "gc keeps our permanent vote when an expired vote of ours on a competitor remains"`
 - `gc.ts: "gc keeps our permanent vote when a deferred staple holds a competitor"`
+- `gc.ts: "a deferred staple that is not dead survives gc and unrelated releases, then applies"`, where this node's pending vote on a block of a deferred staple does not make the staple dead
 
 ### D7. Map completeness and the `'both'` selector
 
@@ -1103,6 +1105,8 @@ Only partly testable through blocks. SET_INFO on an identifier must carry `defau
 - `gc.ts: "a gc retry that fails after its write leaves nothing behind and stays deferred"`
 - `gc.ts: "gc drops deferred staples that can never apply and reports each once"`
 - `gc.ts: "gc reports whether more work remains"`
+- `gc.ts: "a deferred staple that is not dead survives gc and unrelated releases, then applies"`
+- `stats.ts: "a replayed staple that rolls back does not record a settlement time"`
 
 ### D14. Conflicting confirmed history
 

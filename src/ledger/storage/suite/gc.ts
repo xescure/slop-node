@@ -430,6 +430,33 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			expect(blocksHashesOf(await ledger.add(missingStaple))).toEqual(blocksHashesOf([missingStaple]));
 		});
 
+		test('a deferred staple that is not dead survives gc and unrelated releases, then applies', async function() {
+			const log = new RecordingLog();
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { log });
+			await ledger.add(network.genesis);
+			// Our pending vote makes a block of the staple a side successor of its previous, which is not a confirmed one.
+			const voted = await sendFromGenesis(network, 0, 5n);
+			await ledger.vote([voted]);
+			const missing = await sendFromGenesis(network, 1, 1n);
+			const released = await sendFromGenesis(network, 2, 1n);
+			const blocks = [voted, await sendFrom(network, 1, missing.hash, 2n), await sendFrom(network, 2, released.hash, 3n)];
+			const waiting = await confirmedStaple(blocks, network.representatives);
+			expect(await ledger.add(waiting)).toEqual([]);
+			// One of the two awaited blocks arrives, which releases the staple only in part.
+			const releasedStaple = await confirmedStaple([released], network.representatives);
+			expect(blocksHashesOf(await ledger.add(releasedStaple))).toEqual(blocksHashesOf([releasedStaple]));
+
+			expect(await ledger.gc()).toBe(false);
+
+			expect(await deferredWaitingOn(storage, missing.hash)).toEqual(blocksHashesOf([waiting]));
+			const missingStaple = await confirmedStaple([missing], network.representatives);
+			expect(blocksHashesOf(await ledger.add(missingStaple))).toEqual(blocksHashesOf([missingStaple, waiting]));
+			expect(await Promise.all(network.users.map(async function(user) {
+				return(hashOf(await ledger.getHeadBlock(user, 'main')));
+			}))).toEqual(blocks.map(hashOf));
+			expect(log.errorsMentioning(waiting)).toEqual([]);
+		});
+
 		test('gc reports whether more work remains', async function() {
 			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0 });
 			const user = requireAt(network.users, 0);

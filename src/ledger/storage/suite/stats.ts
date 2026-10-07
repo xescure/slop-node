@@ -5,7 +5,7 @@ import type { LedgerStatistics } from '@keetanetwork/keetanet-client/lib/ledger/
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { advanceClock } from '../../../testing/network.js';
 import { confirmedStaple, sendBlock, setRepresentativeBlock } from '../../../testing/blocks.js';
-import { headOf, requireAt, useFixtures } from './support.js';
+import { blocksHashesOf, failAfterPersisting, headOf, requireAt, useFixtures } from './support.js';
 import type { DriverUnderTest } from './types.js';
 
 const lib = KeetaNet.lib;
@@ -28,6 +28,14 @@ function operationsOf(staples: readonly VoteStaple[]): number {
 		}
 	}
 	return(operations);
+}
+
+function settledCount(stats: LedgerStatistics): number {
+	let count = 0;
+	for (const bucket of Object.values(stats.settlementTimes)) {
+		count += bucket.count;
+	}
+	return(count);
 }
 
 function blocksOf(staples: readonly VoteStaple[]): number {
@@ -106,6 +114,34 @@ export function defineStatsCases(driver: DriverUnderTest): void {
 			expect(stats.settlementTimes['1000ms']).toEqual({ count: 1, range: lib.Stats.placeholderTimingData()['1000ms'].range });
 			expect(stats.settlementTimes['100ms'].count).toBe(0);
 			expect(stats.blockCount).toBe(blocksOf([network.genesis]) + 1);
+		});
+
+		test('a replayed staple that rolls back does not record a settlement time', async function() {
+			const { network, startNode } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			const other = requireAt(network.users, 1);
+			const { node, storage } = await startNode(0);
+			const voted = await sendBlock({ from: user, previous: headOf(network.genesis, user), to: other, amount: 5n, token: network.baseToken, network: network.network });
+			await node.ledger.vote([voted]);
+			const missing = await sendBlock({ from: other, previous: headOf(network.genesis, other), to: user, amount: 1n, token: network.baseToken, network: network.network });
+			const after = await sendBlock({ from: other, previous: missing.hash, to: user, amount: 2n, token: network.baseToken, network: network.network });
+			// A block can be voted on only once its previous is on main, so the staple waits through another account's chain.
+			const waiting = await confirmedStaple([voted, after], network.representatives);
+			expect(await node.ledger.add(waiting)).toEqual([]);
+			const restore = failAfterPersisting(storage, waiting);
+			advanceClock(SETTLEMENT_MILLISECONDS);
+			const missingStaple = await confirmedStaple([missing], network.representatives);
+
+			// The replay would earn a settlement time from our temporary vote, and then rolls back.
+			expect(blocksHashesOf(await node.ledger.add(missingStaple))).toEqual(blocksHashesOf([missingStaple]));
+
+			expect(settledCount(await node.ledger.stats())).toBe(0);
+			// A successful retry records the time, which shows the rolled-back unit had one to record.
+			restore();
+			expect(await node.ledger.gc()).toBe(false);
+			const stats = await node.ledger.stats();
+			expect(settledCount(stats)).toBe(1);
+			expect(stats.settlementTimes['1000ms'].count).toBe(1);
 		});
 	});
 }
