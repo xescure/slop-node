@@ -430,7 +430,7 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			expect(blocksHashesOf(await ledger.add(missingStaple))).toEqual(blocksHashesOf([missingStaple]));
 		});
 
-		test('a deferred staple that is not dead survives gc and unrelated releases, then applies', async function() {
+		test('a deferred staple that is not dead survives gc and a partial release, then applies', async function() {
 			const log = new RecordingLog();
 			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { log });
 			await ledger.add(network.genesis);

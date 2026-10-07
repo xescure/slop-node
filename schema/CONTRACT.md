@@ -860,7 +860,7 @@ Forgets a deferred staple and its index entries. A staple that is not deferred i
 protected abstract collectDeadDeferredStaples(transaction: Transaction, limit: number): Promise<CollectedDeferredStaples>;
 ```
 
-Removes up to `limit` deferred staples that can never apply, with their index entries, and returns them as `collected`, with `more` reporting whether more such staples remain. A deferred staple can never apply once the `previous` of any of its blocks has a confirmed successor: the block itself is on the main ledger, or it competes with a block that is. This is the rule of D6, and it applies whether or not the staple still waits on a missing block. The base logs each collected staple once (D20). Tested by `gc.ts: "gc drops deferred staples that can never apply and reports each once"`, `gc.ts: "gc reports whether more work remains"` and `gc.ts: "a deferred staple that is not dead survives gc and unrelated releases, then applies"`, where a staple is kept while this node has only a pending vote on one of its blocks and only one of its two awaited blocks has arrived.
+Removes up to `limit` deferred staples that can never apply, with their index entries, and returns them as `collected`, with `more` reporting whether more such staples remain. A deferred staple can never apply once the `previous` of any of its blocks has a confirmed successor: the block itself is on the main ledger, or it competes with a block that is. This is the rule of D6, and it applies whether or not the staple still waits on a missing block. The base logs each collected staple once (D20). Tested by `gc.ts: "gc drops deferred staples that can never apply and reports each once"`, `gc.ts: "gc reports whether more work remains"` and `gc.ts: "a deferred staple that is not dead survives gc and a partial release, then applies"`, where a staple is kept while this node has only a pending vote on one of its blocks and only one of its two awaited blocks has arrived.
 
 #### `listReleasedDeferredStaples`
 
@@ -970,7 +970,7 @@ Heights and heads count main-ledger blocks only, under every selector. `getHeadB
 - `gc.ts: "gc removes our votes on a competitor of a confirmed block and frees its idempotent key"`
 - `gc.ts: "gc keeps our permanent vote when an expired vote of ours on a competitor remains"`
 - `gc.ts: "gc keeps our permanent vote when a deferred staple holds a competitor"`
-- `gc.ts: "a deferred staple that is not dead survives gc and unrelated releases, then applies"`, where this node's pending vote on a block of a deferred staple does not make the staple dead
+- `gc.ts: "a deferred staple that is not dead survives gc and a partial release, then applies"`, where this node's pending vote on a block of a deferred staple does not make the staple dead
 
 ### D7. Map completeness and the `'both'` selector
 
@@ -1106,7 +1106,7 @@ Only partly testable through blocks. SET_INFO on an identifier must carry `defau
 - `gc.ts: "a gc retry that fails after its write leaves nothing behind and stays deferred"`
 - `gc.ts: "gc drops deferred staples that can never apply and reports each once"`
 - `gc.ts: "gc reports whether more work remains"`
-- `gc.ts: "a deferred staple that is not dead survives gc and unrelated releases, then applies"`
+- `gc.ts: "a deferred staple that is not dead survives gc and a partial release, then applies"`
 - `stats.ts: "a replayed staple that rolls back does not record a settlement time"`
 
 ### D14. Conflicting confirmed history
