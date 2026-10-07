@@ -72,6 +72,22 @@ export type StateDumpRecord = AccountRecord | ACLRecord | BalanceRecord | Certif
 
 export type StateDumpKind = StateDumpRecord['kind'];
 
+const STATE_DUMP_KINDS = {
+	account: true,
+	acl: true,
+	balance: true,
+	certificate: true,
+	checksum: true,
+	head: true,
+	idempotent: true,
+	supply: true,
+	weight: true
+} as const satisfies Record<StateDumpKind, true>;
+
+export function isStateDumpKind(kind: unknown): kind is StateDumpKind {
+	return(typeof kind === 'string' && Object.hasOwn(STATE_DUMP_KINDS, kind));
+}
+
 const CHECKSUM_BITS = 256n;
 
 function isPublicKeyText(text: string): text is PublicKeyText {

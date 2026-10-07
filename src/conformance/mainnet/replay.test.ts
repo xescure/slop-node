@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
-import { driversUnderTest } from '../../ledger/storage/suite/drivers.js';
+import { driverUnderTestNamed } from '../../ledger/storage/suite/drivers.js';
 import { blocksHashesOf } from '../../ledger/storage/suite/support.js';
-import type { DriverUnderTest } from '../../ledger/storage/suite/types.js';
 import { loadMainnetFixture } from './fixture.js';
 import { replayMainnet, replayOrder } from './replay.js';
 import type { Orderable } from './replay.js';
@@ -20,16 +19,6 @@ describe('mainnet replay order and deferral', function() {
 	afterEach(function() {
 		vi.useRealTimers();
 	});
-
-	function memoryDriver(): DriverUnderTest {
-		const driver = driversUnderTest.find(function(candidate): boolean {
-			return(candidate.name === 'memory');
-		});
-		if (driver === undefined) {
-			throw(new Error('the memory driver is not under test'));
-		}
-		return(driver);
-	}
 
 	function stapleAt(millisecond: number, blocksHash: string): Orderable {
 		return({ timestamp: () => new Date(millisecond), blocksHash: { toString: () => blocksHash } });
@@ -49,7 +38,7 @@ describe('mainnet replay order and deferral', function() {
 		const staples = (await loadMainnetFixture('head')).slice(0, 200);
 		const seen: VoteStaple[] = [];
 
-		await replayMainnet(await memoryDriver().create(), [...staples].reverse(), {
+		await replayMainnet(await driverUnderTestNamed('memory').create(), [...staples].reverse(), {
 			beforeAdd: function(staple) {
 				expect(Date.now()).toBe(staple.timestamp().valueOf());
 				seen.push(staple);
@@ -67,7 +56,7 @@ describe('mainnet replay order and deferral', function() {
 			return(staple !== missing);
 		});
 
-		const result = await replayMainnet(await memoryDriver().create(), present);
+		const result = await replayMainnet(await driverUnderTestNamed('memory').create(), present);
 
 		expect(result.deferred.length).toBeGreaterThan(0);
 		expect(result.applied + result.deferred.length).toBe(present.length);

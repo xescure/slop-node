@@ -36,3 +36,14 @@ export const driversUnderTest: readonly DriverUnderTest[] = [
 		}
 	}
 ];
+
+/** The driver under test of that name; a test that runs one driver alone looks it up by name. */
+export function driverUnderTestNamed(name: string): DriverUnderTest {
+	const driver = driversUnderTest.find(function(candidate): boolean {
+		return(candidate.name === name);
+	});
+	if (driver === undefined) {
+		throw(new Error(`the ${name} driver is not under test`));
+	}
+	return(driver);
+}

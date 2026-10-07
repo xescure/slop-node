@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { describe, expect, test } from 'vitest';
 import { stateDumpViolations } from '../schema.js';
-import { STATE_DUMP_FORMAT, firstDifference } from './dump.js';
+import { STATE_DUMP_FORMAT, firstDifference, isStateDumpKind } from './dump.js';
 import type { LineDifference, StateDumpKind } from './dump.js';
 
 /*
@@ -27,10 +27,6 @@ const SECOND_IMPLEMENTATION_KINDS = {
 	supply: 'compared',
 	weight: 'compared'
 } as const satisfies Record<StateDumpKind, 'compared' | 'not modelled'>;
-
-function isStateDumpKind(kind: unknown): kind is StateDumpKind {
-	return(typeof kind === 'string' && Object.hasOwn(SECOND_IMPLEMENTATION_KINDS, kind));
-}
 
 function isComparedKind(kind: unknown): boolean {
 	return(isStateDumpKind(kind) && SECOND_IMPLEMENTATION_KINDS[kind] === 'compared');
