@@ -38,11 +38,11 @@ export const SHADOW_REFUSAL_REASONS = ['self-requirement-return', 'same-staple-g
 
 export type ShadowRefusalReason = typeof SHADOW_REFUSAL_REASONS[number];
 
-export type ShadowRefusal = { readonly code: ErrorCode; readonly message: string };
+export type LedgerRefusal = { readonly code: ErrorCode; readonly message: string };
 
 export type ShadowVote =
 	{ readonly outcome: 'voted'; readonly staple: VoteStaple; readonly vote: Vote } |
-	{ readonly outcome: 'refused'; readonly staple: VoteStaple; readonly refusal: ShadowRefusal };
+	{ readonly outcome: 'refused'; readonly staple: VoteStaple; readonly refusal: LedgerRefusal };
 
 export type ShadowVoter = {
 	/** A replay's hook: it runs with the clock frozen at the staple's timestamp, before the staple is added. */
@@ -55,7 +55,7 @@ export type ShadowVoter = {
  * The ledger's coded errors are its decisions. Anything else, including
  * the driver's wrapping of an error without a code, is a fault of the run.
  */
-function refusalOf(error: unknown): ShadowRefusal {
+export function refusalOf(error: unknown): LedgerRefusal {
 	if (lib.Error.isInstance(error) && error.code !== DRIVER_WRAPPING_CODE) {
 		return({ code: error.code, message: error.message });
 	}
@@ -128,7 +128,7 @@ function refusalMessageOf(requirement: Requirement): string {
 	return(`${keyOf(requirement.principal)} does not have required permissions to perform action on ${keyOf(requirement.entity)}/${keyOf(requirement.target)} -- needs [${flags}]/[${offsets}]`);
 }
 
-function refusedRequirement(blocks: readonly Block[], refusal: ShadowRefusal, anchors: NetworkAnchors): Requirement {
+function refusedRequirement(blocks: readonly Block[], refusal: LedgerRefusal, anchors: NetworkAnchors): Requirement {
 	const named = requirementsOf(blocks, anchors).filter(function(requirement): boolean {
 		return(refusalMessageOf(requirement) === refusal.message);
 	});
@@ -159,7 +159,7 @@ function isSend(operation: BlockOperations): operation is BlockOperationSEND {
  * principal and ACCESS the permissions unless the entry names its own.
  * [Keeta TS] index.js:68461-68492, 68620-68637
  */
-function sendRequirements(block: Block, operation: BlockOperationSEND): Requirement[] {
+export function sendRequirements(block: Block, operation: BlockOperationSEND): Requirement[] {
 	const access = new lib.Permissions(['ACCESS']);
 	const listed: Requirement[] = [
 		{ principal: block.account, entity: operation.token, permissions: access },
@@ -238,10 +238,12 @@ function grantedUnderOldScope(blocks: readonly Block[], refused: Requirement, an
 
 /*
  * The first staple opens the network address and the base token, and its
- * only vote is the trusted account's own, as upstream's genesis is built.
- * [Keeta TS] index.js:79675-79688
+ * only vote is the trusted account's own, as upstream's genesis vote is. The
+ * refused requirement is one of another account on either of them, since
+ * the trusted account's own on its opening blocks are never recorded.
+ * [Keeta TS] index.js:79675-79688, 68653-68661
  */
-function isTrustedAccountGenesis(staple: RefusedStaple, anchors: NetworkAnchors): boolean {
+function isTrustedAccountGenesis(staple: RefusedStaple, refused: Requirement, anchors: NetworkAnchors): boolean {
 	function opens(account: Account | GenericAccount): boolean {
 		return(staple.blocks.some(function(block): boolean {
 			return(block.$opening && block.account.comparePublicKey(account));
@@ -250,7 +252,9 @@ function isTrustedAccountGenesis(staple: RefusedStaple, anchors: NetworkAnchors)
 	const vouchedByTrustedAccountAlone = staple.votes.length > 0 && staple.votes.every(function(vote): boolean {
 		return(vote.issuer.comparePublicKey(anchors.initialTrustedAccount));
 	});
-	return(vouchedByTrustedAccountAlone && opens(anchors.networkAddress) && opens(anchors.baseToken));
+	const onGenesisAccount = refused.entity.comparePublicKey(anchors.baseToken) || refused.entity.comparePublicKey(anchors.networkAddress);
+	const ofAnotherAccount = !refused.principal.comparePublicKey(anchors.initialTrustedAccount);
+	return(vouchedByTrustedAccountAlone && opens(anchors.networkAddress) && opens(anchors.baseToken) && onGenesisAccount && ofAnotherAccount);
 }
 
 function explains(reason: ShadowRefusalReason, staple: RefusedStaple, refused: Requirement, anchors: NetworkAnchors): boolean {
@@ -260,14 +264,20 @@ function explains(reason: ShadowRefusalReason, staple: RefusedStaple, refused: R
 		case 'same-staple-grant-scope':
 			return(grantedUnderOldScope(staple.blocks, refused, anchors));
 		case 'trusted-account-genesis':
-			return(isTrustedAccountGenesis(staple, anchors));
+			return(isTrustedAccountGenesis(staple, refused, anchors));
 		default:
 			return(assertNever(reason));
 	}
 }
 
-/** The one reason that explains the refusal; any other outcome throws UnexplainedRefusal. */
-export function refusalReason(staple: RefusedStaple, refusal: ShadowRefusal, anchors: NetworkAnchors): ShadowRefusalReason {
+export type ExplainedRefusal = {
+	readonly reason: ShadowRefusalReason;
+	/** The requirement the refusal names, as the staple's effects record it. */
+	readonly requirement: Requirement;
+};
+
+/** The one reason that explains the refusal, with the requirement refused; any other outcome throws UnexplainedRefusal. */
+export function explainRefusal(staple: RefusedStaple, refusal: LedgerRefusal, anchors: NetworkAnchors): ExplainedRefusal {
 	if (refusal.code !== 'LEDGER_INVALID_PERMISSIONS') {
 		throw(new UnexplainedRefusal(`only a permission refusal is explained, not ${refusal.code}: ${refusal.message}`));
 	}
@@ -279,12 +289,11 @@ export function refusalReason(staple: RefusedStaple, refusal: ShadowRefusal, anc
 	if (reason === undefined || reasons.length !== 1) {
 		throw(new UnexplainedRefusal(`${String(reasons.length)} reasons explain the refusal: ${refusal.message}`));
 	}
-	return(reason);
+	return({ reason, requirement: refused });
 }
 
-export type ShadowVoteException = {
+export type ShadowVoteException = ExplainedRefusal & {
 	readonly blocksHash: string;
-	readonly reason: ShadowRefusalReason;
 	readonly code: ErrorCode;
 };
 
@@ -295,20 +304,38 @@ export function shadowVoteExceptions(votes: readonly ShadowVote[], anchors: Netw
 			case 'voted':
 				return([]);
 			case 'refused':
-				return([{ blocksHash: vote.staple.blocksHash.toString(), reason: refusalReason(vote.staple, vote.refusal, anchors), code: vote.refusal.code }]);
+				return([{ blocksHash: vote.staple.blocksHash.toString(), code: vote.refusal.code, ...explainRefusal(vote.staple, vote.refusal, anchors) }]);
 			default:
 				return(assertNever(vote));
 		}
 	}));
 }
 
-/** A JSON object from blocks hash to reason and code, in code-point order of the hashes. */
+type RenderedRequirement = {
+	readonly principal: string;
+	readonly entity: string;
+	readonly target?: string;
+	readonly base: readonly string[];
+	readonly external: readonly number[];
+};
+
+/** Its scope as account strings, a target only when it has one, and its flags by name and offset. */
+function renderRequirement({ principal, entity, target, permissions }: Requirement): RenderedRequirement {
+	const scope = { principal: principal.publicKeyString.get(), entity: entity.publicKeyString.get() };
+	const flags = { base: permissions.base.flags, external: permissions.external.trueOffsets };
+	if (target === undefined) {
+		return({ ...scope, ...flags });
+	}
+	return({ ...scope, target: target.publicKeyString.get(), ...flags });
+}
+
+/** A JSON object from blocks hash to reason, code and refused requirement, in code-point order of the hashes. */
 export function renderShadowVoteExceptions(exceptions: readonly ShadowVoteException[]): string {
 	const sorted = [...exceptions].sort(function(left, right): number {
 		return(compareText(left.blocksHash, right.blocksHash));
 	});
-	const byBlocksHash = Object.fromEntries(sorted.map(function({ blocksHash, reason, code }) {
-		return([blocksHash, { reason, code }]);
+	const byBlocksHash = Object.fromEntries(sorted.map(function({ blocksHash, reason, code, requirement }) {
+		return([blocksHash, { reason, code, requirement: renderRequirement(requirement) }]);
 	}));
 	return(`${JSON.stringify(byBlocksHash, null, 2)}\n`);
 }
