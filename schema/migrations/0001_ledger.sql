@@ -177,6 +177,8 @@ CREATE TABLE acls (
 
 CREATE INDEX acls_entity ON acls (entity_id);
 
+-- A certificate is kept after it expires; callers judge validity themselves
+-- [Keeta TS] index.js:69787-69810.
 CREATE TABLE certificates (
 	account_id bigint NOT NULL REFERENCES accounts (id),
 	hash hash32 NOT NULL,
@@ -213,3 +215,13 @@ CREATE TABLE deferred_waits (
 );
 
 CREATE INDEX deferred_waits_staple ON deferred_waits (blocks_hash);
+
+-- The previous of every block of a deferred staple: once any of them has a
+-- confirmed successor, the staple can never apply.
+CREATE TABLE deferred_blocks (
+	blocks_hash hash32 NOT NULL REFERENCES deferred_staples (blocks_hash) ON DELETE CASCADE,
+	previous hash32 NOT NULL,
+	PRIMARY KEY (blocks_hash, previous)
+);
+
+CREATE INDEX deferred_blocks_previous ON deferred_blocks (previous);

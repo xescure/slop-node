@@ -379,6 +379,7 @@ listACLsByPrincipal: (transaction: any, principal: ACLRow['principal'], entityLi
   - `confirmed.ts: "modify permissions: add, set, null deletes, entity-wide fallback"`
   - `confirmed.ts: "subtract to empty stores an empty row (entity-wide row does not re-apply)"`
   - `confirmed.ts: "an ACL granted to a certificate this node lacks is rejected"`
+  - `confirmed.ts: "a permission set built with a negative external set is stored as the confirmed block carries it"`
   - `genesis.ts: "genesis state reads back"`
   - the three cases in `canaries.ts`
 - **Upstream.** The permission check, which passes deduplicated entities [Keeta TS] index.js:69828-69880. `computeLedgerEffect`, which calls it once per principal, possibly with an empty entity list [Keeta TS] index.js:67241-67285.
@@ -398,6 +399,7 @@ listACLsByEntity: (transaction: any, entity: GenericAccount, options?: ListACLsB
   - `confirmed.ts: "set info merges defined keys only"`
   - `confirmed.ts: "an ACL granted to a certificate this node lacks is rejected"`
   - `confirmed.ts: "subtract to empty stores an empty row (entity-wide row does not re-apply)"`, which lists the empty row
+  - `confirmed.ts: "a permission set built with a negative external set is stored as the confirmed block carries it"`
 
 ### `adjust`
 
@@ -732,7 +734,7 @@ getAccountCertificates: (transaction: any, account: GenericAccount) => Promise<C
 - **Semantics.** Every certificate the account holds, whether or not it is currently valid, as `{ certificate, intermediates }` with `intermediates` `null` when none were given. Returns `[]` when there are none. Callers check validity themselves [Keeta TS] index.js:69787-69810.
 - **Selector.** Main only.
 - **Ordering.** Unspecified.
-- **Tested by** `confirmed.ts: "certificates add and remove"`.
+- **Tested by** `confirmed.ts: "certificates add and remove"` and `confirmed.ts: "an expired certificate is still read back"`.
 
 ### `getAccountCertificateByHash`
 
@@ -742,7 +744,7 @@ getAccountCertificateByHash: (transaction: any, account: GenericAccount, hash: C
 
 - **Semantics.** The certificate with this hash that the account holds, or `null`. A `null` answer during `adjust` makes `computeLedgerEffect` refuse an ACL granted to that certificate with `LEDGER_CERTIFICATE_NOT_FOUND` (D15) [Keeta TS] index.js:67233-67239, 67456-67460.
 - **Selector.** Main only.
-- **Tested by** `confirmed.ts: "certificates add and remove"` and `confirmed.ts: "an ACL granted to a certificate this node lacks is rejected"`.
+- **Tested by** `confirmed.ts: "certificates add and remove"`, `confirmed.ts: "an expired certificate is still read back"` and `confirmed.ts: "an ACL granted to a certificate this node lacks is rejected"`.
 
 ### `getIdempotentBlockHash`
 

@@ -312,6 +312,44 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			].sort(byTarget));
 		});
 
+		/*
+		 * Upstream's encoder rebuilds a permission set from its true offsets,
+		 * so a negative external set leaves a block as a positive one, and its
+		 * block decoder refuses bytes that differ from that re-encoding; only
+		 * the set the block carries can reach storage, and it reads back as
+		 * carried.
+		 * [Keeta TS] index.js:64673-64696, 74121-74155, 63964-63975
+		 */
+		test('a permission set built with a negative external set is stored as the confirmed block carries it', async function() {
+			const { network, ledger } = await startNetwork();
+			const entity = requireAt(network.users, 0);
+			const principal = requireAt(network.users, 1);
+			const cursor = new ChainCursor(network.genesis);
+			await ledger.add(network.genesis);
+			const negative = new lib.Permissions(['ACCESS'], -1n);
+			expect(negative.validate(network.network)).toBe(true);
+
+			await applyPermissionChanges(network, ledger, cursor, entity, [
+				{ principal, method: lib.Block.AdjustMethod.SET, permissions: negative }
+			]);
+
+			const [operation] = (await ledger.getHeadBlock(entity, 'main'))?.operations ?? [];
+			if (operation?.type !== lib.Block.OperationType.MODIFY_PERMISSIONS || operation.permissions === null) {
+				throw(new Error('the entity\'s head is not the permission change'));
+			}
+			const carried = operation.permissions;
+			expect(carried.toJSON()).toEqual(lib.Permissions.FromAcceptedTypes(negative).toJSON());
+			expect(carried.external.bigint).not.toBe(-1n);
+			const expected = [{
+				principal: principal.publicKeyString.get(),
+				entity: entity.publicKeyString.get(),
+				target: entity.publicKeyString.get(),
+				permissions: carried.toJSON()
+			}];
+			expect(await aclsOf(ledger, principal, entity)).toEqual(expected);
+			expect((await ledger.listACLsByEntity(entity)).map(summarizeACL)).toEqual(expected);
+		});
+
 		test('set info merges defined keys only', async function() {
 			const { network, ledger } = await startNetwork();
 			const owner = requireAt(network.users, 0);
@@ -374,6 +412,29 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(otherHolder).toBeNull();
 			expect(await ledger.getAccountCertificates(holder)).toEqual([]);
 			expect(await ledger.getAccountCertificateByHash(holder, hash)).toBeNull();
+		});
+
+		// Callers judge validity and skip an expired certificate themselves, so storage keeps returning it.
+		test('an expired certificate is still read back', async function() {
+			const { network, ledger } = await startNetwork();
+			const holder = requireAt(network.users, 0);
+			const cursor = new ChainCursor(network.genesis);
+			await ledger.add(network.genesis);
+			const certificate = await certificateFor(holder, 2);
+			const hash = certificate.hash();
+			await ledger.add(await confirmedStaple([cursor.append(await manageCertificateBlock({ account: holder, previous: cursor.previous(holder), network: network.network, method: lib.Block.AdjustMethod.ADD, certificateOrHash: certificate }))], network.representatives));
+
+			advanceClock(certificate.notAfter.getTime() - Date.now() + 1);
+			expect(certificate.checkValid()).toBe(false);
+
+			const listed = await ledger.getAccountCertificates(holder);
+			const found = await ledger.getAccountCertificateByHash(holder, hash);
+			expect(listed.map(function(entry): string {
+				return(entry.certificate.hash().toString());
+			})).toEqual([hash.toString()]);
+			expect(found?.certificate.hash().toString()).toBe(hash.toString());
+			expect(found?.certificate.checkValid()).toBe(false);
+			expect(found?.intermediates).toBeNull();
 		});
 
 		test('idempotent keys resolve on main', async function() {

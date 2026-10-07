@@ -6,73 +6,110 @@ import type { GetVotesAfterOptions, IdempotentKey, Ledger, LedgerConfig, LedgerS
 import type { ACLRow, ACLUpdate, AccountInfoForType, CertificateWithIntermediates, GetAllBalancesResponse } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
 import type { Vote, VoteBlockHash, VoteBlockHashMap, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import type pg from 'pg';
+import { LedgerInternals } from '../../../upstream/internals.js';
 import { assertNever } from '../../../util/assert-never.js';
 import { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
 import type { CollectedDeferredStaples, LedgerCountsSnapshot, TransactionOptions } from '../base.js';
 import type { AccountInfoUpdate, ConfirmedStapleChange } from '../confirmed.js';
 import { createIdempotentKeyError, createLedgerError } from '../errors.js';
 import { voteExpirySlopMilliseconds } from '../expiry.js';
-import { toAccountKey, toBlockHashKey } from '../keys.js';
+import { toAccountKey, toBlockHashKey, toIdempotentKeyString } from '../keys.js';
 import type { AccountKey, StapleKey } from '../keys.js';
 import type { AccountInfoRow } from '../memory/state.js';
-import { mapDatabaseError } from './errors.js';
-import { SCHEMA_MIGRATIONS, applyMigrations } from './migrations.js';
-import { PostgresPool } from './pool.js';
-import type { PostgresPoolSource } from './pool.js';
+import { DEFAULT_HISTORY_LIMIT, DEFAULT_VOTES_PER_PAGE, decodeCatchUpKey, encodeCatchUpKey } from '../paging.js';
 import {
+	accountHistory,
+	accountHistoryAfter,
 	accountInfoOf,
+	aclsOfEntity,
 	aclsOfPrincipal,
 	addBalances,
 	addCertificate,
 	addSupplies,
 	addWeights,
+	allHistory,
+	allHistoryAfter,
 	appendHistory,
 	balanceOf,
-	bytesOf,
-	deferredStaplesWaitingOn,
+	catchUpStaples,
+	catchUpStaplesAfter,
+	certificateOf,
+	certificatesOf,
 	deleteACL,
-	deleteDeferredStaple,
 	deleteSideIdempotentKeys,
-	deleteSideVotes,
-	fromInteger,
-	hashBytes,
 	headsOf,
 	insertChain,
 	insertMainBlocks,
 	insertMainIdempotentKeys,
 	insertMainVotes,
 	insertStaple,
-	internAccounts,
 	mainBlock,
 	mainBlockHeight,
 	mainBlocksOrSuccessors,
+	mainIdempotentHolder,
 	mainIdempotentKeys,
+	mainLedgerCounts,
+	mainStapleBlocks,
+	mainStapleVotes,
 	mainSuccessor,
+	mainSuccessorVotes,
 	mainVotesOfBlock,
 	markInvolved,
 	mergeAccountInfo,
-	nextSerial,
 	nonZeroBalances,
-	publicKeyOf,
 	raiseHeads,
 	removeCertificate,
 	representativeOf,
 	setACL,
 	setDelegations,
-	sideBlock,
-	sideSuccessor,
-	sideVotesOfBlock,
-	stapleKeyBytes,
-	toBlockHash,
-	toNumeric,
 	totalWeight,
 	weightOf
+} from './confirmed-statements.js';
+import type { ACLColumns, AccountInfoColumns, CatchUpStapleColumns, CertificateColumns } from './confirmed-statements.js';
+import { mapDatabaseError } from './errors.js';
+import { SCHEMA_MIGRATIONS, applyMigrations } from './migrations.js';
+import { PostgresPool } from './pool.js';
+import type { PostgresPoolSource } from './pool.js';
+import {
+	deadDeferredStaples,
+	deferredStaplesWaitingOn,
+	deleteDeferredStaples,
+	deleteSideVotes,
+	deleteUncoveredSideBlocks,
+	deleteUncoveredSideIdempotentKeys,
+	insertDeferredBlocks,
+	insertDeferredStaple,
+	insertDeferredWaits,
+	insertSideBlocks,
+	insertSideIdempotentKeys,
+	insertSideVote,
+	insertVoteBlocks,
+	obsoleteSideVotes,
+	releasedDeferredStaples,
+	removeSideVotes,
+	sideBlock,
+	sideIdempotentHolder,
+	sideStapleVotes,
+	sideSuccessor,
+	sideVoteBlocks,
+	sideVotesOfBlock,
+	sideVotesOfPrevious
+} from './side-statements.js';
+import type { DeferredStapleColumns } from './side-statements.js';
+import {
+	bytesOf,
+	fromInteger,
+	hashBytes,
+	internAccounts,
+	nextSerial,
+	publicKeyOf,
+	stapleKeyBytes,
+	toBlockHash,
+	toNumeric
 } from './sql.js';
 import type {
 	AccountID,
 	AccountIDs,
-	AccountInfoColumns,
-	ACLColumns,
 	IntegerText,
 	SQLValue,
 	Statement,
@@ -80,6 +117,8 @@ import type {
 } from './sql.js';
 
 const lib = KeetaNet.lib;
+
+type CertificateBundle = InstanceType<typeof lib.Utils.Certificate.CertificateBundle>;
 
 type Outcome = 'committed' | 'aborted' | 'failed';
 
@@ -460,8 +499,133 @@ function infoParameters(update: AccountInfoUpdate): [string | null, string | nul
 	return([textOrNull(update.name), textOrNull(update.description), textOrNull(update.metadata), base, external, quorum, update.multisigQuorum !== undefined]);
 }
 
-function notYetImplemented(member: string, task: 'Task 3' | 'Task 4'): Promise<never> {
-	return(Promise.reject(new Error(`PostgresLedgerStorage.${member} is not implemented yet (${task})`)));
+function hexOf(bytes: Buffer): string {
+	return(bytes.toString('hex'));
+}
+
+function groupBy<Row>(rows: readonly Row[], keyOf: (row: Row) => string): Map<string, Row[]> {
+	const groups = new Map<string, Row[]>();
+	for (const row of rows) {
+		const key = keyOf(row);
+		const group = groups.get(key);
+		if (group === undefined) {
+			groups.set(key, [row]);
+		} else {
+			group.push(row);
+		}
+	}
+	return(groups);
+}
+
+/** Decoded votes keyed by the previous whose successor they cover; a previous with none is absent. */
+function votesByPrevious(rows: readonly (VoteColumns & { previous: Buffer })[]): Map<string, Vote[]> {
+	const votes = new Map<string, Vote[]>();
+	for (const [previous, group] of groupBy(rows, function(row) {
+		return(hexOf(row.previous));
+	})) {
+		votes.set(previous, group.map(decodeVote));
+	}
+	return(votes);
+}
+
+function holderOf(rows: readonly { block_hash: Buffer }[]): BlockHash | null {
+	const row = onlyRow(rows);
+	if (row === undefined) {
+		return(null);
+	}
+	return(toBlockHash(row.block_hash));
+}
+
+async function mainStaples(transaction: PostgresTransaction, keys: Buffer[]): Promise<Map<string, VoteStaple>> {
+	const blocksByStaple = groupBy(await transaction.run(mainStapleBlocks, [keys]), function(row) {
+		return(hexOf(row.staple));
+	});
+	const votesByStaple = groupBy(await transaction.run(mainStapleVotes, [keys]), function(row) {
+		return(hexOf(row.blocks_hash));
+	});
+	const staples = new Map<string, VoteStaple>();
+	for (const [key, blockRows] of blocksByStaple) {
+		const voteRows = votesByStaple.get(key);
+		if (voteRows === undefined) {
+			throw(new Error(`storage integrity error: confirmed staple ${key} has no votes`));
+		}
+		staples.set(key, lib.Vote.Staple.fromVotesAndBlocks(voteRows.map(decodeVote), blockRows.map(function(row) {
+			return(decodeBlock(row.bytes));
+		})));
+	}
+	return(staples);
+}
+
+/*
+ * A staple holds votes of one permanence only, so permanent votes, when
+ * there are any, are preferred over temporary ones for the same blocks; the
+ * blocks are those stored with the first of the chosen votes.
+ * [Keeta TS] index.js:80795-80827
+ */
+async function sideStaples(transaction: PostgresTransaction, keys: Buffer[]): Promise<Map<string, VoteStaple>> {
+	const votesByStaple = groupBy(await transaction.run(sideStapleVotes, [keys, unexpiredSince(transaction.moment)]), function(row) {
+		return(hexOf(row.blocks_hash));
+	});
+	const chosenByStaple = new Map<string, { readonly first: IntegerText; readonly votes: Vote[] }>();
+	for (const [key, rows] of votesByStaple) {
+		let chosen = rows.filter(function(row): boolean {
+			return(row.permanent);
+		});
+		if (chosen.length === 0) {
+			chosen = rows;
+		}
+		const [first] = chosen;
+		if (first === undefined) {
+			throw(new Error('internal error: a group of votes is empty'));
+		}
+		chosenByStaple.set(key, { first: first.id, votes: chosen.map(decodeVote) });
+	}
+	const blocksByVote = groupBy(await transaction.run(sideVoteBlocks, [Array.from(chosenByStaple.values(), function({ first }) {
+		return(first);
+	})]), function(row) {
+		return(row.vote_id);
+	});
+	const staples = new Map<string, VoteStaple>();
+	for (const [key, { first, votes }] of chosenByStaple) {
+		const blockRows = blocksByVote.get(first);
+		if (blockRows === undefined) {
+			throw(new Error(`storage integrity error: side vote ${first} covers no blocks`));
+		}
+		staples.set(key, lib.Vote.Staple.fromVotesAndBlocks(votes, blockRows.map(function(row) {
+			return(decodeBlock(row.bytes));
+		})));
+	}
+	return(staples);
+}
+
+/*
+ * Decoding a certificate never checks its validity period, so an expired
+ * certificate reads back like any other; callers judge validity themselves.
+ * [Keeta TS] index.js:77640-77656, 69787-69810
+ */
+function toCertificateWithIntermediates(row: CertificateColumns): CertificateWithIntermediates {
+	let intermediates: CertificateBundle | null = null;
+	if (row.intermediates !== null) {
+		intermediates = new lib.Utils.Certificate.CertificateBundle(row.intermediates);
+	}
+	return({ certificate: new lib.Utils.Certificate.Certificate(row.certificate), intermediates });
+}
+
+function idempotentKeyBytes(key: IdempotentKey): Buffer {
+	return(Buffer.from(toIdempotentKeyString(key), 'hex'));
+}
+
+/** Every vote of a staple is valid at the latest validityFrom among them. */
+function latestValidityFrom(staple: VoteStaple): Date {
+	let latest = 0;
+	for (const vote of staple.votes) {
+		latest = Math.max(latest, vote.validityFrom.getTime());
+	}
+	return(new Date(latest));
+}
+
+function decodeDeferredStaple(row: DeferredStapleColumns): VoteStaple {
+	return(new lib.Vote.Staple(row.bytes, { now: row.latest_vote_from }));
 }
 
 /**
@@ -685,48 +849,275 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 		return(await fromSelected(from, readMain, readSide));
 	}
 
-	getVotesFromMultiplePrevious(_transaction: PostgresTransaction, _previousBlocks: BlockHash[], _from: LedgerSelector, _issuer?: Account): Promise<{ [hash: string]: Vote[] | null }> {
-		return(notYetImplemented('getVotesFromMultiplePrevious', 'Task 3'));
+	/*
+	 * Voting reads this under 'both' with its own key as the issuer, and may
+	 * replace only a single unexpired temporary vote of its own; an expired
+	 * vote left in the answer would block the account until it is collected.
+	 * [Keeta TS] index.js:69281-69306
+	 */
+	async getVotesFromMultiplePrevious(transaction: PostgresTransaction, previousBlocks: BlockHash[], from: LedgerSelector, issuer?: Account): Promise<{ [hash: string]: Vote[] | null }> {
+		let issuerKey: string | null = null;
+		if (issuer !== undefined) {
+			issuerKey = publicKeyOf(issuer);
+		}
+		const found = await fromSelectedEach(from, previousBlocks.map(hashBytes), async function(keys) {
+			return(votesByPrevious(await transaction.run(mainSuccessorVotes, [keys, issuerKey])));
+		}, async function(keys) {
+			return(votesByPrevious(await transaction.run(sideVotesOfPrevious, [keys, unexpiredSince(transaction.moment), issuerKey])));
+		});
+		const votes: { [hash: string]: Vote[] | null } = {};
+		for (const previous of previousBlocks) {
+			votes[toBlockHashKey(previous)] = found.get(hexOf(hashBytes(previous))) ?? null;
+		}
+		return(votes);
 	}
 
-	getVoteStaples(_transaction: PostgresTransaction, _voteBlockHashes: VoteBlockHash[], _from: LedgerSelector): Promise<VoteBlockHashMap<VoteStaple | null>> {
-		return(notYetImplemented('getVoteStaples', 'Task 3'));
+	/*
+	 * Staples are identified by the hash of their blocks, and every requested
+	 * hash gets an entry: upstream reads each one back and treats a missing
+	 * entry as an internal error.
+	 * [Keeta TS] index.js:69512-69548
+	 */
+	async getVoteStaples(transaction: PostgresTransaction, voteBlockHashes: VoteBlockHash[], from: LedgerSelector): Promise<VoteBlockHashMap<VoteStaple | null>> {
+		const found = await fromSelectedEach(from, voteBlockHashes.map(hashBytes), async function(keys) {
+			return(await mainStaples(transaction, keys));
+		}, async function(keys) {
+			return(await sideStaples(transaction, keys));
+		});
+		const staples = new lib.Vote.VoteBlocksHash.Map<VoteStaple | null>();
+		for (const voteBlockHash of voteBlockHashes) {
+			staples.set(voteBlockHash, found.get(hexOf(hashBytes(voteBlockHash))) ?? null);
+		}
+		return(staples);
 	}
 
-	getHistory(_transaction: PostgresTransaction, _account: GenericAccount | null, _start: VoteBlockHash | null, _limit?: number): Promise<VoteBlockHash[]> {
-		return(notYetImplemented('getHistory', 'Task 3'));
+	/*
+	 * Newest first by (staple time, blocks hash). The start is exclusive, so a
+	 * caller can pass the last staple of one page to get the next; a start
+	 * outside the listed history has no position and gives nothing (D8).
+	 * [Keeta TS] index.js:69532-69548, 58992-58994, 81070-81096
+	 */
+	async getHistory(transaction: PostgresTransaction, account: GenericAccount | null, start: VoteBlockHash | null, limit: number = DEFAULT_HISTORY_LIMIT): Promise<VoteBlockHash[]> {
+		let rows: { blocks_hash: Buffer }[];
+		if (account === null) {
+			if (start === null) {
+				rows = await transaction.run(allHistory, [limit]);
+			} else {
+				rows = await transaction.run(allHistoryAfter, [hashBytes(start), limit]);
+			}
+		} else if (start === null) {
+			rows = await transaction.run(accountHistory, [publicKeyOf(account), limit]);
+		} else {
+			rows = await transaction.run(accountHistoryAfter, [publicKeyOf(account), hashBytes(start), limit]);
+		}
+		return(rows.map(function(row): VoteBlockHash {
+			return(new lib.Vote.VoteBlocksHash(row.blocks_hash));
+		}));
 	}
 
-	getVotesAfter(_transaction: PostgresTransaction, _moment: Date, _startKey?: string, _options?: GetVotesAfterOptions): Promise<PaginatedVotes> {
-		return(notYetImplemented('getVotesAfter', 'Task 3'));
+	/*
+	 * Pages end only between staples, so a staple whose votes straddle a page
+	 * is never returned twice; a page therefore holds at least one whole
+	 * staple even when that exceeds the page size. The key is omitted on the
+	 * last page, because the caller stops only when it is undefined. Every
+	 * staple holds a vote, so a page takes at most as many staples as votes,
+	 * and one staple more shows whether any remain.
+	 * [Keeta TS] index.js:69633-69702
+	 */
+	async getVotesAfter(transaction: PostgresTransaction, moment: Date, startKey?: string, options?: GetVotesAfterOptions): Promise<PaginatedVotes> {
+		const maximumVotes = options?.maxVotesPerPage ?? DEFAULT_VOTES_PER_PAGE;
+		const candidates = Math.max(maximumVotes, 1) + 1;
+		let rows: CatchUpStapleColumns[];
+		if (startKey === undefined) {
+			rows = await transaction.run(catchUpStaples, [moment, candidates]);
+		} else {
+			const resumeAfter = decodeCatchUpKey(startKey);
+			rows = await transaction.run(catchUpStaplesAfter, [moment, resumeAfter.moment, resumeAfter.sequence.toString(), candidates]);
+		}
+		const taken: CatchUpStapleColumns[] = [];
+		let voteCount = 0;
+		for (const row of rows) {
+			if (taken.length > 0 && voteCount >= maximumVotes) {
+				break;
+			}
+			taken.push(row);
+			voteCount += Number(fromInteger(row.vote_count));
+		}
+		const votesByStaple = groupBy(await transaction.run(mainStapleVotes, [taken.map(function(row) {
+			return(row.blocks_hash);
+		})]), function(row) {
+			return(hexOf(row.blocks_hash));
+		});
+		const votes: Vote[] = [];
+		for (const row of taken) {
+			votes.push(...(votesByStaple.get(hexOf(row.blocks_hash)) ?? []).map(decodeVote));
+		}
+		const page: PaginatedVotes = { votes };
+		const last = taken.at(-1);
+		if (last !== undefined && taken.length < rows.length) {
+			page.nextKey = encodeCatchUpKey({ moment: last.moment, sequence: fromInteger(last.sequence) });
+		}
+		return(page);
 	}
 
-	getIdempotentBlockHash(_transaction: PostgresTransaction, _idempotent: IdempotentKey, _from: LedgerSelector, _excludeBlockHash?: BlockHash): Promise<BlockHash | null> {
-		return(notYetImplemented('getIdempotentBlockHash', 'Task 3'));
+	/*
+	 * The holder of a key other than the block the caller asked to exclude:
+	 * voting excludes the block it is voting on, so a permanent vote can
+	 * follow the temporary vote that put the key on the side ledger (D12).
+	 * [Keeta TS] index.js:69254-69259, 69711-69716
+	 */
+	async getIdempotentBlockHash(transaction: PostgresTransaction, idempotent: IdempotentKey, from: LedgerSelector, excludeBlockHash?: BlockHash): Promise<BlockHash | null> {
+		const key = idempotentKeyBytes(idempotent);
+		let excluded: Buffer | null = null;
+		if (excludeBlockHash !== undefined) {
+			excluded = hashBytes(excludeBlockHash);
+		}
+		async function readMain(): Promise<BlockHash | null> {
+			return(holderOf(await transaction.run(mainIdempotentHolder, [key, excluded])));
+		}
+		async function readSide(): Promise<BlockHash | null> {
+			return(holderOf(await transaction.run(sideIdempotentHolder, [key, unexpiredSince(transaction.moment), excluded])));
+		}
+		return(await fromSelected(from, readMain, readSide));
 	}
 
-	listOwners(_transaction: PostgresTransaction, _identifier: IdentifierAddress, _target?: GenericAccount): Promise<GenericAccount[]> {
-		return(notYetImplemented('listOwners', 'Task 3'));
+	/*
+	 * Distinct accounts holding OWNER on the identifier: the ledger requires
+	 * exactly one owner to remain, so a principal listed twice would refuse a
+	 * valid staple. Certificates cannot own an identifier.
+	 * [Keeta TS] index.js:70046-70078
+	 */
+	async listOwners(transaction: PostgresTransaction, identifier: IdentifierAddress, target?: GenericAccount): Promise<GenericAccount[]> {
+		const owners = new Map<string, GenericAccount>();
+		for (const row of await transaction.run(aclsOfEntity, [publicKeyOf(identifier), false])) {
+			if (target !== undefined && row.target !== publicKeyOf(target)) {
+				continue;
+			}
+			if (!permissionsOf(row.base_permissions, row.external_permissions).has(['OWNER'])) {
+				continue;
+			}
+			owners.set(row.principal, lib.Account.fromPublicKeyString(row.principal));
+		}
+		return(Array.from(owners.values()));
 	}
 
-	listACLsByEntity(_transaction: PostgresTransaction, _entity: GenericAccount, _options?: ListACLsByEntityFilters): Promise<ACLRow[]> {
-		return(notYetImplemented('listACLsByEntity', 'Task 3'));
+	/*
+	 * The principal-type filter must be honoured: the certificate check throws
+	 * on a row of the wrong type.
+	 * [Keeta TS] index.js:69771-69779
+	 */
+	async listACLsByEntity(transaction: PostgresTransaction, entity: GenericAccount, options?: ListACLsByEntityFilters): Promise<ACLRow[]> {
+		let certificatePrincipals: boolean | null = null;
+		const principalType = options?.principalType;
+		switch (principalType) {
+			case undefined:
+				break;
+			case 'ACCOUNT':
+				certificatePrincipals = false;
+				break;
+			case 'CERTIFICATE':
+				certificatePrincipals = true;
+				break;
+			default:
+				assertNever(principalType);
+		}
+		return((await transaction.run(aclsOfEntity, [publicKeyOf(entity), certificatePrincipals])).map(toACLRow));
 	}
 
-	getAccountCertificates(_transaction: PostgresTransaction, _account: GenericAccount): Promise<CertificateWithIntermediates[]> {
-		return(notYetImplemented('getAccountCertificates', 'Task 3'));
+	async getAccountCertificates(transaction: PostgresTransaction, account: GenericAccount): Promise<CertificateWithIntermediates[]> {
+		return((await transaction.run(certificatesOf, [publicKeyOf(account)])).map(toCertificateWithIntermediates));
 	}
 
-	getAccountCertificateByHash(_transaction: PostgresTransaction, _account: GenericAccount, _hash: Parameters<LedgerStorageAPI['getAccountCertificateByHash']>[2]): Promise<CertificateWithIntermediates | null> {
-		return(notYetImplemented('getAccountCertificateByHash', 'Task 3'));
+	async getAccountCertificateByHash(transaction: PostgresTransaction, account: GenericAccount, hash: Parameters<LedgerStorageAPI['getAccountCertificateByHash']>[2]): Promise<CertificateWithIntermediates | null> {
+		const row = onlyRow(await transaction.run(certificateOf, [publicKeyOf(account), hashBytes(hash)]));
+		if (row === undefined) {
+			return(null);
+		}
+		return(toCertificateWithIntermediates(row));
 	}
 
-	addPendingVote(_transaction: PostgresTransaction, _staple: VoteStaple): Promise<void> {
-		return(notYetImplemented('addPendingVote', 'Task 4'));
+	/*
+	 * Voting stores each vote it issues here, a temporary vote and later the
+	 * permanent one for the same blocks plus a fee block; the permanent vote
+	 * is added beside the temporary vote, which stays until it expires. A
+	 * stored vote with the same identity is replaced. The vote lands with its
+	 * block list, its side copies and their side claims, or not at all.
+	 * [Keeta TS] index.js:69310-69316, 69342-69354
+	 */
+	async addPendingVote(transaction: PostgresTransaction, staple: VoteStaple): Promise<void> {
+		await transaction.isolate(async () => {
+			const { blocks, votes } = staple;
+			const named = new Map<string, AccountKeyAlgorithm>();
+			for (const account of [...blocks.map(function(block) {
+				return(block.account);
+			}), ...votes.map(function(vote) {
+				return(vote.issuer);
+			})]) {
+				named.set(publicKeyOf(account), account.keyType);
+			}
+			const ids = await this.#intern(transaction, named);
+			const hashes = blocks.map(function(block) {
+				return(hashBytes(block.hash));
+			});
+			await transaction.run(insertSideBlocks, [
+				hashes,
+				blocks.map(function(block) {
+					return(idOf(ids, block.account));
+				}),
+				blocks.map(function(block) {
+					return(hashBytes(block.previous));
+				}),
+				blocks.map(function(block) {
+					return(block.operations.length);
+				}),
+				blocks.map(function(block) {
+					return(bytesOf(block.toBytes()));
+				})
+			]);
+			const claims: { key: Buffer; block: Buffer }[] = [];
+			for (const block of blocks) {
+				if (block.idempotent !== undefined) {
+					claims.push({ key: idempotentKeyBytes(LedgerInternals.IdempotentKey.fromAccountAndIdempotent(block.account, block.idempotent)), block: hashBytes(block.hash) });
+				}
+			}
+			await transaction.run(insertSideIdempotentKeys, [claims.map(function({ key }) {
+				return(key);
+			}), claims.map(function({ block }) {
+				return(block);
+			})]);
+			for (const vote of votes) {
+				await transaction.run(deleteSideVotes, [[vote.$uid]]);
+				const inserted = onlyRow(await transaction.run(insertSideVote, [vote.$uid, hashBytes(vote.blocksHash), idOf(ids, vote.issuer), vote.validityFrom, vote.validityTo, vote.$permanent, bytesOf(vote.toBytes())]));
+				if (inserted === undefined) {
+					throw(new Error(`internal error: side vote ${vote.$uid} was not stored`));
+				}
+				await transaction.run(insertVoteBlocks, [inserted.id, hashes]);
+			}
+		});
 	}
 
-	protected countLedger(): Promise<LedgerCountsSnapshot> {
-		return(notYetImplemented('countLedger', 'Task 3'));
+	/*
+	 * One statement reads one snapshot of the committed main ledger, taken at
+	 * some point while it ran; the moment is the middle of that span, and the
+	 * range covers both ends.
+	 */
+	protected async countLedger(): Promise<LedgerCountsSnapshot> {
+		const { pool } = await this.#connection();
+		const sent = Date.now();
+		const result = await pool.query<{ block_count: IntegerText; transaction_count: IntegerText; representative_count: IntegerText }>({ name: mainLedgerCounts.name, text: mainLedgerCounts.text });
+		const received = Date.now();
+		const row = onlyRow(result.rows);
+		if (row === undefined) {
+			throw(new Error('internal error: the ledger counts returned no row'));
+		}
+		const momentRange = Math.ceil((received - sent) / 2);
+		return({
+			moment: new Date(received - momentRange),
+			momentRange,
+			blockCount: Number(fromInteger(row.block_count)),
+			transactionCount: Number(fromInteger(row.transaction_count)),
+			representativeCount: Number(fromInteger(row.representative_count))
+		});
 	}
 
 	/*
@@ -753,31 +1144,60 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 		});
 	}
 
-	protected storeDeferredStaple(_transaction: PostgresTransaction, _staple: VoteStaple, _waitingOn: readonly BlockHash[]): Promise<void> {
-		return(notYetImplemented('storeDeferredStaple', 'Task 4'));
+	/*
+	 * Replaces an earlier copy. Several staples may wait on one block, so a
+	 * wait is keyed by the pair (D13). The previous of each block is kept for
+	 * the dead-staple check.
+	 */
+	protected async storeDeferredStaple(transaction: PostgresTransaction, staple: VoteStaple, waitingOn: readonly BlockHash[]): Promise<void> {
+		const key = hashBytes(staple.blocksHash);
+		await transaction.run(deleteDeferredStaples, [[key]]);
+		await transaction.run(insertDeferredStaple, [key, bytesOf(staple.toBytes()), latestValidityFrom(staple)]);
+		await transaction.run(insertDeferredWaits, [key, waitingOn.map(hashBytes)]);
+		await transaction.run(insertDeferredBlocks, [key, staple.blocks.map(function(block) {
+			return(hashBytes(block.previous));
+		})]);
 	}
 
 	protected async listDeferredStaplesWaitingOn(transaction: PostgresTransaction, blockHashes: readonly BlockHash[]): Promise<readonly VoteStaple[]> {
-		const rows = await transaction.run(deferredStaplesWaitingOn, [blockHashes.map(hashBytes)]);
-		return(rows.map(function(row): VoteStaple {
-			return(new lib.Vote.Staple(row.bytes, { now: row.latest_vote_from }));
-		}));
+		return((await transaction.run(deferredStaplesWaitingOn, [blockHashes.map(hashBytes)])).map(decodeDeferredStaple));
 	}
 
 	protected async removeDeferredStaple(transaction: PostgresTransaction, blocksHash: StapleKey): Promise<void> {
-		await transaction.run(deleteDeferredStaple, [stapleKeyBytes(blocksHash)]);
+		await transaction.run(deleteDeferredStaples, [[stapleKeyBytes(blocksHash)]]);
 	}
 
-	protected collectDeadDeferredStaples(_transaction: PostgresTransaction, _limit: number): Promise<CollectedDeferredStaples> {
-		return(notYetImplemented('collectDeadDeferredStaples', 'Task 4'));
+	protected async collectDeadDeferredStaples(transaction: PostgresTransaction, limit: number): Promise<CollectedDeferredStaples> {
+		const dead = await transaction.run(deadDeferredStaples, [limit + 1]);
+		const collected = dead.slice(0, limit);
+		await transaction.run(deleteDeferredStaples, [collected.map(function(row) {
+			return(row.blocks_hash);
+		})]);
+		return({ collected: collected.map(decodeDeferredStaple), more: dead.length > limit });
 	}
 
-	protected listReleasedDeferredStaples(_transaction: PostgresTransaction, _limit: number, _exclude: ReadonlySet<StapleKey>): Promise<readonly VoteStaple[]> {
-		return(notYetImplemented('listReleasedDeferredStaples', 'Task 4'));
+	protected async listReleasedDeferredStaples(transaction: PostgresTransaction, limit: number, exclude: ReadonlySet<StapleKey>): Promise<readonly VoteStaple[]> {
+		return((await transaction.run(releasedDeferredStaples, [limit, Array.from(exclude, stapleKeyBytes)])).map(decodeDeferredStaple));
 	}
 
-	protected collectObsoleteSideVotes(_transaction: PostgresTransaction, _limit: number): Promise<boolean> {
-		return(notYetImplemented('collectObsoleteSideVotes', 'Task 4'));
+	/*
+	 * Removes the obsolete votes, then the side copies and side claims of the
+	 * blocks they covered that no remaining side vote covers. Main rows are
+	 * never touched (D20).
+	 */
+	protected async collectObsoleteSideVotes(transaction: PostgresTransaction, limit: number): Promise<boolean> {
+		const obsolete = await transaction.run(obsoleteSideVotes, [unexpiredSince(transaction.moment), limit + 1]);
+		const collected = obsolete.slice(0, limit).map(function(row) {
+			return(row.id);
+		});
+		if (collected.length > 0) {
+			const covered = (await transaction.run(removeSideVotes, [collected])).map(function(row) {
+				return(row.block_hash);
+			});
+			await transaction.run(deleteUncoveredSideIdempotentKeys, [covered]);
+			await transaction.run(deleteUncoveredSideBlocks, [covered]);
+		}
+		return(obsolete.length > limit);
 	}
 
 	#connection(): Promise<PostgresPool> {
@@ -1122,6 +1542,33 @@ async function fromSelected<Result>(from: LedgerSelector, readMain: () => Promis
 			return(await readSide());
 		case 'both':
 			return(await readMain() ?? await readSide());
+		default:
+			return(assertNever(from));
+	}
+}
+
+/*
+ * The selector for each key on its own: under 'both' the side ledger is read
+ * only for the keys the main ledger has no answer for (D7).
+ */
+async function fromSelectedEach<Result>(from: LedgerSelector, keys: Buffer[], readMain: (keys: Buffer[]) => Promise<Map<string, Result>>, readSide: (keys: Buffer[]) => Promise<Map<string, Result>>): Promise<Map<string, Result>> {
+	switch (from) {
+		case 'main':
+			return(await readMain(keys));
+		case 'side':
+			return(await readSide(keys));
+		case 'both': {
+			const found = await readMain(keys);
+			const unanswered = keys.filter(function(key): boolean {
+				return(!found.has(hexOf(key)));
+			});
+			if (unanswered.length > 0) {
+				for (const [key, result] of await readSide(unanswered)) {
+					found.set(key, result);
+				}
+			}
+			return(found);
+		}
 		default:
 			return(assertNever(from));
 	}

@@ -22,18 +22,12 @@ import {
 	toVoteKey
 } from '../keys.js';
 import type { AccountKey, BlockHashKey, IdempotentKeyString, StapleKey, VoteKey } from '../keys.js';
+import { DEFAULT_HISTORY_LIMIT, DEFAULT_VOTES_PER_PAGE, compareCatchUpPositions, decodeCatchUpKey, encodeCatchUpKey } from '../paging.js';
+import type { CatchUpPosition } from '../paging.js';
 import { commitOverlay, createCommittedLedger, openOverlay } from './state.js';
 import type { AccountInfoRow, BalanceRow, CommittedLedger, LedgerOverlay, SideVoteRow, StapleRow, TableOverlay } from './state.js';
 
 const lib = KeetaNet.lib;
-
-// Upstream's own default for the number of history entries per request.
-// [Keeta TS] index.js:69532
-const DEFAULT_HISTORY_LIMIT = 25;
-
-// The largest page upstream's only caller ever asks for.
-// [Keeta TS] index.js:69650-69658
-const DEFAULT_VOTES_PER_PAGE = 200;
 
 type Release = () => void;
 
@@ -184,42 +178,6 @@ function compareHistoryOrder(left: HistoryOrder, right: HistoryOrder): number {
 		return(byStapleTime);
 	}
 	return(left.blocksHash.getBuffer().compare(right.blocksHash.getBuffer()));
-}
-
-/** Where a staple sits in the order it entered this node's main ledger. */
-type ConfirmationOrder = Pick<StapleRow, 'moment' | 'sequence'>;
-
-/*
- * The moment the staple was confirmed here, with the node-local sequence
- * breaking ties between staples confirmed at the same moment.
- */
-function compareConfirmationOrder(left: ConfirmationOrder, right: ConfirmationOrder): number {
-	const byMoment = left.moment.getTime() - right.moment.getTime();
-	if (byMoment !== 0) {
-		return(byMoment);
-	}
-	if (left.sequence < right.sequence) {
-		return(-1);
-	}
-	if (left.sequence > right.sequence) {
-		return(1);
-	}
-	return(0);
-}
-
-function encodeVotesAfterKey(order: ConfirmationOrder): string {
-	return(`${String(order.moment.getTime())}:${order.sequence.toString()}`);
-}
-
-/** Keys come only from earlier pages of the same read, so a malformed one is a caller bug. */
-function decodeVotesAfterKey(key: string): ConfirmationOrder {
-	const match = /^(\d+):(\d+)$/u.exec(key);
-	const moment = match?.[1];
-	const sequence = match?.[2];
-	if (moment === undefined || sequence === undefined) {
-		throw(new Error(`invalid getVotesAfter key: ${key}`));
-	}
-	return({ moment: new Date(Number(moment)), sequence: BigInt(sequence) });
 }
 
 function rowsOfEntity(overlay: LedgerOverlay, entity: GenericAccount): ACLRow[] {
@@ -614,15 +572,15 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	async getVotesAfter(transaction: MemoryTransaction, moment: Date, startKey?: string, options?: GetVotesAfterOptions): Promise<PaginatedVotes> {
 		const overlay = await transaction.view();
 		const maximumVotes = options?.maxVotesPerPage ?? DEFAULT_VOTES_PER_PAGE;
-		let resumeAfter: ConfirmationOrder | undefined;
+		let resumeAfter: CatchUpPosition | undefined;
 		if (startKey !== undefined) {
-			resumeAfter = decodeVotesAfterKey(startKey);
+			resumeAfter = decodeCatchUpKey(startKey);
 		}
 		const remaining = this.#confirmedStaplesInOrder(overlay).filter(function(row): boolean {
 			if (row.moment.getTime() < moment.getTime()) {
 				return(false);
 			}
-			return(resumeAfter === undefined || compareConfirmationOrder(row, resumeAfter) > 0);
+			return(resumeAfter === undefined || compareCatchUpPositions(row, resumeAfter) > 0);
 		});
 		const votes: Vote[] = [];
 		let last: StapleRow | undefined;
@@ -637,7 +595,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		}
 		const page: PaginatedVotes = { votes };
 		if (last !== undefined && taken < remaining.length) {
-			page.nextKey = encodeVotesAfterKey(last);
+			page.nextKey = encodeCatchUpKey(last);
 		}
 		return(page);
 	}
@@ -1036,7 +994,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	}
 
 	#confirmedStaplesInOrder(overlay: LedgerOverlay): StapleRow[] {
-		return(this.#confirmedStaples(overlay).sort(compareConfirmationOrder));
+		return(this.#confirmedStaples(overlay).sort(compareCatchUpPositions));
 	}
 
 	#headBlock(overlay: LedgerOverlay, account: AccountKey, from: LedgerSelector): Block | null {
