@@ -1,6 +1,7 @@
 import { afterEach, inject } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account } from '@keetanetwork/keetanet-client/lib/account.js';
+import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { getConfigFromEnv, localNodeConfig, publicOnly } from '../node/config.js';
 import type { Environment, EnvironmentConfig } from '../node/config.js';
 import { LocalNode } from '../node/local.js';
@@ -26,6 +27,19 @@ export const TRUSTED_SIGNER: Account = keys.trustedSigner;
 
 /** The representative a node of NODE_ENVIRONMENT votes as. */
 export const REPRESENTATIVE: Account = publicOnly(lib.Account.fromSeed(TEST_NETWORK_SEEDS.representative, 0));
+
+/** The base token supply the SDK tests create, in base units. */
+export const SUPPLY = 1_000_000n;
+
+/** An account the SDK tests send to, from a fixed seed. */
+export const RECEIVER: Account = lib.Account.fromSeed('7d3c1e5a9b2f4068a1c3e5f7092b4d6f8a0c2e4f6081a3c5e7f9b1d3f5a7c9e1', 0);
+
+/** The blocks hashes of the staples a history lists, newest first as the API answers. */
+export function stapleHashes(entries: readonly { readonly voteStaple: VoteStaple }[]): string[] {
+	return(entries.map(function({ voteStaple }): string {
+		return(voteStaple.blocksHash.toString());
+	}));
+}
 
 /** A local representative trusting the test root, in memory, on the loopback interface at any free port. */
 export const NODE_ENVIRONMENT: Environment = {

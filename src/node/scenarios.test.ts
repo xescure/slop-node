@@ -2,16 +2,13 @@ import { describe, expect, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
-import { REPRESENTATIVE, STORAGES_UNDER_TEST, TRUSTED_SIGNER, useSDKNodes } from '../testing/sdk.js';
+import { RECEIVER, REPRESENTATIVE, stapleHashes, STORAGES_UNDER_TEST, SUPPLY, TRUSTED_SIGNER, useSDKNodes } from '../testing/sdk.js';
 import type { ServingNode, StorageUnderTest, UserClient } from '../testing/sdk.js';
 import type { Environment } from './config.js';
 
 const lib = KeetaNet.lib;
 
-const SUPPLY = 1_000_000n;
-
-/** Keys of the accounts the scenarios create, each from a fixed seed. */
-const RECEIVER = lib.Account.fromSeed('7d3c1e5a9b2f4068a1c3e5f7092b4d6f8a0c2e4f6081a3c5e7f9b1d3f5a7c9e1', 0);
+/** Keys of the accounts the scenarios create besides the receiver, each from a fixed seed. */
 const ISSUER = lib.Account.fromSeed('2e9a4c6f8b1d3e5f7a9c0b2d4f6e8a1c3b5d7f9e0a2c4b6d8f1e3a5c7b9d0f2e', 0);
 const FEE_ACCOUNT = lib.Account.fromSeed('c81f3a5e7b9d0c2e4f6a8b1d3c5e7f9a0b2d4c6e8f1a3b5d7c9e0f2a4b6d8c1e', 0);
 
@@ -26,12 +23,6 @@ const NETWORK_DEFAULT_PERMISSION = ['ACCESS', 'STORAGE_CREATE', 'TOKEN_ADMIN_CRE
 
 function keyOf(account: { readonly publicKeyString: { get(): string } }): string {
 	return(account.publicKeyString.get());
-}
-
-function stapleHashes(entries: readonly { readonly voteStaple: VoteStaple }[]): string[] {
-	return(entries.map(function({ voteStaple }): string {
-		return(voteStaple.blocksHash.toString());
-	}));
 }
 
 /** The error a promise is rejected with. */
@@ -52,7 +43,7 @@ type Network = {
 	readonly genesis: VoteStaple;
 };
 
-describe.each(STORAGES_UNDER_TEST)('the official SDK against a node on %s', { timeout: 60_000 }, function(storage: StorageUnderTest) {
+describe.each(STORAGES_UNDER_TEST)('the official SDK against a node on %s', function(storage: StorageUnderTest) {
 	const nodes = useSDKNodes();
 
 	async function initializedNetwork(extra: Environment = {}): Promise<Network> {

@@ -1,6 +1,7 @@
 import type { Account, StorageAddress, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { LedgerConfig } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import { assertNever } from '../util/assert-never.js';
+import { AMOUNT } from './amount.js';
 
 /** An account a fee may be paid to [Keeta TS] index.js:70267. */
 export type FeeAccount = Account | StorageAddress;
@@ -26,9 +27,6 @@ export type FeePolicy =
 export type ComputeFeeFromBlocks = LedgerConfig['computeFeeFromBlocks'];
 
 const FLAT_PREFIX = 'flat:';
-
-/** A positive amount in base units, written without a sign or leading zeros. */
-const AMOUNT = /^[1-9][0-9]*$/;
 
 /** The schedule written as "free" or "flat:<amount per block>", or undefined when it is neither. */
 export function parseFeeSchedule(text: string): FeeSchedule | undefined {

@@ -14,9 +14,8 @@ const FIXTURES = [
 ] as const satisfies readonly { name: MainnetFixtureName; file: string; staples: number; blocks: number }[];
 
 /*
- * Parsing the head's 2,037 staples took about
- * 4 s on an idle machine, close to the default timeout of 5 s, and make -j8
- * runs the other tests beside it.
+ * Parsing the head's 2,037 staples took about 4 s on an idle machine, and
+ * make -j8 runs the other tests beside it, so this is twice the global timeout.
  */
 const PARSE_TIMEOUT_MILLISECONDS = 60_000;
 

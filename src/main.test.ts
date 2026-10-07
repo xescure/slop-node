@@ -1,7 +1,7 @@
 import { describe, expect, inject, onTestFinished, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Environment } from './node/config.js';
-import { API_LINE, PROCESS_TIMEOUT_MILLISECONDS, startCLI } from './testing/cli.js';
+import { API_LINE, startCLI } from './testing/cli.js';
 import { createDatabase } from './testing/postgres.js';
 import { deriveTestKeys, TEST_NETWORK_SEEDS } from './testing/network.js';
 import { NODE_VERSION } from './version.js';
@@ -36,7 +36,7 @@ async function createTestDatabaseURL(): Promise<string> {
 	return(database.connectionString);
 }
 
-describe('slop-node run', { timeout: PROCESS_TIMEOUT_MILLISECONDS }, function() {
+describe('slop-node run', function() {
 	test.each(['SIGTERM', 'SIGINT'] as const)('serves the API from memory until %s, then exits cleanly', async function(signal) {
 		const cli = startCLI(['run'], NODE);
 		const [, api] = await cli.printed(API_LINE);
@@ -70,7 +70,7 @@ describe('slop-node run', { timeout: PROCESS_TIMEOUT_MILLISECONDS }, function() 
 	});
 });
 
-describe('slop-node genesis', { timeout: PROCESS_TIMEOUT_MILLISECONDS }, function() {
+describe('slop-node genesis', function() {
 	test('creates the network in Postgres, where the node then serves it', async function() {
 		const environment: Environment = { ...NODE, KEETANET_LOCAL_NODE_POSTGRES_URL: await createTestDatabaseURL() };
 		const genesis = startCLI(['genesis'], { ...environment, ...GENESIS });
@@ -112,7 +112,7 @@ describe('slop-node genesis', { timeout: PROCESS_TIMEOUT_MILLISECONDS }, functio
 	});
 });
 
-describe('slop-node', { timeout: PROCESS_TIMEOUT_MILLISECONDS }, function() {
+describe('slop-node', function() {
 	test('explains itself when asked', async function() {
 		const cli = startCLI(['help'], {});
 		expect(await cli.exited).toEqual({ code: 0, signal: null });

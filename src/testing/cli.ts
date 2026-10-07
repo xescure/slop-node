@@ -8,9 +8,6 @@ import type { Environment } from '../node/config.js';
  */
 const BUILT_CLI = new URL('../../dist/main.js', import.meta.url);
 
-/** Starting a process that loads the client takes about a second; a hung shutdown fails the test instead of the run. */
-export const PROCESS_TIMEOUT_MILLISECONDS = 30_000;
-
 export type Exit = { readonly code: number | null; readonly signal: NodeJS.Signals | null };
 
 export type CLIProcess = {

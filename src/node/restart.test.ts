@@ -1,16 +1,9 @@
 import { describe, expect, test } from 'vitest';
-import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
-import { API_LINE, PROCESS_TIMEOUT_MILLISECONDS, startCLI } from '../testing/cli.js';
-import { endpointOf, NODE_ENVIRONMENT, REPRESENTATIVE, TRUSTED_SIGNER, useSDKNodes } from '../testing/sdk.js';
+import { API_LINE, startCLI } from '../testing/cli.js';
+import { endpointOf, NODE_ENVIRONMENT, RECEIVER, REPRESENTATIVE, stapleHashes, SUPPLY, TRUSTED_SIGNER, useSDKNodes } from '../testing/sdk.js';
 import type { UserClient } from '../testing/sdk.js';
 import type { Environment } from './config.js';
-
-const lib = KeetaNet.lib;
-
-const SUPPLY = 1_000_000n;
-
-const RECEIVER = lib.Account.fromSeed('7d3c1e5a9b2f4068a1c3e5f7092b4d6f8a0c2e4f6081a3c5e7f9b1d3f5a7c9e1', 0);
 
 /** What the ledger shows through the API, from both ends of the transfers. */
 type LedgerView = {
@@ -22,12 +15,6 @@ type LedgerView = {
 	readonly holderChain: readonly string[];
 	readonly representativeWeight: bigint;
 };
-
-function stapleHashes(entries: readonly { readonly voteStaple: VoteStaple }[]): string[] {
-	return(entries.map(function({ voteStaple }): string {
-		return(voteStaple.blocksHash.toString());
-	}));
-}
 
 /** The serials of the representative's votes in the staples, as the API returned them. */
 function representativeSerials(staples: readonly VoteStaple[]): bigint[] {
@@ -108,7 +95,7 @@ function expectSerialsContinue(before: readonly bigint[], after: readonly bigint
 	}
 }
 
-describe('a node restarted on the same Postgres database', { timeout: PROCESS_TIMEOUT_MILLISECONDS }, function() {
+describe('a node restarted on the same Postgres database', function() {
 	const nodes = useSDKNodes();
 
 	test('keeps the balances, history and heads, and votes with serials above those it issued before', async function() {

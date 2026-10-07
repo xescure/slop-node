@@ -3,13 +3,11 @@ import type { Account } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { assertNever } from '../util/assert-never.js';
+import { AMOUNT } from './amount.js';
 import { ConfigError, EnvironmentReader, parseAccountKey, publicNetworkOf, publicOnly, readSeedAccount } from './config.js';
 import type { Environment, EnvironmentConfig } from './config.js';
 
 const lib = KeetaNet.lib;
-
-/** A positive amount in base units, written without a sign or leading zeros. */
-const AMOUNT = /^[1-9][0-9]*$/;
 
 /**
  * The network's first staple, as UserClient.initializeNetwork builds it: the
