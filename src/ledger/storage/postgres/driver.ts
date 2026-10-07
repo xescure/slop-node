@@ -891,10 +891,12 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	/*
 	 * Newest first by (staple time, blocks hash). The start is exclusive, so a
 	 * caller can pass the last staple of one page to get the next; a start
-	 * outside the listed history has no position and gives nothing (D8).
+	 * outside the listed history has no position and gives nothing (D8). A
+	 * fractional limit holds the whole entries it allows, as an array slice does.
 	 * [Keeta TS] index.js:69532-69548, 58992-58994, 81070-81096
 	 */
-	async getHistory(transaction: PostgresTransaction, account: GenericAccount | null, start: VoteBlockHash | null, limit: number = DEFAULT_HISTORY_LIMIT): Promise<VoteBlockHash[]> {
+	async getHistory(transaction: PostgresTransaction, account: GenericAccount | null, start: VoteBlockHash | null, requestedLimit: number = DEFAULT_HISTORY_LIMIT): Promise<VoteBlockHash[]> {
+		const limit = Math.trunc(requestedLimit);
 		let rows: { blocks_hash: Buffer }[];
 		if (account === null) {
 			if (start === null) {
@@ -918,11 +920,14 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * staple even when that exceeds the page size. The key is omitted on the
 	 * last page, because the caller stops only when it is undefined. Every
 	 * staple holds a vote, so a page takes at most as many staples as votes,
-	 * and one staple more shows whether any remain.
+	 * and one staple more shows whether any remain. The page size is 32 times
+	 * the caller's remaining limit, which is fractional when the limit is, so
+	 * it is rounded up: a page holds a whole number of votes, and "at least
+	 * 32.96 votes" means 33.
 	 * [Keeta TS] index.js:69633-69702
 	 */
 	async getVotesAfter(transaction: PostgresTransaction, moment: Date, startKey?: string, options?: GetVotesAfterOptions): Promise<PaginatedVotes> {
-		const maximumVotes = options?.maxVotesPerPage ?? DEFAULT_VOTES_PER_PAGE;
+		const maximumVotes = Math.ceil(options?.maxVotesPerPage ?? DEFAULT_VOTES_PER_PAGE);
 		const candidates = Math.max(maximumVotes, 1) + 1;
 		let rows: CatchUpStapleColumns[];
 		if (startKey === undefined) {

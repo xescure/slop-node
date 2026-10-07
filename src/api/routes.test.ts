@@ -4,6 +4,8 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import pg from 'pg';
+import { readCapture } from '../conformance/api/captures.js';
+import type { Capture } from '../conformance/api/captures.js';
 import { APIDocument, isJSONObject } from '../conformance/api/document.js';
 import { routeOfRequest } from '../conformance/api/routes.js';
 import { CONFLICT_MESSAGE, mapDatabaseError } from '../ledger/storage/postgres/errors.js';
@@ -53,6 +55,14 @@ function text(body: unknown, name: string): string {
 	const value = field(body, name);
 	if (typeof value !== 'string') {
 		throw(new Error(`"${name}" is not a string`));
+	}
+	return(value);
+}
+
+function queryOf(capture: Capture, name: string): string {
+	const value = capture.request.query[name];
+	if (value === undefined) {
+		throw(new Error(`the capture has no "${name}" parameter`));
 	}
 	return(value);
 }
@@ -154,6 +164,25 @@ describe('history', function() {
 		expect(await asked('?limit=7')).toBe(7);
 		expect(await asked('?limit=200')).toBe(200);
 		expect(await asked('?limit=1e3')).toBe(200);
+	});
+
+	/*
+	 * Mainnet answered limit=1.5 on an account's history with one staple and
+	 * the last staple's $id as nextKey (ledger-account-history-limit-fractional.json),
+	 * so a fractional limit rounds down. Only the count and the nextKey rule
+	 * are compared: the staples themselves are the user's later activity.
+	 */
+	test('limit=1.5 on an account history holds as many staples as mainnet\'s capture and names the last as nextKey', async function() {
+		const capture = readCapture('ledger-account-history-limit-fractional.json');
+		const captured = list(capture.body, 'history');
+		const node = await populated();
+		const answer = await request(node, `/node/ledger/account/${keyOf(node.user)}/history?limit=${queryOf(capture, 'limit')}`);
+
+		expect(captured).toHaveLength(1);
+		expect(field(capture.body, 'nextKey')).toBe(text(captured.at(-1), '$id'));
+		expect(answer.status).toBe(capture.status);
+		expect(list(answer.body, 'history')).toHaveLength(captured.length);
+		expect(field(answer.body, 'nextKey')).toBe(ids(answer.body).at(-1));
 	});
 
 	test.each([
@@ -361,6 +390,30 @@ describe('requests a representative answers without a failure', function() {
 		})).toEqual([keyOf(node.representative), peer.key]);
 		expect(list(answer.body, 'representatives')[1]).toEqual({ representative: peer.key, weight: '0x0', endpoints: peer.endpoints });
 		expectDocumented('GET', '/node/ledger/representatives', answer);
+	});
+
+	/*
+	 * Mainnet answered limit=1.5 with two staples (node-bootstrap-votes-fractional-limit.json),
+	 * so a fractional limit rounds up. Only the count is compared: which
+	 * staples come first follows the moments the representative added them at.
+	 */
+	test('limit=1.5 holds as many staples as mainnet\'s capture', async function() {
+		const capture = readCapture('node-bootstrap-votes-fractional-limit.json');
+		const node = await populated();
+		const answer = await request(node, `/node/bootstrap/votes?start=${encodeURIComponent(queryOf(capture, 'start'))}&limit=${queryOf(capture, 'limit')}`);
+
+		expect(answer.status).toBe(capture.status);
+		expect(list(capture.body, 'voteStaples')).toHaveLength(2);
+		expect(list(answer.body, 'voteStaples')).toHaveLength(list(capture.body, 'voteStaples').length);
+	});
+
+	test.each(['1.03', '2.01'])('a bootstrap limit of %s is answered alike by both drivers', async function(limit) {
+		const path = `/node/bootstrap/votes?start=1970-01-01T00%3A00%3A00.000Z&limit=${limit}`;
+		const inMemory = await request(await populated(driverUnderTestNamed('memory')), path);
+		const inPostgres = await request(await populated(driverUnderTestNamed('postgres')), path);
+
+		expect(inMemory.status).toBe(200);
+		expect(inPostgres).toEqual(inMemory);
 	});
 
 	test.each([

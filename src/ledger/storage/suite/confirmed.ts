@@ -678,6 +678,35 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(blocksHashesOf(staples)).toEqual(blocksHashesOf([network.genesis, earlier, later]));
 		});
 
+		test('a fractional page size is rounded up for votes and down for history', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			const cursor = new ChainCursor(network.genesis);
+			await ledger.add(network.genesis);
+			const earlier = await confirmedStaple([cursor.append(await sendBlock({ from: user, previous: cursor.previous(user), to: requireAt(network.users, 1), amount: 1n, token: network.baseToken, network: network.network }))], network.representatives);
+			const later = await confirmedStaple([cursor.append(await sendBlock({ from: user, previous: cursor.previous(user), to: requireAt(network.users, 2), amount: 1n, token: network.baseToken, network: network.network }))], network.representatives);
+			advanceClock(1000);
+			const earlierMoment = new Date(Date.now());
+			await ledger.add(earlier);
+			advanceClock(1000);
+			await ledger.add(later);
+
+			const pages = await readStorage(storage, async function(transaction) {
+				return({
+					belowOneVote: await storage.getVotesAfter(transaction, earlierMoment, undefined, { maxVotesPerPage: 0.5 }),
+					belowThree: await storage.getVotesAfter(transaction, earlierMoment, undefined, { maxVotesPerPage: 2.5 }),
+					belowFour: await storage.getVotesAfter(transaction, earlierMoment, undefined, { maxVotesPerPage: 3.5 })
+				});
+			});
+			expect(staplesOfPage(pages.belowOneVote)).toEqual(Array<string>(3).fill(earlier.blocksHash.toString()));
+			expect(pages.belowOneVote.nextKey).toBeTypeOf('string');
+			expect(staplesOfPage(pages.belowThree)).toEqual(Array<string>(3).fill(earlier.blocksHash.toString()));
+			expect(pages.belowThree.nextKey).toBeTypeOf('string');
+			expect(staplesOfPage(pages.belowFour)).toEqual([...Array<string>(3).fill(earlier.blocksHash.toString()), ...Array<string>(3).fill(later.blocksHash.toString())]);
+			expect(Object.hasOwn(pages.belowFour, 'nextKey')).toBe(false);
+			expect(await ledger.getHistory(null, null, 1.5)).toHaveLength(1);
+		});
+
 		test('catch-up orders by the moment each staple was applied, then by application, even when the clock goes back', async function() {
 			const { network, ledger } = await startNetwork();
 			await ledger.add(network.genesis);

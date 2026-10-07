@@ -643,7 +643,7 @@ getVoteStaples: (transaction: any, voteBlockHashes: VoteBlockHash[], from: Ledge
 getHistory: (transaction: any, account: GenericAccount | null, start: VoteBlockHash | null, limit?: number) => Promise<VoteBlockHash[]>;
 ```
 
-- **Semantics.** The `blocksHash` of each main staple that touched the account, or of every main staple when `account` is `null`. A staple touches every account in the effects' `touched` set (D18). At most `limit` entries are returned; upstream always passes a number, and the default is 25 [Keeta TS] index.js:69532. Every returned hash must resolve through `getVoteStaples(..., 'main')` [Keeta TS] index.js:69540-69548.
+- **Semantics.** The `blocksHash` of each main staple that touched the account, or of every main staple when `account` is `null`. A staple touches every account in the effects' `touched` set (D18). At most `limit` entries are returned; upstream always passes a number, which may not be an integer, and a driver returns the whole entries it allows (`1.5` gives one); the default is 25 [Keeta TS] index.js:69532. Every returned hash must resolve through `getVoteStaples(..., 'main')` [Keeta TS] index.js:69540-69548.
 - **Ordering and paging.** Newest first in history order (D8):
   - The key is the ordered pair (staple time, `blocksHash`), descending (provisional: confirmed by the live parity checks). The staple time is `VoteStaple.timestamp()` with no argument, as an integer count of milliseconds since the Unix epoch [Keeta TS] index.js:81070-81096, and `blocksHash` is compared as unsigned bytes.
   - `start` is exclusive.
@@ -651,11 +651,12 @@ getHistory: (transaction: any, account: GenericAccount | null, start: VoteBlockH
 - **Selector.** Main only.
 - **Tested by**:
   - `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, unknown start empty"`
+  - `confirmed.ts: "a fractional page size is rounded up for votes and down for history"`
   - `confirmed.ts: "history orders staples by staple time, not by when they were applied"`
   - `confirmed.ts: "history breaks staple-time ties by blocks hash, descending, and pages across a tie"`
   - `confirmed.ts: "history orders by the mean vote time of a staple, not the earliest or any single representative's"`
   - `concurrency.ts: "concurrent adds of one staple apply it once"`
-- **Postgres.** The history key is stored with each row: `staple_time` (`timestamptz`, holding the staple time's whole milliseconds exactly) and `blocks_hash` (`bytea`, which compares as unsigned bytes). With an account: its `history` rows, `ORDER BY staple_time DESC, blocks_hash DESC LIMIT limit`, through `history_order` (`account_id`, `staple_time DESC`, `blocks_hash DESC`). With `start`: the start's `staple_time` is first looked up in the same account's history (`history_pkey`), and the page continues below it by row comparison, `(staple_time, blocks_hash) < (start time, start)`, so the index range begins at the start. A start not in that history leaves its time `NULL`, the comparison is never true, and the page is empty. With `account` `null`, the same over `staples` through `staples_history` (`staple_time DESC`, `blocks_hash DESC`), with the start looked up through `staples_pkey`. Another implementation must reproduce the key, the strict comparison and the empty page exactly.
+- **Postgres.** The history key is stored with each row: `staple_time` (`timestamptz`, holding the staple time's whole milliseconds exactly) and `blocks_hash` (`bytea`, which compares as unsigned bytes). With an account: its `history` rows, `ORDER BY staple_time DESC, blocks_hash DESC LIMIT trunc(limit)`, through `history_order` (`account_id`, `staple_time DESC`, `blocks_hash DESC`). With `start`: the start's `staple_time` is first looked up in the same account's history (`history_pkey`), and the page continues below it by row comparison, `(staple_time, blocks_hash) < (start time, start)`, so the index range begins at the start. A start not in that history leaves its time `NULL`, the comparison is never true, and the page is empty. With `account` `null`, the same over `staples` through `staples_history` (`staple_time DESC`, `blocks_hash DESC`), with the start looked up through `staples_pkey`. Another implementation must reproduce the key, the strict comparison and the empty page exactly.
 
 ### `getHeadBlocks`
 
@@ -739,14 +740,14 @@ getVotesAfter: (transaction: any, moment: Date, startKey?: string, options?: Get
 - **Semantics.** The votes of main staples confirmed at or after `moment`, page by page (D8, catch-up order). The confirmation moment is the transaction moment of the transaction that applied the staple. `options.bloomFilter` and `options.timeout` may be ignored.
 - **Ordering and paging.**
   - Staples ascend in confirmation order: moment, then the node-local sequence.
-  - A page ends only between staples, so a page may exceed `maxVotesPerPage`, and always holds at least one whole staple when any remains. The default page size is 200, the largest upstream requests.
+  - A page ends only between staples, so a page may exceed `maxVotesPerPage`, and always holds at least one whole staple when any remains. The default page size is 200, the largest upstream requests. Upstream asks for 32 times its remaining limit [Keeta TS] index.js:69653-69656, which is not an integer when the limit is not, so a driver treats a fractional `maxVotesPerPage` as the next whole number: 32.96 votes means 33.
   - `nextKey` is an opaque string that resumes after the page's last staple. It is omitted on the last page, because upstream's loop stops only when it is `undefined` [Keeta TS] index.js:69695-69699.
   - The key is used only within one read transaction.
 - **Selector.** Main only.
 - **Errors.** A malformed `startKey` throws, which `evaluateError` turns into `LEDGER_OTHER`. Untested.
-- **Tested by** `confirmed.ts: "getVotesAfter pages on staple boundaries"`, which also runs upstream's `getVoteStaplesAfter` loop over the pages.
+- **Tested by** `confirmed.ts: "a fractional page size is rounded up for votes and down for history"` and `confirmed.ts: "getVotesAfter pages on staple boundaries"`, which also runs upstream's `getVoteStaplesAfter` loop over the pages.
 - **Upstream.** [Keeta TS] index.js:69633-69702. The moment comparison is "on or after" [Keeta TS] index.js:69659-69666.
-- **Postgres.** `staples` with `moment >= $moment`, `ORDER BY moment, sequence`, through `staples_catch_up` (`moment`, `sequence`); a page after a key continues with `(moment, sequence) > (key)`. `sequence` is an identity column, so it is node-local and never reused. The query fetches `max(maxVotesPerPage, 1) + 1` staples with their main vote counts; the page takes staples until it holds `maxVotesPerPage` votes, and at least one staple, and the key of its last staple is returned only when a fetched staple was left over. Votes are read by `blocks_hash` (`votes_main`) in row ID order. The key is the last staple's moment in milliseconds and its sequence, in decimal, joined by `:` (`src/ledger/storage/paging.ts`).
+- **Postgres.** `staples` with `moment >= $moment`, `ORDER BY moment, sequence`, through `staples_catch_up` (`moment`, `sequence`); a page after a key continues with `(moment, sequence) > (key)`. `sequence` is an identity column, so it is node-local and never reused. The query fetches `max(ceil(maxVotesPerPage), 1) + 1` staples with their main vote counts; the page takes staples until it holds `maxVotesPerPage` votes, and at least one staple, and the key of its last staple is returned only when a fetched staple was left over. Votes are read by `blocks_hash` (`votes_main`) in row ID order. The key is the last staple's moment in milliseconds and its sequence, in decimal, joined by `:` (`src/ledger/storage/paging.ts`).
 
 ### `getVoteStaplesFromBlockHash`
 
