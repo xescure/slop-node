@@ -108,19 +108,29 @@ export function touchedBy(staples: Iterable<VoteStaple>): GenericAccount[] {
 	}));
 }
 
-async function replayOnNode(node: ReplayNode, staples: readonly VoteStaple[], options: ReplayOptions): Promise<ReplayResult> {
-	const { ledger } = node;
-	const ordered = replayOrder(staples);
+/**
+ * Hands each staple to add, oldest first, with the clock frozen at the
+ * staple's timestamp, and then runs gc until nothing remains to retry.
+ */
+export async function addInReplayOrder(ledger: Ledger, staples: readonly VoteStaple[], add: (staple: VoteStaple) => Promise<void>): Promise<void> {
 	try {
-		for (const staple of ordered) {
+		for (const staple of replayOrder(staples)) {
 			vi.setSystemTime(staple.timestamp());
-			await options.beforeAdd?.(staple, ledger);
-			await ledger.add(staple);
+			await add(staple);
 		}
 		await drainDeferral(ledger);
 	} finally {
 		vi.useRealTimers();
 	}
+}
+
+async function replayOnNode(node: ReplayNode, staples: readonly VoteStaple[], options: ReplayOptions): Promise<ReplayResult> {
+	const { ledger } = node;
+	await addInReplayOrder(ledger, staples, async function(staple) {
+		await options.beforeAdd?.(staple, ledger);
+		await ledger.add(staple);
+	});
+	const ordered = replayOrder(staples);
 	const applied = await appliedAmong(ledger, staples);
 	return({
 		ledger,

@@ -137,6 +137,13 @@ export function orphanedSideRowsOf(storage: LedgerStorageDriverBase): Promise<nu
 	}));
 }
 
+/** The staples the driver holds deferred until any of these blocks arrives, each once. */
+export function deferredStaplesWaitingOnOf(storage: LedgerStorageDriverBase, blockHashes: readonly BlockHash[]): Promise<readonly VoteStaple[]> {
+	return(readStorage(storage, function(transaction) {
+		return(storage._Testing(TESTING_KEY).deferredStaplesWaitingOn(transaction, blockHashes));
+	}));
+}
+
 /** Runs storage writes in a transaction of their own, committed when they succeed. */
 export async function writeStorage<Result>(storage: LedgerStorageDriverBase, write: (transaction: LedgerDriverTransaction) => Promise<Result>): Promise<Result> {
 	const transaction = await storage.beginTransaction({ identifier: 'suite-write-storage', readOnly: false });

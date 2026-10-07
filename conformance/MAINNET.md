@@ -62,7 +62,7 @@ The network settings of a mainnet ledger are:
 | initial trusted account | `keeta_aabk62tezl4whordlviamlx3zrdgux6lk63cghay45vkzdatyemzvqqjuj5resa` [Keeta TS] index.js:61377 |
 | base token and network address | derived from the network by `Account.generateBaseAddresses` |
 
-The edge-case staples follow the head chronologically but not directly: their previous blocks are not in the head file, so a ledger that holds only the head defers them.
+The edge-case staples follow the head chronologically but not directly: the blocks they extend are not in the head file, so a ledger that holds only the head defers almost all of them (section 7).
 
 ## 6. Shadow votes
 
@@ -97,3 +97,25 @@ The first staple of the chain opens the network address and the base token, and 
 ### 6.4 Following is unaffected
 
 `Ledger.add` checks the voting weight of a staple's votes, computes its effects and applies them [Keeta TS] index.js:69361-69408. It does not check permission requirements: only a vote does [Keeta TS] index.js:70171-70179, 69989-70022. Both fixes change only which requirements are recorded, so a 0.18.7 node follows mainnet as before: every staple of the head is added, with and without the shadow votes, and both replays reach the same state.
+
+## 7. Edge cases
+
+After the head, the same replay adds the 90 staples of `mainnet/edge-cases.jsonl.gz` to the same ledger, in the same order and with the clock frozen at each staple's timestamp, and then runs gc until nothing more applies. Everything the earlier sections compare, the state dump and the shadow votes included, is read before the first edge case is added.
+
+`mainnet/edge-cases.outcomes.json` gives each staple's outcome by blocks hash:
+
+- `applied`: the staple is on the main ledger.
+- `deferred`: the ledger holds the staple until the blocks in `waitingOn` are on the main ledger. These are the previous blocks of its blocks that are not on the main ledger, leaving out opening blocks and blocks whose previous is in the same staple [Keeta TS] index.js:67678-67732.
+- `refused`: `Ledger.add` threw, with the error code and message.
+
+| Outcome | Staples |
+|---|---|
+| `applied` | 1 |
+| `deferred` | 89 |
+| `refused` | 0 |
+
+No staple is refused. `Ledger.add` checks a staple's voting weight before anything is deferred [Keeta TS] index.js:69397-69405, so every edge case carries enough weight for the head's representatives. Each one decodes and verifies, including the sends to recipients that are not points on the curve and the blocks of the all-zero account.
+
+Of the deferred staples, 13 wait only on blocks that are in neither file, from the history between the head and the edge cases. The other 76 wait only on blocks of other edge-case staples, which are themselves deferred.
+
+The applied staple opens an account and extends it in the same staple, so it waits on nothing. The account has no earlier history in either file, so the staple's sends leave its balances negative. `Ledger.add` applies a confirmed staple's balance changes without a range check, which only a vote makes [Keeta TS] index.js:67382, 70079-70089, and reading that account's balances then fails [Keeta TS] index.js:69422-69436.

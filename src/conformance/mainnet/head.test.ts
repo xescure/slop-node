@@ -12,6 +12,8 @@ import { assertNever } from '../../util/assert-never.js';
 import { stateDumpViolations } from '../schema.js';
 import { STATE_DUMP_FORMAT, renderReplayStateDump } from './dump.js';
 import type { StateDumpKind } from './dump.js';
+import { EDGE_CASE_OUTCOMES, addEdgeCases, renderEdgeCaseOutcomes } from './edge-cases.js';
+import type { EdgeCaseResult } from './edge-cases.js';
 import { loadMainnetFixture } from './fixture.js';
 import { compareText, replayMainnet } from './replay.js';
 import type { ReplayOptions, ReplayResult } from './replay.js';
@@ -23,10 +25,10 @@ const lib = KeetaNet.lib;
 /*
  * One replay of the head per driver serves every assertion about it, so the
  * test time does not grow with each property checked: it shadow-votes each
- * staple before adding it, and dumps the state it reaches. The committed
- * golden state and exception set must equal what the reference driver's
- * replay produces now; with SLOP_NODE_UPDATE_CONFORMANCE=1 they are written
- * instead.
+ * staple before adding it, dumps the state it reaches, and then adds the
+ * edge-case staples to the same ledger. The committed golden state, exception
+ * set and edge-case outcomes must equal what the reference driver's replay
+ * produces now; with SLOP_NODE_UPDATE_CONFORMANCE=1 they are written instead.
  */
 
 const UPDATE = process.env['SLOP_NODE_UPDATE_CONFORMANCE'] === '1';
@@ -38,6 +40,8 @@ const HEAD_LEDGER_CHECKSUM = 0xc4896d171cb02d3c9cd929de064de0df788d100c20cb8260c
 const GOLDEN_FILE = new URL('../../../conformance/mainnet/head.state.jsonl', import.meta.url);
 
 const EXCEPTIONS_FILE = new URL('../../../conformance/mainnet/shadow-vote-exceptions.json', import.meta.url);
+
+const EDGE_CASE_OUTCOMES_FILE = new URL('../../../conformance/mainnet/edge-cases.outcomes.json', import.meta.url);
 
 const STATE_DUMP_DOCUMENT = new URL('../../../conformance/STATE-DUMP.md', import.meta.url);
 
@@ -71,9 +75,14 @@ type PlainReplay = {
 	readonly dump: string;
 };
 
+type EmptiedBalance = { readonly account: string; readonly token: string; readonly listed: boolean };
+
 type HeadReplay = PlainReplay & {
 	readonly shadowVotes: readonly ShadowVote[];
 	readonly orphanedSideRows: number;
+	/** Each balance that some applied SEND moved and that the head leaves at zero. */
+	readonly emptied: readonly EmptiedBalance[];
+	readonly edgeCases: readonly EdgeCaseResult[];
 };
 
 const opened: { readonly driver: DriverUnderTest; readonly storage: LedgerStorageDriverBase }[] = [];
@@ -95,11 +104,35 @@ async function replayHeadOn(storage: LedgerStorageDriverBase, options: ReplayOpt
 	return({ result, dump: await renderReplayStateDump(result) });
 }
 
+async function emptiedBalances(result: ReplayResult): Promise<EmptiedBalance[]> {
+	return(await result.ledger.runReadOnly('emptied-balances', async function(reader) {
+		const found: EmptiedBalance[] = [];
+		for (const { account, token } of sentTokens(result.appliedStaples)) {
+			if (await reader.getBalance(account, token) !== 0n) {
+				continue;
+			}
+			const listed = (await reader.getAllBalances(account)).some(function(entry): boolean {
+				return(entry.token.comparePublicKey(token));
+			});
+			found.push({ account: account.publicKeyString.get(), token: token.publicKeyString.get(), listed });
+		}
+		return(found);
+	}));
+}
+
+/*
+ * Everything read from the head's state is read before the edge cases are
+ * added, since they change the ledger; the shadow votes are classified later
+ * but read only the network's settings.
+ */
 async function replayHead(driver: DriverUnderTest): Promise<HeadReplay> {
 	const storage = await openStorage(driver);
 	const voter = shadowVoter();
 	const replay = await replayHeadOn(storage, { beforeAdd: voter.beforeAdd });
-	return({ ...replay, shadowVotes: voter.votes, orphanedSideRows: await orphanedSideRowsOf(storage) });
+	const orphanedSideRows = await orphanedSideRowsOf(storage);
+	const emptied = await emptiedBalances(replay.result);
+	const edgeCases = await addEdgeCases(storage, replay.result.ledger, await loadMainnetFixture('edge-cases'));
+	return({ ...replay, shadowVotes: voter.votes, orphanedSideRows, emptied, edgeCases });
 }
 
 /** Without shadow votes, so that comparing it with a shadow-voting replay shows the votes leave the state as it was. */
@@ -169,6 +202,12 @@ function committedGolden(): Promise<string> {
 
 function committedExceptions(): Promise<string> {
 	return(committed(EXCEPTIONS_FILE, exceptionsOf));
+}
+
+function committedEdgeCaseOutcomes(): Promise<string> {
+	return(committed(EDGE_CASE_OUTCOMES_FILE, function({ edgeCases }): string {
+		return(renderEdgeCaseOutcomes(edgeCases));
+	}));
 }
 
 type LineDifference = { readonly line: number; readonly expected: string | undefined; readonly actual: string | undefined };
@@ -261,21 +300,7 @@ describe.each(driversUnderTest)('the mainnet head replayed on the $name driver',
 	});
 
 	test('an account that sent all of a token away has a zero balance of it, and getAllBalances omits it', { timeout: REPLAY_TIMEOUT_MILLISECONDS }, async function() {
-		const { result } = await sharedReplay(driver);
-
-		const emptied = await result.ledger.runReadOnly('emptied-balances', async function(reader) {
-			const found: { readonly account: string; readonly token: string; readonly listed: boolean }[] = [];
-			for (const { account, token } of sentTokens(result.appliedStaples)) {
-				if (await reader.getBalance(account, token) !== 0n) {
-					continue;
-				}
-				const listed = (await reader.getAllBalances(account)).some(function(entry): boolean {
-					return(entry.token.comparePublicKey(token));
-				});
-				found.push({ account: account.publicKeyString.get(), token: token.publicKeyString.get(), listed });
-			}
-			return(found);
-		});
+		const { emptied } = await sharedReplay(driver);
 
 		expect(emptied.length).toBeGreaterThan(0);
 		expect(emptied.filter(function(entry): boolean {
@@ -316,6 +341,13 @@ describe.each(driversUnderTest)('the mainnet head replayed on the $name driver',
 		const { orphanedSideRows } = await sharedReplay(driver);
 
 		expect(orphanedSideRows).toBe(0);
+	});
+
+	test('the edge-case staples, added after the head, end as the committed outcomes', { timeout: REPLAY_TIMEOUT_MILLISECONDS }, async function() {
+		const { edgeCases } = await sharedReplay(driver);
+
+		expect(renderEdgeCaseOutcomes(edgeCases)).toBe(await committedEdgeCaseOutcomes());
+		expect(edgeCases).toHaveLength((await loadMainnetFixture('edge-cases')).length);
 	});
 });
 
@@ -370,6 +402,51 @@ describe('the mainnet head state', function() {
 			}).length;
 			expect(document).toContain(`| \`${kind}\` | ${count.toLocaleString('en-US')} |`);
 		}
+	});
+
+	test('MAINNET.md states the staple count of each edge-case outcome', { timeout: REPLAY_TIMEOUT_MILLISECONDS }, async function() {
+		const outcomes = await committedEdgeCaseOutcomes();
+		const document = await readFile(MAINNET_DOCUMENT, 'utf8');
+
+		for (const outcome of EDGE_CASE_OUTCOMES) {
+			const count = outcomes.split(`"outcome": ${JSON.stringify(outcome)}`).length - 1;
+			expect(document).toContain(`| \`${outcome}\` | ${count.toLocaleString('en-US')} |`);
+		}
+	});
+
+	test('MAINNET.md states how many deferred edge cases wait only on blocks in neither file, and how many only on other edge cases', { timeout: REPLAY_TIMEOUT_MILLISECONDS }, async function() {
+		const { edgeCases } = await sharedReplay(reference);
+		const edgeCaseBlocks = new Set((await loadMainnetFixture('edge-cases')).flatMap(function(staple): string[] {
+			return(staple.blocks.map(function(block): string {
+				return(block.hash.toString());
+			}));
+		}));
+		const waits = edgeCases.flatMap(function(result): (readonly string[])[] {
+			switch (result.outcome) {
+				case 'deferred':
+					return([result.waitingOn]);
+				case 'applied':
+				case 'refused':
+					return([]);
+				default:
+					return(assertNever(result));
+			}
+		});
+		const onEdgeCasesOnly = waits.filter(function(waitingOn): boolean {
+			return(waitingOn.every(function(hash): boolean {
+				return(edgeCaseBlocks.has(hash));
+			}));
+		}).length;
+		const outsideOnly = waits.filter(function(waitingOn): boolean {
+			return(!waitingOn.some(function(hash): boolean {
+				return(edgeCaseBlocks.has(hash));
+			}));
+		}).length;
+		const document = await readFile(MAINNET_DOCUMENT, 'utf8');
+
+		expect(onEdgeCasesOnly + outsideOnly).toBe(waits.length);
+		expect(document).toContain(`Of the deferred staples, ${String(outsideOnly)} wait only on blocks that are in neither file`);
+		expect(document).toContain(`The other ${String(onEdgeCasesOnly)} wait only on blocks of other edge-case staples`);
 	});
 
 	test('MAINNET.md states the staple count of each reason in the shadow-vote exceptions', { timeout: REPLAY_TIMEOUT_MILLISECONDS }, async function() {
