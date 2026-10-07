@@ -12,6 +12,7 @@ import { assertNever } from '../util/assert-never.js';
 import type { AssertNever } from '../util/assert-never.js';
 import { computeFeeFromBlocksFor, parseFeeSchedule } from './fees.js';
 import type { FeeAccount, FeePolicy } from './fees.js';
+import type { PeerArena } from './peer-store.js';
 import { P2P_PATH } from './peers.js';
 
 const lib = KeetaNet.lib;
@@ -129,6 +130,8 @@ export type ConfigProblem =
 	| { readonly kind: 'too-many-fee-accounts'; readonly count: number; readonly maximum: number }
 	| { readonly kind: 'writable-on-public-network'; readonly network: PublicNetwork; readonly ledgerWriteMode: LedgerWriteMode }
 	| { readonly kind: 'peers-on-keeta-network'; readonly network: Networks; readonly ledgerWriteMode: LedgerWriteMode; readonly variable: PeerVariable }
+	| { readonly kind: 'remembered-peers'; readonly network: Networks; readonly ledgerWriteMode: LedgerWriteMode; readonly arenas: readonly PeerArena[] }
+	| { readonly kind: 'peers-in-memory' }
 	| { readonly kind: 'automatic-peers' }
 	| { readonly kind: 'peer-signature-invalid'; readonly key: string }
 	| { readonly kind: 'duplicate-peer'; readonly key: string }
@@ -163,6 +166,10 @@ function describeProblem(problem: ConfigProblem): string {
 			return(`the ${problem.network} network is public, so the node may only follow it: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to ${FOLLOWING_WRITE_MODES.join(' or ')} (it is ${problem.ledgerWriteMode})`);
 		case 'peers-on-keeta-network':
 			return(`the ${problem.network} network is Keeta's, so a node with peers on it may only follow it: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to ${FOLLOWING_WRITE_MODES.join(' or ')} (it is ${problem.ledgerWriteMode}), or leave ${problem.variable} unset`);
+		case 'remembered-peers':
+			return(`the ${problem.network} network is Keeta's, and the store of KEETANET_LOCAL_NODE_POSTGRES_URL remembers peers (in ${problem.arenas.join(', ')}), which the node would reach even without KEETANET_LOCAL_NODE_MANUAL_PEERS: run "slop-node clear-peers" with the same environment to forget them, or set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to ${FOLLOWING_WRITE_MODES.join(' or ')} (it is ${problem.ledgerWriteMode})`);
+		case 'peers-in-memory':
+			return('clear-peers needs KEETANET_LOCAL_NODE_POSTGRES_URL: a node in memory forgets its peers when it stops');
 		case 'automatic-peers':
 			return(`KEETANET_LOCAL_NODE_MANUAL_PEERS=auto is not supported: this node finds no peers by itself, so list each as ${MANUAL_PEER_FORM}`);
 		case 'peer-signature-invalid':
@@ -544,15 +551,37 @@ function urlOf(text: string, protocols: ReadonlySet<string>): URL | undefined {
 	return(url);
 }
 
+/** The characters that separate the fields of a peer and the peers of a list. */
+const PEER_SEPARATORS = /[|,]/;
+
+/** A user name, a password, or an empty user before the host. */
+const USER_INFO = /^[^:]+:\/\/[^/?#]*@/;
+
+const FIT_TO_ADVERTISE = 'without a user, password, query, fragment, "|" or ","';
+
 /**
- * The client requests each route at the endpoint followed by the route's
- * path [Keeta TS] index.js:59584-59585, which a query or fragment would cut
- * off.
+ * An endpoint the node advertises is printed in its peer, which another node
+ * must read back, and is sent to every peer, so it holds no separator of the
+ * peer form and no user or password. The client requests each route at the
+ * endpoint followed by the route's path [Keeta TS] index.js:59584-59585,
+ * which a query or fragment would cut off.
  */
+function isFitToAdvertise(text: string, url: URL): boolean {
+	return(!PEER_SEPARATORS.test(text) && !USER_INFO.test(text) && url.search === '' && url.hash === '');
+}
+
+/** A password is left out of the error, as is the rest of the endpoint, which holds it. */
+function invalidEndpoint(variable: ConfigVariable, expected: string, text: string): ConfigError {
+	if (USER_INFO.test(text)) {
+		return(new ConfigError({ kind: 'invalid', variable, expected }));
+	}
+	return(invalid(variable, expected, text));
+}
+
 function parseAPIEndpoint(text: string): string {
 	const url = urlOf(text, API_PROTOCOLS);
-	if (url === undefined || url.search !== '' || url.hash !== '') {
-		throw(invalid('KEETANET_LOCAL_NODE_ENDPOINT_API', 'an http:// or https:// URL without a query or fragment', text));
+	if (url === undefined || !isFitToAdvertise(text, url)) {
+		throw(invalidEndpoint('KEETANET_LOCAL_NODE_ENDPOINT_API', `an http:// or https:// URL ${FIT_TO_ADVERTISE}`, text));
 	}
 	return(text);
 }
@@ -560,8 +589,8 @@ function parseAPIEndpoint(text: string): string {
 /** The node serves peers at one path of the API's own server, so the advertised endpoint must lead there. */
 function parseP2PEndpoint(text: string): string {
 	const url = urlOf(text, P2P_PROTOCOLS);
-	if (url === undefined || url.pathname !== P2P_PATH || url.search !== '' || url.hash !== '') {
-		throw(invalid('KEETANET_LOCAL_NODE_ENDPOINT_P2P', `a ws:// or wss:// URL whose path is ${P2P_PATH}, where the node serves peers`, text));
+	if (url === undefined || url.pathname !== P2P_PATH || !isFitToAdvertise(text, url)) {
+		throw(invalidEndpoint('KEETANET_LOCAL_NODE_ENDPOINT_P2P', `a ws:// or wss:// URL whose path is ${P2P_PATH}, where the node serves peers, ${FIT_TO_ADVERTISE}`, text));
 	}
 	return(text);
 }
@@ -613,9 +642,16 @@ function parseManualPeer(entry: string): ManualPeer {
 	if (!BASE64.test(signature)) {
 		throw(invalid(variable, `${MANUAL_PEER_FORM}, the signature in base64`, entry));
 	}
-	const verified = manualPeerOf({ ...unsigned, key: key.publicKeyString.get(), signature });
+	const problem: ConfigProblem = { kind: 'peer-signature-invalid', key: key.publicKeyString.get() };
+	let verified: ManualPeer | undefined;
+	try {
+		verified = manualPeerOf({ ...unsigned, key: key.publicKeyString.get(), signature });
+	} catch (error: unknown) {
+		// Upstream reads the signature as ASN.1 before verifying it, and throws for bytes that are none [Keeta TS] index.js:71837.
+		throw(new ConfigError(problem, { cause: error }));
+	}
 	if (verified === undefined) {
-		throw(new ConfigError({ kind: 'peer-signature-invalid', key: key.publicKeyString.get() }));
+		throw(new ConfigError(problem));
 	}
 	return(verified);
 }
@@ -778,18 +814,27 @@ function readFeePolicy(reader: EnvironmentReader): FeePolicy {
 
 /**
  * Peers carry the node's staples into the network and its peers' staples into
- * the node, so on any network of Keeta's a node with peers may only follow.
- * Network 0 is this node's own.
+ * the node, so on any network of Keeta's a node with peers may only follow;
+ * this is that network, when the node may do more. Network 0 is this node's
+ * own.
  */
-function refusePeersOnKeetaNetwork(reader: EnvironmentReader, network: NetworkSelection, ledgerWriteMode: LedgerWriteMode): void {
+export function networkClosedToPeers(network: NetworkSelection, ledgerWriteMode: LedgerWriteMode): Networks | undefined {
 	if (network.kind === 'local' || isFollowingWriteMode(ledgerWriteMode)) {
+		return(undefined);
+	}
+	return(network.alias);
+}
+
+function refusePeersOnKeetaNetwork(reader: EnvironmentReader, network: NetworkSelection, ledgerWriteMode: LedgerWriteMode): void {
+	const closed = networkClosedToPeers(network, ledgerWriteMode);
+	if (closed === undefined) {
 		return;
 	}
 	const variable = PEER_VARIABLES.find(function(candidate): boolean {
 		return(reader.isSet(candidate));
 	});
 	if (variable !== undefined) {
-		throw(new ConfigError({ kind: 'peers-on-keeta-network', network: network.alias, ledgerWriteMode, variable }));
+		throw(new ConfigError({ kind: 'peers-on-keeta-network', network: closed, ledgerWriteMode, variable }));
 	}
 }
 

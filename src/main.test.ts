@@ -123,6 +123,43 @@ describe('slop-node run with peers', function() {
 		expect(await first.exited).toEqual({ code: 0, signal: null });
 	});
 
+	/*
+	 * The switch keeps its peers in its store [Keeta TS] index.js:72626-72633, 73451,
+	 * and dials and broadcasts to them whatever the environment names
+	 * [Keeta TS] index.js:72519-72620, 73250-73306.
+	 */
+	test('refuses to vote on dev with the peers it remembers from following it, until they are cleared', async function() {
+		const port = await closedPort();
+		const peerKey = lib.Account.fromSeed(TEST_NETWORK_SEEDS.representative, 1).publicKeyString.get();
+		const dev: Environment = { ...NODE, KEETANET_LOCAL_NODE_NETWORK: 'dev', KEETANET_LOCAL_NODE_POSTGRES_URL: (await nodes.database()).connectionString };
+
+		const following = startCLI(['run'], { ...dev, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-only', KEETANET_LOCAL_NODE_MANUAL_PEERS: `${peerKey}@http://127.0.0.1:${String(port)}/api|ws://127.0.0.1:${String(port)}/p2p` });
+		await following.printed(PEER_LINE);
+		following.signal('SIGTERM');
+		expect(await following.exited).toEqual({ code: 0, signal: null });
+
+		const voting = startCLI(['run'], dev);
+		expect(await voting.exited).toEqual({ code: 1, signal: null });
+		expect(voting.stdout()).toBe('');
+		expect(voting.stderr()).toBe('slop-node: the dev network is Keeta\'s, and the store of KEETANET_LOCAL_NODE_POSTGRES_URL remembers peers (in lastSeenPeers, manualPeerCheckIn), which the node would reach even without KEETANET_LOCAL_NODE_MANUAL_PEERS: run "slop-node clear-peers" with the same environment to forget them, or set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to read-only or bootstrap-only (it is read-write)\n');
+
+		const clearing = startCLI(['clear-peers'], dev);
+		expect(await clearing.exited).toEqual({ code: 0, signal: null });
+		expect(clearing.stdout()).toBe('cleared knownPeers: 0\ncleared potentialPeers: 0\ncleared lastSeenPeers: 1\ncleared connectedPeers: 0\ncleared manualPeerCheckIn: 1\ncleared messageFilters: 0\n');
+
+		const cleared = startCLI(['run'], dev);
+		await cleared.printed(API_LINE);
+		expect(cleared.stdout()).toContain('network: dev (');
+		cleared.signal('SIGTERM');
+		expect(await cleared.exited).toEqual({ code: 0, signal: null });
+	});
+
+	test('clears no peers in memory, where none are kept', async function() {
+		const cli = startCLI(['clear-peers'], NODE);
+		expect(await cli.exited).toEqual({ code: 1, signal: null });
+		expect(cli.stderr()).toBe('slop-node: clear-peers needs KEETANET_LOCAL_NODE_POSTGRES_URL: a node in memory forgets its peers when it stops\n');
+	});
+
 	test('refuses peers named automatically', async function() {
 		const cli = startCLI(['run'], { ...NODE, KEETANET_LOCAL_NODE_MANUAL_PEERS: 'auto' });
 		expect(await cli.exited).toEqual({ code: 1, signal: null });

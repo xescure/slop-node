@@ -518,6 +518,10 @@ describe('KEETANET_LOCAL_NODE_MANUAL_PEERS', function() {
 		expect(problemOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: text })).toEqual({ kind: 'peer-signature-invalid', key });
 	});
 
+	test.each(['AAAA', '////'])('refuses the signature %j, which is base64 but no signature', function(signature) {
+		expect(problemOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: `${PEER}|websocket|${signature}` })).toEqual({ kind: 'peer-signature-invalid', key: PEER_KEY });
+	});
+
 	test.each(['auto', 'AUTO', ` auto `, `${PEER},auto`])('refuses %j: this node finds no peers by itself', function(value) {
 		expect(problemOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: value })).toEqual({ kind: 'automatic-peers' });
 		expect(messageOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: value })).toBe('KEETANET_LOCAL_NODE_MANUAL_PEERS=auto is not supported: this node finds no peers by itself, so list each as <keeta_ account>@<api URL>|<p2p URL>[|http or websocket[|signature]]');
@@ -582,7 +586,30 @@ describe('KEETANET_LOCAL_NODE_ENDPOINT_API and KEETANET_LOCAL_NODE_ENDPOINT_P2P'
 	});
 
 	test('names the path the node serves peers on', function() {
-		expect(messageOf({ KEETANET_LOCAL_NODE_ENDPOINT_P2P: 'ws://127.0.0.1:7000/peers' })).toBe('KEETANET_LOCAL_NODE_ENDPOINT_P2P must be a ws:// or wss:// URL whose path is /p2p, where the node serves peers (it is "ws://127.0.0.1:7000/peers")');
+		expect(messageOf({ KEETANET_LOCAL_NODE_ENDPOINT_P2P: 'ws://127.0.0.1:7000/peers' })).toBe('KEETANET_LOCAL_NODE_ENDPOINT_P2P must be a ws:// or wss:// URL whose path is /p2p, where the node serves peers, without a user, password, query, fragment, "|" or "," (it is "ws://127.0.0.1:7000/peers")');
+	});
+
+	/* The node prints its endpoints in its peer, which another node reads back, and sends them to every peer. */
+	test.each([
+		['KEETANET_LOCAL_NODE_ENDPOINT_API', 'http://127.0.0.1:7000/a|b'],
+		['KEETANET_LOCAL_NODE_ENDPOINT_API', 'http://127.0.0.1:7000/a,b'],
+		['KEETANET_LOCAL_NODE_ENDPOINT_P2P', 'ws://rep,example:7000/p2p']
+	] as const)('refuse %s %j, which a peer could not read back', function(variable, value) {
+		expect(problemOf({ [variable]: value })).toMatchObject({ kind: 'invalid', variable, value });
+		expect(messageOf({ [variable]: value })).toContain('"|" or ","');
+	});
+
+	test.each([
+		['KEETANET_LOCAL_NODE_ENDPOINT_API', 'http://slop:hunter2@127.0.0.1:7000/api'],
+		['KEETANET_LOCAL_NODE_ENDPOINT_API', 'https://slop@rep.example/api'],
+		['KEETANET_LOCAL_NODE_ENDPOINT_API', 'http://@127.0.0.1:7000/api'],
+		['KEETANET_LOCAL_NODE_ENDPOINT_P2P', 'wss://slop:hunter2@rep.example/p2p']
+	] as const)('refuse %s %j, which would advertise a user or password, without repeating it', function(variable, value) {
+		const problem = problemOf({ [variable]: value });
+		expect(problem).toMatchObject({ kind: 'invalid', variable });
+		expect(problem).not.toHaveProperty('value');
+		expect(messageOf({ [variable]: value })).toContain('without a user, password');
+		expect(messageOf({ [variable]: value })).not.toContain('hunter2');
 	});
 
 	test('are signed into the advertisement the node greets its peers with', async function() {

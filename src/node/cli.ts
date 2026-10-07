@@ -8,6 +8,7 @@ import { LocalNodeError } from './errors.js';
 import { describeOperationalFailure, operationalFailureOf } from './failure.js';
 import { addGenesis, GenesisError, getGenesisConfigFromEnv } from './genesis.js';
 import { LocalNode } from './local.js';
+import { forgetPeers, PEER_ARENAS, refuseRememberedPeers } from './peer-store.js';
 import { P2P_PATH } from './peers.js';
 import { closeStorage, nodeResourcesOf, openStorage } from './storage.js';
 import type { OpenedStorage } from './storage.js';
@@ -26,13 +27,14 @@ export type Output = {
 	readonly error: (text: string) => void;
 };
 
-const COMMANDS = ['run', 'genesis', 'help'] as const;
+const COMMANDS = ['run', 'genesis', 'clear-peers', 'help'] as const;
 
 type Command = typeof COMMANDS[number];
 
 const COMMAND_HELP: Readonly<Record<Command, string>> = {
 	run: 'serve the API as a representative until SIGINT or SIGTERM',
 	genesis: 'add the first staple of a new network to the ledger in Postgres',
+	'clear-peers': 'make the node in Postgres forget every peer it remembers; run it while the node is stopped',
 	help: 'print this text'
 };
 
@@ -77,8 +79,11 @@ function describeVariables(variables: readonly ConfigVariable[]): string {
 }
 
 function usage(): string {
+	const width = Math.max(...COMMANDS.map(function(command): number {
+		return(command.length);
+	}));
 	const commands = COMMANDS.map(function(command): string {
-		return(`  ${command.padEnd(8)} ${COMMAND_HELP[command]}\n`);
+		return(`  ${command.padEnd(width)}  ${COMMAND_HELP[command]}\n`);
 	}).join('');
 	return([
 		'Usage: slop-node <command>\n\n',
@@ -171,6 +176,19 @@ async function startupSummary(config: EnvironmentConfig, storage: OpenedStorage,
 	].join(''));
 }
 
+/** A store in memory starts empty, so it remembers no peer. */
+async function refuseRememberedPeersIn(config: EnvironmentConfig, storage: OpenedStorage): Promise<void> {
+	switch (storage.kind) {
+		case 'memory':
+			return;
+		case 'postgres':
+			await refuseRememberedPeers(config, storage.kv);
+			return;
+		default:
+			assertNever(storage);
+	}
+}
+
 /**
  * Serves until a signal, then stops serving, waiting for the requests in
  * flight, and closes the storage.
@@ -183,6 +201,7 @@ async function run(config: EnvironmentConfig, output: Output): Promise<void> {
 		if (storage.kind === 'memory') {
 			output.error('warning: the ledger is kept in memory, so it is lost when the node stops; set KEETANET_LOCAL_NODE_POSTGRES_URL to keep it\n');
 		}
+		await refuseRememberedPeersIn(config, storage);
 		const node = new LocalNode(localNodeConfig(config, nodeResourcesOf(storage, log)));
 		try {
 			// A database that cannot be reached or migrated fails the start rather than the first request.
@@ -223,6 +242,28 @@ async function genesis(config: EnvironmentConfig, environment: Environment, outp
 		}
 	} finally {
 		await log.sync();
+		await closeStorage(storage);
+	}
+}
+
+/** Touches only the store's peer arenas, so the ledger and the statistics stay. */
+async function clearPeers(config: EnvironmentConfig, output: Output): Promise<void> {
+	const storage = openStorage(config.storage);
+	try {
+		switch (storage.kind) {
+			case 'memory':
+				throw(new ConfigError({ kind: 'peers-in-memory' }));
+			case 'postgres': {
+				const removed = await forgetPeers(storage.kv);
+				output.out(PEER_ARENAS.map(function(arena): string {
+					return(`cleared ${arena}: ${String(removed[arena])}\n`);
+				}).join(''));
+				return;
+			}
+			default:
+				assertNever(storage);
+		}
+	} finally {
 		await closeStorage(storage);
 	}
 }
@@ -268,6 +309,9 @@ async function runCommand(command: Command, environment: Environment, output: Ou
 			return;
 		case 'genesis':
 			await genesis(getConfigFromEnv(environment), environment, output);
+			return;
+		case 'clear-peers':
+			await clearPeers(getConfigFromEnv(environment), output);
 			return;
 		default:
 			assertNever(command);
