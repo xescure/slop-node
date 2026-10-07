@@ -17,7 +17,17 @@ export default {
 		'wordlist',
 		'esac',
 		'blockhash',
-		'savepoint'
+		'savepoint',
+		'bytea',
+		'timestamptz',
+		'regclass',
+		'locktype',
+		'localtime',
+		'localtimestamp',
+		'timeofday',
+		'pgdata',
+		'pghost',
+		'pgport'
 	],
 	// Account strings are base32 public keys, not words.
 	ignoreRegExpList: ['/keeta_[a-z2-7]+/g'],

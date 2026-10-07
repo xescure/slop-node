@@ -1,0 +1,272 @@
+import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import pg from 'pg';
+
+/**
+ * What a test needs to reach the cluster. It is plain data so that vitest can
+ * hand it from the global setup to every worker.
+ */
+export type ClusterConnection = {
+	readonly socketDirectory: string;
+	readonly port: number;
+	readonly user: string;
+};
+
+export type Cluster = ClusterConnection & {
+	readonly stop: () => Promise<void>;
+};
+
+declare module 'vitest' {
+	export interface ProvidedContext {
+		postgresCluster: ClusterConnection;
+	}
+}
+
+/** A database name made only of characters that need no quoting anywhere. */
+export type DatabaseName = string & { readonly __databaseName: never };
+
+const CLUSTER_USER = 'slop';
+const MAINTENANCE_DATABASE = 'postgres';
+
+const runFile = promisify(execFile);
+
+// The cluster is thrown away after the run, so durability is traded for speed,
+// and the vitest workers together hold many pools at once.
+const SERVER_SETTINGS = [
+	'listen_addresses=',
+	'max_connections=300',
+	'fsync=off',
+	'synchronous_commit=off',
+	'full_page_writes=off'
+] as const;
+
+/**
+ * devenv's interactive service exports PGHOST, PGPORT and PGDATA, and the
+ * server tools would otherwise act on that cluster instead of this one.
+ */
+const hermeticEnvironment = function(): NodeJS.ProcessEnv {
+	const environment: NodeJS.ProcessEnv = {};
+	for (const [name, value] of Object.entries(process.env)) {
+		if (!name.startsWith('PG')) {
+			environment[name] = value;
+		}
+	}
+	return(environment);
+};
+
+const hasCode = function(error: unknown, code: string): boolean {
+	return(error instanceof Error && 'code' in error && error.code === code);
+};
+
+const standardErrorOf = function(error: unknown): string {
+	if (error instanceof Error && 'stderr' in error && typeof error.stderr === 'string') {
+		return(error.stderr.trim());
+	}
+	return(String(error));
+};
+
+const runTool = async function(tool: string, args: readonly string[]): Promise<void> {
+	try {
+		await runFile(tool, args, { env: hermeticEnvironment() });
+	} catch (error: unknown) {
+		if (hasCode(error, 'ENOENT')) {
+			throw(new Error(`${tool} is not on PATH; the tests need the PostgreSQL server binaries that "devenv shell" provides`, { cause: error }));
+		}
+		throw(new Error(`${tool} ${args.join(' ')} failed: ${standardErrorOf(error)}`, { cause: error }));
+	}
+};
+
+/**
+ * The server listens on no TCP address, but its port still names its socket
+ * and seeds its shared memory key, so a port nothing else holds keeps two
+ * clusters on one machine from probing each other.
+ */
+const findFreePort = function(): Promise<number> {
+	return(new Promise(function(resolve, reject) {
+		const server = createServer();
+		server.once('error', reject);
+		server.listen(0, '127.0.0.1', function() {
+			const address = server.address();
+			server.close(function() {
+				if (address === null || typeof address === 'string') {
+					reject(new Error(`expected a TCP address, got ${String(address)}`));
+					return;
+				}
+				resolve(address.port);
+			});
+		});
+	}));
+};
+
+// pg_ctl hands its server options to a shell, so the socket directory must
+// survive that unquoted.
+const assertShellSafePath = function(path: string): void {
+	if (!/^[A-Za-z0-9/._-]+$/.test(path)) {
+		throw(new Error(`the temporary directory ${JSON.stringify(path)} has characters pg_ctl cannot pass on; set TMPDIR to a plain path`));
+	}
+};
+
+const serverOptions = function(socketDirectory: string, port: number): string {
+	const settings = SERVER_SETTINGS.map(function(setting) {
+		return(`-c ${setting}`);
+	});
+	return([`-k ${socketDirectory}`, `-p ${String(port)}`, ...settings].join(' '));
+};
+
+const describeError = function(error: unknown): string {
+	if (error instanceof Error) {
+		return(error.message);
+	}
+	return(String(error));
+};
+
+const readLog = async function(logFile: string): Promise<string> {
+	try {
+		return(await readFile(logFile, 'utf-8'));
+	} catch (error: unknown) {
+		return(`(no server log: ${String(error)})`);
+	}
+};
+
+/**
+ * Starts a private cluster in a fresh temporary directory, reachable only
+ * through a Unix socket in that directory. Fails with the reason, never
+ * silently, when the server binaries are missing or the server cannot start.
+ */
+export const startCluster = async function(): Promise<Cluster> {
+	const directory = await mkdtemp(join(tmpdir(), 'slop-pg-'));
+	const dataDirectory = join(directory, 'data');
+	const logFile = join(directory, 'server.log');
+	const removeDirectory = function(): Promise<void> {
+		return(rm(directory, { recursive: true, force: true }));
+	};
+	const stopServer = function(): Promise<void> {
+		// The data is thrown away, so nothing needs a clean shutdown.
+		return(runTool('pg_ctl', ['stop', '--pgdata', dataDirectory, '--mode', 'immediate', '--wait']));
+	};
+
+	let port: number;
+	try {
+		assertShellSafePath(directory);
+		port = await findFreePort();
+		await runTool('initdb', [
+			'--pgdata', dataDirectory,
+			'--username', CLUSTER_USER,
+			'--auth', 'trust',
+			'--encoding', 'UTF8',
+			// Collation then sorts by bytes, the same on every machine.
+			'--locale', 'C',
+			'--no-sync',
+			'--no-instructions'
+		]);
+	} catch (error: unknown) {
+		await removeDirectory();
+		throw(error);
+	}
+
+	try {
+		await runTool('pg_ctl', ['start', '--pgdata', dataDirectory, '--log', logFile, '--wait', '--options', serverOptions(directory, port)]);
+	} catch (error: unknown) {
+		const log = await readLog(logFile);
+		await stopServer().catch(function() {
+			// A server that never started has nothing to stop.
+		});
+		await removeDirectory();
+		throw(new Error(`PostgreSQL did not start: ${describeError(error)}\n${log}`, { cause: error }));
+	}
+
+	let stopping: Promise<void> | undefined;
+	const stop = function(): Promise<void> {
+		stopping ??= stopServer().finally(removeDirectory);
+		return(stopping);
+	};
+	return({ socketDirectory: directory, port, user: CLUSTER_USER, stop });
+};
+
+/** Only the connection fields, so that a whole Cluster can be passed as well. */
+export const connectionOf = function(cluster: ClusterConnection): ClusterConnection {
+	return({ socketDirectory: cluster.socketDirectory, port: cluster.port, user: cluster.user });
+};
+
+const clientConfig = function(cluster: ClusterConnection, database: string): pg.ClientConfig {
+	return({ host: cluster.socketDirectory, port: cluster.port, user: cluster.user, database });
+};
+
+const withMaintenanceClient = async function<Result>(cluster: ClusterConnection, action: (client: pg.Client) => Promise<Result>): Promise<Result> {
+	const client = new pg.Client(clientConfig(cluster, MAINTENANCE_DATABASE));
+	await client.connect();
+	try {
+		return(await action(client));
+	} finally {
+		await client.end();
+	}
+};
+
+const newDatabaseName = function(): DatabaseName {
+	// The brand marks a name of lowercase hex and underscores only.
+	return(`test_${randomUUID().replaceAll('-', '')}` as DatabaseName);
+};
+
+/** A database of its own for one test, with the pools opened on it. */
+export class TestDatabase {
+	readonly name: DatabaseName;
+	readonly #cluster: ClusterConnection;
+	readonly #pools: pg.Pool[] = [];
+
+	constructor(cluster: ClusterConnection, name: DatabaseName) {
+		this.#cluster = connectionOf(cluster);
+		this.name = name;
+	}
+
+	/** The same database as a URL, for code that takes a connection string. */
+	get connectionString(): string {
+		const host = encodeURIComponent(this.#cluster.socketDirectory);
+		return(`postgresql://${this.#cluster.user}@${host}:${String(this.#cluster.port)}/${this.name}`);
+	}
+
+	/** A new pool on this database, ended by drop. */
+	pool(): pg.Pool {
+		const pool = new pg.Pool(clientConfig(this.#cluster, this.name));
+		pool.on('error', function() {
+			// drop terminates idle connections; the pool discards them.
+		});
+		this.#pools.push(pool);
+		return(pool);
+	}
+
+	/** Ends every pool opened through this object, then drops the database. */
+	async drop(): Promise<void> {
+		const pools = this.#pools.splice(0);
+		await Promise.all(pools.map(function(pool) {
+			if (pool.ended) {
+				return(Promise.resolve());
+			}
+			return(pool.end());
+		}));
+		const name = this.name;
+		await withMaintenanceClient(this.#cluster, function(client) {
+			return(client.query(`DROP DATABASE ${pg.escapeIdentifier(name)} WITH (FORCE)`));
+		});
+	}
+}
+
+/**
+ * Creates an empty database, or a copy of the template. The template must have
+ * no open connections while it is copied.
+ */
+export const createDatabase = async function(cluster: ClusterConnection, template?: DatabaseName): Promise<TestDatabase> {
+	const name = newDatabaseName();
+	let statement = `CREATE DATABASE ${pg.escapeIdentifier(name)}`;
+	if (template !== undefined) {
+		statement = `${statement} TEMPLATE ${pg.escapeIdentifier(template)}`;
+	}
+	await withMaintenanceClient(cluster, function(client) {
+		return(client.query(statement));
+	});
+	return(new TestDatabase(cluster, name));
+};
