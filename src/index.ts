@@ -1,5 +1,12 @@
+export { PostgresKVStorage } from './kv/postgres.js';
 export { LedgerDriverTransaction, LedgerStorageDriverBase, StorageDriverNotInitializedError } from './ledger/storage/base.js';
 export type { CollectedDeferredStaples, LedgerCountsSnapshot, TransactionOptions } from './ledger/storage/base.js';
 export type { AccountInfoUpdate, CertificateChange, ConfirmedLedgerEffect, ConfirmedStapleChange, IdempotentKeyClaim } from './ledger/storage/confirmed.js';
 export { isVoteUnexpired, voteExpirySlopMilliseconds } from './ledger/storage/expiry.js';
 export { MemoryLedgerStorage, MemoryTransaction } from './ledger/storage/memory/driver.js';
+export { PostgresLedgerStorage, PostgresTransaction } from './ledger/storage/postgres/driver.js';
+export type { UntypedRow } from './ledger/storage/postgres/driver.js';
+export { MigrationError, SCHEMA_MIGRATIONS, applyMigrations } from './ledger/storage/postgres/migrations.js';
+export type { MigrationProblem, SchemaVersion } from './ledger/storage/postgres/migrations.js';
+export { DEFAULT_POOL_OPTIONS } from './ledger/storage/postgres/pool.js';
+export type { PostgresPoolOptions, PostgresPoolSource } from './ledger/storage/postgres/pool.js';
