@@ -19,6 +19,7 @@ import type { TestNetwork } from '../testing/network.js';
 import { NODE_VERSION } from '../version.js';
 import { LocalNodeError } from './errors.js';
 import { LocalNode } from './local.js';
+import { SHUTDOWN_GRACE_MILLISECONDS } from './server.js';
 
 const lib = KeetaNet.lib;
 
@@ -367,15 +368,29 @@ describe('each request', function() {
 			method: 'OPTIONS',
 			headers: { origin: 'https://wallet.invalid', 'access-control-request-method': 'GET' }
 		});
-		expect(preflight.status).toBe(204);
+		expect(preflight.status).toBe(200);
 		expect(preflight.headers.get('access-control-allow-origin')).toBe('*');
 		expect(preflight.headers.get('access-control-allow-methods')).toBe('GET, PUT, POST, OPTIONS');
 		expect(preflight.headers.get('access-control-allow-headers')).toBe('content-type, user-agent, accept');
 	});
 
-	test('for a path the API does not have is not found', async function() {
+	test('for a path the API does not have is not found, in the HTTP server\'s own words', async function() {
 		const answer = await get(await startNode(), '/node/nothing');
 		expect(answer.status).toBe(404);
+		expect(answer.contentType).toBe('text/html; charset=utf-8');
+		expect(answer.text).toContain('<pre>Cannot GET /api/node/nothing</pre>');
+	});
+
+	test('that fails outside every route is answered without the failure\'s details', async function() {
+		const running = await startNode();
+		running.node._app.get('/outside', function(): never {
+			throw(new Error(`could not reach ${SECRET}`));
+		});
+		const answer = await fetch(new URL('/outside', running.apiURL));
+		const text = await answer.text();
+		expect(answer.status).toBe(500);
+		expect(text).not.toContain('hunter2');
+		expect(text).not.toMatch(/\bat /);
 	});
 });
 
@@ -402,6 +417,37 @@ describe('the lifecycle', function() {
 		await running.node.stop();
 		await expect(get(running, '/node/version')).rejects.toThrow();
 		await listenAndClose(Number(new URL(running.apiURL).port));
+	});
+
+	test('stopping waits for a request in flight only for the grace period', async function() {
+		const running = await startNode();
+		const inside = barrier(2);
+		const neverAnswered = new Promise<never>(function() {
+			// The request is held until the server drops its connection.
+		});
+		vi.spyOn(running.storage, 'stats').mockImplementation(async function() {
+			await inside();
+			return(await neverAnswered);
+		});
+		const held = get(running, '/node/stats').then(function(): string {
+			return('answered');
+		}, function(): string {
+			return('dropped');
+		});
+		await inside();
+		// Only the grace timer is faked; the clock freezeClock set is released with it.
+		vi.useRealTimers();
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+		let stoppedYet = false;
+		const stopped = running.node.stop().then(function(): void {
+			stoppedYet = true;
+		});
+		await vi.advanceTimersByTimeAsync(SHUTDOWN_GRACE_MILLISECONDS - 1);
+		expect(stoppedYet).toBe(false);
+		await vi.advanceTimersByTimeAsync(1);
+		vi.useRealTimers();
+		await stopped;
+		expect(await held).toBe('dropped');
 	});
 
 	test('a node listening on every interface needs endpoints to advertise', async function() {

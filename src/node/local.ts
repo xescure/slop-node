@@ -1,4 +1,3 @@
-import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
 import type { Express, NextFunction, Request as ExpressRequest, Response as ExpressResponse } from 'express';
@@ -14,6 +13,8 @@ import { assertNever } from '../util/assert-never.js';
 import type { AssertNever } from '../util/assert-never.js';
 import type { ClassSurface } from '../util/class-surface.js';
 import { LocalNodeError } from './errors.js';
+import { close, listen } from './server.js';
+import type { Listening, ListenTarget } from './server.js';
 
 export type { ApiErrorResponse, LocalNodeConfig } from '@keetanetwork/keetanet-client/lib/node/local.js';
 
@@ -34,8 +35,8 @@ const LOG_SOURCE = 'API';
 
 const SUCCESS_STATUS = 200;
 
-/** A preflight is answered with headers alone. */
-const PREFLIGHT_STATUS = 204;
+/** A preflight is answered with headers alone, and with the status live representatives give it. */
+const PREFLIGHT_STATUS = 200;
 
 /**
  * Twice the largest message a peer may send over the WebSocket
@@ -59,10 +60,6 @@ const CORS_HEADERS: Readonly<Record<string, string>> = {
 const UNSPECIFIED_ADDRESSES: ReadonlySet<string> = new Set(['0.0.0.0', '::', '']);
 
 type Answer = { readonly status: number; readonly body: unknown };
-
-type ListenTarget = { readonly host: string | undefined; readonly port: number };
-
-type Listening = { readonly server: http.Server; readonly address: AddressInfo };
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 	return(typeof value === 'object' && value !== null && !Array.isArray(value));
@@ -173,36 +170,6 @@ function hostInURL(host: string): string {
 	return(host);
 }
 
-function listen(app: Express, target: ListenTarget): Promise<Listening> {
-	const server = http.createServer(app);
-	return(new Promise<Listening>(function(resolve, reject) {
-		server.once('error', reject);
-		server.listen(target.port, target.host, function() {
-			server.off('error', reject);
-			const address = server.address();
-			if (address === null || typeof address === 'string') {
-				reject(new Error('internal error: a TCP server reports no port'));
-				return;
-			}
-			resolve({ server, address });
-		});
-	}));
-}
-
-/** Stops accepting connections, closes the idle ones, and waits for requests in flight to be answered. */
-function close(server: http.Server): Promise<void> {
-	return(new Promise<void>(function(resolve, reject) {
-		server.close(function(error) {
-			if (error !== undefined) {
-				reject(error);
-				return;
-			}
-			resolve();
-		});
-		server.closeIdleConnections();
-	}));
-}
-
 /**
  * A representative that serves the node HTTP API, as declared by upstream's
  * typings (lib/node/local.d.ts) over the Node of the client package.
@@ -220,6 +187,8 @@ export class LocalNode extends ClientNode {
 	constructor(config: LocalNodeConfig) {
 		super(config);
 		this.config = config;
+		// Outside production Express answers a failure that escapes every handler with its stack.
+		this.#app.set('env', 'production');
 	}
 
 	setCorsHeaders(response: ExpressResponse): void {

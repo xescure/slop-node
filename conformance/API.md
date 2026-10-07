@@ -79,6 +79,8 @@ Some requests name values that do not exist or are malformed. The representative
 
 A failure of the whole request may have any non-2xx status: the client reads the error from the body of any response that is not ok [Keeta TS] index.js:59629-59652, and returns the body of a 200 as data [Keeta TS] index.js:59673-59685. Representatives use 500: every failure the representative reported had status 500, whether it refused the request or failed to serve it, so the document gives each operation a 200 and a 500 response. The body of a failure has `"error": true` and one of two forms: a refusal names the KeetaNet error's `type`, `code` and `message`, and an internal failure has nothing but a `message` naming an error ID, `Internal error occurred (error ID: <UUID>)`. A malformed account is not a failure of the whole request: it is answered with a 200 (see Differences).
 
+A path that names no route is outside the API, and the document does not describe it: the HTTP server answers it with status 404 and an HTML page, `Cannot GET <path>`, not with the `Error` envelope.
+
 The capture sends no POST, so the 500 of the four POST routes is inferred from the GET routes rather than observed, and the document says so on each.
 
 To capture again, run:
