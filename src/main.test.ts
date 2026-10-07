@@ -108,7 +108,16 @@ describe('slop-node run with peers', function() {
 		await second.printed(new RegExp(`Added knownPeer: ${firstKey}$`, 'm'));
 
 		const holder = nodes.userClient(endpointOf(firstAPI, lib.Account.fromSeed(TEST_NETWORK_SEEDS.representative, 0)), TRUSTED_SIGNER);
-		expect((await holder.initializeNetwork({ addSupplyAmount: SUPPLY })).publish).toBe(true);
+		const initialized = await holder.initializeNetwork({ addSupplyAmount: SUPPLY });
+		expect(initialized.publish).toBe(true);
+		/*
+		 * A node weighs a staple's votes before it would defer it
+		 * [Keeta TS] index.js:69396-69401, and the weight that votes for the
+		 * send is the weight genesis delegates. A node still adding genesis
+		 * refuses the send, which then reaches it only by its next bootstrap,
+		 * a minute later, so the send waits until genesis is added there.
+		 */
+		await second.printed(new RegExp(`\\[${initialized.voteStaple.blocksHash.toString()}\\] Sending message add`));
 		const sent = await holder.send(RECEIVER, 100n, holder.baseToken);
 		if (sent.from !== 'direct') {
 			throw(new Error('the client published through a publish aid'));
