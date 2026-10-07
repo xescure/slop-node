@@ -8,6 +8,7 @@ import { LocalNodeError } from './errors.js';
 import { describeOperationalFailure, operationalFailureOf } from './failure.js';
 import { addGenesis, GenesisError, getGenesisConfigFromEnv } from './genesis.js';
 import { LocalNode } from './local.js';
+import { DEFAULT_PEER_LIMITS, MAX_PEER_LIMIT } from './peer-limits.js';
 import { forgetPeers, PEER_ARENAS, refuseRememberedPeers } from './peer-store.js';
 import { P2P_PATH } from './peers.js';
 import { closeStorage, nodeResourcesOf, openStorage } from './storage.js';
@@ -60,6 +61,8 @@ const VARIABLE_HELP: Readonly<Record<ConfigVariable, string>> = {
 	KEETANET_LOCAL_NODE_PREFER_UPDATES: 'http or websocket: how peers send it staples (websocket)',
 	KEETANET_LOCAL_NODE_MANUAL_PEERS: `the peers it dials, separated by commas, each ${MANUAL_PEER_FORM}, as a node prints on its "peer:" line (none; auto is not supported)`,
 	KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: 'the API URLs of representatives it catches up from besides its peers, without dialing them, separated by commas (none)',
+	KEETANET_LOCAL_NODE_MAX_PEER_SOCKETS: `the most sockets peers and listeners hold open on ${P2P_PATH} at once, from 1 to ${String(MAX_PEER_LIMIT)} (${String(DEFAULT_PEER_LIMITS.sockets)})`,
+	KEETANET_LOCAL_NODE_MAX_POSTED_MESSAGES: `the most messages peers post over HTTP that it handles at once, from 1 to ${String(MAX_PEER_LIMIT)} (${String(DEFAULT_PEER_LIMITS.postedMessages)})`,
 	KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE: 'true lets the node vote for TOKEN_ADMIN_MODIFY_BALANCE (false)',
 	KEETANET_GENESIS_TRUSTED_SEED: 'the seed of the trusted account (required)',
 	KEETANET_GENESIS_TRUSTED_SEED_INDEX: 'the index of its key under the seed (0)',

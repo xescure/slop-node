@@ -11,17 +11,6 @@ import type { APIRequest, Route } from './route.js';
 
 const lib = KeetaNet.lib;
 
-/**
- * The most messages posted over HTTP the node hands its switch at once. A
- * representative posts each staple it adds, or passes on, to each peer once
- * [Keeta TS] index.js:71451-71464, 72195-72218, so a node that keeps up
- * handles a few at a time, and handling a greeting posts every peer the node
- * knows to the sender [Keeta TS] index.js:73466-73479. Beyond this a post
- * would only queue more work; its sender ignores the answer, and a staple
- * refused still reaches the node by bootstrap.
- */
-export const MAX_POSTED_MESSAGES_HANDLED = 256;
-
 /** How many messages posted over HTTP each switch is handling; every copy of a node shares the node's switch. */
 const postedHandled = new WeakMap<P2PSwitch, number>();
 
@@ -216,11 +205,11 @@ function deliver(node: Node, connection: P2PConnection, message: Buffer): void {
  * A node whose network is closed to peers refuses every message unread: the
  * greeting alone would make the sender a peer the node broadcasts to
  * [Keeta TS] index.js:73250, 73563-73567, and one it remembers. So does a node
- * handling MAX_POSTED_MESSAGES_HANDLED messages posted over HTTP.
+ * handling as many messages posted over HTTP as its peer limits allow.
  */
 function handleMessage(request: APIRequest, body: unknown): Promise<DeclaredResult<DeclaredP2PGroup['message']['POST']>> {
 	const node = request.node;
-	if (nodeNetworkClosedToPeers(node.config.network, node.ledger.ledgerWriteMode) !== undefined || postedHandledBy(node.switch) >= MAX_POSTED_MESSAGES_HANDLED) {
+	if (nodeNetworkClosedToPeers(node.config.network, node.ledger.ledgerWriteMode) !== undefined || postedHandledBy(node.switch) >= request.peerLimits.postedMessages) {
 		return(Promise.resolve({ success: false }));
 	}
 	const payload = asPayload(body);

@@ -1,11 +1,14 @@
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
+import type { PeerLimits } from '../node/peer-limits.js';
 import { assertNever } from '../util/assert-never.js';
 import { compareText } from '../util/compare-text.js';
 
 /**
  * One request as a handler sees it: the node it runs on, its path and query
  * parameters, its parsed body and its headers. The shape is upstream's
- * APIRequest (api/index.d.ts), with the body unknown until a handler checks it.
+ * APIRequest (api/index.d.ts), with the body unknown until a handler checks it,
+ * and with the limits of the node that serves it, which the copy of the node a
+ * request runs on does not carry.
  * [node-lite] adapted from its APIRequest.
  */
 export type APIRequest = {
@@ -16,6 +19,7 @@ export type APIRequest = {
 	readonly header: {
 		get(name: string): string | undefined;
 	};
+	readonly peerLimits: PeerLimits;
 };
 
 /** A path below the API prefix, with each path parameter written ":name". */

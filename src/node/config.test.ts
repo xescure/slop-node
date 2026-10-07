@@ -12,6 +12,7 @@ import { bootstrapEndpointsOf } from './bootstrap-peers.js';
 import { ConfigError, formatManualPeer, getConfigFromEnv, LEDGER_WRITE_MODES, localNodeConfig, MAX_FEE_SEED_ACCOUNTS } from './config.js';
 import type { ConfigProblem, Environment, EnvironmentConfig, LedgerWriteMode } from './config.js';
 import { LocalNode } from './local.js';
+import { MAX_PEER_LIMIT } from './peer-limits.js';
 
 const lib = KeetaNet.lib;
 const NetworkConfig = KeetaNet.Client.Config;
@@ -90,6 +91,7 @@ describe('the defaults', function() {
 		expect(config.endpoints).toEqual({ api: undefined, p2p: undefined });
 		expect(config.preferUpdates).toBe('websocket');
 		expect(config.manualPeers).toEqual([]);
+		expect(config.peerLimits).toEqual({ sockets: 512, postedMessages: 256 });
 	});
 
 	test('the trusted account of a network the client knows', function() {
@@ -473,6 +475,27 @@ describe('KEETANET_LOCAL_NODE_LISTEN_IP and KEETANET_LOCAL_NODE_LISTEN_PORT', fu
 	});
 });
 
+describe('KEETANET_LOCAL_NODE_MAX_PEER_SOCKETS and KEETANET_LOCAL_NODE_MAX_POSTED_MESSAGES', function() {
+	test('limit what the node takes from peers at once', function() {
+		expect(parse({ KEETANET_LOCAL_NODE_MAX_PEER_SOCKETS: '1', KEETANET_LOCAL_NODE_MAX_POSTED_MESSAGES: String(MAX_PEER_LIMIT) }).peerLimits).toEqual({ sockets: 1, postedMessages: MAX_PEER_LIMIT });
+	});
+
+	test('are each read alone, the other keeping its default', function() {
+		expect(parse({ KEETANET_LOCAL_NODE_MAX_POSTED_MESSAGES: '64' }).peerLimits).toEqual({ sockets: 512, postedMessages: 64 });
+	});
+
+	const variables = ['KEETANET_LOCAL_NODE_MAX_PEER_SOCKETS', 'KEETANET_LOCAL_NODE_MAX_POSTED_MESSAGES'] as const;
+	const refused = ['0', '-1', '1.5', '1e3', '0x10', ' 8', '08', 'many', String(MAX_PEER_LIMIT + 1)];
+
+	test.each(variables.flatMap(function(variable) {
+		return(refused.map(function(value) {
+			return([variable, value] as const);
+		}));
+	}))('%s refuses %j', function(variable, value) {
+		expect(problemOf({ [variable]: value })).toEqual({ kind: 'invalid', variable, expected: `a whole number from 1 to ${String(MAX_PEER_LIMIT)}`, value });
+	});
+});
+
 /** What a peer record says, with its key written out. */
 function describePeer(peer: P2PPeerRep): object {
 	if ('signature' in peer) {
@@ -750,6 +773,13 @@ describe('the node configuration', function() {
 		expect(node.bootstrap).toEqual({ kv });
 		expect(node.bootstrap?.kv).toBe(kv);
 		expect(bootstrapEndpointsOf(node)).toEqual([]);
+		expect(node.peerLimits).toEqual({ sockets: 512, postedMessages: 256 });
+	});
+
+	test('carries the peer limits', function() {
+		const config = parse({ KEETANET_LOCAL_NODE_MAX_PEER_SOCKETS: '2048', KEETANET_LOCAL_NODE_MAX_POSTED_MESSAGES: '32' });
+		const node = localNodeConfig(config, { storageDriver: new MemoryLedgerStorage(), kv: null, log: new lib.Log() });
+		expect(node.peerLimits).toEqual({ sockets: 2048, postedMessages: 32 });
 	});
 
 	test('carries the peers, the advertised endpoints and the preference for HTTP updates', function() {

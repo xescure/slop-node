@@ -16,11 +16,16 @@ import { nodeNetworkClosedToPeers } from './config.js';
 import { SwitchConnections } from './connections.js';
 import { LocalNodeError } from './errors.js';
 import { SwitchMessages } from './messages.js';
+import { DEFAULT_PEER_LIMITS } from './peer-limits.js';
+import type { PeerLimits } from './peer-limits.js';
 import { P2P_PATH, PeerServer } from './peers.js';
 import { close, listen } from './server.js';
 import type { Listening, ListenTarget } from './server.js';
 
 export type { ApiErrorResponse, LocalNodeConfig } from '@keetanetwork/keetanet-client/lib/node/local.js';
+
+/** Upstream's configuration of the node, and how much it takes from peers at once, DEFAULT_PEER_LIMITS unless given. */
+export type LimitedLocalNodeConfig = LocalNodeConfig & { peerLimits?: PeerLimits };
 
 const lib = KeetaNet.lib;
 
@@ -122,10 +127,11 @@ function parameterStrings(params: unknown): Readonly<Record<string, string>> {
 	return(strings);
 }
 
-function apiRequest(node: Node, request: ExpressRequest): APIRequest {
+function apiRequest(node: Node, request: ExpressRequest, peerLimits: PeerLimits): APIRequest {
 	const payload: unknown = request.body;
 	return({
 		node,
+		peerLimits,
 		params: parameterStrings(request.params),
 		query: queryStrings(request.query),
 		payload,
@@ -222,10 +228,12 @@ export class LocalNode extends ClientNode {
 	readonly #messages: SwitchMessages;
 	#bootstrap: BootstrapClient | undefined;
 	#running = false;
+	readonly #peerLimits: PeerLimits;
 
-	constructor(config: LocalNodeConfig) {
+	constructor(config: LimitedLocalNodeConfig) {
 		super(withoutManualPeers(config));
 		this.config = config;
+		this.#peerLimits = config.peerLimits ?? DEFAULT_PEER_LIMITS;
 		this.#connections = new SwitchConnections(this.switch, this.log);
 		this.#messages = new SwitchMessages(this.switch, this.log);
 		// Outside production Express answers a failure that escapes every handler with its stack.
@@ -287,7 +295,7 @@ export class LocalNode extends ClientNode {
 		const node = this.copy();
 		let answer: Answer;
 		try {
-			const result = await invokeRoute(route, apiRequest(node, request));
+			const result = await invokeRoute(route, apiRequest(node, request, this.#peerLimits));
 			answer = { status: SUCCESS_STATUS, body: lib.Utils.Conversion.toJSONSerializable(result, { addBinary: true }) };
 		} catch (error) {
 			answer = this.#failure(error);
@@ -369,7 +377,7 @@ export class LocalNode extends ClientNode {
 				this.#listening = await listen(this.#app, target);
 				this.#advertise(target, this.#listening.address);
 				if (options?.startWebSocketServer !== false && this.#openToPeers()) {
-					this.#peers = new PeerServer(this.#listening.server, this.switch, this.log);
+					this.#peers = new PeerServer(this.#listening.server, this.switch, this.log, this.#peerLimits.sockets);
 				}
 			}
 			for (const peer of this.config.manualPeers ?? []) {

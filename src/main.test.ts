@@ -2,6 +2,7 @@ import { createServer } from 'node:net';
 import type { Server } from 'node:net';
 import { describe, expect, inject, onTestFinished, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
+import { GENESIS_VARIABLES, NODE_VARIABLES, TRUSTED_ACCOUNT_VARIABLE } from './node/config.js';
 import type { Environment } from './node/config.js';
 import { API_LINE, PEER_LINE, startCLI } from './testing/cli.js';
 import { endpointOf, RECEIVER, STORAGES_UNDER_TEST, SUPPLY, TRUSTED_SIGNER, useSDKNodes } from './testing/sdk.js';
@@ -325,6 +326,14 @@ describe('slop-node', function() {
 		expect(cli.stdout()).toContain('Usage: slop-node <command>');
 		expect(cli.stdout()).toContain('KEETANET_LOCAL_NODE_POSTGRES_URL');
 		expect(cli.stdout()).toContain('KEETANET_GENESIS_TRUSTED_SEED');
+	});
+
+	test('describes every variable it reads in its help', async function() {
+		const cli = startCLI(['--help'], {});
+		expect(await cli.exited).toEqual({ code: 0, signal: null });
+		for (const variable of [...NODE_VARIABLES, TRUSTED_ACCOUNT_VARIABLE, ...GENESIS_VARIABLES]) {
+			expect(cli.stdout()).toMatch(new RegExp(`^  ${variable} +\\S`, 'm'));
+		}
 	});
 
 	test.each([[[]], [['serve']], [['run', 'now']]])('refuses the arguments %j with its usage', async function(args) {

@@ -13,6 +13,9 @@ import type { AssertNever } from '../util/assert-never.js';
 import { bootstrapFrom } from './bootstrap-peers.js';
 import { computeFeeFromBlocksFor, parseFeeSchedule } from './fees.js';
 import type { FeeAccount, FeePolicy } from './fees.js';
+import type { LimitedLocalNodeConfig } from './local.js';
+import { DEFAULT_PEER_LIMITS, MAX_PEER_LIMIT } from './peer-limits.js';
+import type { PeerLimits } from './peer-limits.js';
 import type { PeerArena } from './peer-store.js';
 import { P2P_PATH } from './peers.js';
 
@@ -52,6 +55,8 @@ export const NODE_VARIABLES = [
 	'KEETANET_LOCAL_NODE_PREFER_UPDATES',
 	'KEETANET_LOCAL_NODE_MANUAL_PEERS',
 	'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS',
+	'KEETANET_LOCAL_NODE_MAX_PEER_SOCKETS',
+	'KEETANET_LOCAL_NODE_MAX_POSTED_MESSAGES',
 	'KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE'
 ] as const;
 
@@ -250,6 +255,7 @@ export type EnvironmentConfig = {
 	readonly manualPeers: readonly ManualPeer[];
 	/** The API endpoints of representatives the node bootstraps from without dialing them. */
 	readonly bootstrapPeers: readonly string[];
+	readonly peerLimits: PeerLimits;
 	readonly fee: FeePolicy;
 	/** Off by default, as upstream has it [Keeta TS] index.js:68983. */
 	readonly enableTokenAdminModifyBalance: boolean;
@@ -737,6 +743,24 @@ export function formatManualPeer(peer: ManualPeer): string {
 	return(`${peer.key.publicKeyString.get()}@${fields.join('|')}`);
 }
 
+function parsePeerLimit(variable: ConfigVariable, text: string): number {
+	if (!DECIMAL.test(text) || Number(text) < 1 || Number(text) > MAX_PEER_LIMIT) {
+		throw(invalid(variable, `a whole number from 1 to ${String(MAX_PEER_LIMIT)}`, text));
+	}
+	return(Number(text));
+}
+
+function readPeerLimits(reader: EnvironmentReader): PeerLimits {
+	return({
+		sockets: reader.read('KEETANET_LOCAL_NODE_MAX_PEER_SOCKETS', function(text: string): number {
+			return(parsePeerLimit('KEETANET_LOCAL_NODE_MAX_PEER_SOCKETS', text));
+		}, DEFAULT_PEER_LIMITS.sockets),
+		postedMessages: reader.read('KEETANET_LOCAL_NODE_MAX_POSTED_MESSAGES', function(text: string): number {
+			return(parsePeerLimit('KEETANET_LOCAL_NODE_MAX_POSTED_MESSAGES', text));
+		}, DEFAULT_PEER_LIMITS.postedMessages)
+	});
+}
+
 function parseBoolean(variable: ConfigVariable, text: string): boolean {
 	switch (text) {
 		case 'true':
@@ -946,6 +970,7 @@ export function getConfigFromEnv(environment: Environment): EnvironmentConfig {
 			return(parseManualPeers(text, representative));
 		}, []),
 		bootstrapPeers: reader.read('KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS', parseBootstrapPeers, []),
+		peerLimits: readPeerLimits(reader),
 		fee: readFeePolicy(reader),
 		enableTokenAdminModifyBalance: reader.read('KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE', function(text: string): boolean {
 			return(parseBoolean('KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE', text));
@@ -1000,9 +1025,9 @@ function configuredEndpoints(endpoints: AdvertisedEndpoints): LocalNodeConfig['e
 }
 
 /** The representative the configuration describes, on the storage given. */
-export function localNodeConfig(config: EnvironmentConfig, resources: NodeResources): LocalNodeConfig {
+export function localNodeConfig(config: EnvironmentConfig, resources: NodeResources): LimitedLocalNodeConfig {
 	const { storageDriver, kv, log } = resources;
-	const retval: LocalNodeConfig = {
+	const retval: LimitedLocalNodeConfig = {
 		kind: lib.Node.Kind.REPRESENTATIVE,
 		log,
 		initialTrustedAccount: config.initialTrustedAccount,
@@ -1018,7 +1043,8 @@ export function localNodeConfig(config: EnvironmentConfig, resources: NodeResour
 		stats: { kv },
 		p2p: { useHTTPRepublish: usesHTTPRepublish(config.preferUpdates) },
 		nodeOptions: { listenIP: config.listen.ip, listenPort: config.listen.port },
-		manualPeers: [...config.manualPeers]
+		manualPeers: [...config.manualPeers],
+		peerLimits: config.peerLimits
 	};
 	if (kv !== null) {
 		retval.p2p = { ...retval.p2p, kv };

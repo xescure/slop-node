@@ -9,18 +9,7 @@ export const P2P_PATH = '/p2p';
 
 const LOG_SOURCE = 'P2P';
 
-/**
- * The most sockets the server keeps open at once. Representatives keep one
- * to each peer they dial, and every client listening for its account's
- * staples keeps one [Keeta TS] index.js:61072-61085, so a representative
- * serves many; this stays below the 1024 open files a process may have by
- * default on Linux, leaving the rest to API requests, the database and the
- * node's own dials, and bounds the frames of up to 16 MiB that open sockets
- * can make the node hold.
- */
-export const MAX_PEER_SOCKETS = 512;
-
-/** The answer to an upgrade beyond MAX_PEER_SOCKETS: the node can take the socket once another closes. */
+/** The answer to an upgrade beyond the node's limit of sockets: the node can take the socket once another closes. */
 export const PEER_SOCKETS_FULL_STATUS = 503;
 
 /**
@@ -28,7 +17,7 @@ export const PEER_SOCKETS_FULL_STATUS = 503;
  * the switch as the switch's own dialer attaches the sockets it opens
  * [Keeta TS] index.js:72314, 72319-72343, with frames bounded as the dialer
  * bounds them [Keeta TS] index.js:71812, 72250-72252, and at most
- * MAX_PEER_SOCKETS of them open at once.
+ * maxSockets of them open at once.
  * [node-lite] adapted from LocalNode.run.
  */
 export class PeerServer {
@@ -38,7 +27,7 @@ export class PeerServer {
 	/** Sockets the switch has not yet taken: it waits for each one's greeting first [Keeta TS] index.js:72708. */
 	readonly #attaching = new Set<Promise<void>>();
 
-	constructor(server: http.Server, p2pSwitch: P2PSwitch, log: Logger) {
+	constructor(server: http.Server, p2pSwitch: P2PSwitch, log: Logger, maxSockets: number) {
 		this.#switch = p2pSwitch;
 		this.#log = log;
 		this.#server = new P2PInternals.WebSocketServer({
@@ -47,7 +36,7 @@ export class PeerServer {
 			maxPayload: P2PInternals.P2P_WEBSOCKET_MAX_PAYLOAD_BYTES,
 			// Answered at once, so the server upgrades before the next socket is counted.
 			verifyClient: (_info: BundledUpgradeInfo, callback: (verified: boolean, code?: number) => void): void => {
-				callback(this.#server.clients.size < MAX_PEER_SOCKETS, PEER_SOCKETS_FULL_STATUS);
+				callback(this.#server.clients.size < maxSockets, PEER_SOCKETS_FULL_STATUS);
 			}
 		});
 		this.#server.on('connection', (socket: BundledWebSocket, request: http.IncomingMessage): void => {

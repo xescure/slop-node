@@ -17,13 +17,14 @@ import type { TestNetwork } from '../testing/network.js';
 import { watchOpenHandles } from '../testing/open-handles.js';
 import { NODE_ENVIRONMENT, useSDKNodes } from '../testing/sdk.js';
 import type { ServingNode } from '../testing/sdk.js';
-import { MAX_POSTED_MESSAGES_HANDLED } from '../api/p2p.js';
 import { P2PInternals } from '../upstream/internals.js';
 import type { LedgerWriteMode } from './config.js';
 import type { LocalNode } from './local.js';
 import { MESSAGE_SETTLE_MILLISECONDS, SwitchMessages } from './messages.js';
+import { DEFAULT_PEER_LIMITS } from './peer-limits.js';
+import type { PeerLimits } from './peer-limits.js';
 import { rememberedPeerArenas } from './peer-store.js';
-import { MAX_PEER_SOCKETS, PEER_SOCKETS_FULL_STATUS } from './peers.js';
+import { PEER_SOCKETS_FULL_STATUS } from './peers.js';
 
 const lib = KeetaNet.lib;
 
@@ -45,7 +46,7 @@ const STRANGER: Account = lib.Account.fromSeed('9a7c5e3f1b2d4068a0c2e4f6b8d1a3c5
 
 type Pair = { readonly first: RunningLocalNode; readonly second: RunningLocalNode };
 
-type PairOptions = { readonly driver?: DriverUnderTest; readonly p2p?: NodeConfig['p2p'] };
+type PairOptions = { readonly driver?: DriverUnderTest; readonly p2p?: NodeConfig['p2p']; readonly peerLimits?: PeerLimits };
 
 /** Two representatives of one network, each with storage of its own, serving on the loopback interface. */
 async function startPair(options: PairOptions = {}): Promise<Pair> {
@@ -587,11 +588,21 @@ describe('peers over the /p2p WebSocket', function() {
 	});
 });
 
-describe('the bounds on peers', function() {
-	test('keep at most MAX_PEER_SOCKETS sockets open on /p2p, refusing another until one closes', async function() {
-		const { first } = await startPair();
+/** Limits other than the defaults, each below its default. */
+const CONFIGURED_PEER_LIMITS: PeerLimits = { sockets: 3, postedMessages: 6 };
+
+type BoundsCase = { readonly name: string; readonly options: PairOptions; readonly limits: PeerLimits };
+
+const BOUNDS_CASES: readonly BoundsCase[] = [
+	{ name: 'the defaults', options: {}, limits: DEFAULT_PEER_LIMITS },
+	{ name: 'configured limits', options: { peerLimits: CONFIGURED_PEER_LIMITS }, limits: CONFIGURED_PEER_LIMITS }
+];
+
+describe.each(BOUNDS_CASES)('the bounds on peers, with $name,', function({ options, limits }) {
+	test('keep at most the limit of sockets open on /p2p, refusing another until one closes', async function() {
+		const { first } = await startPair(options);
 		const sockets: WebSocket[] = [];
-		for (let index = 0; index < MAX_PEER_SOCKETS; index++) {
+		for (let index = 0; index < limits.sockets; index++) {
 			sockets.push(await listenerSocket(first.node, `listener-${String(index)}`));
 		}
 
@@ -606,8 +617,8 @@ describe('the bounds on peers', function() {
 		}
 	});
 
-	test('refuse a message posted over HTTP while the switch handles MAX_POSTED_MESSAGES_HANDLED of them, handing it nothing', async function() {
-		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
+	test('refuse a message posted over HTTP while the switch handles the limit of them, handing it nothing', async function() {
+		const { first, second } = await startPair({ ...options, p2p: { useHTTPRepublish: true } });
 		const greeting = await first.node.switch.getOutgoingGreetingInfo();
 		const held = holdMessages(second.node);
 		const post = function(id: string): Promise<unknown> {
@@ -617,12 +628,12 @@ describe('the bounds on peers', function() {
 		};
 
 		// Each post hands the switch the sender's greeting and the message.
-		for (let index = 0; index < MAX_POSTED_MESSAGES_HANDLED / 2; index++) {
+		for (let index = 0; index < limits.postedMessages / 2; index++) {
 			expect(await post(`held-${String(index)}`)).toEqual({ success: true });
 		}
-		expect(held.delivered()).toBe(MAX_POSTED_MESSAGES_HANDLED);
+		expect(held.delivered()).toBe(limits.postedMessages);
 		expect(await post('refused')).toEqual({ success: false });
-		expect(held.delivered()).toBe(MAX_POSTED_MESSAGES_HANDLED);
+		expect(held.delivered()).toBe(limits.postedMessages);
 
 		await held.release();
 		expect(await post('after')).toEqual({ success: true });

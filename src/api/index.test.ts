@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { documentPathOf } from '../conformance/api/routes.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
+import { DEFAULT_PEER_LIMITS } from '../node/peer-limits.js';
 import { createTestNetwork } from '../testing/network.js';
 import { defineGET, definePOST, invokeRoute, routeTable } from './index.js';
 import type { APIRequest, Route } from './index.js';
@@ -14,6 +15,7 @@ async function requestWith(parts: Pick<APIRequest, 'params' | 'payload'>): Promi
 	return({
 		node: network.createNode(new MemoryLedgerStorage(), representative),
 		query: {},
+		peerLimits: DEFAULT_PEER_LIMITS,
 		header: {
 			get: function(): undefined {
 				return(undefined);

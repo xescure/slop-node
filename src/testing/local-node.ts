@@ -9,6 +9,8 @@ import { GENESIS_MOMENT, requireAt } from '../ledger/storage/suite/support.js';
 import type { DriverUnderTest } from '../ledger/storage/suite/types.js';
 import { bootstrapFrom } from '../node/bootstrap-peers.js';
 import { LocalNode } from '../node/local.js';
+import type { LimitedLocalNodeConfig } from '../node/local.js';
+import type { PeerLimits } from '../node/peer-limits.js';
 import { assertNever } from '../util/assert-never.js';
 import { createTestNetwork, freezeClock } from './network.js';
 import type { TestFeePolicy, TestLedgerOptions, TestNetwork } from './network.js';
@@ -33,6 +35,8 @@ export type LocalNodeOptions = {
 	readonly bootstrap?: LocalNodeConfig['bootstrap'];
 	/** API endpoints the node bootstraps from besides the peers it knows. */
 	readonly bootstrapFrom?: readonly string[];
+	/** The node's own defaults unless given. */
+	readonly peerLimits?: PeerLimits;
 };
 
 /** A representative node of a test network, holding genesis, as built before it runs. */
@@ -106,7 +110,7 @@ export function useLocalNodes(): LocalNodes {
 		if (options.ledgerWriteMode !== undefined) {
 			ledgerOptions.ledgerWriteMode = options.ledgerWriteMode;
 		}
-		const config: LocalNodeConfig = {
+		const config: LimitedLocalNodeConfig = {
 			...network.nodeConfig(storage, requireAt(network.representatives, options.representative ?? 0), ledgerOptions),
 			log,
 			nodeOptions: { listenIP: LOOPBACK, listenPort: 0, ...options.nodeOptions }
@@ -119,6 +123,9 @@ export function useLocalNodes(): LocalNodes {
 		}
 		if (options.bootstrap !== undefined) {
 			config.bootstrap = options.bootstrap;
+		}
+		if (options.peerLimits !== undefined) {
+			config.peerLimits = options.peerLimits;
 		}
 		bootstrapFrom(config, options.bootstrapFrom ?? []);
 		const node = new LocalNode(config);
