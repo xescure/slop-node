@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import { LedgerInternals, StatsPending } from './internals.js';
+import { KVInternals, LedgerInternals, StatsPending } from './internals.js';
 
 const Account = KeetaNet.lib.Account;
 
@@ -74,5 +74,15 @@ describe('LedgerInternals', function() {
 
 		expect(pending).not.toBeInstanceOf(KeetaNet.lib.Stats);
 		expect(await stats.get('ledger', 'probe')).toBe(2);
+	});
+});
+
+describe('KVInternals', function() {
+	test('exposes upstream\'s memory key-value store', async function() {
+		const store = new KVInternals.KVStorageProviderMemory();
+		await store.set('stats', 'probe', 3);
+
+		expect(await store.incr('stats', 'probe', 2)).toBe(5n);
+		expect(await store.get('stats', 'probe')).toBe(5);
 	});
 });

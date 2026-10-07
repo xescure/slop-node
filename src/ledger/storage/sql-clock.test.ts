@@ -1,4 +1,4 @@
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
@@ -6,10 +6,7 @@ import { describe, expect, test } from 'vitest';
 const REPOSITORY = new URL('../../../', import.meta.url);
 
 /** Where SQL lives; each must exist and hold at least one file, so the scan is never vacuous. */
-const REQUIRED_ROOTS = ['schema/migrations/', 'src/ledger/storage/postgres/'] as const;
-
-/** Scanned once it exists. */
-const OPTIONAL_ROOTS = ['src/kv/'] as const;
+const REQUIRED_ROOTS = ['schema/migrations/', 'src/ledger/storage/postgres/', 'src/kv/'] as const;
 
 // Whitespace and comments may separate a function name from its parenthesis.
 const GAP = String.raw`(?:\s|/\*[\s\S]*?\*/|--[^\n]*(?:\n|$))*`;
@@ -37,14 +34,6 @@ const DATABASE_CLOCK = new RegExp([
 
 const matchesClock = function(text: string): boolean {
 	return(Array.from(text.matchAll(DATABASE_CLOCK)).length > 0);
-};
-
-const exists = async function(root: URL): Promise<boolean> {
-	try {
-		return((await stat(root)).isDirectory());
-	} catch {
-		return(false);
-	}
 };
 
 const filesUnder = async function(root: string): Promise<string[]> {
@@ -113,21 +102,11 @@ describe('the database clock', function() {
 	});
 
 	test('no SQL uses the database clock', async function() {
-		const optional: string[] = [];
-		for (const root of OPTIONAL_ROOTS) {
-			if (await exists(new URL(root, REPOSITORY))) {
-				optional.push(root);
-			}
-		}
-
 		const files: string[] = [];
 		for (const root of REQUIRED_ROOTS) {
 			const found = await filesUnder(root);
 			expect(found, root).not.toEqual([]);
 			files.push(...found);
-		}
-		for (const root of optional) {
-			files.push(...await filesUnder(root));
 		}
 
 		const offending = (await Promise.all(files.map(offenses))).flat();

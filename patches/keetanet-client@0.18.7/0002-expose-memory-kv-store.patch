@@ -1,0 +1,48 @@
+Expose upstream's memory key-value store on the lib default export
+
+Why: a key-value provider of our own has to behave as upstream's memory store
+does, and a shared suite proves it only by running the same cases against
+that store, so the store must be constructible.
+Upstream status: the package exports no key-value provider, and lib/kv has
+type declarations only, so the bundle's webpack module 1557 (kv/kv_memory) is
+reached through the lib default export (module 8568) and its public type in
+client/index.d.ts. Nothing upstream needs the base class,
+KVStorageProviderBase, at runtime: it never reads a provider's id and never
+tests a provider's class, so the base is not exposed.
+Removal condition: upstream exports KVStorageProviderMemory, then delete this
+patch and import it from the public entry point.
+
+Applies with "patch -p1" from the package root, after 0001.
+
+--- a/client/index.js
++++ b/client/index.js
+@@ -66787,6 +66787,7 @@
+ const Certificate = __importStar(__webpack_require__(5661));
+ const common_1 = __webpack_require__(5663);
+ const effects_1 = __webpack_require__(7346);
++const kv_memory_1 = __webpack_require__(1557);
+ exports["default"] = {
+     /**
+      * The `Account` module provides functionality for managing key pairs
+@@ -66803,6 +66804,9 @@
+         addTimeStatistic: common_1.addTimeStatistic,
+         IdempotentKey: ledger_1.IdempotentKey
+     },
++    KVInternals: {
++        KVStorageProviderMemory: kv_memory_1.KVStorageProviderMemory
++    },
+     Log: log_1.default,
+     Node: node_1.default,
+     P2P: p2p_1.default,
+--- a/client/index.d.ts
++++ b/client/index.d.ts
+@@ -1443,6 +1443,9 @@
+         addTimeStatistic: typeof import("../lib/ledger/common").addTimeStatistic;
+         IdempotentKey: typeof import("../lib/ledger").IdempotentKey;
+     };
++    KVInternals: {
++        KVStorageProviderMemory: typeof import("../lib/kv/kv_memory").KVStorageProviderMemory;
++    };
+     Log: typeof import("../lib/log").default;
+     Node: typeof import("../lib/node").Node;
+     P2P: typeof import("../lib/p2p").P2PSwitch;

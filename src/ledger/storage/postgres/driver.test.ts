@@ -323,8 +323,8 @@ describe('the Postgres driver', function() {
 		const transaction = await storage.beginTransaction({ identifier: 'first', readOnly: true });
 		await storage.abortTransaction(transaction);
 
-		const versions = await database.pool().query<{ version: number }>('SELECT version FROM schema_version');
-		expect(versions.rows).toEqual([{ version: 1 }]);
+		const versions = await database.pool().query<{ version: number }>('SELECT version FROM schema_version ORDER BY version');
+		expect(versions.rows).toEqual([{ version: 1 }, { version: 2 }]);
 	});
 
 	test('destroy ends a pool the driver opened and leaves an injected pool to its owner', async function() {
