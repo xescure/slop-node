@@ -2,7 +2,7 @@ import { inspect } from 'node:util';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { assertNever } from '../util/assert-never.js';
 import { NODE_VERSION } from '../version.js';
-import { ConfigError, GENESIS_VARIABLES, getConfigFromEnv, localNodeConfig, NODE_VARIABLES, TRUSTED_ACCOUNT_VARIABLE } from './config.js';
+import { ConfigError, GENESIS_VARIABLES, getConfigFromEnv, localNodeConfig, MAX_FEE_SEED_ACCOUNTS, NODE_VARIABLES, TRUSTED_ACCOUNT_VARIABLE } from './config.js';
 import type { ConfigVariable, Environment, EnvironmentConfig, LogSettings, NetworkSelection } from './config.js';
 import { LocalNodeError } from './errors.js';
 import { addGenesis, GenesisError, getGenesisConfigFromEnv } from './genesis.js';
@@ -44,7 +44,7 @@ const VARIABLE_HELP: Readonly<Record<ConfigVariable, string>> = {
 	KEETANET_LOCAL_NODE_FEE_SCHEDULE: 'free, or flat:<base units per block> (free)',
 	KEETANET_LOCAL_NODE_FEE_SEED: 'with the two indexes below, derives the accounts fees are paid to',
 	KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX: 'the first index of the fee accounts',
-	KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX: 'the last index of the fee accounts',
+	KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX: `the last index of the fee accounts; the range holds at most ${String(MAX_FEE_SEED_ACCOUNTS)}`,
 	KEETANET_LOCAL_NODE_FEE_ACCOUNTS: 'or: the public keys fees are paid to, separated by commas (the representative)',
 	KEETANET_LOCAL_NODE_FEE_TOKEN: 'the public key of the token fees are paid in (the base token)',
 	KEETANET_LOCAL_NODE_NETWORK: 'local, dev, staging, test, main, or a network ID (local); test and main only read-only or bootstrap-only',

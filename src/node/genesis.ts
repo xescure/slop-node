@@ -33,7 +33,9 @@ function parseSupply(text: string): bigint {
 
 /**
  * Genesis creates a network, so it is refused on a public one, which has its
- * own, and in memory, where it would be lost as the command ends.
+ * own, and in memory, where it would be lost as the command ends. A name of
+ * the genesis prefix that it does not read is refused as well, since it is
+ * most likely a misspelling.
  */
 export function getGenesisConfigFromEnv(environment: Environment, config: EnvironmentConfig): GenesisSettings {
 	const network = publicNetworkOf(config.network);
@@ -50,6 +52,10 @@ export function getGenesisConfigFromEnv(environment: Environment, config: Enviro
 	}
 
 	const reader = new EnvironmentReader(environment);
+	const unknown = reader.unknownGenesisVariable();
+	if (unknown !== undefined) {
+		throw(new ConfigError({ kind: 'unknown-variable', variable: unknown }));
+	}
 	const trustedSigner = readSeedAccount(reader, 'KEETANET_GENESIS_TRUSTED_SEED', 'KEETANET_GENESIS_TRUSTED_SEED_INDEX');
 	const derived = trustedSigner.publicKeyString.get();
 	const trusted = config.initialTrustedAccount.publicKeyString.get();

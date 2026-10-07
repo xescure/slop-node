@@ -102,6 +102,14 @@ describe('the genesis settings', function() {
 		}
 	});
 
+	test.each(['0x5382', '0X54455354', '1413829460'])('refuse the network ID %s of a public network', function(network) {
+		expect(problemOf({}, { ...NODE, KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-only' })).toMatchObject({ kind: 'genesis-on-public-network' });
+	});
+
+	test.each(['KEETANET_GENESIS_SUPPLY_AMOUNT', 'KEETANET_GENESIS_DELEGATE', 'KEETANET_GENESIS_TRUSTED_SEED_IDX'])('refuse %s, which is not a genesis setting, so a misspelling is not silently ignored', function(variable) {
+		expect(problemOf({ [variable]: '1' })).toEqual({ kind: 'unknown-variable', variable });
+	});
+
 	test.each(['staging', 'dev'] as const)('allow the %s network, whose ID a private network may reuse', function(network) {
 		expect(settingsFor({}, { ...NODE, KEETANET_LOCAL_NODE_NETWORK: network }).supply).toBe(1000000n);
 	});

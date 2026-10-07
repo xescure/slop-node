@@ -6,7 +6,7 @@ import { PostgresKVStorage } from '../kv/postgres.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { requireAt } from '../ledger/storage/suite/support.js';
 import { deriveTestKeys, TEST_NETWORK_SEEDS } from '../testing/network.js';
-import { ConfigError, getConfigFromEnv, LEDGER_WRITE_MODES, localNodeConfig } from './config.js';
+import { ConfigError, getConfigFromEnv, LEDGER_WRITE_MODES, localNodeConfig, MAX_FEE_SEED_ACCOUNTS } from './config.js';
 import type { ConfigProblem, Environment, EnvironmentConfig, LedgerWriteMode } from './config.js';
 
 const lib = KeetaNet.lib;
@@ -236,9 +236,24 @@ describe('the safety rule', function() {
 		expect(problemOf({ KEETANET_LOCAL_NODE_NETWORK: 'main' })).toEqual({ kind: 'writable-on-public-network', network: 'main', ledgerWriteMode: 'read-write' });
 	});
 
-	test.each(['main', 'test'] as const)('applies to the ID of the %s network', function(alias) {
-		const environment: Environment = { KEETANET_LOCAL_NODE_NETWORK: String(NetworkConfig.NetworkIDs[alias]), KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'no-voting' };
-		expect(problemOf(environment)).toEqual({ kind: 'writable-on-public-network', network: alias, ledgerWriteMode: 'no-voting' });
+	/* Every spelling of the ID that the setting reads as that network. */
+	function spellingsOf(id: bigint): string[] {
+		const hex = id.toString(16);
+		return([id.toString(10), `0x${hex}`, `0X${hex}`, `0x${hex.toUpperCase()}`, `0x00${hex}`]);
+	}
+
+	test.each([
+		['main', ['21378', '0x5382', '0X5382', '0x005382']],
+		['test', ['1413829460', '0x54455354', '0X54455354', '0x0054455354']]
+	] as const)('applies to the ID of the %s network in every spelling', function(alias, written) {
+		expect(spellingsOf(NetworkConfig.NetworkIDs[alias])).toEqual(expect.arrayContaining([...written]));
+		for (const network of spellingsOf(NetworkConfig.NetworkIDs[alias])) {
+			for (const mode of VOTING) {
+				expect(problemOf({ KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: mode })).toEqual({ kind: 'writable-on-public-network', network: alias, ledgerWriteMode: mode });
+			}
+			expect(problemOf({ KEETANET_LOCAL_NODE_NETWORK: network })).toEqual({ kind: 'writable-on-public-network', network: alias, ledgerWriteMode: 'read-write' });
+			expect(parse({ KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-only' }).network).toEqual({ kind: 'known', alias, network: NetworkConfig.NetworkIDs[alias] });
+		}
 	});
 
 	test('says why', function() {
@@ -279,6 +294,13 @@ describe('the fee accounts', function() {
 
 	test('refuse a fee seed that is not one, without repeating it', function() {
 		expect(problemOf({ ...SEEDED, KEETANET_LOCAL_NODE_FEE_SEED: 'secret' })).toEqual({ kind: 'invalid', variable: 'KEETANET_LOCAL_NODE_FEE_SEED', expected: '64 hexadecimal digits' });
+	});
+
+	test('refuse a range of more keys than are derived', function() {
+		expect(parse({ ...SEEDED, KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX: '10', KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX: '1033' }).fee).toMatchObject({ kind: 'flat' });
+		expect(problemOf({ ...SEEDED, KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX: '10', KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX: '1034' })).toEqual({ kind: 'too-many-fee-accounts', count: 1025, maximum: MAX_FEE_SEED_ACCOUNTS });
+		expect(problemOf({ ...SEEDED, KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX: '0', KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX: '4294967295' })).toEqual({ kind: 'too-many-fee-accounts', count: 4294967296, maximum: MAX_FEE_SEED_ACCOUNTS });
+		expect(messageOf({ ...SEEDED, KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX: '2000' })).toBe('KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX and KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX name 1999 fee accounts, but at most 1024 are derived');
 	});
 
 	test('refuse an index outside 32 bits', function() {

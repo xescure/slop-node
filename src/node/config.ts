@@ -17,6 +17,7 @@ const NetworkConfig = KeetaNet.Client.Config;
 export type Environment = Readonly<Record<string, string | undefined>>;
 
 const NODE_PREFIX = 'KEETANET_LOCAL_NODE_';
+const GENESIS_PREFIX = 'KEETANET_GENESIS_';
 
 /**
  * Every variable of the node. The seed, log, write mode, trusted account and
@@ -98,6 +99,7 @@ export type ConfigProblem =
 	| { readonly kind: 'private-key-given'; readonly variable: ConfigVariable }
 	| { readonly kind: 'conflicting'; readonly variables: readonly [ConfigVariable, ConfigVariable] }
 	| { readonly kind: 'fee-recipient-without-fee'; readonly variable: ConfigVariable }
+	| { readonly kind: 'too-many-fee-accounts'; readonly count: number; readonly maximum: number }
 	| { readonly kind: 'writable-on-public-network'; readonly network: PublicNetwork; readonly ledgerWriteMode: LedgerWriteMode }
 	| { readonly kind: 'genesis-on-public-network'; readonly network: PublicNetwork }
 	| { readonly kind: 'genesis-in-memory' }
@@ -122,6 +124,8 @@ function describeProblem(problem: ConfigProblem): string {
 			return(`${problem.variables[0]} and ${problem.variables[1]} cannot both be set`);
 		case 'fee-recipient-without-fee':
 			return(`${problem.variable} says where fees go, but KEETANET_LOCAL_NODE_FEE_SCHEDULE charges nothing`);
+		case 'too-many-fee-accounts':
+			return(`KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX and KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX name ${String(problem.count)} fee accounts, but at most ${String(problem.maximum)} are derived`);
 		case 'writable-on-public-network':
 			return(`the ${problem.network} network is public, so the node may only follow it: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to ${FOLLOWING_WRITE_MODES.join(' or ')} (it is ${problem.ledgerWriteMode})`);
 		case 'genesis-on-public-network':
@@ -205,6 +209,15 @@ const HEXADECIMAL = /^0x[0-9a-f]+$/i;
 
 /** Seed indexes fit in 32 bits [Keeta TS] index.js:61739-61741. */
 const MAX_SEED_INDEX = 0xffffffff;
+
+/*
+ * Every key of the fee seed range is derived as the configuration is read,
+ * at about half a millisecond each, so the whole 32-bit range would take
+ * weeks; this many take about half a second. A vote pays one of them, picked
+ * at random [Keeta TS] index.js:70267-70280, so more only spread the fees
+ * thinner.
+ */
+export const MAX_FEE_SEED_ACCOUNTS = 1024;
 const MAX_PORT = 65535;
 
 const POSTGRES_PROTOCOLS: ReadonlySet<string> = new Set(['postgres:', 'postgresql:']);
@@ -259,9 +272,18 @@ export class EnvironmentReader {
 
 	/** A name of the node's own prefix that it does not read, which is most likely a misspelling. */
 	unknownNodeVariable(): string | undefined {
-		const known: ReadonlySet<string> = new Set(NODE_VARIABLES);
+		return(this.#unknownVariable(NODE_PREFIX, NODE_VARIABLES));
+	}
+
+	/** A name of the genesis command's prefix that it does not read. */
+	unknownGenesisVariable(): string | undefined {
+		return(this.#unknownVariable(GENESIS_PREFIX, GENESIS_VARIABLES));
+	}
+
+	#unknownVariable(prefix: string, variables: readonly ConfigVariable[]): string | undefined {
+		const known: ReadonlySet<string> = new Set(variables);
 		return(Object.keys(this.#environment).find(function(name): boolean {
-			return(name.startsWith(NODE_PREFIX) && !known.has(name));
+			return(name.startsWith(prefix) && !known.has(name));
 		}));
 	}
 }
@@ -479,6 +501,10 @@ function readFeeSeedAccounts(reader: EnvironmentReader): FeeAccount[] {
 	const last = parseSeedIndex('KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX', lastText);
 	if (last < first) {
 		throw(invalid('KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX', `at least KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX (${String(first)})`, lastText));
+	}
+	const count = last - first + 1;
+	if (count > MAX_FEE_SEED_ACCOUNTS) {
+		throw(new ConfigError({ kind: 'too-many-fee-accounts', count, maximum: MAX_FEE_SEED_ACCOUNTS }));
 	}
 	const accounts: FeeAccount[] = [];
 	for (let index = first; index <= last; index++) {
