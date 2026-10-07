@@ -7,9 +7,21 @@ export type MappedDatabaseError =
 	| { readonly kind: 'conflict'; readonly error: KeetaNetLedgerError }
 	| { readonly kind: 'other'; readonly error: unknown };
 
+/**
+ * The statement that failed: COMMIT, or one before it. connectionLost says
+ * whether pg had already reported the transaction's connection lost.
+ */
+export type FailedStatement =
+	| { readonly kind: 'commit' }
+	| { readonly kind: 'before-commit'; readonly connectionLost: boolean };
+
 const SERIALIZATION_FAILURE = '40001';
 const DEADLOCK_DETECTED = '40P01';
 const UNIQUE_VIOLATION = '23505';
+
+// The server ending the session while a statement runs: an administrator's or a shutdown's termination.
+const SESSION_TERMINATED = ['57P01', '57P02'] as const;
+const CONNECTION_EXCEPTION_CLASS = '08';
 
 /*
  * The unique constraints two processes of one node can race to: the same
@@ -29,7 +41,17 @@ const isRacedConstraint = function(constraint: string | undefined): constraint i
 	}));
 };
 
-const conflictWith = function(error: pg.DatabaseError, reason: string): MappedDatabaseError {
+const isSessionLoss = function(error: unknown): boolean {
+	if (!(error instanceof pg.DatabaseError) || error.code === undefined) {
+		return(false);
+	}
+	const { code } = error;
+	return(code.startsWith(CONNECTION_EXCEPTION_CLASS) || SESSION_TERMINATED.some(function(terminated): boolean {
+		return(terminated === code);
+	}));
+};
+
+const conflictWith = function(error: unknown, reason: string): MappedDatabaseError {
 	const conflict = createLedgerError('LEDGER_TRANSACTION_ABORTED', `${reason}: ${describeError(error)}`, { retry: true });
 	conflict.cause = error;
 	return({ kind: 'conflict', error: conflict });
@@ -38,12 +60,17 @@ const conflictWith = function(error: pg.DatabaseError, reason: string): MappedDa
 /**
  * A conflict with a concurrent transaction becomes a retryable
  * LEDGER_TRANSACTION_ABORTED: the database rolled the statement back, and a
- * new attempt reads the winner's writes. Every other error is returned
- * unchanged, and evaluateError makes it a non-retryable LEDGER_OTHER. That
- * includes a connection lost during COMMIT, after which nobody knows whether
- * the transaction committed.
+ * new attempt reads the winner's writes. So does a connection lost before
+ * COMMIT was sent: the server rolls back the transaction of a session that
+ * ends, so nothing of the attempt can have committed. Every other error is
+ * returned unchanged, and evaluateError makes it a non-retryable
+ * LEDGER_OTHER. That includes a connection lost during COMMIT, after which
+ * nobody knows whether the transaction committed.
  */
-export function mapDatabaseError(error: unknown): MappedDatabaseError {
+export function mapDatabaseError(error: unknown, statement: FailedStatement): MappedDatabaseError {
+	if (statement.kind === 'before-commit' && (statement.connectionLost || isSessionLoss(error))) {
+		return(conflictWith(error, 'connection lost before commit'));
+	}
 	if (!(error instanceof pg.DatabaseError)) {
 		return({ kind: 'other', error });
 	}

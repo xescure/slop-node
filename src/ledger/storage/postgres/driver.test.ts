@@ -203,6 +203,31 @@ describe('the Postgres driver', function() {
 		expect(await rowsOf(database.pool(), 'accounts')).toEqual([]);
 	});
 
+	test('a connection lost before commit is retried by Ledger.run', async function() {
+		const database = await ledgerDatabase();
+		const storage = ownedStorageOn(database);
+		const ledger = await ledgerOn(storage);
+		let attempts = 0;
+
+		const outcome = await ledger.run('lost', async function() {
+			attempts++;
+			const transaction = storage.opened.at(-1);
+			if (transaction === undefined) {
+				throw(new Error('Ledger.run opened no transaction'));
+			}
+			if (attempts === 1) {
+				await database.pool().query('SELECT pg_terminate_backend($1, 5000)', [await backendOf(transaction)]);
+			}
+			// The first attempt's statement fails before its COMMIT is ever sent, so nothing of it can have committed.
+			await insertAccount(transaction, 'keeta_retried');
+			return('done');
+		});
+
+		expect(outcome).toBe('done');
+		expect(attempts).toBe(2);
+		expect(await rowsOf(database.pool(), 'accounts')).toEqual(['keeta_retried']);
+	});
+
 	test('a failed unit rolls back to its own savepoint and the transaction carries on', async function() {
 		const database = await ledgerDatabase();
 		const pool = database.pool();

@@ -4,6 +4,7 @@ import pg from 'pg';
 import { createDatabase } from '../../../testing/postgres.js';
 import { PostgresLedgerStorage } from './driver.js';
 import { mapDatabaseError } from './errors.js';
+import type { FailedStatement } from './errors.js';
 
 const lib = KeetaNet.lib;
 
@@ -57,16 +58,37 @@ const VIOLATIONS: Readonly<Record<string, Statement>> = {
 	balances_pkey: ['INSERT INTO balances (account_id, token_id, balance) VALUES (1, 1, 0)', []]
 };
 
-const expectRetryable = function(error: unknown): void {
-	const mapped = mapDatabaseError(error);
+const BEFORE_COMMIT: FailedStatement = { kind: 'before-commit', connectionLost: false };
+const COMMIT: FailedStatement = { kind: 'commit' };
+
+const expectRetryable = function(error: unknown, statement: FailedStatement = BEFORE_COMMIT): void {
+	const mapped = mapDatabaseError(error, statement);
 	expect(mapped.kind).toBe('conflict');
 	expect(lib.Error.isInstance(mapped.error)).toBe(true);
 	expect(mapped.error).toMatchObject({ type: 'LEDGER', code: 'LEDGER_TRANSACTION_ABORTED', shouldRetry: true });
 	expect(mapped.error).toHaveProperty('cause', error);
 };
 
-const expectUnchanged = function(error: unknown): void {
-	expect(mapDatabaseError(error)).toEqual({ kind: 'other', error });
+const expectUnchanged = function(error: unknown, statement: FailedStatement = BEFORE_COMMIT): void {
+	expect(mapDatabaseError(error, statement)).toEqual({ kind: 'other', error });
+};
+
+/** A pooled connection whose session another connection ends, and whose errors the test reads from its statements. */
+const sessionToEnd = async function(pool: pg.Pool): Promise<{ readonly victim: pg.PoolClient; readonly end: () => Promise<unknown> }> {
+	const victim = await pool.connect();
+	onTestFinished(function() {
+		victim.release(true);
+	});
+	victim.on('error', function() {
+		// The server ends the session; the statements report it.
+	});
+	const { rows } = await victim.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+	return({
+		victim,
+		end: function() {
+			return(pool.query('SELECT pg_terminate_backend($1, 5000)', [rows[0]?.pid]));
+		}
+	});
 };
 
 describe('mapDatabaseError', function() {
@@ -149,19 +171,38 @@ describe('mapDatabaseError', function() {
 		expect(await unused.evaluateError(failures['balances_pkey'])).toMatchObject({ code: 'LEDGER_OTHER', shouldRetry: false });
 	});
 
-	test('a terminated connection and other errors are returned unchanged', async function() {
+	test('a session the server ends during a statement is a retryable conflict before COMMIT and unchanged at COMMIT', async function() {
 		const pool = await ledgerPool();
-		const victim = await pool.connect();
-		victim.on('error', function() {
-			// The server ends the session; the query below reports it.
-		});
-		const { rows } = await victim.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
-		await pool.query('SELECT pg_terminate_backend($1, 5000)', [rows[0]?.pid]);
+		const { victim } = await sessionToEnd(pool);
 
-		const terminated = await failureOf(victim.query('SELECT 1'));
-		victim.release(true);
+		// The session ends itself, so its own statement is running when the server ends it.
+		const terminated = await failureOf(victim.query('SELECT pg_terminate_backend(pg_backend_pid())'));
 
-		expectUnchanged(terminated);
+		expect(terminated).toMatchObject({ code: '57P01' });
+		expectRetryable(terminated);
+		expectUnchanged(terminated, COMMIT);
+	});
+
+	test('a statement on a connection already reported lost is a retryable conflict before COMMIT and unchanged at COMMIT', async function() {
+		const pool = await ledgerPool();
+		const { victim, end } = await sessionToEnd(pool);
+		await end();
+
+		const failed = await failureOf(victim.query('SELECT 1'));
+
+		expectRetryable(failed, { kind: 'before-commit', connectionLost: true });
+		expectUnchanged(failed, COMMIT);
+	});
+
+	test('a connection exception (class 08) is a retryable conflict only before COMMIT', function() {
+		const failure = new pg.DatabaseError('connection failure', 0, 'error');
+		failure.code = '08006';
+
+		expectRetryable(failure);
+		expectUnchanged(failure, COMMIT);
+	});
+
+	test('other errors are returned unchanged', function() {
 		expectUnchanged(new Error('disk on fire'));
 		expectUnchanged('not even an error');
 	});

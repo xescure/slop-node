@@ -148,11 +148,17 @@ export class PostgresTransaction extends LedgerDriverTransaction {
 	// A conflict seen anywhere dooms the attempt, even one a unit rolled back
 	// and its caller handled: what the attempt read may already be stale.
 	#conflict: KeetaNetLedgerError | undefined;
+	// pg emits the loss before it fails the statements it affects.
+	#connectionLost = false;
+	readonly #noteConnectionLost = (): void => {
+		this.#connectionLost = true;
+	};
 
 	/** Takes a client checked out with checkOut that has run BEGIN. */
 	constructor(options: TransactionOptions, client: pg.PoolClient) {
 		super(options);
 		this.#state = { status: 'open', client };
+		client.on('error', this.#noteConnectionLost);
 	}
 
 	/** Runs a prepared statement of the driver's in this transaction. */
@@ -214,7 +220,7 @@ export class PostgresTransaction extends LedgerDriverTransaction {
 			committed = await client.query('COMMIT');
 		} catch (error: unknown) {
 			this.#finish(client, 'failed', true);
-			throw(mapDatabaseError(error).error);
+			throw(mapDatabaseError(error, { kind: 'commit' }).error);
 		}
 		// Postgres answers COMMIT of a transaction that a failed statement aborted with ROLLBACK.
 		if (committed.command !== 'COMMIT') {
@@ -253,6 +259,7 @@ export class PostgresTransaction extends LedgerDriverTransaction {
 
 	#finish(client: pg.PoolClient, outcome: Outcome, closeConnection: boolean): void {
 		this.#state = { status: 'finished', outcome };
+		client.removeListener('error', this.#noteConnectionLost);
 		checkIn(client, closeConnection);
 	}
 
@@ -279,7 +286,7 @@ export class PostgresTransaction extends LedgerDriverTransaction {
 		try {
 			return(await turn);
 		} catch (error: unknown) {
-			const mapped = mapDatabaseError(error);
+			const mapped = mapDatabaseError(error, { kind: 'before-commit', connectionLost: this.#connectionLost });
 			if (mapped.kind === 'conflict') {
 				this.#conflict ??= mapped.error;
 			}
@@ -664,7 +671,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 			await client.query(begin);
 		} catch (error: unknown) {
 			checkIn(client, true);
-			throw(mapDatabaseError(error).error);
+			throw(mapDatabaseError(error, { kind: 'before-commit', connectionLost: false }).error);
 		}
 		return(new PostgresTransaction(options, client));
 	}
