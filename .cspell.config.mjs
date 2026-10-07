@@ -35,6 +35,9 @@ export default {
 		'datname',
 		'pkey',
 		'cmdline',
+		// Names in upstream's API: a route segment and a switch statistic.
+		'clearstats',
+		'ungreeted',
 		// Elliptic curve names in upstream's key algorithms.
 		'secp',
 		// The migration lock key, 0x6b656574616c6467, read as ASCII.

@@ -1,0 +1,1944 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "KeetaNet node HTTP API",
+    "version": "0.18.7",
+    "description": "The HTTP API of a KeetaNet node as described by version 0.18.7 of @keetanetwork/keetanet-client. The routes are those of the \"rootTree\" in the package's API typings (api/index.d.ts); the request and response shapes are the typed values as the package serializes them. Citations name the package's bundle, client/index.js, by line ([Keeta TS] index.js:N), or its typings by file. A response body is the handler's result passed through the package's JSON conversion with binary encodings added, which is why blocks, votes, quotes and staples at the top of a response carry \"$binary\" (the client decodes them from it, [Keeta TS] index.js:58891, 58977, 59808, 59814, 59923). Every route is served below /api [Keeta TS] index.js:61390."
+  },
+  "jsonSchemaDialect": "https://spec.openapis.org/oas/3.1/dialect/base",
+  "paths": {
+    "/api/vote": {
+      "post": {
+        "operationId": "createVote",
+        "summary": "Ask the node to vote for blocks",
+        "description": "The blocks are ASN.1 encoded and base64 encoded; \"votes\" carries the votes of other representatives when a permanent vote is requested, and \"quote\" a fee quote previously issued by this node [Keeta TS] index.js:59855-59866, 59775. The client reads the vote from \"vote.$binary\" [Keeta TS] index.js:59806-59810.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["blocks"],
+                "properties": {
+                  "blocks": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "$ref": "#/components/schemas/Base64" }
+                  },
+                  "votes": {
+                    "description": "Must not be empty when present [Keeta TS] index.js:59861-59863.",
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "$ref": "#/components/schemas/Base64" }
+                  },
+                  "quote": { "$ref": "#/components/schemas/Base64" }
+                },
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The node's vote.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["vote"],
+                  "properties": {
+                    "vote": { "$ref": "#/components/schemas/Vote" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/vote/quote": {
+      "post": {
+        "operationId": "createVoteQuote",
+        "summary": "Ask the node to quote its fee for voting for blocks",
+        "description": "The blocks are ASN.1 encoded and base64 encoded [Keeta TS] index.js:59844-59849. The client reads the quote from \"quote.$binary\" [Keeta TS] index.js:59811-59815.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["blocks"],
+                "properties": {
+                  "blocks": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "$ref": "#/components/schemas/Base64" }
+                  }
+                },
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The node's fee quote.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["quote"],
+                  "properties": {
+                    "quote": { "$ref": "#/components/schemas/VoteQuote" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/vote/{blockhash}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/BlockhashPath" }
+      ],
+      "get": {
+        "operationId": "getVotes",
+        "summary": "The votes the node holds for a block",
+        "description": "\"votes\" is null when the node holds no votes for the block [Keeta TS] index.js:59915-59919.",
+        "parameters": [
+          { "$ref": "#/components/parameters/Side" }
+        ],
+        "responses": {
+          "200": {
+            "description": "The block's hash and its votes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["blockhash", "votes"],
+                  "properties": {
+                    "blockhash": { "$ref": "#/components/schemas/Hash" },
+                    "votes": {
+                      "oneOf": [
+                        {
+                          "type": "array",
+                          "items": { "$ref": "#/components/schemas/Vote" }
+                        },
+                        { "type": "null" }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/peers": {
+      "get": {
+        "operationId": "getPeers",
+        "summary": "The peers the node knows",
+        "responses": {
+          "200": {
+            "description": "The node's peers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["peers"],
+                  "properties": {
+                    "peers": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Peer" }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/publish": {
+      "post": {
+        "operationId": "publishVoteStaple",
+        "summary": "Publish a vote staple to the node",
+        "description": "\"votesAndBlocks\" is the staple's binary form, base64 encoded [Keeta TS] index.js:58481-58485.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["votesAndBlocks"],
+                "properties": {
+                  "votesAndBlocks": { "$ref": "#/components/schemas/Base64" }
+                },
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Whether the staple was published.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["publish"],
+                  "properties": {
+                    "publish": { "type": "boolean" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/stats": {
+      "get": {
+        "operationId": "getNodeStats",
+        "summary": "The node's ledger and peer-to-peer statistics",
+        "responses": {
+          "200": {
+            "description": "Ledger and switch statistics.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["ledger", "switch"],
+                  "properties": {
+                    "ledger": { "$ref": "#/components/schemas/LedgerStatistics" },
+                    "switch": { "$ref": "#/components/schemas/P2PSwitchStatistics" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/version": {
+      "get": {
+        "operationId": "getVersion",
+        "summary": "The node's software version",
+        "responses": {
+          "200": {
+            "description": "The version string.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["node"],
+                  "properties": {
+                    "node": { "type": "string" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/bootstrap/votes": {
+      "get": {
+        "operationId": "getVoteStaplesAfter",
+        "summary": "Vote staples added to the node's ledger since a moment",
+        "description": "Pages through the ledger by moment; a page is empty once every staple has been returned [Keeta TS] index.js:59140-59182.",
+        "parameters": [
+          {
+            "name": "start",
+            "in": "query",
+            "required": true,
+            "description": "The moment to return staples after, as an ISO 8601 date [Keeta TS] index.js:59166-59168. The API error codes include START_MISSING and INVALID_START [Keeta TS] index.js:66022-66030.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "The largest number of staples to return, in decimal [Keeta TS] index.js:59169-59171.",
+            "schema": { "$ref": "#/components/schemas/DecimalCount" }
+          },
+          {
+            "name": "bloomFilter",
+            "in": "query",
+            "required": false,
+            "description": "A serialized bloom filter of staples already received, which the node leaves out [Keeta TS] index.js:59151-59154, 59172-59174.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of staples.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["voteStaples"],
+                  "properties": {
+                    "voteStaples": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/VoteStaple" }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/clearstats": {
+      "get": {
+        "operationId": "debugClearStats",
+        "summary": "Clear the node's statistics",
+        "responses": {
+          "200": {
+            "description": "Whether the statistics were cleared.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["clearStats"],
+                  "properties": {
+                    "clearStats": { "type": "boolean" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/checksum": {
+      "get": {
+        "operationId": "getLedgerChecksum",
+        "summary": "A checksum of the node's ledger",
+        "responses": {
+          "200": {
+            "description": "The checksum and the moment it covers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["moment", "momentRange", "checksum"],
+                  "properties": {
+                    "moment": { "$ref": "#/components/schemas/Date" },
+                    "momentRange": { "type": "number" },
+                    "checksum": { "$ref": "#/components/schemas/BigInt" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/block/{blockhash}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/BlockhashPath" }
+      ],
+      "get": {
+        "operationId": "getBlockByHash",
+        "summary": "A block by its hash",
+        "description": "\"block\" is null when the ledger side holds no such block [Keeta TS] index.js:58790-58792.",
+        "parameters": [
+          { "$ref": "#/components/parameters/Side" }
+        ],
+        "responses": {
+          "200": {
+            "description": "The requested hash and the block.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["blockhash", "block"],
+                  "properties": {
+                    "blockhash": { "type": "string" },
+                    "block": { "$ref": "#/components/schemas/NullableBlock" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/block/{blockhash}/successor": {
+      "parameters": [
+        { "$ref": "#/components/parameters/BlockhashPath" }
+      ],
+      "get": {
+        "operationId": "getBlockSuccessor",
+        "summary": "The block that follows a block on its account's chain",
+        "description": "\"successorBlock\" is null when the node knows no successor [Keeta TS] index.js:59255-59263.",
+        "responses": {
+          "200": {
+            "description": "The requested hash and its successor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["blockhash", "successorBlock"],
+                  "properties": {
+                    "blockhash": { "type": "string" },
+                    "successorBlock": { "$ref": "#/components/schemas/NullableBlock" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/representative": {
+      "get": {
+        "operationId": "getRepresentative",
+        "summary": "The node's own representative and its weight",
+        "description": "The API error codes include REP_MISSING [Keeta TS] index.js:66022-66030.",
+        "responses": {
+          "200": {
+            "description": "The representative and its weight.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RepresentativeWeight" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/representative/{rep}": {
+      "parameters": [
+        {
+          "name": "rep",
+          "in": "path",
+          "required": true,
+          "description": "The representative's account [Keeta TS] index.js:59011-59016.",
+          "schema": { "$ref": "#/components/schemas/Account" }
+        }
+      ],
+      "get": {
+        "operationId": "getRepresentativeByAccount",
+        "summary": "A representative and its weight",
+        "responses": {
+          "200": {
+            "description": "The representative and its weight.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RepresentativeWeight" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/representatives": {
+      "get": {
+        "operationId": "getAllRepresentatives",
+        "summary": "Every representative the node knows, with weights and endpoints",
+        "responses": {
+          "200": {
+            "description": "The representatives.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["representatives"],
+                  "properties": {
+                    "representatives": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": ["representative", "weight", "endpoints"],
+                        "properties": {
+                          "representative": { "$ref": "#/components/schemas/Account" },
+                          "weight": { "$ref": "#/components/schemas/BigInt" },
+                          "endpoints": { "$ref": "#/components/schemas/Endpoints" }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/history": {
+      "get": {
+        "operationId": "getHistory",
+        "summary": "The vote staples of the whole ledger, newest first",
+        "parameters": [
+          { "$ref": "#/components/parameters/HistoryStart" },
+          { "$ref": "#/components/parameters/HistoryLimit" }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of history.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HistoryPage" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/accounts/{accounts}": {
+      "parameters": [
+        {
+          "name": "accounts",
+          "in": "path",
+          "required": true,
+          "description": "Accounts separated by commas [Keeta TS] index.js:59958-59960.",
+          "schema": { "$ref": "#/components/schemas/AccountList" }
+        }
+      ],
+      "get": {
+        "operationId": "getAccountStates",
+        "summary": "The state of several accounts",
+        "responses": {
+          "200": {
+            "description": "One state per requested account; the client matches them by \"account\" [Keeta TS] index.js:58572-58575.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/AccountStateOrError" }
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/account/{account}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/AccountPath" }
+      ],
+      "get": {
+        "operationId": "getAccountState",
+        "summary": "The state of an account",
+        "responses": {
+          "200": {
+            "description": "The account's state, or why it could not be read.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AccountStateOrError" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/account/{account}/head": {
+      "parameters": [
+        { "$ref": "#/components/parameters/AccountPath" }
+      ],
+      "get": {
+        "operationId": "getAccountHead",
+        "summary": "The head block of an account's chain and its height",
+        "description": "\"block\" and \"height\" are null when the account has no blocks [Keeta TS] index.js:58743-58745.",
+        "responses": {
+          "200": {
+            "description": "The account, its head block and its height.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["account", "block", "height"],
+                  "properties": {
+                    "account": { "$ref": "#/components/schemas/Account" },
+                    "block": { "$ref": "#/components/schemas/NullableBlock" },
+                    "height": {
+                      "oneOf": [
+                        { "$ref": "#/components/schemas/BigInt" },
+                        { "type": "null" }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/account/{account}/chain": {
+      "parameters": [
+        { "$ref": "#/components/parameters/AccountPath" }
+      ],
+      "get": {
+        "operationId": "getAccountChain",
+        "summary": "The blocks of an account's chain, newest first",
+        "description": "Pages through the chain; \"nextKey\" is the \"start\" of the next page and null after the last [Keeta TS] index.js:58868-58901.",
+        "parameters": [
+          {
+            "name": "start",
+            "in": "query",
+            "required": false,
+            "description": "The hash of the block to start from, or HEAD for the account's head block [Keeta TS] index.js:58871-58877.",
+            "schema": {
+              "oneOf": [
+                { "const": "HEAD" },
+                { "$ref": "#/components/schemas/HashInput" }
+              ]
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": false,
+            "description": "The hash of the block to stop at [Keeta TS] index.js:58878-58880.",
+            "schema": { "$ref": "#/components/schemas/HashInput" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "The largest number of blocks to return, in decimal; the client asks for at most 200 [Keeta TS] index.js:58873.",
+            "schema": { "$ref": "#/components/schemas/DecimalCount" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of the chain.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["account", "blocks", "nextKey"],
+                  "properties": {
+                    "account": { "$ref": "#/components/schemas/Account" },
+                    "blocks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": ["block"],
+                        "properties": {
+                          "block": { "$ref": "#/components/schemas/Block" }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "nextKey": {
+                      "oneOf": [
+                        { "$ref": "#/components/schemas/Hash" },
+                        { "type": "null" }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/account/{account}/history": {
+      "parameters": [
+        { "$ref": "#/components/parameters/AccountPath" }
+      ],
+      "get": {
+        "operationId": "getAccountHistory",
+        "summary": "The vote staples that touched an account, newest first",
+        "parameters": [
+          { "$ref": "#/components/parameters/HistoryStart" },
+          { "$ref": "#/components/parameters/HistoryLimit" }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of history.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HistoryPage" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/account/{account}/history/start/{block}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/AccountPath" },
+        {
+          "name": "block",
+          "in": "path",
+          "required": true,
+          "description": "The staple to start from, as the hash of its blocks, in place of the \"start\" query parameter (api/node.d.ts, getAccountHistory).",
+          "schema": { "$ref": "#/components/schemas/HashInput" }
+        }
+      ],
+      "get": {
+        "operationId": "getAccountHistoryFrom",
+        "summary": "The vote staples that touched an account, from a given staple",
+        "parameters": [
+          { "$ref": "#/components/parameters/HistoryLimit" }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of history.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HistoryPage" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/account/{account}/balance": {
+      "parameters": [
+        { "$ref": "#/components/parameters/AccountPath" }
+      ],
+      "get": {
+        "operationId": "getAllBalances",
+        "summary": "Every token balance of an account",
+        "responses": {
+          "200": {
+            "description": "The account and its balances.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["account", "balances"],
+                  "properties": {
+                    "account": { "$ref": "#/components/schemas/Account" },
+                    "balances": { "$ref": "#/components/schemas/Balances" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/account/{account}/balance/{token}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/AccountPath" },
+        {
+          "name": "token",
+          "in": "path",
+          "required": true,
+          "description": "The token's account [Keeta TS] index.js:58653-58661.",
+          "schema": { "$ref": "#/components/schemas/Account" }
+        }
+      ],
+      "get": {
+        "operationId": "getAccountBalance",
+        "summary": "An account's balance of one token",
+        "responses": {
+          "200": {
+            "description": "The account, the token and the balance.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["account", "token", "balance"],
+                  "properties": {
+                    "account": { "$ref": "#/components/schemas/Account" },
+                    "token": { "$ref": "#/components/schemas/Account" },
+                    "balance": { "$ref": "#/components/schemas/BigInt" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/account/{account}/acl": {
+      "parameters": [
+        { "$ref": "#/components/parameters/AccountPath" }
+      ],
+      "get": {
+        "operationId": "listACLsByPrincipal",
+        "summary": "The permissions granted to an account as principal",
+        "responses": {
+          "200": {
+            "description": "The ACL rows.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PermissionsList" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/account/{account}/acl/{entityList}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/AccountPath" },
+        { "$ref": "#/components/parameters/EntityList" }
+      ],
+      "get": {
+        "operationId": "listACLsByPrincipalForEntities",
+        "summary": "The permissions granted to an account as principal on the listed entities",
+        "responses": {
+          "200": {
+            "description": "The ACL rows.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PermissionsList" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/account/{account}/acl/granted": {
+      "parameters": [
+        { "$ref": "#/components/parameters/AccountPath" }
+      ],
+      "get": {
+        "operationId": "listACLsByEntity",
+        "summary": "The permissions any principal holds on an account as entity",
+        "description": "The path's account is the entity [Keeta TS] index.js:58637-58644.",
+        "responses": {
+          "200": {
+            "description": "The ACL rows.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PermissionsList" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/account/{account}/acl/additional": {
+      "parameters": [
+        { "$ref": "#/components/parameters/AccountPath" }
+      ],
+      "get": {
+        "operationId": "listACLsByPrincipalWithInfo",
+        "summary": "The permissions granted to an account as principal, with each entity's info and balances",
+        "responses": {
+          "200": {
+            "description": "The principal and its access per entity.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PrincipalAccess" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/account/{account}/acl/additional/{entityList}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/AccountPath" },
+        { "$ref": "#/components/parameters/EntityList" }
+      ],
+      "get": {
+        "operationId": "listACLsByPrincipalWithInfoForEntities",
+        "summary": "The permissions granted to an account as principal on the listed entities, with each entity's info and balances",
+        "description": "The client reads each entry's entity, info, balances and principals [Keeta TS] index.js:58618-58627.",
+        "responses": {
+          "200": {
+            "description": "The principal and its access per entity.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PrincipalAccess" }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/account/{account}/certificates": {
+      "parameters": [
+        { "$ref": "#/components/parameters/AccountPath" }
+      ],
+      "get": {
+        "operationId": "getAccountCertificates",
+        "summary": "The certificates of an account",
+        "description": "Each certificate and intermediate is a string the client parses as a certificate [Keeta TS] index.js:60054-60065.",
+        "responses": {
+          "200": {
+            "description": "The account and its certificates.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["account", "certificates"],
+                  "properties": {
+                    "account": { "$ref": "#/components/schemas/Account" },
+                    "certificates": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": ["certificate", "intermediates"],
+                        "properties": {
+                          "certificate": { "type": "string" },
+                          "intermediates": { "$ref": "#/components/schemas/NullableCertificateStrings" }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/account/{account}/certificates/{certificateHash}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/AccountPath" },
+        {
+          "name": "certificateHash",
+          "in": "path",
+          "required": true,
+          "description": "The certificate's hash [Keeta TS] index.js:58708-58719.",
+          "schema": { "$ref": "#/components/schemas/HashInput" }
+        }
+      ],
+      "get": {
+        "operationId": "getCertificateByHash",
+        "summary": "One certificate of an account",
+        "description": "\"certificate\" and \"intermediates\" are null when the account has no such certificate [Keeta TS] index.js:58720-58722.",
+        "responses": {
+          "200": {
+            "description": "The certificate and its intermediates.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": ["certificate", "intermediates", "account"],
+                      "properties": {
+                        "certificate": { "type": "string" },
+                        "intermediates": { "$ref": "#/components/schemas/NullableCertificateStrings" },
+                        "account": { "$ref": "#/components/schemas/Account" }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": ["certificate", "intermediates", "account"],
+                      "properties": {
+                        "certificate": { "type": "null" },
+                        "intermediates": { "type": "null" },
+                        "account": { "$ref": "#/components/schemas/Account" }
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/account/{account}/pending": {
+      "parameters": [
+        { "$ref": "#/components/parameters/AccountPath" }
+      ],
+      "get": {
+        "operationId": "getAccountPendingBlock",
+        "summary": "The block of an account the node holds on its side ledger, awaiting votes",
+        "description": "\"block\" is null when nothing is pending [Keeta TS] index.js:59219-59226.",
+        "responses": {
+          "200": {
+            "description": "The account and its pending block.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["account", "block"],
+                  "properties": {
+                    "account": { "$ref": "#/components/schemas/Account" },
+                    "block": { "$ref": "#/components/schemas/NullableBlock" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/node/ledger/account/{account}/idempotent/{idempotent}": {
+      "parameters": [
+        { "$ref": "#/components/parameters/AccountPath" },
+        {
+          "name": "idempotent",
+          "in": "path",
+          "required": true,
+          "description": "The block's idempotent key, base64 encoded [Keeta TS] index.js:59526-59532.",
+          "schema": { "$ref": "#/components/schemas/Base64" }
+        }
+      ],
+      "get": {
+        "operationId": "getBlockFromIdempotent",
+        "summary": "The block an account published with an idempotent key",
+        "description": "\"block\" is null when the account has no block with the key [Keeta TS] index.js:59540-59542.",
+        "parameters": [
+          { "$ref": "#/components/parameters/Side" }
+        ],
+        "responses": {
+          "200": {
+            "description": "The block.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["block"],
+                  "properties": {
+                    "block": { "$ref": "#/components/schemas/NullableBlock" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
+    "/api/p2p/message": {
+      "post": {
+        "operationId": "handleMessage",
+        "summary": "Deliver a peer-to-peer message over HTTP",
+        "description": "A representative that prefers updates over HTTP receives peer-to-peer messages here; \"greeting\" is the sender's own peer record [Keeta TS] index.js:72195-72216, 72791-72799.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["message", "greeting"],
+                "properties": {
+                  "message": {
+                    "description": "The peer-to-peer message as JSON text [Keeta TS] index.js:72211.",
+                    "type": "string"
+                  },
+                  "greeting": { "$ref": "#/components/schemas/Peer" }
+                },
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Whether the message was accepted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["success"],
+                  "properties": {
+                    "success": { "type": "boolean" }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "default": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "AccountPath": {
+        "name": "account",
+        "in": "path",
+        "required": true,
+        "description": "The account, as its public key string [Keeta TS] index.js:58546-58553.",
+        "schema": { "$ref": "#/components/schemas/Account" }
+      },
+      "BlockhashPath": {
+        "name": "blockhash",
+        "in": "path",
+        "required": true,
+        "description": "The block's hash [Keeta TS] index.js:58778-58789.",
+        "schema": { "$ref": "#/components/schemas/HashInput" }
+      },
+      "EntityList": {
+        "name": "entityList",
+        "in": "path",
+        "required": true,
+        "description": "Entity accounts separated by commas [Keeta TS] index.js:58588-58597, 59958-59960.",
+        "schema": { "$ref": "#/components/schemas/AccountList" }
+      },
+      "Side": {
+        "name": "side",
+        "in": "query",
+        "required": false,
+        "description": "Which ledger to read: \"main\" holds what has been voted for permanently, \"side\" what is still awaiting votes [Keeta TS] index.js:67868-67873, 58778-58789. The API error codes include INVALID_SIDE [Keeta TS] index.js:66022-66030.",
+        "schema": {
+          "type": "string",
+          "enum": ["main", "side"]
+        }
+      },
+      "HistoryStart": {
+        "name": "start",
+        "in": "query",
+        "required": false,
+        "description": "The staple to start from, as the hash of its blocks: the \"nextKey\" of the previous page [Keeta TS] index.js:58951-58954, 58986-58990.",
+        "schema": { "$ref": "#/components/schemas/HashInput" }
+      },
+      "HistoryLimit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "description": "The largest number of staples to return, in decimal [Keeta TS] index.js:58948-58951. The API error codes include LIMIT_NOT_NUMBER, LIMIT_NOT_GREATER_THAN_ZERO and INVALID_LIMIT [Keeta TS] index.js:66022-66030.",
+        "schema": { "$ref": "#/components/schemas/DecimalCount" }
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "A failure. The client treats a body whose \"error\" is true as a KeetaNet error and rebuilds it from the body [Keeta TS] index.js:59629-59652; any other body is reported as text [Keeta TS] index.js:59656-59671.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "BigInt": {
+        "description": "An integer as \"0x\" followed by its magnitude in uppercase hexadecimal without leading zeros, after a \"-\" when negative [Keeta TS] index.js:78420-78433.",
+        "type": "string",
+        "pattern": "^-?0x(?:0|[1-9A-F][0-9A-F]*)$"
+      },
+      "DecimalCount": {
+        "description": "A positive integer in decimal, as a query parameter.",
+        "type": "string",
+        "pattern": "^[1-9][0-9]*$"
+      },
+      "Account": {
+        "description": "An account as its public key string: \"keeta_\" and the base32 of the key type, the 32- or 33-byte public key and a 5-byte checksum, in lowercase without padding [Keeta TS] index.js:62455-62468, 76739-76744, 63012-63014.",
+        "type": "string",
+        "pattern": "^keeta_(?:[a-z2-7]{61}|[a-z2-7]{63})$"
+      },
+      "AccountList": {
+        "description": "Accounts separated by commas [Keeta TS] index.js:59958-59960.",
+        "type": "string",
+        "pattern": "^keeta_[a-z2-7]+(?:,keeta_[a-z2-7]+)*$"
+      },
+      "Hash": {
+        "description": "A 32-byte hash in uppercase hexadecimal [Keeta TS] index.js:63186-63193, 76858-76862.",
+        "type": "string",
+        "pattern": "^[0-9A-F]{64}$"
+      },
+      "HashInput": {
+        "description": "A 32-byte hash in hexadecimal, as a request parameter; the hash types decode hexadecimal of either case [Keeta TS] index.js:76805-76814.",
+        "type": "string",
+        "pattern": "^[0-9A-Fa-f]{64}$"
+      },
+      "HexBytes": {
+        "description": "Bytes in uppercase hexadecimal [Keeta TS] index.js:78439-78443.",
+        "type": "string",
+        "pattern": "^(?:[0-9A-F]{2})*$"
+      },
+      "Base64": {
+        "description": "Bytes in standard base64 with padding [Keeta TS] index.js:63911-63913.",
+        "type": "string",
+        "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+      },
+      "Date": {
+        "description": "A moment as an ISO 8601 date in UTC with milliseconds [Keeta TS] index.js:78436-78437.",
+        "type": "string",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+      },
+      "Permissions": {
+        "description": "The base and external permission sets as two integers [Keeta TS] index.js:74240-74242.",
+        "type": "array",
+        "prefixItems": [
+          { "$ref": "#/components/schemas/BigInt" },
+          { "$ref": "#/components/schemas/BigInt" }
+        ],
+        "items": false,
+        "minItems": 2
+      },
+      "AdjustMethod": {
+        "description": "0 adds, 1 subtracts, 2 sets [Keeta TS] index.js:63147-63151.",
+        "type": "integer",
+        "enum": [0, 1, 2]
+      },
+      "BlockSigner": {
+        "description": "The signer of a block: an account, or a multisig account and its signers, each of which may itself be a multisig pair (lib/block/index.d.ts, BlockSignerField).",
+        "oneOf": [
+          { "$ref": "#/components/schemas/Account" },
+          {
+            "type": "array",
+            "prefixItems": [
+              { "$ref": "#/components/schemas/Account" },
+              {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/BlockSigner" }
+              }
+            ],
+            "items": false,
+            "minItems": 2
+          }
+        ]
+      },
+      "CertificateHashPrincipal": {
+        "description": "A principal that holds a certificate issued under the named certificate [Keeta TS] index.js:65597-65610.",
+        "type": "object",
+        "required": ["usingCertificate", "certificateHash", "certificateAccount"],
+        "properties": {
+          "usingCertificate": { "const": true },
+          "certificateHash": { "$ref": "#/components/schemas/Hash" },
+          "certificateAccount": { "$ref": "#/components/schemas/Account" }
+        },
+        "additionalProperties": false
+      },
+      "Certificate": {
+        "description": "A certificate in an operation: its parsed fields, its hash and, in \"$binary\", its PEM text [Keeta TS] index.js:78141-78167. The parsed fields are left open here.",
+        "type": "object",
+        "required": ["$hash", "$binary"],
+        "properties": {
+          "$hash": { "$ref": "#/components/schemas/Hash" },
+          "$binary": { "type": "string" }
+        },
+        "additionalProperties": true
+      },
+      "Operation": {
+        "description": "A block operation, told apart by \"type\" [Keeta TS] index.js:64636-64646. Each serializes its own fields, leaving out the optional ones it does not have.",
+        "oneOf": [
+          { "$ref": "#/components/schemas/OperationSend" },
+          { "$ref": "#/components/schemas/OperationSetRep" },
+          { "$ref": "#/components/schemas/OperationSetInfo" },
+          { "$ref": "#/components/schemas/OperationModifyPermissions" },
+          { "$ref": "#/components/schemas/OperationCreateIdentifier" },
+          { "$ref": "#/components/schemas/OperationTokenAdminSupply" },
+          { "$ref": "#/components/schemas/OperationTokenAdminModifyBalance" },
+          { "$ref": "#/components/schemas/OperationReceive" },
+          { "$ref": "#/components/schemas/OperationManageCertificate" }
+        ]
+      },
+      "OperationSend": {
+        "description": "SEND [Keeta TS] index.js:65062-65070.",
+        "type": "object",
+        "required": ["type", "to", "amount", "token"],
+        "properties": {
+          "type": { "const": 0 },
+          "to": { "$ref": "#/components/schemas/Account" },
+          "amount": { "$ref": "#/components/schemas/BigInt" },
+          "external": { "type": "string" },
+          "token": { "$ref": "#/components/schemas/Account" }
+        },
+        "additionalProperties": false
+      },
+      "OperationSetRep": {
+        "description": "SET_REP [Keeta TS] index.js:65265-65270.",
+        "type": "object",
+        "required": ["type", "to"],
+        "properties": {
+          "type": { "const": 1 },
+          "to": { "$ref": "#/components/schemas/Account" }
+        },
+        "additionalProperties": false
+      },
+      "OperationSetInfo": {
+        "description": "SET_INFO [Keeta TS] index.js:65447-65458.",
+        "type": "object",
+        "required": ["type", "name", "description", "metadata"],
+        "properties": {
+          "type": { "const": 2 },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "metadata": { "type": "string" },
+          "defaultPermission": { "$ref": "#/components/schemas/Permissions" }
+        },
+        "additionalProperties": false
+      },
+      "OperationModifyPermissions": {
+        "description": "MODIFY_PERMISSIONS; \"permissions\" is null when the row is removed [Keeta TS] index.js:65583-65591.",
+        "type": "object",
+        "required": ["type", "principal", "method", "permissions"],
+        "properties": {
+          "type": { "const": 3 },
+          "principal": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/Account" },
+              { "$ref": "#/components/schemas/CertificateHashPrincipal" }
+            ]
+          },
+          "method": { "$ref": "#/components/schemas/AdjustMethod" },
+          "permissions": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/Permissions" },
+              { "type": "null" }
+            ]
+          },
+          "target": { "$ref": "#/components/schemas/Account" }
+        },
+        "additionalProperties": false
+      },
+      "OperationCreateIdentifier": {
+        "description": "CREATE_IDENTIFIER; \"createArguments\" configures a multisig identifier [Keeta TS] index.js:65337-65343.",
+        "type": "object",
+        "required": ["type", "identifier"],
+        "properties": {
+          "type": { "const": 4 },
+          "identifier": { "$ref": "#/components/schemas/Account" },
+          "createArguments": {
+            "type": "object",
+            "required": ["type", "signers", "quorum"],
+            "properties": {
+              "type": {
+                "description": "The multisig key type [Keeta TS] index.js:61554.",
+                "const": 7
+              },
+              "signers": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/Account" }
+              },
+              "quorum": { "$ref": "#/components/schemas/BigInt" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "OperationTokenAdminSupply": {
+        "description": "TOKEN_ADMIN_SUPPLY; the method only adds or subtracts [Keeta TS] index.js:65655-65661.",
+        "type": "object",
+        "required": ["type", "amount", "method"],
+        "properties": {
+          "type": { "const": 5 },
+          "amount": { "$ref": "#/components/schemas/BigInt" },
+          "method": {
+            "type": "integer",
+            "enum": [0, 1]
+          }
+        },
+        "additionalProperties": false
+      },
+      "OperationTokenAdminModifyBalance": {
+        "description": "TOKEN_ADMIN_MODIFY_BALANCE [Keeta TS] index.js:65217-65224.",
+        "type": "object",
+        "required": ["type", "token", "amount", "method"],
+        "properties": {
+          "type": { "const": 6 },
+          "token": { "$ref": "#/components/schemas/Account" },
+          "amount": { "$ref": "#/components/schemas/BigInt" },
+          "method": { "$ref": "#/components/schemas/AdjustMethod" }
+        },
+        "additionalProperties": false
+      },
+      "OperationReceive": {
+        "description": "RECEIVE; \"exact\" is false unless set [Keeta TS] index.js:65148-65157, 65159-65163.",
+        "type": "object",
+        "required": ["type", "amount", "token", "from", "exact"],
+        "properties": {
+          "type": { "const": 7 },
+          "amount": { "$ref": "#/components/schemas/BigInt" },
+          "token": { "$ref": "#/components/schemas/Account" },
+          "from": { "$ref": "#/components/schemas/Account" },
+          "exact": { "type": "boolean" },
+          "forward": { "$ref": "#/components/schemas/Account" }
+        },
+        "additionalProperties": false
+      },
+      "OperationManageCertificate": {
+        "description": "MANAGE_CERTIFICATE: a certificate when adding, its hash when removing; the method only adds or subtracts [Keeta TS] index.js:65760-65767. Intermediates serialize as a bundle of PEM texts [Keeta TS] index.js:77504-77510.",
+        "type": "object",
+        "required": ["type", "certificateOrHash", "method"],
+        "properties": {
+          "type": { "const": 8 },
+          "certificateOrHash": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/Certificate" },
+              { "$ref": "#/components/schemas/Hash" }
+            ]
+          },
+          "method": {
+            "type": "integer",
+            "enum": [0, 1]
+          },
+          "intermediateCertificates": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["certificates"],
+                "properties": {
+                  "certificates": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  }
+                },
+                "additionalProperties": false
+              },
+              { "type": "null" }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "BlockContent": {
+        "description": "A block's fields as the block serializes them [Keeta TS] index.js:63910-63939. \"idempotent\" is base64 and \"subnet\" an integer, each left out when the block has none; a version 1 block carries one \"signature\", a version 2 block a list of \"signatures\", in uppercase hexadecimal [Keeta TS] index.js:63915-63924.",
+        "type": "object",
+        "required": ["version", "date", "previous", "account", "purpose", "signer", "network", "operations", "$hash", "$opening"],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "enum": [1, 2]
+          },
+          "idempotent": { "$ref": "#/components/schemas/Base64" },
+          "date": { "$ref": "#/components/schemas/Date" },
+          "previous": { "$ref": "#/components/schemas/Hash" },
+          "account": { "$ref": "#/components/schemas/Account" },
+          "purpose": {
+            "description": "0 is a generic block, 1 a fee block [Keeta TS] index.js:63126-63129.",
+            "type": "integer",
+            "enum": [0, 1]
+          },
+          "signer": { "$ref": "#/components/schemas/BlockSigner" },
+          "network": { "$ref": "#/components/schemas/BigInt" },
+          "subnet": { "$ref": "#/components/schemas/BigInt" },
+          "operations": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Operation" }
+          },
+          "$hash": { "$ref": "#/components/schemas/Hash" },
+          "$opening": { "type": "boolean" },
+          "$binary": { "$ref": "#/components/schemas/Base64" },
+          "signature": { "$ref": "#/components/schemas/HexBytes" },
+          "signatures": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/HexBytes" }
+          }
+        },
+        "additionalProperties": false,
+        "if": {
+          "properties": { "version": { "const": 1 } }
+        },
+        "then": {
+          "required": ["signature"],
+          "properties": { "signature": true, "signatures": false }
+        },
+        "else": {
+          "required": ["signatures"],
+          "properties": { "signatures": true, "signature": false }
+        }
+      },
+      "Block": {
+        "description": "A block with its ASN.1 encoding in \"$binary\", as a response carries it [Keeta TS] index.js:63911-63913.",
+        "type": "object",
+        "$ref": "#/components/schemas/BlockContent",
+        "required": ["$binary"],
+        "properties": { "$binary": true }
+      },
+      "NullableBlock": {
+        "oneOf": [
+          { "$ref": "#/components/schemas/Block" },
+          { "type": "null" }
+        ]
+      },
+      "StapledBlock": {
+        "description": "A block inside a staple, serialized without \"$binary\" [Keeta TS] index.js:81097-81099.",
+        "type": "object",
+        "$ref": "#/components/schemas/BlockContent",
+        "properties": { "$binary": false }
+      },
+      "VoteFee": {
+        "description": "A fee a vote asks for: the amount and, when given, the token and the account to pay (lib/vote.d.ts, FeeAmountAndToken).",
+        "type": "object",
+        "required": ["amount"],
+        "properties": {
+          "amount": { "$ref": "#/components/schemas/BigInt" },
+          "payTo": { "$ref": "#/components/schemas/Account" },
+          "token": { "$ref": "#/components/schemas/Account" }
+        },
+        "additionalProperties": false
+      },
+      "VoteContent": {
+        "description": "A vote's or a quote's fields as it serializes them [Keeta TS] index.js:80606-80630. \"$uid\" is \"ID=\", the issuer, \"/Serial=\" and the serial in decimal; \"$id\" is the hash of \"$uid\" in uppercase hexadecimal [Keeta TS] index.js:80569-80570. The signature is uppercase hexadecimal [Keeta TS] index.js:78439-78440. \"fee\" is a single fee or a list of choices, and is left out when the vote asks for none.",
+        "type": "object",
+        "required": ["issuer", "serial", "blocks", "validityFrom", "validityTo", "signature", "$trusted", "$permanent", "$uid", "$id"],
+        "properties": {
+          "issuer": { "$ref": "#/components/schemas/Account" },
+          "serial": { "$ref": "#/components/schemas/BigInt" },
+          "blocks": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Hash" }
+          },
+          "validityFrom": { "$ref": "#/components/schemas/Date" },
+          "validityTo": { "$ref": "#/components/schemas/Date" },
+          "signature": { "$ref": "#/components/schemas/HexBytes" },
+          "$trusted": { "type": "boolean" },
+          "$permanent": { "type": "boolean" },
+          "$uid": {
+            "type": "string",
+            "pattern": "^ID=keeta_[a-z2-7]+/Serial=(?:0|[1-9][0-9]*)$"
+          },
+          "$id": { "$ref": "#/components/schemas/Hash" },
+          "$binary": { "$ref": "#/components/schemas/Base64" },
+          "fee": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/VoteFee" },
+              {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/VoteFee" }
+              }
+            ]
+          },
+          "quote": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      },
+      "Vote": {
+        "description": "A vote with its encoding in \"$binary\", as a response carries it [Keeta TS] index.js:80607-80609.",
+        "type": "object",
+        "$ref": "#/components/schemas/VoteContent",
+        "required": ["$binary"],
+        "properties": { "$binary": true }
+      },
+      "VoteQuote": {
+        "description": "A fee quote with its encoding in \"$binary\"; a quote serializes as a vote does [Keeta TS] index.js:80606-80630.",
+        "type": "object",
+        "$ref": "#/components/schemas/VoteContent",
+        "required": ["$binary"],
+        "properties": { "$binary": true }
+      },
+      "StapledVote": {
+        "description": "A vote inside a staple, serialized without \"$binary\" [Keeta TS] index.js:81094-81096.",
+        "type": "object",
+        "$ref": "#/components/schemas/VoteContent",
+        "properties": { "$binary": false }
+      },
+      "VoteStaple": {
+        "description": "Votes and the blocks they vote for, with the staple's encoding in \"$binary\" [Keeta TS] index.js:81088-81101.",
+        "type": "object",
+        "required": ["votes", "blocks", "$binary"],
+        "properties": {
+          "votes": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/StapledVote" }
+          },
+          "blocks": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/StapledBlock" }
+          },
+          "$binary": { "$ref": "#/components/schemas/Base64" }
+        },
+        "additionalProperties": false
+      },
+      "HistoryPage": {
+        "description": "A page of staples, newest first; \"nextKey\" is the \"start\" of the next page and null after the last [Keeta TS] index.js:58969-58996.",
+        "type": "object",
+        "required": ["history", "nextKey"],
+        "properties": {
+          "history": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["voteStaple", "$id", "$timestamp"],
+              "properties": {
+                "voteStaple": { "$ref": "#/components/schemas/VoteStaple" },
+                "$id": { "type": "string" },
+                "$timestamp": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "nextKey": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/Hash" },
+              { "type": "null" }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "AccountInfo": {
+        "description": "An account's info. Identifier accounts may carry \"defaultPermission\", a token its \"supply\", a multisig account its \"multisigQuorum\" (lib/ledger/types.d.ts, AccountInfo; [Keeta TS] index.js:59971-59999).",
+        "type": "object",
+        "required": ["account", "name", "description", "metadata"],
+        "properties": {
+          "account": { "$ref": "#/components/schemas/Account" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "metadata": { "type": "string" },
+          "defaultPermission": { "$ref": "#/components/schemas/Permissions" },
+          "supply": { "$ref": "#/components/schemas/BigInt" },
+          "multisigQuorum": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/BigInt" },
+              { "type": "null" }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "Balances": {
+        "description": "An account's balance of each token, in the token's raw units (lib/ledger/types.d.ts, GetAllBalancesResponse; [Keeta TS] index.js:59961-59967).",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["token", "balance"],
+          "properties": {
+            "token": { "$ref": "#/components/schemas/Account" },
+            "balance": { "$ref": "#/components/schemas/BigInt" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "AccountState": {
+        "description": "An account's head, representative, info and balances (api/node.d.ts, AccountState; [Keeta TS] index.js:60000-60023).",
+        "type": "object",
+        "required": ["account", "currentHeadBlock", "currentHeadBlockHeight", "representative", "info", "balances"],
+        "properties": {
+          "account": { "$ref": "#/components/schemas/Account" },
+          "currentHeadBlock": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/Hash" },
+              { "type": "null" }
+            ]
+          },
+          "currentHeadBlockHeight": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/BigInt" },
+              { "type": "null" }
+            ]
+          },
+          "representative": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/Account" },
+              { "type": "null" }
+            ]
+          },
+          "info": { "$ref": "#/components/schemas/AccountInfo" },
+          "balances": { "$ref": "#/components/schemas/Balances" }
+        },
+        "additionalProperties": false
+      },
+      "AccountStateError": {
+        "description": "Why an account's state could not be read: exactly the account and a message [Keeta TS] index.js:58241-58256.",
+        "type": "object",
+        "required": ["account", "error"],
+        "properties": {
+          "account": { "type": "string" },
+          "error": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "AccountStateOrError": {
+        "oneOf": [
+          { "$ref": "#/components/schemas/AccountState" },
+          { "$ref": "#/components/schemas/AccountStateError" }
+        ]
+      },
+      "ACLRow": {
+        "description": "A permission row: the principal holds \"permissions\" on \"entity\", optionally scoped to \"target\". The principal is an account, or a certificate under which issued certificates qualify [Keeta TS] index.js:60024-60053.",
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["principalType", "principal", "entity", "target", "permissions"],
+            "properties": {
+              "principalType": { "const": "ACCOUNT" },
+              "principal": { "$ref": "#/components/schemas/Account" },
+              "entity": { "$ref": "#/components/schemas/Account" },
+              "target": { "$ref": "#/components/schemas/Account" },
+              "permissions": { "$ref": "#/components/schemas/Permissions" }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["principalType", "principal", "entity", "target", "permissions"],
+            "properties": {
+              "principalType": { "const": "CERTIFICATE" },
+              "principal": {
+                "type": "object",
+                "required": ["usingCertificate", "certificate", "certificateAccount"],
+                "properties": {
+                  "usingCertificate": { "const": true },
+                  "certificate": { "$ref": "#/components/schemas/Hash" },
+                  "certificateAccount": { "$ref": "#/components/schemas/Account" }
+                },
+                "additionalProperties": false
+              },
+              "entity": { "$ref": "#/components/schemas/Account" },
+              "target": { "$ref": "#/components/schemas/Account" },
+              "permissions": { "$ref": "#/components/schemas/Permissions" }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "PermissionsList": {
+        "type": "object",
+        "required": ["permissions"],
+        "properties": {
+          "permissions": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ACLRow" }
+          }
+        },
+        "additionalProperties": false
+      },
+      "PrincipalAccess": {
+        "description": "A principal and, per entity it holds permissions on, the entity's info, balances and the rows (api/node.d.ts, PrincipalACLWithInfoResponse).",
+        "type": "object",
+        "required": ["account", "access"],
+        "properties": {
+          "account": { "$ref": "#/components/schemas/Account" },
+          "access": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["entity", "info", "balances", "principals"],
+              "properties": {
+                "entity": { "$ref": "#/components/schemas/Account" },
+                "info": { "$ref": "#/components/schemas/AccountInfo" },
+                "balances": { "$ref": "#/components/schemas/Balances" },
+                "principals": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/ACLRow" }
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "NullableCertificateStrings": {
+        "oneOf": [
+          {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          { "type": "null" }
+        ]
+      },
+      "RepresentativeWeight": {
+        "description": "A representative and its voting weight (api/node.d.ts, GetRepresentativeAPIResponse; [Keeta TS] index.js:60066-60070).",
+        "type": "object",
+        "required": ["representative", "weight"],
+        "properties": {
+          "representative": { "$ref": "#/components/schemas/Account" },
+          "weight": { "$ref": "#/components/schemas/BigInt" }
+        },
+        "additionalProperties": false
+      },
+      "Endpoints": {
+        "description": "Where a node serves its API and its peer-to-peer socket (config/index.d.ts, Endpoints).",
+        "type": "object",
+        "required": ["api", "p2p"],
+        "properties": {
+          "api": { "type": "string" },
+          "p2p": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "Peer": {
+        "description": "A peer record: a representative with its key, endpoints, preferred update channel and either a base64 signature over the record or a certificate, or a participant with only its kind [Keeta TS] index.js:71988-72019. Kinds are 0 participant, 1 representative, 2 relay, 3 archival [Keeta TS] index.js:71287-71292.",
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["kind", "key", "endpoints", "preferUpdates"],
+            "properties": {
+              "kind": { "const": 1 },
+              "key": { "$ref": "#/components/schemas/Account" },
+              "endpoints": { "$ref": "#/components/schemas/Endpoints" },
+              "preferUpdates": {
+                "type": "string",
+                "enum": ["http", "websocket"]
+              },
+              "signature": { "$ref": "#/components/schemas/Base64" },
+              "certificate": { "type": "null" }
+            },
+            "additionalProperties": false,
+            "oneOf": [
+              { "type": "object", "required": ["signature"], "properties": { "signature": true } },
+              { "type": "object", "required": ["certificate"], "properties": { "certificate": true } }
+            ]
+          },
+          {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": {
+                "type": "integer",
+                "enum": [0, 2, 3]
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "TimeStat": {
+        "description": "How many events took a duration within \"range\", in milliseconds; a count of -1 marks a placeholder [Keeta TS] index.js:74388-74396.",
+        "type": "object",
+        "required": ["count", "range"],
+        "properties": {
+          "count": { "type": "integer" },
+          "range": {
+            "type": "array",
+            "prefixItems": [
+              { "type": "integer" },
+              { "type": "integer" }
+            ],
+            "items": false,
+            "minItems": 2
+          }
+        },
+        "additionalProperties": false
+      },
+      "TimeStats": {
+        "description": "One count per duration bucket [Keeta TS] index.js:74283-74303.",
+        "type": "object",
+        "required": ["-1ms", "0ms", "10ms", "100ms", "200ms", "300ms", "400ms", "500ms", "600ms", "700ms", "800ms", "900ms", "1000ms", "1500ms", "2000ms", "5000ms", "10000ms", "100000ms", "ExtraLong"],
+        "properties": {
+          "-1ms": { "$ref": "#/components/schemas/TimeStat" },
+          "0ms": { "$ref": "#/components/schemas/TimeStat" },
+          "10ms": { "$ref": "#/components/schemas/TimeStat" },
+          "100ms": { "$ref": "#/components/schemas/TimeStat" },
+          "200ms": { "$ref": "#/components/schemas/TimeStat" },
+          "300ms": { "$ref": "#/components/schemas/TimeStat" },
+          "400ms": { "$ref": "#/components/schemas/TimeStat" },
+          "500ms": { "$ref": "#/components/schemas/TimeStat" },
+          "600ms": { "$ref": "#/components/schemas/TimeStat" },
+          "700ms": { "$ref": "#/components/schemas/TimeStat" },
+          "800ms": { "$ref": "#/components/schemas/TimeStat" },
+          "900ms": { "$ref": "#/components/schemas/TimeStat" },
+          "1000ms": { "$ref": "#/components/schemas/TimeStat" },
+          "1500ms": { "$ref": "#/components/schemas/TimeStat" },
+          "2000ms": { "$ref": "#/components/schemas/TimeStat" },
+          "5000ms": { "$ref": "#/components/schemas/TimeStat" },
+          "10000ms": { "$ref": "#/components/schemas/TimeStat" },
+          "100000ms": { "$ref": "#/components/schemas/TimeStat" },
+          "ExtraLong": { "$ref": "#/components/schemas/TimeStat" }
+        },
+        "additionalProperties": false
+      },
+      "LedgerStatistics": {
+        "description": "Counts over the ledger (lib/ledger/types.d.ts, LedgerStatistics).",
+        "type": "object",
+        "required": ["moment", "momentRange", "blockCount", "transactionCount", "representativeCount", "db", "settlementTimes"],
+        "properties": {
+          "moment": { "type": "string" },
+          "momentRange": { "type": "number" },
+          "blockCount": { "type": "integer" },
+          "transactionCount": { "type": "integer" },
+          "representativeCount": { "type": "integer" },
+          "db": {
+            "type": "object",
+            "required": ["retries"],
+            "properties": {
+              "retries": { "type": "integer" }
+            },
+            "additionalProperties": false
+          },
+          "settlementTimes": { "$ref": "#/components/schemas/TimeStats" }
+        },
+        "additionalProperties": false
+      },
+      "P2PSwitchStatistics": {
+        "description": "Message counts of the peer-to-peer switch (lib/p2p.d.ts, P2PSwitchStatistics).",
+        "type": "object",
+        "required": ["incomingMessages", "outgoingMessagesPeerSuccess", "outgoingMessagesPeerFailure", "outgoingMessagesPeerFiltered", "outgoingMessagesPeerFailureUngreeted"],
+        "properties": {
+          "incomingMessages": { "type": "integer" },
+          "outgoingMessagesPeerSuccess": { "type": "integer" },
+          "outgoingMessagesPeerFailure": { "type": "integer" },
+          "outgoingMessagesPeerFiltered": { "type": "integer" },
+          "outgoingMessagesPeerFailureUngreeted": { "type": "integer" }
+        },
+        "additionalProperties": false
+      },
+      "Error": {
+        "description": "A failure. A KeetaNet error serializes its type, code and message [Keeta TS] index.js:66067-66073, a ledger vote error adds the accounts party to the conflict [Keeta TS] index.js:66533-66540, and an idempotent-key error adds the account, the key and both block hashes [Keeta TS] index.js:66575-66590. The client rebuilds the error from these fields, reading \"shouldRetry\" and \"retryDelay\" of a ledger error when present [Keeta TS] index.js:66334-66410.",
+        "type": "object",
+        "required": ["error", "message"],
+        "properties": {
+          "error": { "const": true },
+          "type": {
+            "description": "The error's family; GENERIC when none applies [Keeta TS] index.js:66054, 65980, 66021, 66090, 66161, 66187, 66225, 66426, 66452, 66607, 66636.",
+            "type": "string",
+            "enum": ["GENERIC", "ACCOUNT", "API", "BLOCK", "BLOOM", "CERTIFICATE", "CLIENT", "KV", "LEDGER", "PERMISSIONS", "VOTE"]
+          },
+          "code": {
+            "description": "The type, an underscore and the code within the type, such as LEDGER_NOT_SUCCESSOR [Keeta TS] index.js:66055-66062.",
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
+          "message": { "type": "string" },
+          "shouldRetry": { "type": "boolean" },
+          "retryDelay": { "type": "number" },
+          "accounts": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Account" }
+          },
+          "account": { "$ref": "#/components/schemas/Account" },
+          "idempotentKey": { "$ref": "#/components/schemas/Base64" },
+          "blockhash": { "$ref": "#/components/schemas/Hash" },
+          "existingBlockhash": { "$ref": "#/components/schemas/Hash" }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}
