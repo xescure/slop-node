@@ -19,6 +19,10 @@
     {
       packages = forAllSystems (system: {
         default = pkgsBySystem.${system}.callPackage ./nix/package.nix { };
+        image = pkgsBySystem.${system}.callPackage ./nix/image.nix {
+          slop-node = self.packages.${system}.default;
+          revision = self.rev or null;
+        };
       });
 
       apps = forAllSystems (system: {
@@ -32,6 +36,7 @@
       checks = forAllSystems (system: import ./nix/checks.nix {
         pkgs = pkgsBySystem.${system};
         slop-node = self.packages.${system}.default;
+        image = self.packages.${system}.image;
         devenvLock = nixpkgs.lib.importJSON ./devenv.lock;
         nixpkgsRev = nixpkgs.rev;
       });

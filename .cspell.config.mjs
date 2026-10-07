@@ -43,10 +43,18 @@ export default {
 		// Elliptic curve names in upstream's key algorithms.
 		'secp',
 		// The migration lock key, 0x6b656574616c6467, read as ASCII.
-		'keetaldg'
+		'keetaldg',
+		// The image's init, its labels' namespace, and the settings a container runs with.
+		'tini',
+		'opencontainers',
+		'tzdir',
+		'zoneinfo',
+		'nofile',
+		'devnet'
 	],
-	// Account strings are base32 public keys, not words.
-	ignoreRegExpList: ['/keeta_[a-z2-7]+/g'],
+	// Account strings are base32 public keys, not words, and a Unix socket
+	// directory as the host of a Postgres URL has each "/" written %2F.
+	ignoreRegExpList: ['/keeta_[a-z2-7]+/g', '/%2F[a-z]+/gi'],
 	ignorePaths: [
 		'/reference/',
 		'node_modules/',
