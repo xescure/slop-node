@@ -5,7 +5,7 @@ import type { Account } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import { MemoryLedgerStorage } from '../../ledger/storage/memory/driver.js';
-import { confirmedStaple, sendBlock } from '../../testing/blocks.js';
+import { confirmedStaple, manageCertificateBlock, sendBlock } from '../../testing/blocks.js';
 import { createTestNetwork, freezeClock } from '../../testing/network.js';
 import type { TestNetwork } from '../../testing/network.js';
 import { APIDocument, isJSONObject } from './document.js';
@@ -33,6 +33,9 @@ const FIXTURE_ROUTES: Readonly<Record<string, string>> = {
 	'head_no_chain.json': '/api/node/ledger/account/{account}/head',
 	'representatives.json': '/api/node/ledger/representatives'
 };
+
+/** Where the local representative says it serves; nothing is ever sent there. */
+const LOCAL_ENDPOINTS = { api: 'https://representative.invalid/api', p2p: 'wss://representative.invalid/p2p' } as const;
 
 type Capture = {
 	readonly request: { readonly method: 'GET'; readonly path: string; readonly query: Readonly<Record<string, string>> };
@@ -74,7 +77,25 @@ function captureBody(name: string): Readonly<Record<string, unknown>> {
 	return(body);
 }
 
-function without(object: Readonly<Record<string, unknown>>, name: string): Readonly<Record<string, unknown>> {
+/** Every string in a value, at any depth. */
+function strings(value: unknown): readonly string[] {
+	if (typeof value === 'string') {
+		return([value]);
+	}
+	if (Array.isArray(value)) {
+		return(value.flatMap(strings));
+	}
+	if (isJSONObject(value)) {
+		return(Object.values(value).flatMap(strings));
+	}
+	return([]);
+}
+
+/** The object without the named field. */
+function without(object: unknown, name: string): Readonly<Record<string, unknown>> {
+	if (!isJSONObject(object)) {
+		throw(new Error('not an object'));
+	}
 	return(Object.fromEntries(Object.entries(object).filter(function([key]): boolean {
 		return(key !== name);
 	})));
@@ -292,12 +313,19 @@ describe('the values the responses carry', function() {
 		expect(api.responseViolations(internalRoute, 500, { ...internal, code: 'API_INVALID_SIDE' })).not.toEqual([]);
 		expect(api.responseViolations(internalRoute, 500, { ...internal, error: false })).not.toEqual([]);
 	});
+
+	test('the document refuses endpoints without their scheme and peer records of kinds that are not serialized', function() {
+		expect(api.schemaViolations('Endpoints', LOCAL_ENDPOINTS)).toEqual([]);
+		expect(api.schemaViolations('Endpoints', { ...LOCAL_ENDPOINTS, api: 'representative.invalid/api' })).not.toEqual([]);
+		expect(api.schemaViolations('Endpoints', { ...LOCAL_ENDPOINTS, p2p: 'https://representative.invalid/p2p' })).not.toEqual([]);
+		expect(api.schemaViolations('Peer', { kind: 0 })).toEqual([]);
+		for (const kind of [2, 3]) {
+			expect(api.schemaViolations('Peer', { kind })).not.toEqual([]);
+		}
+	});
 });
 
 const START = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
-
-/** Where the local representative says it serves; nothing is ever sent there. */
-const LOCAL_ENDPOINTS = { api: 'https://representative.invalid/api', p2p: 'wss://representative.invalid/p2p' } as const;
 
 /** A staple travels between peers with this many hops left [Keeta TS] index.js:71404. */
 const ADD_MESSAGE_TTL = 30;
@@ -316,16 +344,24 @@ type LocalNetwork = {
 	readonly block: Block;
 };
 
+/** The last block genesis gives the account. */
+function genesisHead(network: TestNetwork, account: Account): Block {
+	const head = network.genesis.blocks.filter(function(block): boolean {
+		return(block.account.comparePublicKey(account));
+	}).at(-1);
+	if (head === undefined) {
+		throw(new Error('genesis gives the account no block'));
+	}
+	return(head);
+}
+
 /** A send by user 0, after its previous block, or after its genesis head when none is given. */
 async function sendFromUser(network: TestNetwork, previous?: Block): Promise<Block> {
 	const [user, other] = network.users;
-	const head = network.genesis.blocks.filter(function(block): boolean {
-		return(user !== undefined && block.account.comparePublicKey(user));
-	}).at(-1);
-	if (user === undefined || other === undefined || head === undefined) {
+	if (user === undefined || other === undefined) {
 		throw(new Error('the network has no users'));
 	}
-	return(await sendBlock({ from: user, to: other, amount: 1n, token: network.baseToken, previous: (previous ?? head).hash, network: network.network }));
+	return(await sendBlock({ from: user, to: other, amount: 1n, token: network.baseToken, previous: (previous ?? genesisHead(network, user)).hash, network: network.network }));
 }
 
 async function localNetwork(): Promise<LocalNetwork> {
@@ -354,6 +390,8 @@ describe('requests and responses of the POST routes, built locally', function() 
 
 		expect(api.requestViolations(route, request)).toEqual([]);
 		expect(api.responseViolations(route, 200, { quote: serialized(quote) })).toEqual([]);
+		expect(api.schemaViolations('Vote', serialized(quote))).not.toEqual([]);
+		expect(api.schemaViolations('VoteQuote', without(serialized(quote), 'fee'))).not.toEqual([]);
 	});
 
 	test('a vote request with another representative\'s vote and a quote, and the vote', async function() {
@@ -369,6 +407,9 @@ describe('requests and responses of the POST routes, built locally', function() 
 
 		expect(api.requestViolations(route, request)).toEqual([]);
 		expect(api.responseViolations(route, 200, { vote: serialized(vote) })).toEqual([]);
+		expect(api.schemaViolations('VoteQuote', serialized(vote))).not.toEqual([]);
+		expect(api.schemaViolations('Vote', without(serialized(vote), 'quote'))).not.toEqual([]);
+		expect(api.schemaViolations('Vote', without(without(serialized(vote), 'quote'), 'fee'))).toEqual([]);
 	});
 
 	test('a refused vote, in the envelope every captured failure has', async function() {
@@ -428,5 +469,41 @@ describe('requests and responses of the POST routes, built locally', function() 
 		expect(lib.P2P.parseJSONMessage(Buffer.from(message))).toMatchObject({ valid: true, type: 'add' });
 		expect(api.requestViolations(route, request)).toEqual([]);
 		expect(api.responseViolations(route, 200, { success: true })).toEqual([]);
+	});
+});
+
+describe('certificates', function() {
+	afterEach(function() {
+		vi.useRealTimers();
+	});
+
+	test('every certificate a representative served is PEM text, and parses into the fields the document lists', function() {
+		const texts = strings(captureBody('ledger-account-certificates.json')['certificates']);
+
+		expect(texts.length).toBeGreaterThan(1);
+		for (const pem of texts) {
+			expect(api.schemaViolations('PEMCertificate', pem)).toEqual([]);
+			expect(api.schemaViolations('Certificate', serialized(new lib.Utils.Certificate.Certificate(pem, { moment: null })))).toEqual([]);
+		}
+		expect(api.schemaViolations('PEMCertificate', texts[0]?.replace('-----BEGIN CERTIFICATE-----', ''))).not.toEqual([]);
+	});
+
+	test('a block that adds a certificate authority\'s certificate serializes as the document says', async function() {
+		const { network } = await localNetwork();
+		const [user] = network.users;
+		if (user === undefined) {
+			throw(new Error('the network has no users'));
+		}
+		const certificate = await new lib.Utils.Certificate.CertificateBuilder({
+			issuer: user,
+			validFrom: new Date(START.getTime() - 1000),
+			validTo: new Date(START.getTime() + 1000),
+			serial: 1,
+			isCA: true
+		}).build({ subjectPublicKey: user });
+		const block = await manageCertificateBlock({ account: user, method: lib.Block.AdjustMethod.ADD, certificateOrHash: certificate, previous: genesisHead(network, user).hash, network: network.network });
+
+		expect(serialized(certificate)).toHaveProperty('baseExtensions.basicConstraints');
+		expect(api.schemaViolations('Block', serialized(block))).toEqual([]);
 	});
 });

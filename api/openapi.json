@@ -21,12 +21,13 @@
                 "required": ["blocks"],
                 "properties": {
                   "blocks": {
+                    "description": "At least one: the ledger issues no vote for an empty list [Keeta TS] index.js:69012-69015.",
                     "type": "array",
                     "minItems": 1,
                     "items": { "$ref": "#/components/schemas/Base64" }
                   },
                   "votes": {
-                    "description": "Must not be empty when present [Keeta TS] index.js:59861-59863.",
+                    "description": "When the client sends it, it always sends at least one: it refuses to ask with an empty list [Keeta TS] index.js:59861-59863.",
                     "type": "array",
                     "minItems": 1,
                     "items": { "$ref": "#/components/schemas/Base64" }
@@ -75,8 +76,8 @@
                 "required": ["blocks"],
                 "properties": {
                   "blocks": {
+                    "description": "The client sends the list it is given [Keeta TS] index.js:59844-59849, and the ledger's quote, unlike its vote, makes no check that it holds a block [Keeta TS] index.js:69356-69360.",
                     "type": "array",
-                    "minItems": 1,
                     "items": { "$ref": "#/components/schemas/Base64" }
                   }
                 },
@@ -277,8 +278,8 @@
             "name": "start",
             "in": "query",
             "required": true,
-            "description": "The moment to return staples after, as an ISO 8601 date [Keeta TS] index.js:59166-59168. The API error codes include START_MISSING and INVALID_START [Keeta TS] index.js:66022-66030.",
-            "schema": { "type": "string" }
+            "description": "The moment to return staples after, as the client writes a date [Keeta TS] index.js:59166-59168. The API error codes include START_MISSING and INVALID_START [Keeta TS] index.js:66022-66030.",
+            "schema": { "$ref": "#/components/schemas/Date" }
           },
           {
             "name": "limit",
@@ -388,7 +389,7 @@
                   "type": "object",
                   "required": ["blockhash", "block"],
                   "properties": {
-                    "blockhash": { "type": "string" },
+                    "blockhash": { "$ref": "#/components/schemas/Hash" },
                     "block": { "$ref": "#/components/schemas/NullableBlock" }
                   },
                   "additionalProperties": false
@@ -417,7 +418,7 @@
                   "type": "object",
                   "required": ["blockhash", "successorBlock"],
                   "properties": {
-                    "blockhash": { "type": "string" },
+                    "blockhash": { "$ref": "#/components/schemas/Hash" },
                     "successorBlock": { "$ref": "#/components/schemas/NullableBlock" }
                   },
                   "additionalProperties": false
@@ -933,7 +934,7 @@
                         "type": "object",
                         "required": ["certificate", "intermediates"],
                         "properties": {
-                          "certificate": { "type": "string" },
+                          "certificate": { "$ref": "#/components/schemas/PEMCertificate" },
                           "intermediates": { "$ref": "#/components/schemas/NullableCertificateStrings" }
                         },
                         "additionalProperties": false
@@ -975,7 +976,7 @@
                       "type": "object",
                       "required": ["certificate", "intermediates", "account"],
                       "properties": {
-                        "certificate": { "type": "string" },
+                        "certificate": { "$ref": "#/components/schemas/PEMCertificate" },
                         "intermediates": { "$ref": "#/components/schemas/NullableCertificateStrings" },
                         "account": { "$ref": "#/components/schemas/Account" }
                       },
@@ -1263,15 +1264,96 @@
         },
         "additionalProperties": false
       },
+      "PEMCertificate": {
+        "description": "A certificate as PEM text: the base64 of its DER encoding in lines of at most 64 characters, between the PEM boundaries, each line ending in a line feed [Keeta TS] index.js:78109-78120.",
+        "type": "string",
+        "pattern": "^-----BEGIN CERTIFICATE-----\\n(?:[A-Za-z0-9+/=]{1,64}\\n)+-----END CERTIFICATE-----\\n$"
+      },
+      "DistinguishedName": {
+        "description": "A distinguished name as its parts in order, each the attribute's name and value [Keeta TS] index.js:77061-77072.",
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["name", "value"],
+          "properties": {
+            "name": { "type": "string" },
+            "value": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
       "Certificate": {
-        "description": "A certificate in an operation: its parsed fields, its hash and, in \"$binary\", its PEM text [Keeta TS] index.js:78141-78167. The parsed fields are left open here.",
+        "description": "A certificate in an operation, as it serializes itself: the fields parsed from it, its hash and, in \"$binary\", its PEM text, which an operation always includes [Keeta TS] index.js:78141-78167, 65760-65767. \"subject\" and \"issuer\" are the distinguished names as text, \"subjectDN\" and \"issuerDN\" the same names as parts, and \"subjectPublicKey\" the subject's account [Keeta TS] index.js:77644-77651.",
         "type": "object",
-        "required": ["$hash", "$binary"],
+        "required": ["serial", "notBefore", "notAfter", "subject", "issuer", "subjectPublicKey", "baseExtensions", "subjectDN", "issuerDN", "$hash", "$binary"],
         "properties": {
+          "serial": { "$ref": "#/components/schemas/BigInt" },
+          "notBefore": { "$ref": "#/components/schemas/Date" },
+          "notAfter": { "$ref": "#/components/schemas/Date" },
+          "subject": { "type": "string" },
+          "issuer": { "type": "string" },
+          "subjectPublicKey": { "$ref": "#/components/schemas/Account" },
+          "baseExtensions": { "$ref": "#/components/schemas/CertificateBaseExtensions" },
+          "subjectDN": { "$ref": "#/components/schemas/DistinguishedName" },
+          "issuerDN": { "$ref": "#/components/schemas/DistinguishedName" },
           "$hash": { "$ref": "#/components/schemas/Hash" },
-          "$binary": { "type": "string" }
+          "$binary": { "$ref": "#/components/schemas/PEMCertificate" }
         },
-        "additionalProperties": true
+        "additionalProperties": false
+      },
+      "CertificateBaseExtensions": {
+        "description": "The X.509 extensions the package parses, each present when the certificate carries it [Keeta TS] index.js:78236-78275: basic constraints as whether the subject is a certificate authority and its path length, null when absent; key usage as one flag per usage; and the key identifiers.",
+        "type": "object",
+        "properties": {
+          "basicConstraints": {
+            "type": "array",
+            "prefixItems": [
+              { "type": "boolean" },
+              {
+                "oneOf": [
+                  { "$ref": "#/components/schemas/BigInt" },
+                  { "type": "null" }
+                ]
+              }
+            ],
+            "items": false,
+            "minItems": 2
+          },
+          "keyUsage": {
+            "description": "Every usage the package names, each set or not [Keeta TS] index.js:77515-77525, 78210-78235.",
+            "type": "object",
+            "required": ["digitalSignature", "nonRepudiation", "keyEncipherment", "dataEncipherment", "keyAgreement", "keyCertSign", "cRLSign", "encipherOnly", "decipherOnly"],
+            "properties": {
+              "digitalSignature": { "type": "boolean" },
+              "nonRepudiation": { "type": "boolean" },
+              "keyEncipherment": { "type": "boolean" },
+              "dataEncipherment": { "type": "boolean" },
+              "keyAgreement": { "type": "boolean" },
+              "keyCertSign": { "type": "boolean" },
+              "cRLSign": { "type": "boolean" },
+              "encipherOnly": { "type": "boolean" },
+              "decipherOnly": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          },
+          "authorityKeyIdentifier": {
+            "description": "The key identifier as the ASN.1 context value it is tagged with, implicitly or, in older certificates, explicitly [Keeta TS] index.js:78260-78268.",
+            "type": "object",
+            "required": ["type", "value", "kind", "contains"],
+            "properties": {
+              "type": { "const": "context" },
+              "value": { "const": 0 },
+              "kind": {
+                "type": "string",
+                "enum": ["implicit", "explicit"]
+              },
+              "contains": { "$ref": "#/components/schemas/HexBytes" }
+            },
+            "additionalProperties": false
+          },
+          "subjectKeyIdentifier": { "$ref": "#/components/schemas/HexBytes" }
+        },
+        "additionalProperties": false
       },
       "Operation": {
         "description": "A block operation, told apart by \"type\" [Keeta TS] index.js:64636-64646. Each serializes its own fields, leaving out the optional ones it does not have.",
@@ -1436,7 +1518,7 @@
                 "properties": {
                   "certificates": {
                     "type": "array",
-                    "items": { "type": "string" }
+                    "items": { "$ref": "#/components/schemas/PEMCertificate" }
                   }
                 },
                 "additionalProperties": false
@@ -1525,7 +1607,7 @@
         "additionalProperties": false
       },
       "VoteContent": {
-        "description": "A vote's or a quote's fields as it serializes them [Keeta TS] index.js:80606-80630. \"$uid\" is \"ID=\", the issuer, \"/Serial=\" and the serial in decimal; \"$id\" is the hash of \"$uid\" in uppercase hexadecimal [Keeta TS] index.js:80569-80570. The signature is uppercase hexadecimal [Keeta TS] index.js:78439-78440. \"fee\" is a single fee or a list of choices, and is left out when the vote asks for none.",
+        "description": "A vote's or a quote's fields as it serializes them [Keeta TS] index.js:80606-80630. \"$uid\" is \"ID=\", the issuer, \"/Serial=\" and the serial in decimal; \"$id\" is the hash of \"$uid\" in uppercase hexadecimal [Keeta TS] index.js:80569-80570. The signature is uppercase hexadecimal [Keeta TS] index.js:78439-78440. \"fee\" is a single fee or a non-empty list of choices, and \"quote\" whether the fee is quoted rather than asked for; both come from the same extension, so they are present together or not at all [Keeta TS] index.js:79963-80020, 80492-80502, 80611-80616.",
         "type": "object",
         "required": ["issuer", "serial", "blocks", "validityFrom", "validityTo", "signature", "$trusted", "$permanent", "$uid", "$id"],
         "properties": {
@@ -1551,33 +1633,48 @@
               { "$ref": "#/components/schemas/VoteFee" },
               {
                 "type": "array",
+                "minItems": 1,
                 "items": { "$ref": "#/components/schemas/VoteFee" }
               }
             ]
           },
           "quote": { "type": "boolean" }
         },
+        "dependentRequired": {
+          "fee": ["quote"],
+          "quote": ["fee"]
+        },
         "additionalProperties": false
       },
       "Vote": {
-        "description": "A vote with its encoding in \"$binary\", as a response carries it [Keeta TS] index.js:80607-80609.",
+        "description": "A vote with its encoding in \"$binary\", as a response carries it [Keeta TS] index.js:80607-80609. A vote is no quote: \"quote\" is false when it asks for a fee and absent otherwise [Keeta TS] index.js:80213-80215, 80497-80499, 80652, 80660-80662.",
         "type": "object",
         "$ref": "#/components/schemas/VoteContent",
         "required": ["$binary"],
-        "properties": { "$binary": true }
+        "properties": {
+          "$binary": true,
+          "quote": { "const": false }
+        }
       },
       "VoteQuote": {
-        "description": "A fee quote with its encoding in \"$binary\"; a quote serializes as a vote does [Keeta TS] index.js:80606-80630.",
+        "description": "A fee quote with its encoding in \"$binary\"; a quote serializes as a vote does [Keeta TS] index.js:80606-80630, and always carries its fee with \"quote\" true [Keeta TS] index.js:80213-80218, 80696-80698, 80702.",
         "type": "object",
         "$ref": "#/components/schemas/VoteContent",
-        "required": ["$binary"],
-        "properties": { "$binary": true }
+        "required": ["$binary", "fee", "quote"],
+        "properties": {
+          "$binary": true,
+          "fee": true,
+          "quote": { "const": true }
+        }
       },
       "StapledVote": {
-        "description": "A vote inside a staple, serialized without \"$binary\" [Keeta TS] index.js:81094-81096.",
+        "description": "A vote inside a staple, serialized without \"$binary\" [Keeta TS] index.js:81094-81096; like any vote, it is no quote.",
         "type": "object",
         "$ref": "#/components/schemas/VoteContent",
-        "properties": { "$binary": false }
+        "properties": {
+          "$binary": false,
+          "quote": { "const": false }
+        }
       },
       "VoteStaple": {
         "description": "Votes and the blocks they vote for, with the staple's encoding in \"$binary\" [Keeta TS] index.js:81088-81101.",
@@ -1786,7 +1883,7 @@
         "oneOf": [
           {
             "type": "array",
-            "items": { "type": "string" }
+            "items": { "$ref": "#/components/schemas/PEMCertificate" }
           },
           { "type": "null" }
         ]
@@ -1802,17 +1899,23 @@
         "additionalProperties": false
       },
       "Endpoints": {
-        "description": "Where a node serves its API and its peer-to-peer socket (config/index.d.ts, Endpoints).",
+        "description": "Where a node serves its API and its peer-to-peer socket (config/index.d.ts, Endpoints): the client fetches the API below \"api\" [Keeta TS] index.js:59584, 72201, and opens a WebSocket to \"p2p\" [Keeta TS] index.js:72250.",
         "type": "object",
         "required": ["api", "p2p"],
         "properties": {
-          "api": { "type": "string" },
-          "p2p": { "type": "string" }
+          "api": {
+            "type": "string",
+            "pattern": "^https?://"
+          },
+          "p2p": {
+            "type": "string",
+            "pattern": "^wss?://"
+          }
         },
         "additionalProperties": false
       },
       "Peer": {
-        "description": "A peer record: a representative with its key, endpoints, preferred update channel and either a base64 signature over the record or a certificate, or a participant with only its kind [Keeta TS] index.js:71988-72019. Kinds are 0 participant, 1 representative, 2 relay, 3 archival [Keeta TS] index.js:71287-71292.",
+        "description": "A peer record: a representative with its key, endpoints, preferred update channel and either a base64 signature over the record or a certificate, or a participant with only its kind [Keeta TS] index.js:71988-72019. Kinds are 0 participant, 1 representative, 2 relay, 3 archival [Keeta TS] index.js:71287-71292; a peer record is written only for a representative or a participant.",
         "oneOf": [
           {
             "type": "object",
@@ -1838,10 +1941,7 @@
             "type": "object",
             "required": ["kind"],
             "properties": {
-              "kind": {
-                "type": "integer",
-                "enum": [0, 2, 3]
-              }
+              "kind": { "const": 0 }
             },
             "additionalProperties": false
           }

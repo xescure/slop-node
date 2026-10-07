@@ -12,6 +12,16 @@ The document describes version 0.18.7 of `@keetanetwork/keetanet-client`:
 
 `src/conformance/api/routes.test.ts: "the document covers exactly the routes of the typings"` reads the route tree from the typings with the TypeScript compiler API and requires the document's operations to be exactly those routes.
 
+## Closed and open objects
+
+Every object a response holds is closed (`"additionalProperties": false`) and lists every field the package writes into it, so a field the document does not name is an error in the response. The objects that differ, and why:
+
+- **Request bodies** of `POST /api/vote`, `POST /api/vote/quote`, `POST /api/node/publish` and `POST /api/p2p/message` are open. The client sends exactly the fields each lists [Keeta TS] index.js:59844-59849, 59852-59866, 58481-58485, 72209-72212; the node reads those and ignores any other, so a client of another version that sends one more field is still served.
+- **`Certificate`**, the certificate an operation carries, is closed: it lists the fields a certificate writes [Keeta TS] index.js:78141-78167, down to each base extension the package parses [Keeta TS] index.js:78236-78275. An operation always includes the PEM text in `$binary` [Keeta TS] index.js:65760-65767.
+- **`Error`** is closed in each of its two forms. A refusal lists every field a KeetaNet error writes or the client reads back [Keeta TS] index.js:66067-66073, 66533-66540, 66575-66590, 66334-66410, and an internal failure is exactly `error` and `message`.
+
+The vote request's lists have a lower bound where something enforces one: `blocks` holds at least one block, because the ledger issues no vote for none [Keeta TS] index.js:69012-69015, and `votes`, when present, at least one vote, because the client refuses to ask with an empty list [Keeta TS] index.js:59861-59863. The quote request's `blocks` has none: the client sends the list it is given [Keeta TS] index.js:59844-59849, and the ledger's quote, unlike its vote, makes no such check [Keeta TS] index.js:69356-69360.
+
 ## Validation against real responses
 
 `src/conformance/api/responses.test.ts` validates real responses against the document with Ajv in the JSON Schema 2020-12 dialect, each against the schema the document gives for its route and status:
@@ -19,6 +29,8 @@ The document describes version 0.18.7 of `@keetanetwork/keetanet-client`:
 - **Mainnet captures** (`api/mainnet/`): every captured body validates; together the captures cover every GET route but one (see below); every capture is JSON; and every status a representative answered with is one the operation documents.
 - **Fixtures** (`api/fixtures/`): every fixture validates against its route's 200 schema.
 - **Library serialization:** every block, vote and staple in a captured body or a fixture is exactly what the package's JSON conversion with `addBinary` makes of the value its `$binary` encodes [Keeta TS] index.js:78476-78481, 63910-63939, 80606-80630, 81088-81101.
+- **Votes and quotes:** a quote is told from a vote by `quote`, which is true for a quote and false or absent for a vote, and a quote always carries its fee [Keeta TS] index.js:80213-80218, 80660-80662, 80696-80698; the local quote and vote each validate only as their own kind.
+- **Certificates:** every certificate and intermediate a representative served is PEM text, and parses into exactly the fields `Certificate` lists; a block adding a certificate authority's certificate, made locally, validates as a block.
 - **History pages:** the `$id` of each entry is the hash of its staple's blocks [Keeta TS] index.js:81044-81053, and `nextKey` is the `$id` of the page's last entry.
 - **POST routes**, which the capture never sends: request bodies are built locally the way the client builds them, from blocks, votes, quotes and staples made by the package on a local test network, and validate against the request schemas: `POST /api/vote/quote` [Keeta TS] index.js:59844-59849, `POST /api/vote` with another representative's vote and a quote [Keeta TS] index.js:59852-59866, 59775, `POST /api/node/publish` [Keeta TS] index.js:58481-58485 and `POST /api/p2p/message` with an `add` message and a representative's greeting [Keeta TS] index.js:71402-71404, 73043-73047, 72200-72212. The quote and the vote the local ledger returns validate against the response schemas once serialized as above, and the error the ledger refuses a vote with, `LEDGER_NOT_SUCCESSOR`, validates as a refusal in the envelope every captured failure has.
 
