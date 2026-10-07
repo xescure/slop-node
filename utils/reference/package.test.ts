@@ -1,3 +1,4 @@
+import { rmSync } from 'node:fs';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -34,16 +35,27 @@ async function filesContaining(directory: string, needle: string): Promise<reado
 	return(retval);
 }
 
+/*
+ * The extractions are 15 MB each. A worker that is stopped while its tests run
+ * does not reach afterAll, but its process still exits, so the directory is
+ * removed there as well.
+ */
+function removeWorkDirectory(): void {
+	rmSync(workDirectory, { recursive: true, force: true });
+}
+
 beforeAll(async function(): Promise<void> {
 	workDirectory = await mkdtemp(join(tmpdir(), 'slop-node-package-'));
+	process.once('exit', removeWorkDirectory);
 	source = await readReferenceSource(packageRoot);
 	firstExtraction = join(workDirectory, 'first');
 	await writeReference(source, firstExtraction);
 }, slowTestTimeout);
 
 afterAll(async function(): Promise<void> {
+	process.off('exit', removeWorkDirectory);
 	await rm(workDirectory, { recursive: true, force: true });
-});
+}, slowTestTimeout);
 
 test('prologue, modules and epilogue reproduce the upstream bundle exactly', async function(): Promise<void> {
 	const bytes = await readFile(join(packageRoot, 'client', 'index.js'));
