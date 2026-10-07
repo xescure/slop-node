@@ -1,0 +1,34 @@
+{
+  "body": {
+    "account": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+    "balances": [
+      {
+        "balance": "0x10437BFF78D2A68938",
+        "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg"
+      }
+    ],
+    "currentHeadBlock": "FC30CFFE7EE5E8DCB1C3071AEFA31416A8285E026BEC8A665F92264FD68C23FD",
+    "currentHeadBlockHeight": "0x3469",
+    "info": {
+      "account": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+      "defaultPermission": [
+        "0x1",
+        "0x0"
+      ],
+      "description": "Keeta",
+      "metadata": "eyJkZWNpbWFsUGxhY2VzIjoxOH0=",
+      "name": "KTA",
+      "supply": "0x9A125DAB338BBFA6B49F6"
+    },
+    "representative": null
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/account/keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+    "query": {}
+  },
+  "status": 200
+}

@@ -1,0 +1,22 @@
+{
+  "body": {
+    "account": "keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a",
+    "certificates": [
+      {
+        "certificate": "-----BEGIN CERTIFICATE-----\nMIIDKzCCAtGgAwIBAgIQYqtfIV7ts2ol+RFor6m5djALBglghkgBZQMEAwowOzE5\nMDcGA1UEAxMwS2VldGEgUGVyc29uYWwgQ2VudHJhbGl6ZWQgQXV0aCBTZXJ2ZXIg\nSXNzdWVyIENBMB4XDTI2MDUyODAwNDgxNFoXDTI3MDUyODAwNDgxNFowUDFOMEwG\nA1UEAxZFa2VldGFfYWFiNjZkc2NmZGoyazJocnR6ZXNlZW9mazRvNmppcTc3dDV6\naWpsZTZnMnhnZHRkY2s1d2s2dGh4ZzR2MzVhMDYwEAYHKoZIzj0CAQYFK4EEAAoD\nIgAD7w5CKNOlaPGeSSIRxVcd5KIf/PuUJWTxtXMOYxK7ZXqjggHCMIIBvjAOBgNV\nHQ8BAf8EBAMCAMAwHwYDVR0jBBgwFoAUDiD2hjMa0MTLpt6M+7/Wsp3WhdgwHQYD\nVR0OBBYEFMpNaMsV9UyyePEN4Lo5TLBaIKwsMIIBagYKKwYBBAGD6VMAAASCAVow\nggFWMIIBUgYKKwYBBAGD6VMBA4GCAUIwggE+AgEAMIGtBglghkgBZQMEAS4EDLv3\n59BJ9okGr9rU5ASBkQSnSk+3ucAPXQRH4QIg22gR1r9SreyLvdJXBofmL8WoY81P\nb68rJqDC0nsAf+gqgI7vadryS4NCBPiiNzY+jI6RJbO8u71XbEykTZ6x3ZjIyBzU\n7ztJNAUqna3kr0y/CdZA4mV5xmIyNu/yjMkmnztfwS68+4JCs+H5XPb7YUezVrq9\nqBnjXkBleoyjJrJQtZ0wXwQwWL37u2/PpWQvorqje5v2Vu3sezn3CtCPZD0oL98R\nlhpxdVROTd9IYXxYmQA9FOp9BglghkgBZQMEAggEIOl3W+bHKFf38xJ3Aahh56Ji\n7CqT6mDm7erok3a4X0S7BCgJedwXEFxvCtDE2oIHIbfW5SeUZ1NgUFxk1SeDky3+\nJ6dk347WUcf2MAsGCWCGSAFlAwQDCgNHADBEAiAs9s6YoKiYHVUcDV3eAZzMs+2v\nu1B2979xVwgUkhrh4QIgI0GVBsfX4YvGMtt/ihbFPTKmFWPHysy4XRKOzp3EkLs=\n-----END CERTIFICATE-----\n",
+        "intermediates": [
+          "-----BEGIN CERTIFICATE-----\nMIIBpTCCAUqgAwIBAgIBATALBglghkgBZQMEAwowOTE3MDUGA1UEAxMuS2VldGEg\nUGVyc29uYWwgQ2VudHJhbGl6ZWQgQXV0aCBTZXJ2ZXIgUm9vdCBDQTAeFw0yNjA1\nMDYwMDAwMDBaFw0zNjA1MDYwMDAwMDBaMDsxOTA3BgNVBAMTMEtlZXRhIFBlcnNv\nbmFsIENlbnRyYWxpemVkIEF1dGggU2VydmVyIElzc3VlciBDQTA2MBAGByqGSM49\nAgEGBSuBBAAKAyIAArV3F+UE52pZBpyXRFMUDdcm51u3PkeR8L0iTPB/up2ho2Mw\nYTAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIAxjAfBgNVHSMEGDAWgBTb\ndfwsYQ8J5kCQP7pkahXWmapnwTAdBgNVHQ4EFgQUDiD2hjMa0MTLpt6M+7/Wsp3W\nhdgwCwYJYIZIAWUDBAMKA0gAMEUCIQDepRJp/t8nHXKFGu8KDcqtMExrJvAlBEhm\njJfLhVW85wIgJRGjdDie3nzglQxxU21RbKHTdIBvCCxgUymSUYFYs/s=\n-----END CERTIFICATE-----\n"
+        ]
+      }
+    ]
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/account/keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a/certificates",
+    "query": {}
+  },
+  "status": 200
+}

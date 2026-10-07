@@ -1,0 +1,15 @@
+{
+  "body": {
+    "error": true,
+    "message": "Internal error occurred (error ID: d97e76c4-1476-40d7-927f-f1d02875ecf3)"
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/vote/not-a-hash",
+    "query": {}
+  },
+  "status": 500
+}

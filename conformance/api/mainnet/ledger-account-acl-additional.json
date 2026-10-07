@@ -1,0 +1,265 @@
+{
+  "body": {
+    "access": [
+      {
+        "balances": [
+          {
+            "balance": "0x3B8B87C0",
+            "token": "keeta_amnkge74xitii5dsobstldatv3irmyimujfjotftx7plaaaseam4bntb7wnna"
+          }
+        ],
+        "entity": "keeta_amnkge74xitii5dsobstldatv3irmyimujfjotftx7plaaaseam4bntb7wnna",
+        "info": {
+          "account": "keeta_amnkge74xitii5dsobstldatv3irmyimujfjotftx7plaaaseam4bntb7wnna",
+          "defaultPermission": [
+            "0x1",
+            "0x0"
+          ],
+          "description": "USD Coin",
+          "metadata": "eyJkZWNpbWFsUGxhY2VzIjo2LCJsb2dvVVJJIjoiZGF0YTppbWFnZS93ZWJwO2Jhc2U2NCxVa2xHUnZnSEFBQlhSVUpRVmxBNElPd0hBQURRSVFDZEFTcGFBRm9BUHBGQW1VZ2xwQ0toTFZkKzJMQVNDV3dBc2hZTlY1NHRmalA2QjZUOU9mdFA5Ry9WbnJONldlai9PUDhlL2JlY1IrbWZZSC9XYnBEK1lqellQUkgvaHZSSi8xWFdaZWhYMHRYN3Ura2Rtb0g5aTdaLzhaMGpMRVgycTBHOWllMWJ1bllBTjB2U3JhQUg1TzlCWE85OWJiK1g5dTAxdGMrMU5MSFlkYnNEeUpuZUd0dHF4V1YwUkpJeVNqQ2JYZ1JtWi93aUorcHhxdHFXQTdJQXhGbXIvNFU2REtGeWp3c0UyazZBZUdQRHZreXhEazZOVnpwdDFnUGFiYkwwREZSLzRwWktRWmpud3o1RVRJQXJqTlo4UVN6b0Z4ZTBHKzZZdkdoQVZwVkFWaENPYVdUbFIweFlXWHVISXdvNXRoQVk4QysxMlhud0R6MDV6cS9oV1R6OWgxUzJyZ0VNRFVXeGY1YVQvZ0FBL3RKeHhvUTNMaURuQjJ5UDVONTF2amVmVnMwWkJ0WGFhNFBpVFlpaDArQzRxWTdSakNsN1Y0RzQ2MVY0REVVd3V2OFZMYk5SZkprdFpkNkJWb2hxcmF0bS9hZFd1bUhFZ09QTnEvSnA0d3JYL0tpdmFhaUpWeTVYSi81TVBkbG8wVGpYN25Od252Z04zVkVmUTlXVHdsN3JyMStVMXRlQ3dyQVFPWDJiWVhiYmxBUnVJdUVlTExkVTdwRWxybEx4RjFBcm9ERTF6dy8rMEZFejZXQjQ2K0VrMFd1SU9hSzJsN3BWYzgzdlMyOVJIT3NOOU1zY2tIVHJ1dkFpTHN3MTl5ZHRCRnhhZUErcnVwdGVKL3ZLT3BBL21QOFEzUi9JTmYwam56MVRhVzRYejRPcW5pUTAwNVpUUUpQZE9rdFc1b3pJb3MzRDBIWlFhWG5ld1EvbFNnMXp4NTFJUXF5ME93N2hQQWF1UVZEQ05tRDIxSXZrUlZiaXZJQnJhKzN4MndKZGtuNHFxVElaRTdjLzFjWEpHQ2JNZzBZVmVOK0kzV2w4bkdRMDU5V2JHem1jYjVwT3QyTHV2bUQ2ZzdkQlVGUVBRVWdHcFNwMlYwM0U0R1VId2VRT1Zzb1FZUVA0VC9SVjdBeHRHNVkrenl4dTNIa2V1MUFwQ0RmM0pHQTByYzJWZjZIYThjMzZlTkFtN2RxNlhGQVAyaTF1cUZvV0hreWJtbDM5V0hPVDAxcHlPM21aNjQvRGR4OVdtcm9ZR0RabVdrMllNNnB3Yk1HNnk5VWt0RXBEM0dhZlRmTlJLdmtsTWsxQ3ZDSEhJTnB5NEcvS2RSZHdhTXhZOExqR1IwSEhMcjhGeGt3S04wd3BZcG91MmE4Zzd2RXd2bmJmM3pRNm1KcVZIUXVOWElGb1JDb1AyclRmZTAzSTFYZWh5dGc1Rk01d2Q3bmp5UjI3d0d3UmQxRDRySUtMMzRPSTI3NVBxWFdGTzVnYXY5MHE4RzR3UVh0bmdxRGswT1JsSXdCbmR3OXFrODJaVXZDODcvRHk3VVpGbUU1aThWYWJCNlhreVZSWFN1YURWQUMwVHM5NUViYU5JVVhHZk4rcC9tNHllQzg3eFNmdHQzRlpEOU4yQUNCZ3lIdzI1ak5sYzdsNjNyU3Y3TzNGZWVXcDJuNkVNeTYrKzJzYzh3Wm1nNk41OUVxMGdzTno4QWpocVFOMmtZLzFKUTA0aTZHcktaRzhXdnE5MUd5dzFad1BvblRrdjgvanN2SDFKYUJuWkNONU4wb3dOSFBFSHN5b2Uxc1lQTERYVlZPaURPUFdENmN0c1ErMjlXYUlmcTIwaTFzMVJLMzkvWjFXVVRRTXM5NEpDeXJwRXo1L0swbWUvT2p6OURydG9CS3hYSDVqeHhKemlMc2Jta1gwajVZWTU1MHhUTFZrUWFYZks3Njk2Z3hwckQvWElzdnZSejlOMEIvRFZzd1BQZmtKSGRkOUtwenZZU2J4TTBBZGQxVmVaTzh1NXNlMGxzTkZ0RmcxbGg0eWJwL1k3WXByc0JJWWtYQUhIZm9QaHFPNXhUMnA5TGlQK1E5ZTR1Rnk2OUlHWldtU2t2TEk4WXZYQlEwU1RlWGtlSzkwNTQ2amF0U0tObmpVY1ByRFhmU0RGRVZ6ZGV6SURZRFhmWUlrelBTcW5SdlVsL0ZwWCs4TmhranNlTUZhWXk1ek5ueE9qV0N5Ym5oL0ExOWFWSzBxZzNMc3B6MzZLb2ttUS9GUVRhYkJBc3k5dFp6NWxFbWRWbkl0ZVYxcjdJMlpieU50ajJEbE9KU0JNT3F5dHQ0ejI5cytreE5QT2VQVm84eEVzdEJXVVlhWUZrdlB0TVhsNHFaUnQ2NGtWL01VK09mV1Q1VjBzMEFWY3RoOGhiOWlZSElhMWhRcHhVT2sxSVNoQkx0RWY0aXBqVWc0MFdzQjVJSGN1MnZaUXdyU1FhelJ4UnpydDAwVW5HWGRCaU9hYUlwWUlhSjVEcWtoT2tvMURYaU1scUJrK2g3TWVoMk83NHUzdDRmd1RZRHFoSmpEbkhTYzhKMVE2OW5wYkUwc3JZRGdFcFFLSjcvTWMvUEx0SXFLcFY0SXo2bEpmb1hpaFlDd0hwTU9mcmRBbHFYTkVjMW1oMXZUNHZhVnVVMjNFQjR3VHlkUkFza3E1Mi9vOURVSG9EM1U2emdURmNtSU5RTjVvenlpMHc3SWhUWi9Zd1JvZzBaRkZHTWUrTk5jZW0rQnhtWUZTMlhrQVBNSlZSSWN4QkVVR2xHODdGSmtHa2h6cnJvcXF6Q3BuOFlDN21OZFVueEZ3d3pobDVvM0thdmN0eUxmYWJmU1BlR0ZlUkFjMjJLRjVtT0NUTElIc3FJRENCN1N2T3lEamRQM0I1OW1lTUhlWklSMW9sNVpMcmVzb1JPbDNCNWtpSUxML3Y0S3dyN1lPSzI0TnBWQm9ocVdUaFpLWEtHU2QzYUpyV2lmRTNzNkk5VTBCcnAxMU0zYWlxMkdiOUZ3bEJmNSt2N3ZCazRrWHpOdkEvaVhQdEhUVzNEWTNiS3NGbUR2NnpjZFhMKy90OHU4VEExMERucHF4bXFBZ1JSWXFDeW1uM215MmpTR0JVUWM3MDdWeXlPclRSTEJ6NVEvTGo0OEpMWFo0bmV5UTdxUGwyRm1rNmxPUEkxeEdiT1Z3bEw5eDlmSlV6WExKbytsOTI0dG8wc3hCUXlZcDhnNzhhTS9INE1Ia0p3VHZvcDRjSTFJN1V2WjhFNUFobHZxRnNrMEhuTW9DbENoNVdHd25PRWkvc0VFbjJjUFIrcUozQXZXV3FCaVUxbDN2SytDbEhseDlML2Z2UWR3RndhaXUwc2NjSXB4Zi81d0ROKzRTdk8zZ0JjZ3AycTJhajdUREF1aVdjWmU1R2NyUEFXdnd4aC8zTUVLNEZlYlpBQ3hLTTV1bi9WYnp6NjVzbU9hSmQ1cXA4V2w3eTVVY05QM3p1SkgrQUtVZWtPa0Rqd1VhK0xkcVN6QlpGTng3dk5uZml6RzE4Z0FQOE9rc0R4dlZPTTlSSjB4MUExN2k5dmtxN1pTTXk0ZXZMU1NTbUFBQUFBPSJ9",
+          "name": "USDC",
+          "supply": "0x44BDB913F"
+        },
+        "principals": [
+          {
+            "entity": "keeta_amnkge74xitii5dsobstldatv3irmyimujfjotftx7plaaaseam4bntb7wnna",
+            "permissions": [
+              "0x5",
+              "0x0"
+            ],
+            "principal": "keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm",
+            "principalType": "ACCOUNT",
+            "target": "keeta_amnkge74xitii5dsobstldatv3irmyimujfjotftx7plaaaseam4bntb7wnna"
+          },
+          {
+            "entity": "keeta_amnkge74xitii5dsobstldatv3irmyimujfjotftx7plaaaseam4bntb7wnna",
+            "permissions": [
+              "0x3",
+              "0x0"
+            ],
+            "principal": "keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai",
+            "principalType": "ACCOUNT",
+            "target": "keeta_amnkge74xitii5dsobstldatv3irmyimujfjotftx7plaaaseam4bntb7wnna"
+          }
+        ]
+      },
+      {
+        "balances": [
+          {
+            "balance": "0x10437BFF78D2A68938",
+            "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg"
+          }
+        ],
+        "entity": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+        "info": {
+          "account": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+          "defaultPermission": [
+            "0x1",
+            "0x0"
+          ],
+          "description": "Keeta",
+          "metadata": "eyJkZWNpbWFsUGxhY2VzIjoxOH0=",
+          "name": "KTA",
+          "supply": "0x9A125DAB338BBFA6B49F6"
+        },
+        "principals": [
+          {
+            "entity": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+            "permissions": [
+              "0x5",
+              "0x0"
+            ],
+            "principal": "keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm",
+            "principalType": "ACCOUNT",
+            "target": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg"
+          },
+          {
+            "entity": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+            "permissions": [
+              "0x5",
+              "0x0"
+            ],
+            "principal": "keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai",
+            "principalType": "ACCOUNT",
+            "target": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg"
+          },
+          {
+            "entity": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+            "permissions": [
+              "0x3",
+              "0x0"
+            ],
+            "principal": "keeta_aabk62tezl4whordlviamlx3zrdgux6lk63cghay45vkzdatyemzvqqjuj5resa",
+            "principalType": "ACCOUNT",
+            "target": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg"
+          }
+        ]
+      },
+      {
+        "balances": [],
+        "entity": "keeta_apblhar4ncp3ln62wrygsn73pt3houuvj7ic47aarnolpcu67oqn4xqcji3au",
+        "info": {
+          "account": "keeta_apblhar4ncp3ln62wrygsn73pt3houuvj7ic47aarnolpcu67oqn4xqcji3au",
+          "defaultPermission": [
+            "0x1",
+            "0x0"
+          ],
+          "description": "EUR Coin",
+          "metadata": "eyJkZWNpbWFsUGxhY2VzIjo2LCJsb2dvVVJJIjoiZGF0YTppbWFnZS93ZWJwO2Jhc2U2NCxVa2xHUnZBSEFBQlhSVUpRVmxBNElPUUhBQUJRSWdDZEFTcGFBRm9BUHBVOG1VZ2xvNktoTVBVZWtMQVNpV3dBc1NYaDF0NHdmbVA1OTZPVlkvdEg0dTR6T25QTjc4YS9iL0lCNmkvMHo3QS82M2RJZnpEL3VSNncvb3gveWZxRS8yYnFLdlJBOHU3MmJmM1h3a3YrcGRzSCtPNVpxVkVZZSswbWc3c2IydXQxakFCOVQrSWY2ODYzcFFBL04vb1c1NC9yVDBlT3I5KzFxbjJzMUJJOGFHb2ZxL0wzZnBRdW5HcWdDR09xMHdmYjF3cnFlSGVML0pDRmtUU1gzcXFNbzg5NldGMHFKSURoQUxBZDVHOGlhUlg2aUMwWXR2SDNjOC85cmNtek1hRUdzWjFvWTdsejZmaWJzOEc5MUFFVEROVmZHSjcvd0RJazJMYW5PK2t0NkEyZTJXUDhNdGNuS2pvUnRzTU5aRTBiTEc2RisvVGx5TUZ6MmtORWFJTnVlM01kcFZlcHNPYWkyeWtQZ3RId0FQN084ZlZTaXZzMUZwWlRXd0RIRGNMaTJBRkFxU3RYSzNtUytTU0k1K0NzbVhtR24va01sWWdJR0YwM2xuV09NSTVxcytLWXFob29IUVE0RmRHakxhSmwrR1UwdEN1bzhwMnA4ak1VQ0tGT1BvU0E2dUpsVlJ1T3BzbzNVd0RWTXl1T29zb3JEeU14b2FmTTRua2IvRlVZYnJXb25FRTNaVUJmV2hGQ0dzZ3h6VVFpRkZyVlkwTDc5S3F3c0pnc1h5L2NybGhHZkIvN2p3YkRDekx5eGwvS1Vxb2tTUU5QRkxqZjBXcGI5K2JYb2Vja0E5R0MwNGZtK2Rmdmd5WG9QazRSQlZ5dWttMDdneHhXRXc3Qzc1d2VKSC9TL08rM3BZWVNQM2xmTHVrV3I0UHVXZVBZYWJNMjhSSndGSnlZNlZEa09JSVBYTk9MdmJpTi80NUE2WmFKRG94MXg4Y2ZyRmhaN1MyMzRPMGloUDd6aGEwckFzV2loZXZiRVRxeDF5emQxL1Y3MW5nMVIveDhqQWd1YVlGRnlTZUVnRDZPT1UwMElKRmF2U1UyRVdRVTlUT005d2kyZTE2SWp1YWNES2JSVDBnQU5ZcEpwT3RDTGcvL1BNdW1XRTlJcDVJaHRESXNGMmdkMFNRdjZOSmYwUnJ2SDZTblJwWGdjUTZ0eFJDcGRWS3lqMTFHSGp3aEtPRGVxU2duT1YwQWhOSTM2N0pJNzhKTklXYjQ3RDQwdGJ0KzNTMXA1Z0Y1Q1JlZXozRDNpQmQxWnQwVVhBL2FUZlFncktwQS9EUlZCNXphMDdGd0R5U2xaREViMHdLTmtVcTdwQ1ZFbzFmcHovbHRCaXI2N24wd2dmRDNRSnhKMWJvdVdZNXNwb1JzSFNXazZIV2luNVVwbXhJclpuek1EbnlwcHFTYzZGWXFsWGtZeW42R04yYkZvNlNZQ2Y4bnJIQStvZ3NmcWdtdW1BNWJoZHZOR0JOdHhSR0x1UEJCeEM2L2ZXNTQrVkJtRWtWT0d5L2t1eXIvTm5jOW5FZHRrT3U3QnFMQk5HVXZpT1Q3QTJVV1NRa3ZrSWxxTVFCZDFFVENuL0FKOHk4NkMrcFZwbGw2ejNkQUZTYzJVUFRXdFFITVZ2WW0xRlRzbE15Q29DbDZQMkY5Vk9MeWNNRmJmUGdmUStIcXpEU1pVU0JqcmJsZENrL0hIZGs4V2N0SC9wNmNXVW5yUGhWdHQ4dFFHMzJyY0w2WkRaSk5RMk9EU0dNQlV1WXo5ZUFmL3VvY255R0FnMGlZMmV2b0tDcjZVWGlGVnNHWWRtK3M3dFFEZ1IvMmh5QXlUb0k2S1VKODBYeDhSbXJuaVJLVjhmVWVndWFNYWNQSU52L2RsL1g1Q3lkRnpFbXlQeWNiOVdjMGJCdFgveUxJc1JmRnhjUkxXekxaVmZIY1lrWGdRNWswTmFsYk9JMFdUK1ZRb3cvbmYrRDUvQWJhZVV3SjZmejNtd0p4UlptdndUSGJnUk15enBHcFFPeU4vbkQrRitxZjhDTkw4NjFEbFZ2cFlhTVFhNjdWVzlHMTNtQzhjUS9ycUgrZytwOXhLc1lrbnI2bEQ4aDBSanZjdTVaREFMekp3RWs4NHFteWJGVTFjYXBDenIvN0tESFAvbnRJUG5wbm1mOFcyU0hoYXlmUnh3Ym9Gc1VUc0x2N2ZIRlVBbTFIb1V0KzZobXpGSkFTYTFaczkxYWhqanlSMkI5VzRqM3haNTRCdERLWEtqM0huczRwbndwSmVRMkM0WFBOSUdTbzhycHB5di9PcE56UTUrSVcyeHMxV0dFVER2MktYWkh5Nm5GRjdXbWdsdWlJa2d5enNuQkdjbUhmdEZxUWU3Ylp0TGlwRU1ONGZ0a0NxcGtia21LVlRUdFFCTElWVGFBRjIwUVpWMkZpYzN2dkc3VHVES0FtTXgxd0RaNXFLWDVnbC9zcmoyY051U0VyRVQ3VllCVEtSM1FHSFRZTUZ4RE1NWmdWdkNFYzltMm16c1pTU1dBVWtQM0V2VzBISytwNWNlOEh6WDhObE9BQnZKcHdIYnRabEpXa2o0MkhQN2d5dk1hM2EvblNGdEIvQlVYUEZPZDdRaVRSRi9HTTdrNDVocHlEd1BlM3lUYm1UNVlBVkFKSWp6aFBkT253eStSemc4MENIODgvY1VtU2hIc3VxMDByUE9Kcld0d1FldXd6ZzRLdUFsQjBzRURHWnUwdVBjRER4ZWFnNWFRRTZPeEUzYmJUQ3dpQUY5clMvUlhCWGNKbUlnSjJMZW5MbGU5eTRGMVVEajBqd0FObXNycFYvWFdFT1ZMRGdQZFVMN2FKNnZXalhIcjhMbXllKzZ4d2xqSisrYWVUSUdjdHVKaHdRc0szdW13R3U1bjBxTG5Vc3dEdnowMHRtM0hpZUlqUTcrbUVnK3J5N0VSZjVvTVI3bU9SMHM0L3ZEZ2pPejRXS3RGTkcwNEl3bEVsa3hpY21LNFJzYWxHeGxEYk1VVko4V0Z1dUlxWXUvZlQzRGl5ejFGWVlRY0pRdjZzZjkrRjl2Ymw3dDloZmJxemk5YitsT2FmaHM2MjNGdDlMT2d5WlFLV3hKbVlwK3dPZXRFSlhEL2RjNnF3N2R5bU9OSnZwMVdxblE3Y0t5NGNKeE5rMWpsT2ZoWHBGY2k4V2E2R09YNk81RUQydG81Ri9xVUFybGpOcUJxUFowR2J0bFNCM2pScnI0Tmg5cnBvNFQrWEJFS2ZOVWxwUzB3UGRJWHZyV2d2eTFQZjhIZ2ZHWmpFRlEzU1NaVlRLZGtQalpDejhqVnlqWnlaZ1doMmJNK2lJVU9sSUxrQlRhU1FwL0tFaG5TSTFJL3U0TVlxQ3VSNTZZWit3TXNRdWdWTUtRY29uNzZNVHZkQ0VhMGlaSWF0dEhDNkU2RTVRZVJTbllkcVVJNXBtWENZV0F3a3I5NGpEcTh2SUQ2aVdDenNnYWxzNzdzMEUzMjRmei9pQ1BmRFBYREdoUDhVVThhU1pXL0dmajByTlJCRGZOZms5QnhzZ2ZSRHFVeERiYlZ3eUl2NVJIaFh3RU1BbEFBQSJ9",
+          "name": "EURC",
+          "supply": "0x6C8FEEF6"
+        },
+        "principals": [
+          {
+            "entity": "keeta_apblhar4ncp3ln62wrygsn73pt3houuvj7ic47aarnolpcu67oqn4xqcji3au",
+            "permissions": [
+              "0x5",
+              "0x0"
+            ],
+            "principal": "keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm",
+            "principalType": "ACCOUNT",
+            "target": "keeta_apblhar4ncp3ln62wrygsn73pt3houuvj7ic47aarnolpcu67oqn4xqcji3au"
+          },
+          {
+            "entity": "keeta_apblhar4ncp3ln62wrygsn73pt3houuvj7ic47aarnolpcu67oqn4xqcji3au",
+            "permissions": [
+              "0x3",
+              "0x0"
+            ],
+            "principal": "keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai",
+            "principalType": "ACCOUNT",
+            "target": "keeta_apblhar4ncp3ln62wrygsn73pt3houuvj7ic47aarnolpcu67oqn4xqcji3au"
+          }
+        ]
+      },
+      {
+        "balances": [],
+        "entity": "keeta_apyez4az5r6shtblf3qtzirmikq3tghb5svrmmrltdkxgnnzzhlstby3cuscc",
+        "info": {
+          "account": "keeta_apyez4az5r6shtblf3qtzirmikq3tghb5svrmmrltdkxgnnzzhlstby3cuscc",
+          "defaultPermission": [
+            "0x1",
+            "0x0"
+          ],
+          "description": "Coinbase Bitcoin",
+          "metadata": "eyJkZWNpbWFsUGxhY2VzIjo4fQ==",
+          "name": "CBBTC",
+          "supply": "0x16744E"
+        },
+        "principals": [
+          {
+            "entity": "keeta_apyez4az5r6shtblf3qtzirmikq3tghb5svrmmrltdkxgnnzzhlstby3cuscc",
+            "permissions": [
+              "0x5",
+              "0x0"
+            ],
+            "principal": "keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm",
+            "principalType": "ACCOUNT",
+            "target": "keeta_apyez4az5r6shtblf3qtzirmikq3tghb5svrmmrltdkxgnnzzhlstby3cuscc"
+          },
+          {
+            "entity": "keeta_apyez4az5r6shtblf3qtzirmikq3tghb5svrmmrltdkxgnnzzhlstby3cuscc",
+            "permissions": [
+              "0x3",
+              "0x0"
+            ],
+            "principal": "keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai",
+            "principalType": "ACCOUNT",
+            "target": "keeta_apyez4az5r6shtblf3qtzirmikq3tghb5svrmmrltdkxgnnzzhlstby3cuscc"
+          }
+        ]
+      },
+      {
+        "balances": [
+          {
+            "balance": "0xB4B8A600",
+            "token": "keeta_amca5kka2txyzatz7gqv3mc32ibwpp4dogbpksoclc42ate3iq56nemp25y5m"
+          },
+          {
+            "balance": "0x1393C6207",
+            "token": "keeta_amnkge74xitii5dsobstldatv3irmyimujfjotftx7plaaaseam4bntb7wnna"
+          },
+          {
+            "balance": "0x3C9A41DDDB1609A960000",
+            "token": "keeta_amoholo42ekzx7hoco44zqm4paoowbg2kxs5t7kv35q2vvh57czlh5pki6reo"
+          },
+          {
+            "balance": "0x2B2",
+            "token": "keeta_anf4krfbxp6srdhhovjjacpsgmtkk3biuibnazt5ajb5izjoam26w7oegeirk"
+          },
+          {
+            "balance": "0x14757FEAD568871D7F",
+            "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg"
+          },
+          {
+            "balance": "0x3635C9ADC5DEA00000",
+            "token": "keeta_anvyixi4coiomjint2m2zyp5augq7nn3g2q4ikpfcenrinhl24o7japijaimc"
+          },
+          {
+            "balance": "0x7F1EEE202E53D4238D",
+            "token": "keeta_ao7nitutebhm2pkrfbtniepivaw324hecyb43wsxts5rrhi2p5ckgof37racm"
+          },
+          {
+            "balance": "0x1F482443",
+            "token": "keeta_apblhar4ncp3ln62wrygsn73pt3houuvj7ic47aarnolpcu67oqn4xqcji3au"
+          },
+          {
+            "balance": "0x71118170400",
+            "token": "keeta_apekny3rwbh5hhpigcvn4wxorbageyxopezaoryds627u7mncuf3ktob4snz4"
+          },
+          {
+            "balance": "0x49B9CA9A694340000",
+            "token": "keeta_apey3z7rvvorboznw4mj34ppdklp25bhcmi2jjsapxbjlsoh565ovzsa7caf2"
+          },
+          {
+            "balance": "0x29209080",
+            "token": "keeta_appez3qahkrlnevabva6a3ixschv2lg7li6ma4h6bgyc5hxw2ublr4txaggr4"
+          }
+        ],
+        "entity": "keeta_aqltdal4rshtky5iehd765y3mdjkcmku5d4ulo5fgonzqrxulwepnogq33mle",
+        "info": {
+          "account": "keeta_aqltdal4rshtky5iehd765y3mdjkcmku5d4ulo5fgonzqrxulwepnogq33mle",
+          "defaultPermission": [
+            "0x601",
+            "0x0"
+          ],
+          "description": "EVM Anchor Bridge Account",
+          "metadata": "",
+          "name": "EVM_ANCHOR"
+        },
+        "principals": [
+          {
+            "entity": "keeta_aqltdal4rshtky5iehd765y3mdjkcmku5d4ulo5fgonzqrxulwepnogq33mle",
+            "permissions": [
+              "0x11",
+              "0x0"
+            ],
+            "principal": "keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm",
+            "principalType": "ACCOUNT",
+            "target": "keeta_aqltdal4rshtky5iehd765y3mdjkcmku5d4ulo5fgonzqrxulwepnogq33mle"
+          },
+          {
+            "entity": "keeta_aqltdal4rshtky5iehd765y3mdjkcmku5d4ulo5fgonzqrxulwepnogq33mle",
+            "permissions": [
+              "0x3",
+              "0x0"
+            ],
+            "principal": "keeta_aab7tgdhz3ti6e5ijzxdpuf4tqvezzwdkmijtiauaoqjhmbontaxboij5ho4llq",
+            "principalType": "ACCOUNT",
+            "target": "keeta_aqltdal4rshtky5iehd765y3mdjkcmku5d4ulo5fgonzqrxulwepnogq33mle"
+          }
+        ]
+      }
+    ],
+    "account": "keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm"
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/account/keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm/acl/additional",
+    "query": {}
+  },
+  "status": 200
+}

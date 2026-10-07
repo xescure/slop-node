@@ -1,0 +1,15 @@
+{
+  "body": {
+    "error": true,
+    "message": "Internal error occurred (error ID: 1a1ce27c-bbf6-4c54-bb71-0d3e4fa38d5d)"
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/block/not-a-hash",
+    "query": {}
+  },
+  "status": 500
+}

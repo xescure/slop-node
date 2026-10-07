@@ -54,7 +54,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -98,7 +98,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -138,7 +138,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -165,7 +165,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -205,7 +205,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -230,7 +230,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -254,7 +254,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -305,7 +305,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -329,7 +329,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -355,7 +355,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -387,7 +387,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -416,7 +416,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -434,7 +434,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -460,7 +460,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -496,7 +496,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -517,7 +517,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -546,7 +546,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -566,7 +566,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -601,7 +601,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -674,7 +674,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -698,7 +698,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -709,7 +709,7 @@
           "name": "block",
           "in": "path",
           "required": true,
-          "description": "The staple to start from, as the hash of its blocks, in place of the \"start\" query parameter (api/node.d.ts, getAccountHistory).",
+          "description": "The staple the page continues after, as the hash of its blocks, in place of the \"start\" query parameter (api/node.d.ts, getAccountHistory).",
           "schema": { "$ref": "#/components/schemas/HashInput" }
         }
       ],
@@ -728,7 +728,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -756,7 +756,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -792,7 +792,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -812,7 +812,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -833,7 +833,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -854,7 +854,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -874,7 +874,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -896,7 +896,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -936,7 +936,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -987,7 +987,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -1016,7 +1016,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -1054,7 +1054,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     },
@@ -1098,7 +1098,7 @@
               }
             }
           },
-          "default": { "$ref": "#/components/responses/Error" }
+          "500": { "$ref": "#/components/responses/Error" }
         }
       }
     }
@@ -1140,7 +1140,7 @@
         "name": "start",
         "in": "query",
         "required": false,
-        "description": "The staple to start from, as the hash of its blocks: the \"nextKey\" of the previous page [Keeta TS] index.js:58951-58954, 58986-58990.",
+        "description": "The staple the page continues after, as the hash of its blocks: the \"nextKey\" of the previous page [Keeta TS] index.js:58951-58954, 58986-58990.",
         "schema": { "$ref": "#/components/schemas/HashInput" }
       },
       "HistoryLimit": {
@@ -1153,7 +1153,7 @@
     },
     "responses": {
       "Error": {
-        "description": "A failure. The client treats a body whose \"error\" is true as a KeetaNet error and rebuilds it from the body [Keeta TS] index.js:59629-59652; any other body is reported as text [Keeta TS] index.js:59656-59671.",
+        "description": "A failure. A representative answers every failure with status 500, a request it refuses as well as one it fails to serve; a failure it did not anticipate carries only \"error\" and a \"message\" naming an error ID. The client treats a body whose \"error\" is true as a KeetaNet error and rebuilds it from the body, whatever the status [Keeta TS] index.js:59629-59652; any other body is reported as text [Keeta TS] index.js:59656-59671.",
         "content": {
           "application/json": {
             "schema": { "$ref": "#/components/schemas/Error" }
@@ -1585,7 +1585,7 @@
         "additionalProperties": false
       },
       "HistoryPage": {
-        "description": "A page of staples, newest first; \"nextKey\" is the \"start\" of the next page and null after the last [Keeta TS] index.js:58969-58996.",
+        "description": "A page of staples, newest first; \"nextKey\" is the \"$id\" of the page's last staple, the \"start\" of the next page, and null after the last page [Keeta TS] index.js:58969-58996.",
         "type": "object",
         "required": ["history", "nextKey"],
         "properties": {
@@ -1596,8 +1596,14 @@
               "required": ["voteStaple", "$id", "$timestamp"],
               "properties": {
                 "voteStaple": { "$ref": "#/components/schemas/VoteStaple" },
-                "$id": { "type": "string" },
-                "$timestamp": { "type": "string" }
+                "$id": {
+                  "description": "The hash of the staple's blocks, which the client takes as the next page's start where \"nextKey\" is missing [Keeta TS] index.js:58991-58994, 81044-81053.",
+                  "$ref": "#/components/schemas/Hash"
+                },
+                "$timestamp": {
+                  "description": "A moment the node records with the staple; it differs from the staple's own timestamp, the average of its votes' validity [Keeta TS] index.js:81061-81087.",
+                  "$ref": "#/components/schemas/Date"
+                }
               },
               "additionalProperties": false
             }
@@ -1879,7 +1885,7 @@
         "type": "object",
         "required": ["moment", "momentRange", "blockCount", "transactionCount", "representativeCount", "db", "settlementTimes"],
         "properties": {
-          "moment": { "type": "string" },
+          "moment": { "$ref": "#/components/schemas/Date" },
           "momentRange": { "type": "number" },
           "blockCount": { "type": "integer" },
           "transactionCount": { "type": "integer" },

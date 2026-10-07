@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+"""Captures a Keeta mainnet representative's responses to the node HTTP API.
+
+Usage: capture-api-responses <head-state> <output-directory>
+
+Sends one GET request for every GET route of api/openapi.json, and a few that
+a representative must refuse, to one public mainnet representative, and writes
+each request with the status, content type and body of its response to its own
+JSON file in <output-directory>. The accounts, tokens and blocks named in the
+requests are taken from <head-state>, the state dump of the mainnet head
+(conformance/mainnet/head.state.jsonl); the start of a second history page is
+the "nextKey" of the first, as the client pages. conformance/API.md describes
+the capture.
+
+Only HTTP GET requests are made, one at a time with a pause between them:
+nothing is published, no vote is asked for and no peer message is sent. The
+statistics-clearing route is a GET that changes the representative's state,
+so it is left out. Nothing here runs in the tests, and it needs only the
+standard library.
+"""
+
+import base64
+import collections
+import hashlib
+import json
+import os
+import shutil
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+PROGRAM = "capture-api-responses"
+API_URL = "https://rep1.main.network.api.keeta.com/api"
+USER_AGENT = "slop-node-capture/1"
+TIMEOUT_SECONDS = 60
+PAUSE_SECONDS = 0.5
+PAGE_LIMIT = "2"
+EPOCH = "1970-01-01T00:00:00.000Z"
+# A key derived from a fixed test seed, so no mainnet block has touched it.
+UNKNOWN_ACCOUNT = "keeta_aabx4z7qrrsongdomou3l6vcyuaovnfo6s3wlm4v3vub6zu4xhte5ntk6qifixa"
+# The SHA-256 of nothing is a well-formed hash that no block or certificate has.
+UNKNOWN_HASH = hashlib.sha256(b"").hexdigest().upper()
+UNKNOWN_IDEMPOTENT_KEY = base64.b64encode(b"slop-node/unknown").decode("ascii")
+MALFORMED_HASH = "not-a-hash"
+MALFORMED_ACCOUNT = "keeta_not-an-account"
+
+
+def fail(message):
+	print(f"{PROGRAM}: {message}", file=sys.stderr)
+	sys.exit(1)
+
+
+# The first byte of an account's public key string names its key type
+# [Keeta TS] index.js:61548-61554, 62455-62468.
+KEY_TYPE_ECDSA_SECP256K1 = 0
+KEY_TYPE_NETWORK = 2
+KEY_TYPE_TOKEN = 3
+KEY_TYPE_MULTISIG = 7
+
+
+def key_type(account):
+	encoded = account.removeprefix("keeta_").upper()
+	return base64.b32decode(encoded + "=" * (-len(encoded) % 8))[0]
+
+
+class Parameters:
+	"""The mainnet accounts, token and block the requests name, chosen by fixed rules from the head state."""
+
+	def __init__(self, records):
+		accounts = {}
+		heads = {}
+		balances = collections.defaultdict(list)
+		holders = collections.Counter()
+		weights = []
+		rows = []
+		for record in records:
+			kind = record.get("kind")
+			if kind == "account":
+				accounts[record["account"]] = record
+			elif kind == "head":
+				heads[record["account"]] = record
+			elif kind == "balance":
+				balances[record["account"]].append(record)
+				holders[record["token"]] += 1
+			elif kind == "weight":
+				weights.append(record)
+			elif kind == "acl":
+				rows.append(record)
+
+		def first(description, candidates):
+			for candidate in candidates:
+				return candidate
+			fail(f"the head state has no {description}")
+
+		def of_type(wanted):
+			return (account for account in accounts if key_type(account) == wanted)
+
+		# The token most accounts hold is the base token.
+		self.token = first("token", (token for token, _ in holders.most_common(1) if key_type(token) == KEY_TYPE_TOKEN))
+		self.user = first("keypair account with a chain, a representative and two balances", (
+			account for account in of_type(KEY_TYPE_ECDSA_SECP256K1)
+			if account in heads and accounts[account]["representative"] is not None and len(balances[account]) >= 2
+		))
+		self.user_head = heads[self.user]["block"]
+		self.network = first("network address with a chain", (account for account in of_type(KEY_TYPE_NETWORK) if account in heads))
+		self.multisig = first("multisig account", of_type(KEY_TYPE_MULTISIG))
+		self.principal = self.multisig
+		self.entity = first(f"permission row of {self.multisig} on the base token", (
+			row["entity"] for row in rows if row["principal"] == self.principal and row["entity"] == self.token
+		))
+		self.representative = first("representative", (
+			record["representative"] for record in sorted(weights, key=lambda record: -int(record["weight"]))
+		))
+
+
+def read_head_state(path):
+	try:
+		with open(path, encoding="ascii") as source:
+			return [json.loads(line) for line in source]
+	except (OSError, ValueError) as error:
+		fail(f"cannot read {path}: {error}")
+
+
+def encode_segment(value):
+	# As encodeURIComponent, which the client applies to each path argument.
+	return urllib.parse.quote(value, safe="-_.!~*'()")
+
+
+def fetch(path, query):
+	url = API_URL.removesuffix("/api") + path
+	if query:
+		url = f"{url}?{urllib.parse.urlencode(query)}"
+	request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT}, method="GET")
+	try:
+		with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+			return response.status, response.headers.get("content-type"), response.read()
+	except urllib.error.HTTPError as error:
+		with error:
+			return error.code, error.headers.get("content-type"), error.read()
+	except (urllib.error.URLError, OSError) as error:
+		fail(f"GET {url} failed: {error}")
+
+
+def decode_body(content_type, raw):
+	text = raw.decode("utf-8")
+	if content_type is not None and "json" in content_type:
+		try:
+			return json.loads(text)
+		except ValueError:
+			return text
+	return text
+
+
+class Capture:
+	def __init__(self, directory):
+		self.directory = directory
+		self.names = set()
+
+	def get(self, name, segments, query=None):
+		"""GETs /api followed by the segments, each encoded as one path segment, and records the exchange as <name>.json."""
+		if name in self.names:
+			fail(f"{name} is captured twice")
+		self.names.add(name)
+		query = dict(sorted((query or {}).items()))
+		path = "/api/" + "/".join(encode_segment(segment) for segment in segments)
+		time.sleep(PAUSE_SECONDS)
+		status, content_type, raw = fetch(path, query)
+		body = decode_body(content_type, raw)
+		record = {
+			"request": {"method": "GET", "path": path, "query": query},
+			"status": status,
+			"headers": {"content-type": content_type},
+			"body": body,
+		}
+		with open(os.path.join(self.directory, f"{name}.json"), "w", encoding="ascii") as out:
+			json.dump(record, out, indent=2, sort_keys=True, ensure_ascii=True)
+			out.write("\n")
+		print(f"{status} GET {path} {query}", file=sys.stderr)
+		return body
+
+
+def next_key(name, body):
+	if not isinstance(body, dict) or not isinstance(body.get("nextKey"), str):
+		fail(f"{name} has no nextKey to page from")
+	return body["nextKey"]
+
+
+def capture(parameters, directory):
+	p = parameters
+	c = Capture(directory)
+	ledger = ["node", "ledger"]
+
+	c.get("node-version", ["node", "version"])
+	c.get("node-peers", ["node", "peers"])
+	c.get("node-stats", ["node", "stats"])
+	c.get("node-bootstrap-votes", ["node", "bootstrap", "votes"], {"start": EPOCH, "limit": "1"})
+	c.get("node-bootstrap-votes-without-start", ["node", "bootstrap", "votes"], {"limit": "1"})
+
+	c.get("ledger-checksum", [*ledger, "checksum"])
+	c.get("ledger-representative", [*ledger, "representative"])
+	c.get("ledger-representative-of-account", [*ledger, "representative", p.representative])
+	c.get("ledger-representatives", [*ledger, "representatives"])
+	page = c.get("ledger-history", [*ledger, "history"], {"limit": PAGE_LIMIT})
+	c.get("ledger-history-from-start", [*ledger, "history"], {"start": next_key("ledger-history", page), "limit": PAGE_LIMIT})
+	c.get("ledger-history-limit-zero", [*ledger, "history"], {"limit": "0"})
+
+	c.get("ledger-block", [*ledger, "block", p.user_head])
+	c.get("ledger-block-side", [*ledger, "block", p.user_head], {"side": "side"})
+	c.get("ledger-block-unknown", [*ledger, "block", UNKNOWN_HASH])
+	c.get("ledger-block-malformed", [*ledger, "block", MALFORMED_HASH])
+	c.get("ledger-block-invalid-side", [*ledger, "block", p.user_head], {"side": "neither"})
+	c.get("ledger-block-successor", [*ledger, "block", p.user_head, "successor"])
+	c.get("ledger-block-successor-unknown", [*ledger, "block", UNKNOWN_HASH, "successor"])
+
+	c.get("vote", ["vote", p.user_head])
+	c.get("vote-side", ["vote", p.user_head], {"side": "side"})
+	c.get("vote-unknown", ["vote", UNKNOWN_HASH])
+	c.get("vote-malformed", ["vote", MALFORMED_HASH])
+
+	c.get("ledger-accounts", [*ledger, "accounts", ",".join([p.user, p.token, p.network, UNKNOWN_ACCOUNT])])
+	c.get("ledger-accounts-malformed", [*ledger, "accounts", ",".join([p.user, MALFORMED_ACCOUNT])])
+
+	account = [*ledger, "account"]
+	c.get("ledger-account-keypair", [*account, p.user])
+	c.get("ledger-account-token", [*account, p.token])
+	c.get("ledger-account-network", [*account, p.network])
+	c.get("ledger-account-multisig", [*account, p.multisig])
+	c.get("ledger-account-unknown", [*account, UNKNOWN_ACCOUNT])
+	c.get("ledger-account-malformed", [*account, MALFORMED_ACCOUNT])
+	c.get("ledger-account-head", [*account, p.user, "head"])
+	c.get("ledger-account-head-unknown", [*account, UNKNOWN_ACCOUNT, "head"])
+	c.get("ledger-account-chain", [*account, p.user, "chain"], {"limit": PAGE_LIMIT})
+	c.get("ledger-account-chain-from-start", [*account, p.user, "chain"], {"start": p.user_head, "limit": PAGE_LIMIT})
+	page = c.get("ledger-account-history", [*account, p.user, "history"], {"limit": PAGE_LIMIT})
+	start = next_key("ledger-account-history", page)
+	c.get("ledger-account-history-from-start", [*account, p.user, "history"], {"start": start, "limit": PAGE_LIMIT})
+	c.get("ledger-account-history-start", [*account, p.user, "history", "start", start], {"limit": PAGE_LIMIT})
+	c.get("ledger-account-history-limit-zero", [*account, p.user, "history"], {"limit": "0"})
+	c.get("ledger-account-balance", [*account, p.user, "balance"])
+	c.get("ledger-account-balance-of-token", [*account, p.user, "balance", p.token])
+	c.get("ledger-account-acl", [*account, p.principal, "acl"])
+	c.get("ledger-account-acl-of-entities", [*account, p.principal, "acl", p.entity])
+	c.get("ledger-account-acl-granted", [*account, p.token, "acl", "granted"])
+	c.get("ledger-account-acl-additional", [*account, p.principal, "acl", "additional"])
+	c.get("ledger-account-acl-additional-of-entities", [*account, p.principal, "acl", "additional", p.entity])
+	c.get("ledger-account-certificates", [*account, p.user, "certificates"])
+	c.get("ledger-account-certificate-unknown", [*account, p.user, "certificates", UNKNOWN_HASH])
+	c.get("ledger-account-pending", [*account, p.user, "pending"])
+	c.get("ledger-account-idempotent-unknown", [*account, p.user, "idempotent", UNKNOWN_IDEMPOTENT_KEY])
+
+
+def main():
+	if len(sys.argv) != 3:
+		print(f"usage: {PROGRAM} <head-state> <output-directory>", file=sys.stderr)
+		sys.exit(2)
+	parameters = Parameters(read_head_state(sys.argv[1]))
+	output = sys.argv[2].rstrip("/")
+	# Beside the output, so a failed capture leaves the previous one whole and
+	# the final renames stay on one filesystem.
+	partial = f"{output}.partial"
+	previous = f"{output}.previous"
+	shutil.rmtree(partial, ignore_errors=True)
+	os.makedirs(partial)
+	capture(parameters, partial)
+	shutil.rmtree(previous, ignore_errors=True)
+	if os.path.exists(output):
+		os.rename(output, previous)
+	os.rename(partial, output)
+	shutil.rmtree(previous, ignore_errors=True)
+
+
+if __name__ == "__main__":
+	main()

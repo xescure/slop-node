@@ -1,0 +1,15 @@
+{
+  "body": {
+    "representative": "keeta_aabwip6zeo2fnzfxp5hssrrqtascs2277w2zk7vqd6d3k3m4dkt2flcbca2mqki",
+    "weight": "0x1F127D16AD5FB816A14F1"
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/representative/keeta_aabwip6zeo2fnzfxp5hssrrqtascs2277w2zk7vqd6d3k3m4dkt2flcbca2mqki",
+    "query": {}
+  },
+  "status": 200
+}

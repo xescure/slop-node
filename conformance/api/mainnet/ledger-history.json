@@ -1,0 +1,622 @@
+{
+  "body": {
+    "history": [
+      {
+        "$id": "93584C3B1FAF9CA1E01073AA66F45239FB41C9B5EFBE9AD6A02132524E86079A",
+        "$timestamp": "2026-10-07T08:40:58.220Z",
+        "voteStaple": {
+          "$binary": "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",
+          "blocks": [
+            {
+              "$hash": "CCA999F738479DEE6A34572874DEF84F92ACACA9EECFF7339F2B1B34BEFB2842",
+              "$opening": false,
+              "account": "keeta_aabxtne7hbivzeknf3c6dw7rb7uiln7pbntwubrwccb7uz62ihjlmlaordxh6fa",
+              "date": "2026-10-07T08:40:57.374Z",
+              "network": "0x5382",
+              "operations": [
+                {
+                  "amount": "0x1",
+                  "external": "r128-0-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-1-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-2-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-3-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-4-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-5-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-6-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-7-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-8-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-9-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-10-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-11-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-12-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-13-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-14-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-15-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-16-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-17-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-18-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-19-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-20-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-21-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-22-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-23-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-24-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-25-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-26-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-27-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-28-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-29-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-30-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-31-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-32-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-33-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-34-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-35-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-36-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-37-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-38-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-39-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-40-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-41-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-42-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-43-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-44-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-45-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-46-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-47-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-48-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x1",
+                  "external": "r128-49-1791362457289",
+                  "to": "keeta_aabe7jhqj3bzv3jg3l6el5myl24yvjawy73btyurwdv5kyhpsmv7a2yec4ep4sq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                }
+              ],
+              "previous": "5CAB38A22F5DEDDBC2BB0822E1D8EF28B058B62D2C9973EF48EC91E9834F283C",
+              "purpose": 0,
+              "signature": "2B130C7288C93F21529FABD01C0F0A27972F6274A479499798611B6EEDF34212363DE2102C1221F9FC2E4E64B6FFFB4B2C768DE5C1899DD6008775E6969F0102",
+              "signer": "keeta_aabxtne7hbivzeknf3c6dw7rb7uiln7pbntwubrwccb7uz62ihjlmlaordxh6fa",
+              "version": 1
+            },
+            {
+              "$hash": "39E4D71A544F072761775D41E245467C20D9AEB0A7922FB13F2757A2B40D2F03",
+              "$opening": false,
+              "account": "keeta_aabxtne7hbivzeknf3c6dw7rb7uiln7pbntwubrwccb7uz62ihjlmlaordxh6fa",
+              "date": "2026-10-07T08:40:57.947Z",
+              "network": "0x5382",
+              "operations": [
+                {
+                  "amount": "0x5543DF729C000",
+                  "to": "keeta_aabtpoxf6kfb6yggykaar6xcfbzj2aw4slfokkbxdyrh5wqfmp64ghe6dzsuwli",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x5543DF729C000",
+                  "to": "keeta_aabnt7snjc5dwd4lv6blpfu6ee2mcai3zwkiqqeqcqtnbeads5emdfqfcxim5uy",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x5543DF729C000",
+                  "to": "keeta_aabqfnu57x7ul4vy4icur2x65spk5wrhpsvybqwjqrox2sqfsakljspax53mely",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x5543DF729C000",
+                  "to": "keeta_aabszfnpbfvu6srntplpe2owlbk62sk5lc6cwgh7c3luf4symkh2umre7xv3zki",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                }
+              ],
+              "previous": "CCA999F738479DEE6A34572874DEF84F92ACACA9EECFF7339F2B1B34BEFB2842",
+              "purpose": 1,
+              "signatures": [
+                "8BB7BC114160251EF7BDC56C52E3C0CFFC252F4F7DBA06647A22E596E3A5D8801E0C1CFE1F9E542CD0C059C627576A39BF715E53935FFC2B082969D301CE4752"
+              ],
+              "signer": "keeta_aabxtne7hbivzeknf3c6dw7rb7uiln7pbntwubrwccb7uz62ihjlmlaordxh6fa",
+              "version": 2
+            }
+          ],
+          "votes": [
+            {
+              "$id": "456D83D1494AA90CBF3CA153A993B7228AA1A6FD6561DB2B0544357EE9260093",
+              "$permanent": true,
+              "$trusted": false,
+              "$uid": "ID=keeta_aabvmwxttv4q56gbfveighwfwp3yvitlrdfsacic3ckqc7lqelsspvmhc7oldmq/Serial=916993",
+              "blocks": [
+                "CCA999F738479DEE6A34572874DEF84F92ACACA9EECFF7339F2B1B34BEFB2842",
+                "39E4D71A544F072761775D41E245467C20D9AEB0A7922FB13F2757A2B40D2F03"
+              ],
+              "issuer": "keeta_aabvmwxttv4q56gbfveighwfwp3yvitlrdfsacic3ckqc7lqelsspvmhc7oldmq",
+              "serial": "0xDFE01",
+              "signature": "3045022100A2B219F7C5461D612278631B84B9C6DF00CAF62C3A6665F105BC4ACCEC7F7E0C0220146E46384B4A5C6236E8BFFC023E51B54236698664CE308CCA8B36F74A47A61B",
+              "validityFrom": "2026-10-07T08:40:58.076Z",
+              "validityTo": "3027-01-31T00:00:00.000Z"
+            },
+            {
+              "$id": "922D4BAEF5FF6D966B6E4B89EE1DDE1C3C89376795269F43613E075827B86AB9",
+              "$permanent": true,
+              "$trusted": false,
+              "$uid": "ID=keeta_aablpogflko72eusdhuuqgsto2rwcvy2m5mo5snmvrmbacz3qczwjtwpmzf5ufq/Serial=816487",
+              "blocks": [
+                "CCA999F738479DEE6A34572874DEF84F92ACACA9EECFF7339F2B1B34BEFB2842",
+                "39E4D71A544F072761775D41E245467C20D9AEB0A7922FB13F2757A2B40D2F03"
+              ],
+              "issuer": "keeta_aablpogflko72eusdhuuqgsto2rwcvy2m5mo5snmvrmbacz3qczwjtwpmzf5ufq",
+              "serial": "0xC7567",
+              "signature": "304402200BAE69B6974235E3CBAAA3DBE02F3D196E907205372B5FCEBC252A38F894E39202204255449B362912660A840CBE4E59F7CB434E745B31322484F867513FB070308A",
+              "validityFrom": "2026-10-07T08:40:58.099Z",
+              "validityTo": "3027-01-31T00:00:00.000Z"
+            },
+            {
+              "$id": "3D05B8CEF72F10CA76D4EFC2EA4EE800E7BED39118B8BC90F887CBCF478C213E",
+              "$permanent": true,
+              "$trusted": false,
+              "$uid": "ID=keeta_aabwip6zeo2fnzfxp5hssrrqtascs2277w2zk7vqd6d3k3m4dkt2flcbca2mqki/Serial=935621",
+              "blocks": [
+                "CCA999F738479DEE6A34572874DEF84F92ACACA9EECFF7339F2B1B34BEFB2842",
+                "39E4D71A544F072761775D41E245467C20D9AEB0A7922FB13F2757A2B40D2F03"
+              ],
+              "issuer": "keeta_aabwip6zeo2fnzfxp5hssrrqtascs2277w2zk7vqd6d3k3m4dkt2flcbca2mqki",
+              "serial": "0xE46C5",
+              "signature": "3045022100D4374686271A8BE71DD405694A0DC39FBBB3F149569E8F9C245963B47E6ADB54022077649A3FAD45A9646D5CE41B60633D17DB7349D934C7C8C8EA57BF9BEB77473B",
+              "validityFrom": "2026-10-07T08:40:58.220Z",
+              "validityTo": "3027-01-31T00:00:00.000Z"
+            },
+            {
+              "$id": "CB134A763126A22127A38ED6CDC1C613A32DD51B4AF37FAF2330C62C3CE73387",
+              "$permanent": true,
+              "$trusted": false,
+              "$uid": "ID=keeta_aabwqf5fnta4t2v2atieis545b3rqoq6z7x5w3geugiilqlz5jdsb5og2rmxvdq/Serial=918900",
+              "blocks": [
+                "CCA999F738479DEE6A34572874DEF84F92ACACA9EECFF7339F2B1B34BEFB2842",
+                "39E4D71A544F072761775D41E245467C20D9AEB0A7922FB13F2757A2B40D2F03"
+              ],
+              "issuer": "keeta_aabwqf5fnta4t2v2atieis545b3rqoq6z7x5w3geugiilqlz5jdsb5og2rmxvdq",
+              "serial": "0xE0574",
+              "signature": "3044022052E1F67F95161854BD0AB55A7A89DF9FF464F1FD2E109B1671563C4D440B46FC02200523561A049E855D015A940BB5372C4ECC0ACA10CC05FC7E6403D9DF364949DF",
+              "validityFrom": "2026-10-07T08:40:58.088Z",
+              "validityTo": "3027-01-31T00:00:00.000Z"
+            }
+          ]
+        }
+      },
+      {
+        "$id": "2B977570DDD89978F49855BD314BDA5B676FF97A95A80A435BD9F5D09999AC60",
+        "$timestamp": "2026-10-07T08:15:20.548Z",
+        "voteStaple": {
+          "$binary": "eJzF1vlTU1cUB/C8JUEFMYCIxREjOyh488JLcEMQwjK4IAilaNUkL5tJCCErUaM8quCCtSjWjlCIiljBpSKLuLIJKFCq4m6tFBfQSisV3OnYaTt1BgfqL94/4Nz7vZ9zz1xADs8AJPwTmtoGUi/AEAWGY0gqZawdBjA2EwAO8GfiwN8Xnzo1AXWmwC+JSwLKm1aeTcmpbW4TTp09nvftfKdpunGnEW7EkYJ+VyoFZVRHufS6TkptrouJsHGzq+AcepTHMDUe25HYmHixsGrKFeBpdgeuqDMFiUvoyU2xflblE57mVFfSt2GXLOM8Yzh8NRtaleR816MNDfTyzU+0yXi08Lgbve2WKDBi7Wm3iuIHz36kNKddef3kYZFETHoIq683jZ7zII3zR2lWumXXttL1uCy81ft54h1+L0rCsJmE3gASevE22rvBmGxfJpudAEPQULOF030X/t4eQ3U0Zcy0bIm6Pp9lOLwpsqJw9gbvJTuXu2YCEorKjwZRb+t5P34TNqzz1Pi8HPuzJ2bTL7OuL8ipaqdZEmaX9caIQ/6wBZJ3KKjoDAWdiCzz8/m5ocF8cY39yQuFT/j3PB5etor6fr/ddl5C1qTIR0/+romYuLtrFue3XPuG2j3zl6+IQO6aLw8or4yulOQWTH6gqD/xATVhO8nFpn22tPMBeb5Pi7dy4/arprs7wQFGk21wZXVn7LwPOWfj5PRwLic0qDrbdsq+NVs8QzqnO5e5db2yWHnRc26A9N7/qYkG3qU49RzMjOkYs/l2mfnraHMnGnpu84xb51J0o8o35s3a4LDz8330kBuZyvZpUHndr9ErUyy1oydmZZn6I03ErfurAEnbhZJQASAhMyCh0HwEhmAYsdIuAZa04cvWhUNCBEVGgCjmPDCHhsSiiBVXJhRqeEt5PL48SSkWyWVKDibUqgmJVqsSqzVKLFkv0KVgClyhxNWJCl2ygs8TGFkqgVG/XKNPUhhFuFakAu7vNhwGfJn+/gljR7EAxgFMFhP8tRIAnWkNrN7uTLWiCjg4LgRsQKdZeK8Lb5kJQzTqpFSUMgJxpsDlFXUJua9tsz7pDHeM0e3mfeoojn/cWFwcT7ecvqaEaNktBWIg/CcUAiEQ1I/G5seABf8GhYeBkME7GWXYoyUNaqvbsaIXcYtmNWb0McUnGSwLp9/GCHsJH25U+Tt3h4RTABeeSNl/qP5wzRnHV0femJ73fndyAgNZQmvtyGZcCMZOFUQujocZEUG3XH22Wiw6YjY43PTcc39d9Rcz02ZEEuOaQw/mp74MQ0loDyCh/P9AWVNlQ4DSq0S4KFHD89NgOoynkQqlatwP57OSVUoV28gx4HqWWKgVS6VyldyILyfUfFwpxpIVBh0xEBQG8EGghABn898DhUgcCuRVjV2VaGtI5IkH+rHTnH7oviGvNW9ZW5XSFcZ4+tGgwiggBGZwxzzMy5lX+OpOT21QT24G3XLyZ+fImtSm4JKj9uJaxzKYsapeO39RmHtRnKqioygwuLmhawFvq21PUATtcVDfvBn2AzmFnhiKkzSJbRQqMVGiUWRIwiVqdXKySsNTC9QYxuHoMaOMo1MRbIIlYyn8CJkGE8kFfAEPU6hk0gGccL/BHpTQj80XvM+JmHXN5WhcR/nq+V6hYIerl2zp69Js0+EJ6aWKHMfCXcUf2Sm6F7m75OpedLU6PVZT1tjPUUSMx02LeRvTQqa1PdpRCzPiXTxMh1Pk9XdpLd3dNMqBMdSRS0XHnxra4sB2wyZ1/gCDb+TrZ0Nw0in0Bo1G56fC2WK+SCeUiiV6kT6JlaKTauTJhEjNE0gFLIFMJeDIVUK5Wp2kU0gEHKWcUAw4+KYO5kSICJH/+5wG+yt87MHXvHcE2rmCf7/ljtzL41LOyPjprID0G1qbkuv0FTfJGxEwY+6ddnZN37EmUt8Wv7e4smpdf7wHZp3pIFnleNMy2bfzTwsmZC0=",
+          "blocks": [
+            {
+              "$hash": "48102E54F1E253051A7E883D0BCE50DA4F3378B08C4BB8A7428A2A5E9B6A248D",
+              "$opening": false,
+              "account": "keeta_aabpwzgummap5udbcgz35fbfd67mno47tzhr4otwdo7qgrkjwks76jg4qzok43i",
+              "date": "2026-10-07T08:15:08.599Z",
+              "network": "0x5382",
+              "operations": [
+                {
+                  "to": "keeta_aabvmwxttv4q56gbfveighwfwp3yvitlrdfsacic3ckqc7lqelsspvmhc7oldmq",
+                  "type": 1
+                }
+              ],
+              "previous": "C25023F6242B81CDC55349112513B837AFEC9F207EC9B9986EC96ED3A7C12FD7",
+              "purpose": 0,
+              "signature": "292EA06E1188EC54BB2510D5DD66404985BF25B8ACE8F8D100CD83D7FDF2EBAB6867822765C2DACC144CE88337F4B592870BEA94B589356B48D02AF96EE162F6",
+              "signer": "keeta_aabpwzgummap5udbcgz35fbfd67mno47tzhr4otwdo7qgrkjwks76jg4qzok43i",
+              "version": 1
+            },
+            {
+              "$hash": "1504B3C8730CDF5566FA565B3FC988F73167BD2033071EF01665F6642D4550B7",
+              "$opening": false,
+              "account": "keeta_aabpwzgummap5udbcgz35fbfd67mno47tzhr4otwdo7qgrkjwks76jg4qzok43i",
+              "date": "2026-10-07T08:15:16.166Z",
+              "network": "0x5382",
+              "operations": [
+                {
+                  "amount": "0x39FAF41ABC000",
+                  "to": "keeta_aabcv3x6i4eotpq5t6oblrv4iiinmm62kgomdyqgbnskci4jpje26ogf4eir3ha",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x39FAF41ABC000",
+                  "to": "keeta_aabx4rndynokbtwztec66ppdsfsearmar6ww7vyuxjuj3jjm5bw4pphlx3ynlxa",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x39FAF41ABC000",
+                  "to": "keeta_aabbg2gtzsubebwlh2ps55nmsncvnktrhmtb4ar6pj7beq52yluvktvlvxstghi",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                },
+                {
+                  "amount": "0x39FAF41ABC000",
+                  "to": "keeta_aab4slehjbctorsbykkrel5iqcicqrhjhmrlmjpk7qdxzuziju7gtzrj34sawcq",
+                  "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                  "type": 0
+                }
+              ],
+              "previous": "48102E54F1E253051A7E883D0BCE50DA4F3378B08C4BB8A7428A2A5E9B6A248D",
+              "purpose": 1,
+              "signatures": [
+                "E5001EF3AE8D53E4168EDFB6A19752A1E90446CA8E3CDDCA79760FB78B9F3F8A179B5DA81044DB8D6FE23A01B7C5ED527C790B75142192927EFF4B7E64DDE77D"
+              ],
+              "signer": "keeta_aabpwzgummap5udbcgz35fbfd67mno47tzhr4otwdo7qgrkjwks76jg4qzok43i",
+              "version": 2
+            }
+          ],
+          "votes": [
+            {
+              "$id": "914B2A5063FF0E93E2F189E337541049ECFAC12776F0ADE3F78C6743AB9CF451",
+              "$permanent": true,
+              "$trusted": false,
+              "$uid": "ID=keeta_aablpogflko72eusdhuuqgsto2rwcvy2m5mo5snmvrmbacz3qczwjtwpmzf5ufq/Serial=816478",
+              "blocks": [
+                "48102E54F1E253051A7E883D0BCE50DA4F3378B08C4BB8A7428A2A5E9B6A248D",
+                "1504B3C8730CDF5566FA565B3FC988F73167BD2033071EF01665F6642D4550B7"
+              ],
+              "issuer": "keeta_aablpogflko72eusdhuuqgsto2rwcvy2m5mo5snmvrmbacz3qczwjtwpmzf5ufq",
+              "serial": "0xC755E",
+              "signature": "3045022100AAAFC7B0C3C01AFCB2FE7EF9F6A9BD1F20035E06D0E49520D24332BEA54B5C5802204941DD242D93075BB2A17817DC28A4E786C2843D833C4B641BCD46AEA081FB47",
+              "validityFrom": "2026-10-07T08:15:20.188Z",
+              "validityTo": "3027-01-31T00:00:00.000Z"
+            },
+            {
+              "$id": "EDB2B1715C1DBE24F448812185782C1E501780FF34E508B9264BFB202BC4C059",
+              "$permanent": true,
+              "$trusted": false,
+              "$uid": "ID=keeta_aabwqf5fnta4t2v2atieis545b3rqoq6z7x5w3geugiilqlz5jdsb5og2rmxvdq/Serial=918891",
+              "blocks": [
+                "48102E54F1E253051A7E883D0BCE50DA4F3378B08C4BB8A7428A2A5E9B6A248D",
+                "1504B3C8730CDF5566FA565B3FC988F73167BD2033071EF01665F6642D4550B7"
+              ],
+              "issuer": "keeta_aabwqf5fnta4t2v2atieis545b3rqoq6z7x5w3geugiilqlz5jdsb5og2rmxvdq",
+              "serial": "0xE056B",
+              "signature": "304402204516EB9F9C4EA7FCE1F3C441F39D88100B2C59CA82C381CC43B3B41567C41AB602207DC7754F5B4726AB5671B8E4AB4043CDC8EA51619312F3414906EE41F74E3C15",
+              "validityFrom": "2026-10-07T08:15:20.205Z",
+              "validityTo": "3027-01-31T00:00:00.000Z"
+            },
+            {
+              "$id": "A6DA9BECB5C1E3384A1F6462D36FD76EA69CB4CDC6128A90FD17624E2EE4D4F9",
+              "$permanent": true,
+              "$trusted": false,
+              "$uid": "ID=keeta_aabwip6zeo2fnzfxp5hssrrqtascs2277w2zk7vqd6d3k3m4dkt2flcbca2mqki/Serial=935612",
+              "blocks": [
+                "48102E54F1E253051A7E883D0BCE50DA4F3378B08C4BB8A7428A2A5E9B6A248D",
+                "1504B3C8730CDF5566FA565B3FC988F73167BD2033071EF01665F6642D4550B7"
+              ],
+              "issuer": "keeta_aabwip6zeo2fnzfxp5hssrrqtascs2277w2zk7vqd6d3k3m4dkt2flcbca2mqki",
+              "serial": "0xE46BC",
+              "signature": "3044022052F603E55ED8A6047F73875574B6C9FF376D491D357E5C618B83443AD5EC98C402205823277EB0796CC7E506CEEFEF0600AD16050D5F66BBF578D5563096788C73A0",
+              "validityFrom": "2026-10-07T08:15:20.548Z",
+              "validityTo": "3027-01-31T00:00:00.000Z"
+            },
+            {
+              "$id": "05BFE67E4A21E2F86E6084AB2E42961FBF4B0CFC3F72A968413A45755155416B",
+              "$permanent": true,
+              "$trusted": false,
+              "$uid": "ID=keeta_aabvmwxttv4q56gbfveighwfwp3yvitlrdfsacic3ckqc7lqelsspvmhc7oldmq/Serial=916984",
+              "blocks": [
+                "48102E54F1E253051A7E883D0BCE50DA4F3378B08C4BB8A7428A2A5E9B6A248D",
+                "1504B3C8730CDF5566FA565B3FC988F73167BD2033071EF01665F6642D4550B7"
+              ],
+              "issuer": "keeta_aabvmwxttv4q56gbfveighwfwp3yvitlrdfsacic3ckqc7lqelsspvmhc7oldmq",
+              "serial": "0xDFDF8",
+              "signature": "3045022100CDA60A04E97B62E7CEE16C2927D49C0D583B333E87DB7511B3DA107BDC82DB4902204DE1E236C3F7B9CC8277D558A6ACBAC186FF5827320E8D17687D1ADC0B722EE9",
+              "validityFrom": "2026-10-07T08:15:20.198Z",
+              "validityTo": "3027-01-31T00:00:00.000Z"
+            }
+          ]
+        }
+      }
+    ],
+    "nextKey": "2B977570DDD89978F49855BD314BDA5B676FF97A95A80A435BD9F5D09999AC60"
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/history",
+    "query": {
+      "limit": "2"
+    }
+  },
+  "status": 200
+}

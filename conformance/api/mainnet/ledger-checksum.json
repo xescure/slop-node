@@ -1,0 +1,16 @@
+{
+  "body": {
+    "checksum": "0xF34A03B9115442ED3B3DDD3098843E917EF6D761124C4A9A75C39117FDB17713",
+    "moment": "2026-10-07T08:44:20.385Z",
+    "momentRange": 1
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/checksum",
+    "query": {}
+  },
+  "status": 200
+}

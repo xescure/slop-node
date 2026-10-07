@@ -1,0 +1,17 @@
+{
+  "body": {
+    "blockhash": "1C8C249A599545D70245D3ECD02C741AB0F4A09317D708C95C5416513EF61017",
+    "votes": null
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/vote/1C8C249A599545D70245D3ECD02C741AB0F4A09317D708C95C5416513EF61017",
+    "query": {
+      "side": "side"
+    }
+  },
+  "status": 200
+}

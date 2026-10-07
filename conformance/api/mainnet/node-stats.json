@@ -1,0 +1,165 @@
+{
+  "body": {
+    "ledger": {
+      "blockCount": 935164,
+      "db": {
+        "retries": 2088
+      },
+      "moment": "2026-10-07T08:44:18.131Z",
+      "momentRange": 1.5,
+      "representativeCount": 4,
+      "settlementTimes": {
+        "-1ms": {
+          "count": 0,
+          "range": [
+            -1,
+            -1
+          ]
+        },
+        "0ms": {
+          "count": 0,
+          "range": [
+            0,
+            0
+          ]
+        },
+        "100000ms": {
+          "count": 20745,
+          "range": [
+            10001,
+            100000
+          ]
+        },
+        "10000ms": {
+          "count": 94202,
+          "range": [
+            5001,
+            10000
+          ]
+        },
+        "1000ms": {
+          "count": 19145,
+          "range": [
+            901,
+            1000
+          ]
+        },
+        "100ms": {
+          "count": 0,
+          "range": [
+            11,
+            100
+          ]
+        },
+        "10ms": {
+          "count": 0,
+          "range": [
+            1,
+            10
+          ]
+        },
+        "1500ms": {
+          "count": 121418,
+          "range": [
+            1001,
+            1500
+          ]
+        },
+        "2000ms": {
+          "count": 96251,
+          "range": [
+            1501,
+            2000
+          ]
+        },
+        "200ms": {
+          "count": 0,
+          "range": [
+            101,
+            200
+          ]
+        },
+        "300ms": {
+          "count": 56,
+          "range": [
+            201,
+            300
+          ]
+        },
+        "400ms": {
+          "count": 3291,
+          "range": [
+            301,
+            400
+          ]
+        },
+        "5000ms": {
+          "count": 110612,
+          "range": [
+            2001,
+            5000
+          ]
+        },
+        "500ms": {
+          "count": 9480,
+          "range": [
+            401,
+            500
+          ]
+        },
+        "600ms": {
+          "count": 12692,
+          "range": [
+            501,
+            600
+          ]
+        },
+        "700ms": {
+          "count": 16840,
+          "range": [
+            601,
+            700
+          ]
+        },
+        "800ms": {
+          "count": 17215,
+          "range": [
+            701,
+            800
+          ]
+        },
+        "900ms": {
+          "count": 17484,
+          "range": [
+            801,
+            900
+          ]
+        },
+        "ExtraLong": {
+          "count": 187,
+          "range": [
+            100000,
+            9007199254740991
+          ]
+        }
+      },
+      "transactionCount": 77590430
+    },
+    "switch": {
+      "incomingMessages": 9645575,
+      "outgoingMessagesPeerFailure": 412,
+      "outgoingMessagesPeerFailureUngreeted": 0,
+      "outgoingMessagesPeerFiltered": 707604,
+      "outgoingMessagesPeerSuccess": 11128574
+    }
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/stats",
+    "query": {}
+  },
+  "status": 200
+}

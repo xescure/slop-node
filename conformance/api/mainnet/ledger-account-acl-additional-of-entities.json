@@ -1,0 +1,68 @@
+{
+  "body": {
+    "access": [
+      {
+        "balances": [
+          {
+            "balance": "0x10437BFF78D2A68938",
+            "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg"
+          }
+        ],
+        "entity": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+        "info": {
+          "account": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+          "defaultPermission": [
+            "0x1",
+            "0x0"
+          ],
+          "description": "Keeta",
+          "metadata": "eyJkZWNpbWFsUGxhY2VzIjoxOH0=",
+          "name": "KTA",
+          "supply": "0x9A125DAB338BBFA6B49F6"
+        },
+        "principals": [
+          {
+            "entity": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+            "permissions": [
+              "0x5",
+              "0x0"
+            ],
+            "principal": "keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm",
+            "principalType": "ACCOUNT",
+            "target": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg"
+          },
+          {
+            "entity": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+            "permissions": [
+              "0x5",
+              "0x0"
+            ],
+            "principal": "keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai",
+            "principalType": "ACCOUNT",
+            "target": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg"
+          },
+          {
+            "entity": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+            "permissions": [
+              "0x3",
+              "0x0"
+            ],
+            "principal": "keeta_aabk62tezl4whordlviamlx3zrdgux6lk63cghay45vkzdatyemzvqqjuj5resa",
+            "principalType": "ACCOUNT",
+            "target": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg"
+          }
+        ]
+      }
+    ],
+    "account": "keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm"
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/account/keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm/acl/additional/keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+    "query": {}
+  },
+  "status": 200
+}

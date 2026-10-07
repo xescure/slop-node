@@ -1,0 +1,15 @@
+{
+  "body": {
+    "account": "keeta_not-an-account",
+    "error": "Error: Key is the wrong length (14)"
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/account/keeta_not-an-account",
+    "query": {}
+  },
+  "status": 200
+}

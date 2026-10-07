@@ -1,0 +1,45 @@
+{
+  "body": {
+    "peers": [
+      {
+        "endpoints": {
+          "api": "https://rep4.main.network.api.keeta.com/api",
+          "p2p": "wss://rep4.main.network.api.keeta.com/p2p"
+        },
+        "key": "keeta_aablpogflko72eusdhuuqgsto2rwcvy2m5mo5snmvrmbacz3qczwjtwpmzf5ufq",
+        "kind": 1,
+        "preferUpdates": "http",
+        "signature": "MEUCAQAEQHAncB4AasFKPJy1fWxf8MTzLeQAdlW3237CE6vcb+MbEzTOZ842u8BlU5at6i31vOPpS9ghN93ueN2P3a4gI9E="
+      },
+      {
+        "endpoints": {
+          "api": "https://rep2.main.network.api.keeta.com/api",
+          "p2p": "wss://rep2.main.network.api.keeta.com/p2p"
+        },
+        "key": "keeta_aabvmwxttv4q56gbfveighwfwp3yvitlrdfsacic3ckqc7lqelsspvmhc7oldmq",
+        "kind": 1,
+        "preferUpdates": "http",
+        "signature": "MEUCAQAEQJploQp0Tzx8drrYLdYg9QzQZz0qjlGqtUPVDhr/iw/TIxUNuWn5jyDGZXdUrfhXFxpGqMIC09FnBM720R5/01U="
+      },
+      {
+        "endpoints": {
+          "api": "https://rep3.main.network.api.keeta.com/api",
+          "p2p": "wss://rep3.main.network.api.keeta.com/p2p"
+        },
+        "key": "keeta_aabwqf5fnta4t2v2atieis545b3rqoq6z7x5w3geugiilqlz5jdsb5og2rmxvdq",
+        "kind": 1,
+        "preferUpdates": "http",
+        "signature": "MEUCAQAEQGxNihC39SnAki8mRNvpQNM9GzO8v2aJToJGoXoOLe4XX8LOx6KMYiy7osWk49JY34v+uaEDQEReHFhD6peXHhU="
+      }
+    ]
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/peers",
+    "query": {}
+  },
+  "status": 200
+}

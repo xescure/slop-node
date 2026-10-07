@@ -1,0 +1,29 @@
+{
+  "body": {
+    "account": "keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm",
+    "balances": [],
+    "currentHeadBlock": null,
+    "currentHeadBlockHeight": null,
+    "info": {
+      "account": "keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm",
+      "defaultPermission": [
+        "0x0",
+        "0x0"
+      ],
+      "description": "",
+      "metadata": "",
+      "multisigQuorum": "0x3",
+      "name": ""
+    },
+    "representative": null
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/account/keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm",
+    "query": {}
+  },
+  "status": 200
+}

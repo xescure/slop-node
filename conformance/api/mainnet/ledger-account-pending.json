@@ -1,0 +1,15 @@
+{
+  "body": {
+    "account": "keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a",
+    "block": null
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/account/keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a/pending",
+    "query": {}
+  },
+  "status": 200
+}

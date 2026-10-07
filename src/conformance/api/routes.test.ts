@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { describe, expect, test } from 'vitest';
-import { documentRoutes, routesOfTypings } from './routes.js';
+import { documentRoutes, routeOfRequest, routesOfTypings } from './routes.js';
 import type { Route } from './routes.js';
 
 const TYPINGS_FILE = createRequire(import.meta.url).resolve('@keetanetwork/keetanet-client/api/index.d.ts');
@@ -65,6 +65,45 @@ describe('the route-tree extractor', function() {
 		expect(function() {
 			return(routesOfTypings('declare const otherTree: {};'));
 		}).toThrow('no rootTree declaration');
+	});
+});
+
+describe('the route of a request path', function() {
+	const routes: readonly Route[] = [
+		{ method: 'GET', path: '/api/node/ledger/account/{account}/acl/{entityList}' },
+		{ method: 'GET', path: '/api/node/ledger/account/{account}/acl/granted' },
+		{ method: 'GET', path: '/api/node/ledger/account/{account}' },
+		{ method: 'POST', path: '/api/vote' },
+		{ method: 'GET', path: '/api/vote/{blockhash}' }
+	];
+
+	test('fills a parameter with any segment', function() {
+		expect(routeOfRequest(routes, 'GET', '/api/node/ledger/account/keeta_x')).toEqual(routes[2]);
+	});
+
+	test('prefers a literal segment to a parameter, as a router does', function() {
+		expect(routeOfRequest(routes, 'GET', '/api/node/ledger/account/keeta_x/acl/granted')).toEqual(routes[1]);
+		expect(routeOfRequest(routes, 'GET', '/api/node/ledger/account/keeta_x/acl/keeta_y')).toEqual(routes[0]);
+	});
+
+	test('refuses a path that no route of the method serves', function() {
+		expect(function() {
+			return(routeOfRequest(routes, 'GET', '/api/vote'));
+		}).toThrow('no route serves GET /api/vote');
+		expect(function() {
+			return(routeOfRequest(routes, 'GET', '/api/node/ledger/account/'));
+		}).toThrow('no route serves GET /api/node/ledger/account/');
+	});
+
+	test('refuses a path two routes serve equally well', function() {
+		const ambiguous: readonly Route[] = [
+			{ method: 'GET', path: '/api/{a}/x' },
+			{ method: 'GET', path: '/api/x/{b}' }
+		];
+
+		expect(function() {
+			return(routeOfRequest(ambiguous, 'GET', '/api/x/x'));
+		}).toThrow('GET /api/x/x is served by both /api/x/{b} and /api/{a}/x');
 	});
 });
 

@@ -1,0 +1,180 @@
+{
+  "body": [
+    {
+      "account": "keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a",
+      "balances": [
+        {
+          "balance": "0xB7C6A3C30F4A4D000",
+          "token": "keeta_am22axs4ba6p5ip5fqg4o33irpfjer2bhoddhxpqjz3ynnxxy63jdhy5mspro"
+        },
+        {
+          "balance": "0x2540BE400",
+          "token": "keeta_am2nnxi4lz2yhbatmcomobhbiecg3d4g7jtx4gsrl5uyys63e22sntxc46gew"
+        },
+        {
+          "balance": "0x5F5E100",
+          "token": "keeta_amhbbstzrgagp6xormdlp6m6deeoxmvpsqgdc7fs5qkjd7r4dsumdmhd3j3dc"
+        },
+        {
+          "balance": "0x25E54461D2400",
+          "token": "keeta_amlsrye6thy6t73yhmogtlb6xqsc7pustswljzmak4pukq2atfqoa5kez3ojy"
+        },
+        {
+          "balance": "0xF4240",
+          "token": "keeta_amnkge74xitii5dsobstldatv3irmyimujfjotftx7plaaaseam4bntb7wnna"
+        },
+        {
+          "balance": "0x4A817C800",
+          "token": "keeta_amusv3yxpocp5tlqqizlekje3sitw25kf2liusgzvqckwufflaombldwis5ag"
+        },
+        {
+          "balance": "0xE1614BD000",
+          "token": "keeta_an322ooweoj237oy4htadf7twzk6wlkiakmowm2uotptixsu4klrgfnbqvjta"
+        },
+        {
+          "balance": "0x1264C45600",
+          "token": "keeta_anfee53wm7kmrwbo5ukmelvbbe2xjv2ibwgng2arpteqqsfk4zhjzans4ohts"
+        },
+        {
+          "balance": "0xC3C2DD05D53E0000",
+          "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg"
+        },
+        {
+          "balance": "0x1431E0FAE6D7217CAA0000000",
+          "token": "keeta_anr2cdpiwulw6bdyedyneljde7bgbcopv7z255udnfbls4btswwxnb5qqoayu"
+        },
+        {
+          "balance": "0xE1614BD000",
+          "token": "keeta_anx5nekykjryzcbhildesr3fawxaxn7gjcbd55ph4ds5hqkhrfhgjlskmjhsm"
+        },
+        {
+          "balance": "0xC1B710800",
+          "token": "keeta_ao3djbxur5r4cvqtnqqraeoxqlhqe7zsndkc2paq56j3uupur77vytrdhge26"
+        },
+        {
+          "balance": "0xAFF5CFB46D15AB7540B704",
+          "token": "keeta_ao7nitutebhm2pkrfbtniepivaw324hecyb43wsxts5rrhi2p5ckgof37racm"
+        },
+        {
+          "balance": "0x916AD371A00",
+          "token": "keeta_aoakr34bzfsrfa2pezbrxh6kz5w2wrr76rwuzjnrzn3toa7gmx723fuip4u2y"
+        },
+        {
+          "balance": "0x186A0",
+          "token": "keeta_aogn3lr42pwwpk4vh6k2behjtnmtkm36z4usqek2orxl2desdqk4hom6myxm2"
+        },
+        {
+          "balance": "0x7A120",
+          "token": "keeta_aolpjiu6gcfqtzt5xu4okxsqevo272xxwhyzoziccz4glx675bry6rgj2m7q6"
+        },
+        {
+          "balance": "0x1",
+          "token": "keeta_aon3u6fj4ioghstzrep2mvzkvphlibf3ochxpsn745grpgs4w2jqyq6sfqkxk"
+        },
+        {
+          "balance": "0x3B9ACA00",
+          "token": "keeta_aou3lzgg4reti7wv3f6ezh5iffmhvjsrcvvlt2w6kecxj32rhfeqlmt2oz4qq"
+        },
+        {
+          "balance": "0x174876E800",
+          "token": "keeta_ap46alqluwcixrc4eoi7b5pfsyin27cjzzvimn3dnsmwy6tdt6musnpqjbz6q"
+        },
+        {
+          "balance": "0x186A0",
+          "token": "keeta_apasvsunxd5ac7hgqpxix4efn7tvalbluooeuv7jfesxannujkvru3liyjwqa"
+        },
+        {
+          "balance": "0x71118170400",
+          "token": "keeta_apekny3rwbh5hhpigcvn4wxorbageyxopezaoryds627u7mncuf3ktob4snz4"
+        },
+        {
+          "balance": "0x989680",
+          "token": "keeta_apg74kga2nma3rrhnfw43ucz4jlossuc6hnaq2ppcz6pfksquaztrgsw64vgk"
+        },
+        {
+          "balance": "0x2FAF0800",
+          "token": "keeta_appez3qahkrlnevabva6a3ixschv2lg7li6ma4h6bgyc5hxw2ublr4txaggr4"
+        },
+        {
+          "balance": "0x4C4B40",
+          "token": "keeta_apvbibsnmz5mityvbxi3aosgjebzs47dlhgtpjcffevjozau75wudrojgt6dc"
+        },
+        {
+          "balance": "0x3E8",
+          "token": "keeta_apwid2t72kab2spegd4f3ecavt23qahlt2k4broo6opnlwxy5hb25pv3uta2c"
+        }
+      ],
+      "currentHeadBlock": "969DE570F7A22DD8B16F60204BAD0834709B8318289E03A783FBCE0F4CCC77D4",
+      "currentHeadBlockHeight": "0x8A",
+      "info": {
+        "account": "keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a",
+        "description": "",
+        "metadata": "",
+        "name": ""
+      },
+      "representative": "keeta_aabwqf5fnta4t2v2atieis545b3rqoq6z7x5w3geugiilqlz5jdsb5og2rmxvdq"
+    },
+    {
+      "account": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+      "balances": [
+        {
+          "balance": "0x10437BFF78D2A68938",
+          "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg"
+        }
+      ],
+      "currentHeadBlock": "FC30CFFE7EE5E8DCB1C3071AEFA31416A8285E026BEC8A665F92264FD68C23FD",
+      "currentHeadBlockHeight": "0x3469",
+      "info": {
+        "account": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+        "defaultPermission": [
+          "0x1",
+          "0x0"
+        ],
+        "description": "Keeta",
+        "metadata": "eyJkZWNpbWFsUGxhY2VzIjoxOH0=",
+        "name": "KTA",
+        "supply": "0x9A125DAB338BBFA6B49F6"
+      },
+      "representative": null
+    },
+    {
+      "account": "keeta_alwerxoezkupzhifvpo5yvoazlsdqaweov66mokhq7xl4h5ow36v5xu6ek3js",
+      "balances": [],
+      "currentHeadBlock": "44DF9E56742A00D076B92341609AFFA024B5E8579CF231BB601A8B195EFE27DC",
+      "currentHeadBlockHeight": "0x0",
+      "info": {
+        "account": "keeta_alwerxoezkupzhifvpo5yvoazlsdqaweov66mokhq7xl4h5ow36v5xu6ek3js",
+        "defaultPermission": [
+          "0x121",
+          "0x0"
+        ],
+        "description": "KeetaNet Network Address",
+        "metadata": "eJy9zU0OgjAQQOG7zLo/oTW17R08RClDJEgh0wE1hLurG+MJ3L3FS74dNqQ6zAViIyCvRFjy85IWiDvgg5FKukEE03rj0VppXDDy5DBI35xRhjbYztne+L4DASt95ivzUqPWlRMPWRXk+0yjGhE5qTxPenpHlzjpX/AQUJG2IWP9D/7VjuMFkIVWPA==",
+        "name": "KEETA"
+      },
+      "representative": null
+    },
+    {
+      "account": "keeta_aabx4z7qrrsongdomou3l6vcyuaovnfo6s3wlm4v3vub6zu4xhte5ntk6qifixa",
+      "balances": [],
+      "currentHeadBlock": null,
+      "currentHeadBlockHeight": null,
+      "info": {
+        "account": "keeta_aabx4z7qrrsongdomou3l6vcyuaovnfo6s3wlm4v3vub6zu4xhte5ntk6qifixa",
+        "description": "",
+        "metadata": "",
+        "name": ""
+      },
+      "representative": null
+    }
+  ],
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/accounts/keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a%2Ckeeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg%2Ckeeta_alwerxoezkupzhifvpo5yvoazlsdqaweov66mokhq7xl4h5ow36v5xu6ek3js%2Ckeeta_aabx4z7qrrsongdomou3l6vcyuaovnfo6s3wlm4v3vub6zu4xhte5ntk6qifixa",
+    "query": {}
+  },
+  "status": 200
+}

@@ -1,0 +1,14 @@
+{
+  "body": {
+    "block": null
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/account/keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a/idempotent/c2xvcC1ub2RlL3Vua25vd24%3D",
+    "query": {}
+  },
+  "status": 200
+}

@@ -1,0 +1,42 @@
+{
+  "body": {
+    "blockhash": "1C8C249A599545D70245D3ECD02C741AB0F4A09317D708C95C5416513EF61017",
+    "successorBlock": {
+      "$binary": "MIIBVQIBAAICU4IFABgTMjAyNTA5MjQwMzUwMzIuMzk2WgQiAAPvDkIo06Vo8Z5JIhHFVx3koh/8+5QlZPG1cw5jErtlegUABCAcjCSaWZVF1wJF0+zQLHQasPSgkxfXCMlcVBZRPvYQFzCBqqBPME0EIgACl4/hFP7KXG2N7RItYODtiJdqcrVGI99/hmQl/AMrKUECBACYloAEIQO+1E6TIE7NPVEoZtQR6KgtvXDkFgPN2lecuxidGn9Eo6dXMFUCCQQQ1YaiCkwAAAQhA2A0LeDIyKHTgBW90qfyYuYn69YMULGqE5ZhWpIrS+zyBCIAApeP4RT+ylxtje0SLWDg7YiXanK1RiPff4ZkJfwDKylBAQH/BECkzBF4cFr5X5AF4I4DT56maf6qquFzGw9o8fZxQSbBVFYhuh9OFV1AYtj5SS5+w1iaO0IUde+lCq05B5FfTZCP",
+      "$hash": "AD98F91A94631B72B2E89621B92CFA092FFCA92992D2A2FB18ADBF9D6F1BB915",
+      "$opening": false,
+      "account": "keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a",
+      "date": "2025-09-24T03:50:32.396Z",
+      "network": "0x5382",
+      "operations": [
+        {
+          "amount": "0x989680",
+          "to": "keeta_aabjpd7bct7muxdnrxwrella4dwyrf3kok2umi67p6dgijp4amvssqptdw3xcuy",
+          "token": "keeta_ao7nitutebhm2pkrfbtniepivaw324hecyb43wsxts5rrhi2p5ckgof37racm",
+          "type": 0
+        },
+        {
+          "amount": "0x410D586A20A4C0000",
+          "exact": true,
+          "from": "keeta_aabjpd7bct7muxdnrxwrella4dwyrf3kok2umi67p6dgijp4amvssqptdw3xcuy",
+          "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+          "type": 7
+        }
+      ],
+      "previous": "1C8C249A599545D70245D3ECD02C741AB0F4A09317D708C95C5416513EF61017",
+      "purpose": 0,
+      "signature": "A4CC1178705AF95F9005E08E034F9EA669FEAAAAE1731B0F68F1F6714126C1545621BA1F4E155D4062D8F9492E7EC3589A3B421475EFA50AAD3907915F4D908F",
+      "signer": "keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a",
+      "version": 1
+    }
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/block/1C8C249A599545D70245D3ECD02C741AB0F4A09317D708C95C5416513EF61017/successor",
+    "query": {}
+  },
+  "status": 200
+}

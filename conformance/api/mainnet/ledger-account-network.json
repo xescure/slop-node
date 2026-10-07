@@ -1,0 +1,28 @@
+{
+  "body": {
+    "account": "keeta_alwerxoezkupzhifvpo5yvoazlsdqaweov66mokhq7xl4h5ow36v5xu6ek3js",
+    "balances": [],
+    "currentHeadBlock": "44DF9E56742A00D076B92341609AFFA024B5E8579CF231BB601A8B195EFE27DC",
+    "currentHeadBlockHeight": "0x0",
+    "info": {
+      "account": "keeta_alwerxoezkupzhifvpo5yvoazlsdqaweov66mokhq7xl4h5ow36v5xu6ek3js",
+      "defaultPermission": [
+        "0x121",
+        "0x0"
+      ],
+      "description": "KeetaNet Network Address",
+      "metadata": "eJy9zU0OgjAQQOG7zLo/oTW17R08RClDJEgh0wE1hLurG+MJ3L3FS74dNqQ6zAViIyCvRFjy85IWiDvgg5FKukEE03rj0VppXDDy5DBI35xRhjbYztne+L4DASt95ivzUqPWlRMPWRXk+0yjGhE5qTxPenpHlzjpX/AQUJG2IWP9D/7VjuMFkIVWPA==",
+      "name": "KEETA"
+    },
+    "representative": null
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/account/keeta_alwerxoezkupzhifvpo5yvoazlsdqaweov66mokhq7xl4h5ow36v5xu6ek3js",
+    "query": {}
+  },
+  "status": 200
+}

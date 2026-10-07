@@ -1,0 +1,63 @@
+{
+  "body": {
+    "representatives": [
+      {
+        "endpoints": {
+          "api": "https://rep1.main.network.api.keeta.com/api",
+          "p2p": "wss://rep1.main.network.api.keeta.com/p2p"
+        },
+        "representative": "keeta_aabwip6zeo2fnzfxp5hssrrqtascs2277w2zk7vqd6d3k3m4dkt2flcbca2mqki",
+        "weight": "0x1F127D16AD5FB816A14F1"
+      },
+      {
+        "endpoints": {
+          "api": "https://rep2.main.network.api.keeta.com/api",
+          "p2p": "wss://rep2.main.network.api.keeta.com/p2p"
+        },
+        "representative": "keeta_aabvmwxttv4q56gbfveighwfwp3yvitlrdfsacic3ckqc7lqelsspvmhc7oldmq",
+        "weight": "0x439E87B095E5DF01C129"
+      },
+      {
+        "endpoints": {
+          "api": "https://rep3.main.network.api.keeta.com/api",
+          "p2p": "wss://rep3.main.network.api.keeta.com/p2p"
+        },
+        "representative": "keeta_aabwqf5fnta4t2v2atieis545b3rqoq6z7x5w3geugiilqlz5jdsb5og2rmxvdq",
+        "weight": "0x1951E2FB8F3C9088C235"
+      },
+      {
+        "endpoints": {
+          "api": "https://rep4.main.network.api.keeta.com/api",
+          "p2p": "wss://rep4.main.network.api.keeta.com/p2p"
+        },
+        "representative": "keeta_aablpogflko72eusdhuuqgsto2rwcvy2m5mo5snmvrmbacz3qczwjtwpmzf5ufq",
+        "weight": "0x14DF41304E78AD16DF24"
+      },
+      {
+        "endpoints": {
+          "api": "https://example.com/api",
+          "p2p": "wss://example.com/p2p"
+        },
+        "representative": "keeta_aab6ka7fepj5qnymucfgw2tcnq2f3och733un4hgqutr2urolk3yrvzjhybk5iy",
+        "weight": "0x0"
+      },
+      {
+        "endpoints": {
+          "api": "https://long-games-cross.loca.lt/api",
+          "p2p": "wss://long-games-cross.loca.lt/p2p"
+        },
+        "representative": "keeta_aabasfpjd6zdmg2s5ifkif4zl2nmqaognrrord6fougzn2js56ngqphsmdlhz5q",
+        "weight": "0x0"
+      }
+    ]
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/representatives",
+    "query": {}
+  },
+  "status": 200
+}

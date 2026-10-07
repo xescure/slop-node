@@ -126,6 +126,69 @@ export function routesOfTypings(typings: string): readonly Route[] {
 	return(canonicalRoutes(routes));
 }
 
+function isParameterSegment(segment: string): boolean {
+	return(segment.startsWith('{') && segment.endsWith('}'));
+}
+
+/** How many literal segments of the route match the path's, or undefined when the route does not serve the path. */
+function literalMatches(route: Route, segments: readonly string[]): number | undefined {
+	const template = route.path.split('/');
+	if (template.length !== segments.length) {
+		return(undefined);
+	}
+	let literals = 0;
+	for (const [index, part] of template.entries()) {
+		const segment = segments[index];
+		if (segment === undefined) {
+			return(undefined);
+		}
+		if (isParameterSegment(part)) {
+			if (segment === '') {
+				return(undefined);
+			}
+			continue;
+		}
+		if (part !== segment) {
+			return(undefined);
+		}
+		literals++;
+	}
+	return(literals);
+}
+
+/**
+ * The route that serves a request path, with parameters still encoded. Where
+ * a literal segment and a parameter both fit, as "granted" and {entityList}
+ * do, the literal wins, as in a router that tries fixed paths first.
+ */
+export function routeOfRequest(routes: readonly Route[], method: HTTPMethod, path: string): Route {
+	const segments = path.split('/');
+	let best: { readonly route: Route; readonly literals: number } | undefined;
+	let tied: Route | undefined;
+	for (const route of canonicalRoutes(routes)) {
+		if (route.method !== method) {
+			continue;
+		}
+		const literals = literalMatches(route, segments);
+		if (literals === undefined) {
+			continue;
+		}
+		if (best === undefined || literals > best.literals) {
+			best = { route, literals };
+			tied = undefined;
+		} else if (literals === best.literals) {
+			tied = route;
+		}
+	}
+	if (best === undefined) {
+		throw(new Error(`no route serves ${method} ${path}`));
+	}
+	if (tied !== undefined) {
+		throw(new Error(`${method} ${path} is served by both ${best.route.path} and ${tied.path}`));
+	}
+	return(best.route);
+}
+
 /** The routes an OpenAPI document describes, from its operations under "paths". */
 export function documentRoutes(document: unknown): readonly Route[] {
 	if (!isRecord(document) || !isRecord(document['paths'])) {
