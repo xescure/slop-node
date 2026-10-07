@@ -6,7 +6,7 @@ import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { LocalNode as DeclaredLocalNode, LocalNodeConfig } from '@keetanetwork/keetanet-client/lib/node/local.js';
 import { answerError, ERROR_STATUS, newErrorID } from '../api/errors.js';
 import type { ErrorBody } from '../api/errors.js';
-import { API_ROUTES, invokeRoute, settleDeliveries } from '../api/index.js';
+import { API_ROUTES, invokeRoute } from '../api/index.js';
 import type { APIRequest, Route } from '../api/index.js';
 import { assertNever } from '../util/assert-never.js';
 import type { AssertNever } from '../util/assert-never.js';
@@ -428,9 +428,9 @@ export class LocalNode extends ClientNode {
 
 	/**
 	 * Stops bootstrapping, then serving peers and requests, waiting for the
-	 * requests in flight and the messages peers posted, then stops the node,
-	 * and waits until its switch is done with every message its connections
-	 * delivered and then with every connection, so that the storage can be
+	 * requests in flight, then stops the node, and waits until its switch is
+	 * done with every message peers delivered, over a WebSocket or posted
+	 * over HTTP, and then with every connection, so that the storage can be
 	 * closed after.
 	 */
 	override async stop(): Promise<void> {
@@ -445,7 +445,6 @@ export class LocalNode extends ClientNode {
 		if (listening !== undefined) {
 			await close(listening.server);
 		}
-		await settleDeliveries(this);
 		this.#running = false;
 		await this.#connections.stopping();
 		await super.stop();

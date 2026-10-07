@@ -1,6 +1,6 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
-import type { P2PConnection, P2PPeer, P2PPeerRep, P2PSwitch } from '@keetanetwork/keetanet-client/lib/p2p.js';
+import type { P2PConnection, P2PPeer, P2PPeerRep } from '@keetanetwork/keetanet-client/lib/p2p.js';
 import type { JSONSerializableObject } from '@keetanetwork/keetanet-client/lib/utils/conversion.js';
 import { nodeNetworkClosedToPeers } from '../node/config.js';
 import { P2PInternals } from '../upstream/internals.js';
@@ -10,61 +10,6 @@ import { definePOST } from './route.js';
 import type { APIRequest, Route } from './route.js';
 
 const lib = KeetaNet.lib;
-
-/** Deliveries to each switch still running; every copy of a node shares the node's switch. */
-const deliveries = new WeakMap<P2PSwitch, Set<Promise<void>>>();
-
-/**
- * How long stopping waits for the messages peers posted: handling one can
- * wait on the node's own posts to peers, which have no time limit
- * [Keeta TS] index.js:72203-72218, so a peer that never answers could
- * otherwise keep the node from stopping.
- */
-export const DELIVERY_SETTLE_MILLISECONDS = 5000;
-
-async function allDelivered(running: Set<Promise<void>>): Promise<'delivered'> {
-	while (running.size > 0) {
-		await Promise.all(running);
-	}
-	return('delivered');
-}
-
-/**
- * Waits until every message posted to the node's switch over HTTP has been
- * handled, for DELIVERY_SETTLE_MILLISECONDS at most.
- */
-export async function settleDeliveries(node: Node): Promise<void> {
-	const running = deliveries.get(node.switch);
-	if (running === undefined || running.size === 0) {
-		return;
-	}
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	const timedOut = new Promise<'timed out'>(function(resolve) {
-		timer = setTimeout(function() {
-			resolve('timed out');
-		}, DELIVERY_SETTLE_MILLISECONDS);
-	});
-	try {
-		const outcome = await Promise.race([allDelivered(running), timedOut]);
-		if (outcome === 'timed out') {
-			node.log.warn('P2P', `Stopped waiting for ${String(running.size)} messages posted over HTTP after ${String(DELIVERY_SETTLE_MILLISECONDS)} ms`);
-		}
-	} finally {
-		clearTimeout(timer);
-	}
-}
-
-function track(p2pSwitch: P2PSwitch, delivery: Promise<void>): void {
-	let running = deliveries.get(p2pSwitch);
-	if (running === undefined) {
-		running = new Set();
-		deliveries.set(p2pSwitch, running);
-	}
-	const tracked = delivery.finally(function() {
-		running.delete(tracked);
-	});
-	running.add(tracked);
-}
 
 /**
  * A representative's advertisement, kept to what its signature covers
@@ -200,7 +145,11 @@ function greetingMessage(advertisement: SignedAdvertisement): Buffer {
 	return(Buffer.from(JSON.stringify({ id: `greeting-${digest}`, greeting: serialized, ttl: 0 })));
 }
 
-/** A failure here has no request left to answer, so it is logged. */
+/**
+ * A failure here has no request left to answer, so it is logged. The node
+ * waits for the message as it stops, as for one that arrived on a WebSocket,
+ * since both reach the same switch (src/node/messages.ts).
+ */
 async function receive(node: Node, connection: P2PConnection, message: Buffer): Promise<void> {
 	try {
 		await node.switch.recvMessageFromPeer(connection, message);
@@ -210,7 +159,7 @@ async function receive(node: Node, connection: P2PConnection, message: Buffer): 
 }
 
 function deliver(node: Node, connection: P2PConnection, message: Buffer): void {
-	track(node.switch, receive(node, connection, message));
+	void receive(node, connection, message);
 }
 
 /**

@@ -5,8 +5,6 @@ import type { NodeConfig } from '@keetanetwork/keetanet-client/lib/node/index.js
 import type { P2PConnection, P2PPeer } from '@keetanetwork/keetanet-client/lib/p2p.js';
 import type { JSONSerializableObject } from '@keetanetwork/keetanet-client/lib/utils/conversion.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
-import { settleDeliveries } from '../api/index.js';
-import { DELIVERY_SETTLE_MILLISECONDS } from '../api/p2p.js';
 import { APIDocument } from '../conformance/api/document.js';
 import { driversUnderTest } from '../ledger/storage/suite/drivers.js';
 import { ChainCursor, requireAt } from '../ledger/storage/suite/support.js';
@@ -100,6 +98,11 @@ function deliveredTypes(node: LocalNode): (string | undefined)[] {
 		return(handle(from, buffer));
 	});
 	return(types);
+}
+
+/** Tracks the messages peers deliver to the node from now on, as the node does to wait for them as it stops. */
+function trackedMessages(node: LocalNode): SwitchMessages {
+	return(new SwitchMessages(node.switch, node.log));
 }
 
 /**
@@ -375,31 +378,6 @@ type HeldStaples = {
 	readonly release: () => void;
 };
 
-/** Holds every staple a peer delivers to the node, before the switch handles it, until released. */
-function holdStaples(node: LocalNode): HeldStaples {
-	const handle = node.switch.recvMessageFromPeer.bind(node.switch);
-	let arrive: () => void = function() {
-		throw(new Error('arrived before the test waited'));
-	};
-	const arrived = new Promise<void>(function(resolve) {
-		arrive = resolve;
-	});
-	let release: () => void = function() {
-		throw(new Error('released before the staple arrived'));
-	};
-	const held = new Promise<void>(function(resolve) {
-		release = resolve;
-	});
-	vi.spyOn(node.switch, 'recvMessageFromPeer').mockImplementation(async function(from: P2PConnection, buffer: Buffer | ArrayBuffer): Promise<boolean> {
-		if (messageTypeOf(buffer) === 'add') {
-			arrive();
-			await held;
-		}
-		return(await handle(from, buffer));
-	});
-	return({ arrived, release });
-}
-
 /**
  * Holds every staple the switch hands the node, inside the switch's handling
  * of the message [Keeta TS] index.js:72870-72890, 71409-71415, until released.
@@ -586,12 +564,13 @@ describe('peers over HTTP republish', function() {
 		// The node's own connection to the representative has the name a filter in its greeting would be kept under.
 		await dial(first.node, second.node);
 		const recorded = recordedPotentialPeers(first.node);
+		const messages = trackedMessages(first.node);
 		const genuine = await second.node.switch.getOutgoingGreetingInfo();
 
 		const answer = await postJSON(first, '/p2p/message', { message: peerMessage('replayed', genuine, 0), greeting: await advertisementWithUnsignedFields(second.node) });
 
 		expect(answer.body).toEqual({ success: true });
-		await settleDeliveries(first.node);
+		await messages.settled();
 		// Once for the greeting, once for the peer the message passes on.
 		expect(recorded).toEqual([genuine, genuine]);
 		expect(await first.node.switch.config.kv.getAll('messageFilters')).toEqual({});
@@ -605,15 +584,16 @@ describe('peers over HTTP republish', function() {
 	test('handles a representative\'s greeting once, whatever fields its signature does not cover are added to it', async function() {
 		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
 		const recorded = recordedPotentialPeers(second.node);
+		const messages = trackedMessages(second.node);
 		const [plain, withUnsignedFields] = await chainedStaples(first.network, [10n, 20n]);
 		if (plain === undefined || withUnsignedFields === undefined) {
 			throw(new Error('internal error: fewer staples than amounts'));
 		}
 
 		await postJSON(second, '/p2p/message', { message: JSON.stringify({ id: 'plain', add: plain.toString(), ttl: 0 }), greeting: await first.node.switch.getOutgoingGreetingInfo() });
-		await settleDeliveries(second.node);
+		await messages.settled();
 		await postJSON(second, '/p2p/message', { message: JSON.stringify({ id: 'with-unsigned-fields', add: withUnsignedFields.toString(), ttl: 0 }), greeting: await advertisementWithUnsignedFields(first.node) });
-		await settleDeliveries(second.node);
+		await messages.settled();
 
 		expect(recorded).toEqual([await first.node.switch.getOutgoingGreetingInfo()]);
 	});
@@ -643,6 +623,7 @@ describe('peers over HTTP republish', function() {
 		});
 		const staples = await chainedStaples(first.network, [10n, 20n, 30n]);
 		const handled = handledInTurn(second.node, 'add', staples.length);
+		const messages = trackedMessages(second.node);
 		const greeting = await first.node.switch.getOutgoingGreetingInfo();
 
 		for (const [index, staple] of staples.entries()) {
@@ -651,7 +632,7 @@ describe('peers over HTTP republish', function() {
 		}
 		await handled;
 		release();
-		await settleDeliveries(second.node);
+		await messages.settled();
 
 		expect(arrivals).toEqual(['staple-0', 'staple-1', 'staple-2']);
 		expect(await second.node.ledger.getBalance(requireAt(second.network.users, 1), second.network.baseToken)).toBe(1060n);
@@ -667,12 +648,13 @@ describe('peers over HTTP republish', function() {
 		await dial(first.node, second.node);
 		const greeting = await greetingOf(pair);
 		const delivered = deliveredTypes(first.node);
+		const messages = trackedMessages(first.node);
 
 		const answer = await postJSON(first, '/p2p/message', { message: await filteringGreetingMessage(second.node), greeting });
 
 		expect(answer.body).toEqual({ success: false });
 		expect(api.responseViolations(MESSAGE_ROUTE, answer.status, answer.body)).toEqual([]);
-		await settleDeliveries(first.node);
+		await messages.settled();
 		// Only the greeting the node builds from the greeting field.
 		expect([...delivered]).toEqual(['greeting']);
 		expect(await first.node.switch.config.kv.getAll('messageFilters')).toEqual({});
@@ -691,11 +673,12 @@ describe('peers over HTTP republish', function() {
 	])('refuses $refused', async function({ message }) {
 		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
 		const delivered = deliveredTypes(second.node);
+		const messages = trackedMessages(second.node);
 
 		const answer = await postJSON(second, '/p2p/message', { message: await message(first.node), greeting: await first.node.switch.getOutgoingGreetingInfo() });
 
 		expect(answer.body).toEqual({ success: false });
-		await settleDeliveries(second.node);
+		await messages.settled();
 		expect(delivered).toEqual(['greeting']);
 	});
 
@@ -703,11 +686,12 @@ describe('peers over HTTP republish', function() {
 		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
 		const stranger = await startStranger();
 		const genuine = await stranger.node.switch.getOutgoingGreetingInfo();
+		const messages = trackedMessages(second.node);
 
 		const answer = await postJSON(second, '/p2p/message', { message: peerMessage('passed-on', await advertisementWithUnsignedFields(stranger.node), 0), greeting: await first.node.switch.getOutgoingGreetingInfo() });
 
 		expect(answer.body).toEqual({ success: true });
-		await settleDeliveries(second.node);
+		await messages.settled();
 		expect(await second.node.switch.config.kv.get('potentialPeers', keyOf(representativeOf(stranger, 2)))).toEqual(genuine);
 		expect(await second.node.switch.config.kv.getAll('messageFilters')).toEqual({});
 	});
@@ -715,11 +699,12 @@ describe('peers over HTTP republish', function() {
 	test('refuses a message that is no peer-to-peer message, and still takes the sender\'s greeting', async function() {
 		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
 		const delivered = deliveredTypes(second.node);
+		const messages = trackedMessages(second.node);
 
 		const answer = await postJSON(second, '/p2p/message', { message: '{"id": 7}', greeting: await first.node.switch.getOutgoingGreetingInfo() });
 
 		expect(answer.body).toEqual({ success: false });
-		await settleDeliveries(second.node);
+		await messages.settled();
 		expect(delivered).toEqual(['greeting']);
 		expect(representativeKeys(await second.node.switch.peers({ includeUnverified: true }))).toEqual([keyOf(representativeOf(first, 0))]);
 	});
@@ -910,7 +895,7 @@ describe('stopping', function() {
 		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
 		await dial(first.node, second.node);
 		const receiver = requireAt(first.network.users, 1);
-		const { arrived, release } = holdStaples(second.node);
+		const { arrived, release } = holdStaplesInNode(second.node);
 
 		// The sender is answered before the message is handled.
 		expect(await first.node.addToLedger(await sendStaple(first.network, 10n))).toBe(true);
@@ -927,10 +912,11 @@ describe('stopping', function() {
 		expect(await second.node.ledger.getBalance(receiver, second.network.baseToken)).toBe(1010n);
 	});
 
-	test('stops waiting for the messages posted over HTTP after a bound, and says so', async function() {
+	test('stops waiting for the messages posted over HTTP after the same bound, and says so', async function() {
 		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
 		await dial(first.node, second.node);
-		const { arrived, release } = holdStaples(second.node);
+		const messages = trackedMessages(second.node);
+		const { arrived, release } = holdStaplesInNode(second.node);
 		const warn = vi.spyOn(second.node.log, 'warn');
 		expect(await first.node.addToLedger(await sendStaple(first.network, 10n))).toBe(true);
 		await arrived;
@@ -939,16 +925,16 @@ describe('stopping', function() {
 		vi.useRealTimers();
 		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 		let settled = false;
-		const settling = settleDeliveries(second.node).then(function() {
+		const settling = messages.settled().then(function() {
 			settled = true;
 		});
-		await vi.advanceTimersByTimeAsync(DELIVERY_SETTLE_MILLISECONDS - 1);
+		await vi.advanceTimersByTimeAsync(MESSAGE_SETTLE_MILLISECONDS - 1);
 		expect(settled).toBe(false);
 		await vi.advanceTimersByTimeAsync(1);
 		vi.useRealTimers();
 		await settling;
 
-		expect(warn).toHaveBeenCalledWith('P2P', expect.stringContaining('Stopped waiting for 1 messages posted over HTTP'));
+		expect(warn).toHaveBeenCalledWith('P2P', `Stopped waiting for 1 messages from peers after ${String(MESSAGE_SETTLE_MILLISECONDS)} ms`);
 		release();
 	});
 
