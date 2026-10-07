@@ -57,6 +57,13 @@ const UPDATE = process.env['SLOP_NODE_UPDATE_CONFORMANCE'] === '1';
  */
 const REPLAY_TIMEOUT_MILLISECONDS = 30_000;
 
+/*
+ * Generating a group runs its cases in memory. The permissions group took
+ * 2.6 s while make -j8 ran the rest of the suite beside it, so the test that
+ * generates it twice ran past the default timeout of 5 s.
+ */
+const GENERATION_TIMEOUT_MILLISECONDS = 30_000;
+
 const CORPUS_DIRECTORY = new URL('../../conformance/vote-cases/', import.meta.url);
 
 function fileOf(group: Group): URL {
@@ -101,7 +108,7 @@ describe('vote-decision corpus', function() {
 	});
 
 	describe.each(groups)('$name cases', function(group) {
-		test('the committed file equals a fresh generation', async function() {
+		test('the committed file equals a fresh generation', { timeout: GENERATION_TIMEOUT_MILLISECONDS }, async function() {
 			const generated = await generate(group);
 			if (UPDATE) {
 				await mkdir(CORPUS_DIRECTORY, { recursive: true });
@@ -110,7 +117,7 @@ describe('vote-decision corpus', function() {
 			expect(await readCommitted(group)).toBe(generated);
 		});
 
-		test('two generations are byte-identical', async function() {
+		test('two generations are byte-identical', { timeout: GENERATION_TIMEOUT_MILLISECONDS }, async function() {
 			expect(await generate(group)).toBe(await generate(group));
 		});
 
