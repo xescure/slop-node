@@ -1,31 +1,25 @@
 import { createServer } from 'node:net';
 import { readFileSync } from 'node:fs';
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
-import type { LogEntry, LogTarget } from '@keetanetwork/keetanet-client/lib/log/common.js';
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
-import type { LocalNodeConfig } from '@keetanetwork/keetanet-client/lib/node/local.js';
 import { APIDocument, isJSONObject } from '../conformance/api/document.js';
 import { documentPathOf } from '../conformance/api/routes.js';
 import type { Route as DocumentRoute } from '../conformance/api/routes.js';
 import type { LedgerStorageDriverBase } from '../ledger/storage/base.js';
 import { createLedgerError } from '../ledger/storage/errors.js';
-import { driversUnderTest, driverUnderTestNamed } from '../ledger/storage/suite/drivers.js';
+import { driversUnderTest } from '../ledger/storage/suite/drivers.js';
 import { checksumOf, requireAt } from '../ledger/storage/suite/support.js';
-import type { DriverUnderTest } from '../ledger/storage/suite/types.js';
-import { createTestNetwork, freezeClock } from '../testing/network.js';
-import type { TestNetwork } from '../testing/network.js';
+import { request, useLocalNodes } from '../testing/local-node.js';
+import type { HTTPAnswer } from '../testing/local-node.js';
 import { NODE_VERSION } from '../version.js';
 import { LocalNodeError } from './errors.js';
-import { LocalNode } from './local.js';
 import { SHUTDOWN_GRACE_MILLISECONDS } from './server.js';
 
 const lib = KeetaNet.lib;
 
 const api = new APIDocument();
-
-const GENESIS_MOMENT = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
 
 const LOOPBACK = '127.0.0.1';
 
@@ -33,103 +27,13 @@ const SECRET = 'postgres://slop:hunter2@db.invalid/ledger';
 
 const PEER_CAPTURE = new URL('../../conformance/api/mainnet/node-peers.json', import.meta.url);
 
-type RunningNode = {
-	readonly node: LocalNode;
-	readonly network: TestNetwork;
-	readonly storage: LedgerStorageDriverBase;
-	/** Every log entry the node emitted, once it has synced. */
-	readonly logs: readonly LogEntry[];
-	/** Where the API is served, with no trailing slash. */
-	readonly apiURL: string;
-};
-
-type StartOptions = {
-	readonly driver?: DriverUnderTest;
-	readonly nodeOptions?: LocalNodeConfig['nodeOptions'];
-	readonly endpoints?: LocalNodeConfig['endpoints'];
-};
-
-const started: { readonly node: LocalNode; readonly driver: DriverUnderTest; readonly storage: LedgerStorageDriverBase }[] = [];
-
-afterEach(async function() {
-	vi.restoreAllMocks();
-	for (const { node, driver, storage } of started.splice(0)) {
-		await node.stop();
-		await driver.destroy(storage);
-	}
-	vi.useRealTimers();
-});
-
-function capturingTarget(logs: LogEntry[]): LogTarget {
-	return({
-		logLevel: 'ALL',
-		filter: null,
-		emitLogs: function(entries: LogEntry[]): Promise<void> {
-			logs.push(...entries);
-			return(Promise.resolve());
-		}
-	});
-}
-
-function apiURLOf(node: LocalNode): string {
-	const advertised = node.config.endpoints?.api;
-	if (advertised === undefined) {
-		throw(new Error('the node advertises no API endpoint'));
-	}
-	return(advertised.replace(/\/$/, ''));
-}
-
-/** A representative node of a one-representative test network, holding genesis, not yet running. */
-async function createNode(options: StartOptions = {}): Promise<Omit<RunningNode, 'apiURL'>> {
-	const driver = options.driver ?? driverUnderTestNamed('memory');
-	freezeClock(GENESIS_MOMENT);
-	const network = await createTestNetwork({ representativeWeights: [1000n] });
-	const storage = await driver.create();
-	const logs: LogEntry[] = [];
-	const log = new lib.Log();
-	log.registerTarget(capturingTarget(logs));
-	const config: LocalNodeConfig = {
-		...network.nodeConfig(storage, requireAt(network.representatives, 0)),
-		log,
-		nodeOptions: { listenIP: LOOPBACK, listenPort: 0, ...options.nodeOptions }
-	};
-	if (options.endpoints !== undefined) {
-		config.endpoints = { ...options.endpoints };
-	}
-	const node = new LocalNode(config);
-	started.push({ node, driver, storage });
-	await node.ledger.add(network.genesis);
-	return({ node, network, storage, logs });
-}
-
-async function startNode(options: StartOptions = {}): Promise<RunningNode> {
-	const created = await createNode(options);
-	await created.node.run();
-	return({ ...created, apiURL: apiURLOf(created.node) });
-}
-
-type Answer = {
-	readonly status: number;
-	readonly contentType: string | null;
-	readonly text: string;
-	readonly body: unknown;
-};
-
-async function get(running: Pick<RunningNode, 'apiURL'>, path: string, init: RequestInit = {}): Promise<Answer> {
-	const response = await fetch(`${running.apiURL}${path}`, init);
-	const text = await response.text();
-	let body: unknown = undefined;
-	if (response.headers.get('content-type')?.startsWith('application/json') === true) {
-		body = JSON.parse(text);
-	}
-	return({ status: response.status, contentType: response.headers.get('content-type'), text, body });
-}
+const nodes = useLocalNodes();
 
 function documentRoute(path: string): DocumentRoute {
 	return({ method: 'GET', path: documentPathOf(path) });
 }
 
-function expectDocumented(path: string, answer: Answer): void {
+function expectDocumented(path: string, answer: HTTPAnswer): void {
 	expect(answer.contentType).toBe('application/json; charset=utf-8');
 	expect(api.responseViolations(documentRoute(path), answer.status, answer.body)).toEqual([]);
 }
@@ -175,22 +79,22 @@ const NODE_GROUP = ['/node/version', '/node/stats', '/node/peers', '/node/ledger
 
 describe.each(driversUnderTest)('the node group on the $name driver', function(driver) {
 	test('every response validates against the document', async function() {
-		const running = await startNode({ driver });
+		const running = await nodes.start({ driver });
 		for (const path of NODE_GROUP) {
-			const answer = await get(running, path);
+			const answer = await request(running, path);
 			expect(answer.status, path).toBe(200);
 			expectDocumented(path, answer);
 		}
 	});
 
 	test('the checksum covers every block the ledger holds', async function() {
-		const running = await startNode({ driver });
-		const answer = await get(running, '/node/ledger/checksum');
+		const running = await nodes.start({ driver });
+		const answer = await request(running, '/node/ledger/checksum');
 		expect(field(answer.body, 'checksum')).toBe(`0x${checksumOf([running.network.genesis]).toString(16).toUpperCase()}`);
 	});
 
 	test('the checksum and the moment it is reported with are read between commits', async function() {
-		const running = await startNode({ driver });
+		const running = await nodes.start({ driver });
 		const between = vi.spyOn(running.storage, 'betweenCommits');
 		const statistics = vi.spyOn(lib.Ledger.prototype, 'stats');
 		const checksum = vi.spyOn(lib.Stats.prototype, 'getXor');
@@ -202,7 +106,7 @@ describe.each(driversUnderTest)('the node group on the $name driver', function(d
 			expect(checksum).toHaveBeenCalledTimes(1);
 			return(result);
 		});
-		const answer = await get(running, '/node/ledger/checksum');
+		const answer = await request(running, '/node/ledger/checksum');
 		expect(answer.status).toBe(200);
 		expect(between).toHaveBeenCalledTimes(1);
 	});
@@ -210,33 +114,33 @@ describe.each(driversUnderTest)('the node group on the $name driver', function(d
 
 describe('the node group', function() {
 	test('the version names the KeetaNet release the node speaks', async function() {
-		const answer = await get(await startNode(), '/node/version');
+		const answer = await request(await nodes.start(), '/node/version');
 		expect(answer.body).toEqual({ node: NODE_VERSION });
 	});
 
 	test('statistics are never cleared over the API', async function() {
-		const answer = await get(await startNode(), '/node/ledger/clearstats');
+		const answer = await request(await nodes.start(), '/node/ledger/clearstats');
 		expect(answer.body).toEqual({ clearStats: false });
 	});
 
 	test('the statistics count the ledger', async function() {
-		const running = await startNode();
-		const answer = await get(running, '/node/stats');
+		const running = await nodes.start();
+		const answer = await request(running, '/node/stats');
 		expect(field(field(answer.body, 'ledger'), 'blockCount')).toBe(running.network.genesis.blocks.length);
 	});
 
 	test('a peer is listed as the representative advertised itself', async function() {
-		const running = await startNode();
+		const running = await nodes.start();
 		const peer = capturedPeer();
 		await running.node.switch.config.kv.set('knownPeers', peer.key, peer);
 		await running.node.switch.config.kv.set('lastSeenPeers', peer.key, String(Date.now()));
-		const answer = await get(running, '/node/peers');
+		const answer = await request(running, '/node/peers');
 		expectDocumented('/node/peers', answer);
 		expect(answer.body).toEqual({ peers: [peer] });
 	});
 
 	test('a node with no peers lists none, and not itself', async function() {
-		const answer = await get(await startNode(), '/node/peers');
+		const answer = await request(await nodes.start(), '/node/peers');
 		expect(answer.body).toEqual({ peers: [] });
 	});
 });
@@ -247,9 +151,9 @@ describe('a failed request', function() {
 	}
 
 	test('a KeetaNet error is answered with status 500 as a refusal', async function() {
-		const running = await startNode();
+		const running = await nodes.start();
 		failStatistics(running.storage, createLedgerError('LEDGER_INVALID_BALANCE', 'Balance would go negative'));
-		const answer = await get(running, '/node/stats');
+		const answer = await request(running, '/node/stats');
 		expect(answer.status).toBe(500);
 		expectDocumented('/node/stats', answer);
 		expect(answer.body).toEqual({ error: true, type: 'LEDGER', code: 'LEDGER_INVALID_BALANCE', message: 'Balance would go negative' });
@@ -262,9 +166,9 @@ describe('a failed request', function() {
 	];
 
 	test.each(hidden)('$name is answered with status 500 and only an error ID, which the log records it under', async function({ error }) {
-		const running = await startNode();
+		const running = await nodes.start();
 		failStatistics(running.storage, error);
-		const answer = await get(running, '/node/stats');
+		const answer = await request(running, '/node/stats');
 		expect(answer.status).toBe(500);
 		expectDocumented('/node/stats', answer);
 		expect(api.schemaViolations('ErrorInternal', answer.body)).toEqual([]);
@@ -301,7 +205,7 @@ function barrier(parties: number): () => Promise<void> {
 
 describe('each request', function() {
 	test('runs on a copy of its own, with a ledger of its own, and is synced after it', async function() {
-		const running = await startNode();
+		const running = await nodes.start();
 		const copies: Node[] = [];
 		const copy = running.node.copy.bind(running.node);
 		vi.spyOn(running.node, 'copy').mockImplementation(function(): Node {
@@ -319,7 +223,7 @@ describe('each request', function() {
 		});
 		const synced = vi.spyOn(lib.Node.prototype, 'sync');
 
-		const answers = await Promise.all([get(running, '/node/stats'), get(running, '/node/ledger/checksum')]);
+		const answers = await Promise.all([request(running, '/node/stats'), request(running, '/node/ledger/checksum')]);
 		expect(answers.map(function(answer): number {
 			return(answer.status);
 		})).toEqual([200, 200]);
@@ -354,14 +258,14 @@ describe('each request', function() {
 	});
 
 	test('is not synced when the node is told not to', async function() {
-		const running = await startNode({ nodeOptions: { noSyncAfterEachRoute: true } });
+		const running = await nodes.start({ nodeOptions: { noSyncAfterEachRoute: true } });
 		const synced = vi.spyOn(lib.Node.prototype, 'sync');
-		expect((await get(running, '/node/version')).status).toBe(200);
+		expect((await request(running, '/node/version')).status).toBe(200);
 		expect(synced).not.toHaveBeenCalled();
 	});
 
 	test('is answered with the headers a browser needs to read it', async function() {
-		const running = await startNode();
+		const running = await nodes.start();
 		const answer = await fetch(`${running.apiURL}/node/version`);
 		expect(answer.headers.get('access-control-allow-origin')).toBe('*');
 		const preflight = await fetch(`${running.apiURL}/node/version`, {
@@ -375,14 +279,14 @@ describe('each request', function() {
 	});
 
 	test('for a path the API does not have is not found, in the HTTP server\'s own words', async function() {
-		const answer = await get(await startNode(), '/node/nothing');
+		const answer = await request(await nodes.start(), '/node/nothing');
 		expect(answer.status).toBe(404);
 		expect(answer.contentType).toBe('text/html; charset=utf-8');
 		expect(answer.text).toContain('<pre>Cannot GET /api/node/nothing</pre>');
 	});
 
 	test('that fails outside every route is answered without the failure\'s details', async function() {
-		const running = await startNode();
+		const running = await nodes.start();
 		running.node._app.get('/outside', function(): never {
 			throw(new Error(`could not reach ${SECRET}`));
 		});
@@ -396,7 +300,7 @@ describe('each request', function() {
 
 describe('the lifecycle', function() {
 	test('a node without endpoints advertises where it listens', async function() {
-		const running = await startNode();
+		const running = await nodes.start();
 		const { port } = new URL(running.apiURL);
 		expect(running.node.config.endpoints).toEqual({
 			api: `http://${LOOPBACK}:${port}/api`,
@@ -407,20 +311,20 @@ describe('the lifecycle', function() {
 	test('the API is served below the path of the configured endpoint', async function() {
 		const port = await unusedPort();
 		const endpoints = { api: `http://${LOOPBACK}:${String(port)}/keeta/api`, p2p: `ws://${LOOPBACK}:${String(port)}/keeta/p2p` };
-		const running = await startNode({ endpoints, nodeOptions: { listenPort: port } });
+		const running = await nodes.start({ endpoints, nodeOptions: { listenPort: port } });
 		expect(running.node.config.endpoints).toEqual(endpoints);
-		expect((await get(running, '/node/version')).status).toBe(200);
+		expect((await request(running, '/node/version')).status).toBe(200);
 	});
 
 	test('stopping releases the port', async function() {
-		const running = await startNode();
+		const running = await nodes.start();
 		await running.node.stop();
-		await expect(get(running, '/node/version')).rejects.toThrow();
+		await expect(request(running, '/node/version')).rejects.toThrow();
 		await listenAndClose(Number(new URL(running.apiURL).port));
 	});
 
 	test('stopping waits for a request in flight only for the grace period', async function() {
-		const running = await startNode();
+		const running = await nodes.start();
 		const inside = barrier(2);
 		const neverAnswered = new Promise<never>(function() {
 			// The request is held until the server drops its connection.
@@ -429,7 +333,7 @@ describe('the lifecycle', function() {
 			await inside();
 			return(await neverAnswered);
 		});
-		const held = get(running, '/node/stats').then(function(): string {
+		const held = request(running, '/node/stats').then(function(): string {
 			return('answered');
 		}, function(): string {
 			return('dropped');
@@ -451,12 +355,12 @@ describe('the lifecycle', function() {
 	});
 
 	test('a node listening on every interface needs endpoints to advertise', async function() {
-		const created = await createNode({ nodeOptions: { listenIP: '0.0.0.0', listenPort: 0 } });
+		const created = await nodes.create({ nodeOptions: { listenIP: '0.0.0.0', listenPort: 0 } });
 		await expect(created.node.run()).rejects.toBeInstanceOf(LocalNodeError);
 	});
 
 	test('a running node cannot be run again', async function() {
-		const running = await startNode();
+		const running = await nodes.start();
 		await expect(running.node.run()).rejects.toThrow(LocalNodeError);
 	});
 });
