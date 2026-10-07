@@ -4,8 +4,9 @@ import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { ACLRow, AccountInfo, CertificateWithIntermediates } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
 import type { Permissions } from '@keetanetwork/keetanet-client/lib/permissions.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import { LedgerInternals } from '../../upstream/internals.js';
 import { assertNever } from '../../util/assert-never.js';
-import { compareText, touchedBy } from './replay.js';
+import { compareText } from './replay.js';
 import type { ReplayResult } from './replay.js';
 
 const lib = KeetaNet.lib;
@@ -284,6 +285,19 @@ async function readRecords(reader: LedgerReader, accounts: readonly GenericAccou
 function renderLine(value: object): string {
 	return(JSON.stringify(value).replace(/[\u007f-\uffff]/g, function(unit): string {
 		return(`\\u${unit.charCodeAt(0).toString(16).padStart(4, '0')}`);
+	}));
+}
+
+/** Every account the staples' effects touch, once each, in code-point order of their public key strings. */
+function touchedBy(staples: Iterable<VoteStaple>): GenericAccount[] {
+	const touched = new lib.Account.Set();
+	for (const staple of staples) {
+		for (const account of LedgerInternals.computeEffectOfBlocks(staple.blocks).touched) {
+			touched.add(account);
+		}
+	}
+	return([...touched].sort(function(left, right): number {
+		return(compareText(left.publicKeyString.get(), right.publicKeyString.get()));
 	}));
 }
 

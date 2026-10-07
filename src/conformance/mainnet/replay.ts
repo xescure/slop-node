@@ -1,9 +1,8 @@
 import { vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import type { GenericAccount, NetworkAddress, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Ledger, LedgerStorageAPI } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
-import { LedgerInternals } from '../../upstream/internals.js';
+import { freezeClock } from '../../testing/network.js';
 import { MAINNET_NETWORK, mainnetLedgerSettings, mainnetReplayRepresentative, mainnetTrustedRoot } from './fixture.js';
 
 const lib = KeetaNet.lib;
@@ -26,10 +25,6 @@ export type ReplayResult = {
 	readonly deferred: readonly VoteStaple[];
 	/** What the node's statistics hold under ledgerChecksum: the XOR of the hash of every block applied. */
 	readonly ledgerChecksum: bigint;
-	/** Every account that an applied staple's effects touch, in code-point order of their public key strings. */
-	readonly touched: readonly GenericAccount[];
-	readonly baseToken: TokenAddress;
-	readonly networkAddress: NetworkAddress;
 };
 
 export function compareText(left: string, right: string): number {
@@ -95,19 +90,6 @@ async function appliedAmong(ledger: Ledger, staples: readonly VoteStaple[]): Pro
 	})));
 }
 
-/** Every account the staples' effects touch, once each, in code-point order of their public key strings. */
-export function touchedBy(staples: Iterable<VoteStaple>): GenericAccount[] {
-	const touched = new lib.Account.Set();
-	for (const staple of staples) {
-		for (const account of LedgerInternals.computeEffectOfBlocks(staple.blocks).touched) {
-			touched.add(account);
-		}
-	}
-	return([...touched].sort(function(left, right): number {
-		return(compareText(left.publicKeyString.get(), right.publicKeyString.get()));
-	}));
-}
-
 /**
  * Hands each staple to add, oldest first, with the clock frozen at the
  * staple's timestamp, and then runs gc until nothing remains to retry.
@@ -115,7 +97,7 @@ export function touchedBy(staples: Iterable<VoteStaple>): GenericAccount[] {
 export async function addInReplayOrder(ledger: Ledger, staples: readonly VoteStaple[], add: (staple: VoteStaple) => Promise<void>): Promise<void> {
 	try {
 		for (const staple of replayOrder(staples)) {
-			vi.setSystemTime(staple.timestamp());
+			freezeClock(staple.timestamp());
 			await add(staple);
 		}
 		await drainDeferral(ledger);
@@ -141,10 +123,7 @@ async function replayOnNode(node: ReplayNode, staples: readonly VoteStaple[], op
 		deferred: ordered.filter(function(staple): boolean {
 			return(!applied.has(staple));
 		}),
-		ledgerChecksum: (await node.stats.getXor('ledgerChecksum')).toBigInt(),
-		touched: touchedBy(applied),
-		baseToken: node.baseToken,
-		networkAddress: node.networkAddress
+		ledgerChecksum: (await node.stats.getXor('ledgerChecksum')).toBigInt()
 	});
 }
 
