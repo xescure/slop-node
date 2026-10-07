@@ -10,7 +10,7 @@ import { blocksHashesOf, orphanedSideRowsOf } from '../../ledger/storage/suite/s
 import type { DriverUnderTest } from '../../ledger/storage/suite/types.js';
 import { assertNever } from '../../util/assert-never.js';
 import { stateDumpViolations } from '../schema.js';
-import { STATE_DUMP_FORMAT, renderReplayStateDump } from './dump.js';
+import { STATE_DUMP_FORMAT, firstDifference, renderReplayStateDump } from './dump.js';
 import type { StateDumpKind } from './dump.js';
 import { EDGE_CASE_OUTCOMES, addEdgeCases, renderEdgeCaseOutcomes } from './edge-cases.js';
 import type { EdgeCaseResult } from './edge-cases.js';
@@ -208,20 +208,6 @@ function committedEdgeCaseOutcomes(): Promise<string> {
 	return(committed(EDGE_CASE_OUTCOMES_FILE, function({ edgeCases }): string {
 		return(renderEdgeCaseOutcomes(edgeCases));
 	}));
-}
-
-type LineDifference = { readonly line: number; readonly expected: string | undefined; readonly actual: string | undefined };
-
-/** The first line where two dumps differ, so a failure names one record instead of printing megabytes. */
-function firstDifference(expected: string, actual: string): LineDifference | null {
-	const expectedLines = expected.split('\n');
-	const actualLines = actual.split('\n');
-	for (let index = 0; index < Math.max(expectedLines.length, actualLines.length); index++) {
-		if (expectedLines[index] !== actualLines[index]) {
-			return({ line: index + 1, expected: expectedLines[index], actual: actualLines[index] });
-		}
-	}
-	return(null);
 }
 
 type ParsedRecord = { readonly kind: StateDumpKind; readonly line: string; readonly key: readonly string[] };

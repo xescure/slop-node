@@ -119,3 +119,13 @@ No staple is refused. `Ledger.add` checks a staple's voting weight before anythi
 Of the deferred staples, 13 wait only on blocks that are in neither file, from the history between the head and the edge cases. The other 76 wait only on blocks of other edge-case staples, which are themselves deferred.
 
 The applied staple opens an account and extends it in the same staple, so it waits on nothing. The account has no earlier history in either file, so the staple's sends leave its balances negative. `Ledger.add` applies a confirmed staple's balance changes without a range check, which only a vote makes [Keeta TS] index.js:67382, 70079-70089, and reading that account's balances then fails [Keeta TS] index.js:69422-69436.
+
+## 8. A second implementation
+
+`mainnet/head.rust-mirror.jsonl` is a second, independent implementation's state for the same staples, restricted to the record kinds it models. The implementation is written in Rust, separately from Keeta's client: it decodes and verifies the staples, computes their effects and keeps its state with its own code and its own storage. It applies the 2,037 staples of the head file, oldest first by the earliest `validityFrom` of each staple's votes, and every one applies. Its own quorum and balance checks dispute none of them.
+
+The file is a dump in format `slop-node/state-dump@1` (`STATE-DUMP.md`) with every kind but `idempotent`, which the implementation does not store; the head carries no idempotent value. The implementation does not compute the `touched` sets of section 5 of `STATE-DUMP.md`, so it is given the dumped account set, the `account` keys of `mainnet/head.state.jsonl`, and reads every value from its own state. It also checks the set from its side: no account outside it holds any state of its own there, each being only a representative that an account of the set delegates to.
+
+Its model differs from the format in two places, and the values are converted. It counts an account's opening block as height 1, so a head's height is its own minus one. It keeps a representative for every account, so an account whose key type cannot delegate is written with none, as `STATE-DUMP.md` section 3.1 requires; no account of the set needed it.
+
+The file equals `mainnet/head.state.jsonl` without its `idempotent` records, byte for byte. `make test` checks that equality and the file's validity under the schema from the committed files; it does not build or run the second implementation.

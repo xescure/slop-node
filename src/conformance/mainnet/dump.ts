@@ -308,3 +308,17 @@ export async function renderStateDump(ledger: Ledger, appliedStaples: readonly V
 export function renderReplayStateDump(result: ReplayResult): Promise<string> {
 	return(renderStateDump(result.ledger, result.appliedStaples, result.ledgerChecksum));
 }
+
+export type LineDifference = { readonly line: number; readonly expected: string | undefined; readonly actual: string | undefined };
+
+/** The first line where two dumps differ, so a failure names one record instead of printing megabytes. */
+export function firstDifference(expected: string, actual: string): LineDifference | null {
+	const expectedLines = expected.split('\n');
+	const actualLines = actual.split('\n');
+	for (let index = 0; index < Math.max(expectedLines.length, actualLines.length); index++) {
+		if (expectedLines[index] !== actualLines[index]) {
+			return({ line: index + 1, expected: expectedLines[index], actual: actualLines[index] });
+		}
+	}
+	return(null);
+}
