@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { LedgerStorageDriverBase } from '../ledger/storage/base.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
-import { completeDriversUnderTest } from '../ledger/storage/suite/drivers.js';
+import { driversUnderTest } from '../ledger/storage/suite/drivers.js';
 import { VOTE_CASE_FORMAT, decodeVoteCaseFile, encodeVoteCaseFile } from './case.js';
 import type { VoteCase } from './case.js';
 import { EXCLUDED_ROWS } from './exclusions.js';
@@ -157,7 +157,7 @@ describe('vote-decision corpus', function() {
 		expect((await readdir(CORPUS_DIRECTORY)).sort()).toEqual(names);
 	});
 
-	describe.each(completeDriversUnderTest)('replay on the $name driver', function(driver) {
+	describe.each(driversUnderTest)('replay on the $name driver', function(driver) {
 		/** Replays one case on fresh storage, released before the next case, so a driver backed by a database holds one case's storage at a time. */
 		async function replayOnDriver(voteCase: VoteCase): Promise<readonly ReplayFailure[]> {
 			const created: LedgerStorageDriverBase[] = [];

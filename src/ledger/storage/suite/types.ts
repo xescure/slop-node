@@ -27,8 +27,6 @@ export type StoreSharing =
  */
 export type DriverUnderTest = {
 	readonly name: string;
-	/** Every group, or, while the driver is still being built, the groups whose members it implements. */
-	readonly groups: 'all' | readonly SuiteGroup[];
 	/** A sibling is released with the instance it was opened beside. */
 	readonly sharing: StoreSharing;
 	create(): Promise<LedgerStorageDriverBase>;

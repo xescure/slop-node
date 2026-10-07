@@ -39,7 +39,6 @@ class SideHeadsMemoryLedgerStorage extends MemoryLedgerStorage {
 function driverOf(name: string, create: () => MemoryLedgerStorage): DriverUnderTest {
 	return({
 		name,
-		groups: 'all',
 		sharing: { kind: 'process-local' },
 		create: function() {
 			return(Promise.resolve(create()));

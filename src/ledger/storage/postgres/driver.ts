@@ -66,9 +66,9 @@ import {
 	weightOf
 } from './confirmed-statements.js';
 import type { ACLColumns, AccountInfoColumns, CatchUpStapleColumns, CertificateColumns } from './confirmed-statements.js';
+import { checkIn, checkOut } from './connection.js';
 import { mapDatabaseError } from './errors.js';
-import { SCHEMA_MIGRATIONS, applyMigrations } from './migrations.js';
-import { PostgresPool } from './pool.js';
+import { MigratedPostgresPool } from './pool.js';
 import type { PostgresPoolSource } from './pool.js';
 import {
 	deadDeferredStaples,
@@ -135,15 +135,6 @@ function ignoreOutcome(): void {
 	// The queue only orders statements; each caller sees its own outcome.
 }
 
-/*
- * pg reports a connection lost while a client is checked out as an event,
- * which would end the process without a listener; the next statement fails
- * and reports it instead.
- */
-function ignoreConnectionError(): void {
-	// The failing statement carries the error.
-}
-
 /**
  * A Postgres transaction: one pooled connection inside BEGIN ISOLATION LEVEL
  * SERIALIZABLE, held until commit or abort. Upstream issues calls on one
@@ -158,7 +149,7 @@ export class PostgresTransaction extends LedgerDriverTransaction {
 	// and its caller handled: what the attempt read may already be stale.
 	#conflict: KeetaNetLedgerError | undefined;
 
-	/** Takes a client that has run BEGIN, with ignoreConnectionError listening for its errors. */
+	/** Takes a client checked out with checkOut that has run BEGIN. */
 	constructor(options: TransactionOptions, client: pg.PoolClient) {
 		super(options);
 		this.#state = { status: 'open', client };
@@ -262,8 +253,7 @@ export class PostgresTransaction extends LedgerDriverTransaction {
 
 	#finish(client: pg.PoolClient, outcome: Outcome, closeConnection: boolean): void {
 		this.#state = { status: 'finished', outcome };
-		client.removeListener('error', ignoreConnectionError);
-		client.release(closeConnection);
+		checkIn(client, closeConnection);
 	}
 
 	#open(): Extract<TransactionState, { status: 'open' }> {
@@ -636,13 +626,11 @@ function decodeDeferredStaple(row: DeferredStapleColumns): VoteStaple {
  * relied on for correctness.
  */
 export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTransaction> implements LedgerStorageAPI {
-	readonly #source: PostgresPoolSource;
-	#connecting: Promise<PostgresPool> | undefined;
-	#destroyed = false;
+	readonly #pool: MigratedPostgresPool;
 
 	constructor(source: PostgresPoolSource) {
 		super();
-		this.#source = source;
+		this.#pool = new MigratedPostgresPool(source, 'storage driver');
 	}
 
 	/**
@@ -653,28 +641,20 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 */
 	override init(config: LedgerConfig, ledger: Ledger): void {
 		super.init(config, ledger);
-		this.#connection().catch(ignoreOutcome);
+		this.#pool.connection().catch(ignoreOutcome);
 	}
 
-	/** Ends the pool if the driver opened it; an injected pool is left to its owner (G8). */
-	async destroy(): Promise<void> {
-		this.#destroyed = true;
-		const connecting = this.#connecting;
-		this.#connecting = undefined;
-		if (connecting === undefined) {
-			return;
-		}
-		const connection = await connecting.catch(function() {
-			return(undefined);
-		});
-		await connection?.close();
+	/*
+	 * Whoever injected a pool may share it with other code, so only a pool the
+	 * driver opened from a connection string is ended here.
+	 */
+	destroy(): Promise<void> {
+		return(this.#pool.destroy());
 	}
 
 	async beginTransaction(options: TransactionOptions): Promise<PostgresTransaction> {
-		const { pool } = await this.#connection();
-		const client = await pool.connect();
-		// The pool stopped listening at checkout, and a connection can be lost while BEGIN runs.
-		client.on('error', ignoreConnectionError);
+		const { pool } = await this.#pool.connection();
+		const client = await checkOut(pool);
 		let begin = 'BEGIN ISOLATION LEVEL SERIALIZABLE';
 		// Upstream opens read-only transactions only for reads (CONTRACT 3.2), which lets Postgres track fewer conflicts.
 		if (options.readOnly ?? true) {
@@ -683,8 +663,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 		try {
 			await client.query(begin);
 		} catch (error: unknown) {
-			client.removeListener('error', ignoreConnectionError);
-			client.release(true);
+			checkIn(client, true);
 			throw(mapDatabaseError(error).error);
 		}
 		return(new PostgresTransaction(options, client));
@@ -713,7 +692,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	async getNextSerialNumber(transaction?: PostgresTransaction): Promise<bigint> {
 		let rows: { serial: IntegerText }[];
 		if (transaction === undefined) {
-			const { pool } = await this.#connection();
+			const { pool } = await this.#pool.connection();
 			rows = (await pool.query<{ serial: IntegerText }>({ name: nextSerial.name, text: nextSerial.text })).rows;
 		} else {
 			rows = await transaction.run(nextSerial, []);
@@ -1112,7 +1091,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * range covers both ends.
 	 */
 	protected async countLedger(): Promise<LedgerCountsSnapshot> {
-		const { pool } = await this.#connection();
+		const { pool } = await this.#pool.connection();
 		const sent = Date.now();
 		const result = await pool.query<{ block_count: IntegerText; transaction_count: IntegerText; representative_count: IntegerText }>({ name: mainLedgerCounts.name, text: mainLedgerCounts.text });
 		const received = Date.now();
@@ -1216,26 +1195,6 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 			await transaction.run(deleteUncoveredSideBlocks, [covered]);
 		}
 		return(obsolete.length > limit);
-	}
-
-	#connection(): Promise<PostgresPool> {
-		if (this.#destroyed) {
-			return(Promise.reject(new Error('storage driver is destroyed')));
-		}
-		this.#connecting ??= this.#connect();
-		return(this.#connecting);
-	}
-
-	async #connect(): Promise<PostgresPool> {
-		const connection = await PostgresPool.open(this.#source);
-		try {
-			await applyMigrations(connection.pool, SCHEMA_MIGRATIONS);
-		} catch (error: unknown) {
-			this.#connecting = undefined;
-			await connection.close();
-			throw(error);
-		}
-		return(connection);
 	}
 
 	#block(rows: readonly { bytes: Buffer }[]): Block | null {

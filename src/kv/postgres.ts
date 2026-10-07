@@ -4,8 +4,8 @@ import type { KVSetOptionsType, KVStorageProviderAPI } from '@keetanetwork/keeta
 import type { BufferStorage } from '@keetanetwork/keetanet-client/lib/utils/buffer.js';
 import type { JSONSerializable } from '@keetanetwork/keetanet-client/lib/utils/conversion.js';
 import type pg from 'pg';
-import { SCHEMA_MIGRATIONS, applyMigrations } from '../ledger/storage/postgres/migrations.js';
-import { PostgresPool } from '../ledger/storage/postgres/pool.js';
+import { checkIn, checkOut } from '../ledger/storage/postgres/connection.js';
+import { MigratedPostgresPool } from '../ledger/storage/postgres/pool.js';
 import type { PostgresPoolSource } from '../ledger/storage/postgres/pool.js';
 import { Statement } from '../ledger/storage/postgres/sql.js';
 import type { SQLValue } from '../ledger/storage/postgres/sql.js';
@@ -127,15 +127,6 @@ function encodeValue(value: JSONSerializable): string {
 	}));
 }
 
-/*
- * pg reports a connection lost while a client is checked out as an event,
- * which would end the process without a listener; the failing query reports
- * it instead.
- */
-const ignoreConnectionError = function(): void {
-	// The failing query carries the error.
-};
-
 /**
  * Upstream's key-value store (lib/kv) on Postgres, in the schema the
  * migrations create, sharing one database with the ledger driver and with
@@ -151,26 +142,15 @@ const ignoreConnectionError = function(): void {
  * statement, so it sees one snapshot.
  */
 export class PostgresKVStorage implements KVStorageProviderAPI {
-	readonly #source: PostgresPoolSource;
-	#connecting: Promise<PostgresPool> | undefined;
-	#destroyed = false;
+	readonly #pool: MigratedPostgresPool;
 
 	constructor(source: PostgresPoolSource) {
-		this.#source = source;
+		this.#pool = new MigratedPostgresPool(source, 'key-value store');
 	}
 
 	/** Ends the pool if this store opened it; an injected pool is left to its owner. */
-	async destroy(): Promise<void> {
-		this.#destroyed = true;
-		const connecting = this.#connecting;
-		this.#connecting = undefined;
-		if (connecting === undefined) {
-			return;
-		}
-		const connection = await connecting.catch(function() {
-			return(undefined);
-		});
-		await connection?.close();
+	destroy(): Promise<void> {
+		return(this.#pool.destroy());
 	}
 
 	/**
@@ -286,9 +266,8 @@ export class PostgresKVStorage implements KVStorageProviderAPI {
 	 * is closed rather than returned to the pool.
 	 */
 	async #transaction<Result>(work: (client: pg.PoolClient) => Promise<Result>): Promise<Result> {
-		const { pool } = await this.#connection();
-		const client = await pool.connect();
-		client.on('error', ignoreConnectionError);
+		const { pool } = await this.#pool.connection();
+		const client = await checkOut(pool);
 		let broken = false;
 		try {
 			await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
@@ -301,29 +280,8 @@ export class PostgresKVStorage implements KVStorageProviderAPI {
 			});
 			throw(error);
 		} finally {
-			client.removeListener('error', ignoreConnectionError);
-			client.release(broken);
+			checkIn(client, broken);
 		}
-	}
-
-	#connection(): Promise<PostgresPool> {
-		if (this.#destroyed) {
-			return(Promise.reject(new Error('key-value store is destroyed')));
-		}
-		this.#connecting ??= this.#connect();
-		return(this.#connecting);
-	}
-
-	async #connect(): Promise<PostgresPool> {
-		const connection = await PostgresPool.open(this.#source);
-		try {
-			await applyMigrations(connection.pool, SCHEMA_MIGRATIONS);
-		} catch (error: unknown) {
-			this.#connecting = undefined;
-			await connection.close();
-			throw(error);
-		}
-		return(connection);
 	}
 }
 

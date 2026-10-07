@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { assertNever } from '../../../util/assert-never.js';
+import { SCHEMA_MIGRATIONS, applyMigrations } from './migrations.js';
 
 /** The settings of a pool the driver opens itself; an injected pool keeps its owner's. */
 export type PostgresPoolOptions = {
@@ -88,6 +89,18 @@ export class PostgresPool {
 		}
 	}
 
+	/** Opens the pool and brings the database up to this build's schema; a pool opened here is closed again if that fails. */
+	static async openMigrated(source: PostgresPoolSource): Promise<PostgresPool> {
+		const connection = await PostgresPool.open(source);
+		try {
+			await applyMigrations(connection.pool, SCHEMA_MIGRATIONS);
+		} catch (error: unknown) {
+			await connection.close();
+			throw(error);
+		}
+		return(connection);
+	}
+
 	/** Ends a pool opened here, once; an injected pool is left to its owner. */
 	close(): Promise<void> {
 		if (!this.#owned) {
@@ -95,5 +108,44 @@ export class PostgresPool {
 		}
 		this.#closing ??= this.pool.end();
 		return(this.#closing);
+	}
+}
+
+/**
+ * The pool of one store, opened and migrated on first use. A failed attempt
+ * is forgotten, so the next use tries again; after destroy every use fails.
+ */
+export class MigratedPostgresPool {
+	readonly #source: PostgresPoolSource;
+	readonly #owner: string;
+	#opening: Promise<PostgresPool> | undefined;
+	#destroyed = false;
+
+	/** The owner names the store in the error a use after destroy raises. */
+	constructor(source: PostgresPoolSource, owner: string) {
+		this.#source = source;
+		this.#owner = owner;
+	}
+
+	connection(): Promise<PostgresPool> {
+		if (this.#destroyed) {
+			return(Promise.reject(new Error(`${this.#owner} is destroyed`)));
+		}
+		this.#opening ??= PostgresPool.openMigrated(this.#source).catch((error: unknown) => {
+			this.#opening = undefined;
+			throw(error);
+		});
+		return(this.#opening);
+	}
+
+	/** Ends the pool if it was opened here; an injected pool is left to its owner. */
+	async destroy(): Promise<void> {
+		this.#destroyed = true;
+		const opening = this.#opening;
+		this.#opening = undefined;
+		const connection = await opening?.catch(function() {
+			return(undefined);
+		});
+		await connection?.close();
 	}
 }

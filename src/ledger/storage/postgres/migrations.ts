@@ -3,6 +3,7 @@ import type { Dirent } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import type pg from 'pg';
 import { assertNever } from '../../../util/assert-never.js';
+import { checkIn, checkOut } from './connection.js';
 
 /** The number of a migration, and of the newest migration a database has applied. */
 export type SchemaVersion = number & { readonly __schemaVersion: never };
@@ -205,15 +206,6 @@ const migrateLocked = async function(client: pg.PoolClient, migrations: readonly
 	return(toSchemaVersion(migrations.length));
 };
 
-/*
- * pg reports a connection lost while a client is checked out as an event,
- * which would end the process without a listener; the failing query reports
- * it instead.
- */
-const ignoreConnectionError = function(): void {
-	// The failing query carries the error.
-};
-
 /**
  * Unlocks, gives the session back its own statement timeout, and returns the
  * connection to the pool, or, if the session cannot do both, closes it:
@@ -227,8 +219,7 @@ const releaseLock = async function(client: pg.PoolClient): Promise<void> {
 	} catch {
 		unlocked = false;
 	}
-	client.removeListener('error', ignoreConnectionError);
-	client.release(!unlocked);
+	checkIn(client, !unlocked);
 };
 
 const currentDate = function(): Date {
@@ -245,8 +236,7 @@ const currentDate = function(): Date {
  */
 export const applyMigrations = async function(pool: pg.Pool, directory: URL, clock: () => Date = currentDate): Promise<SchemaVersion> {
 	const migrations = await loadMigrations(directory);
-	const client = await pool.connect();
-	client.on('error', ignoreConnectionError);
+	const client = await checkOut(pool);
 	let version: SchemaVersion;
 	try {
 		// Waiting for another process's migration, and a migration itself, may

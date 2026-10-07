@@ -3,7 +3,7 @@ import { defineCanaryCases } from './suite/canaries.js';
 import { defineConcurrencyCases } from './suite/concurrency.js';
 import { defineConfirmedCases } from './suite/confirmed.js';
 import { defineDeferralCases } from './suite/deferral.js';
-import { driversUnderTest, runsGroup } from './suite/drivers.js';
+import { driversUnderTest } from './suite/drivers.js';
 import { defineGcCases } from './suite/gc.js';
 import { defineGenesisCases } from './suite/genesis.js';
 import { defineStatsCases } from './suite/stats.js';
@@ -26,8 +26,6 @@ const defineGroup: Readonly<Record<SuiteGroup, (driver: DriverUnderTest) => void
 
 describe.each(driversUnderTest)('$name driver', function(driver) {
 	for (const group of SUITE_GROUPS) {
-		if (runsGroup(driver, group)) {
-			defineGroup[group](driver);
-		}
+		defineGroup[group](driver);
 	}
 });
