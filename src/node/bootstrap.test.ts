@@ -508,6 +508,21 @@ describe('a node that bootstraps', function() {
 		expect(await bootstrapSources(running.node)).toEqual([apiOf(1), apiOf(2)]);
 	});
 
+	test('catches up from a manual peer that holds no voting weight, when it has no genesis and no other source', async function() {
+		const peer = await representative();
+		const staples = await sendsFrom(peer.network, 0, 2);
+		await addAll(peer.node, staples);
+		const late = await joiner();
+		const unweighted = lib.Account.fromSeed('0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0', 0);
+		late.node.config.manualPeers = [verifiedPeer(unweighted, 0, peer.apiURL)];
+		expect(await heldBlocksHashes(late.node)).toEqual([]);
+
+		expect(await bootstrapSources(late.node)).toEqual([peer.apiURL]);
+		expect(await clientOf(late.node).update()).toEqual({ complete: true });
+
+		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([peer.network.genesis, ...staples]));
+	});
+
 	test('stops bootstrapping before it stops its switch', async function() {
 		const running = await representative();
 		const client = bootstrapOf(running.node);
@@ -586,8 +601,8 @@ function apiOf(port: number): string {
 }
 
 /** A representative as the switch lists it once verified; choosing whom to bootstrap from reads no signature. */
-function verifiedPeer(key: Account, port: number): P2PPeer {
-	return({ kind: lib.Node.Kind.REPRESENTATIVE, key, endpoints: { p2p: `ws://127.0.0.1:${String(port)}/p2p`, api: apiOf(port) }, preferUpdates: 'websocket', signature: new ArrayBuffer(64) });
+function verifiedPeer(key: Account, port: number, api: string = apiOf(port)): P2PPeer {
+	return({ kind: lib.Node.Kind.REPRESENTATIVE, key, endpoints: { p2p: `ws://127.0.0.1:${String(port)}/p2p`, api }, preferUpdates: 'websocket', signature: new ArrayBuffer(64) });
 }
 
 async function cursorOf(kv: KVStorageProvider | null | undefined, endpoint: string): Promise<number> {
