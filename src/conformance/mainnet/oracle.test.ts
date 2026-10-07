@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, test } from 'vitest';
 import { stateDumpViolations } from '../schema.js';
 import { STATE_DUMP_FORMAT, firstDifference } from './dump.js';
-import type { StateDumpKind } from './dump.js';
+import type { LineDifference, StateDumpKind } from './dump.js';
 
 /*
  * conformance/mainnet/head.rust-mirror.jsonl is the state that a second,
@@ -49,6 +49,23 @@ function restrictedToComparedKinds(dump: string): string {
 	return([format, ...records, ''].join('\n'));
 }
 
+/*
+ * Nothing here regenerates the second implementation's file, so a difference
+ * after a deliberate change to the golden state is a disagreement to resolve
+ * on that implementation's side, never by editing its file.
+ */
+function disagreement(difference: LineDifference | null): string {
+	if (difference === null) {
+		return('');
+	}
+	return([
+		`conformance/mainnet/head.rust-mirror.jsonl differs from head.state.jsonl at line ${String(difference.line)}.`,
+		'That file is a second, independent implementation\'s dump (conformance/MAINNET.md section 8), and make conformance does not regenerate it.',
+		'If head.state.jsonl changed on purpose, the shown line is an open disagreement between the two implementations until that implementation\'s maintainers regenerate and commit their dump.',
+		'Do not edit or delete the file to make this pass.'
+	].join(' '));
+}
+
 async function read(file: URL): Promise<string> {
 	return(await readFile(file, 'utf8'));
 }
@@ -56,8 +73,9 @@ async function read(file: URL): Promise<string> {
 describe('the mainnet head state of a second, independent implementation', function() {
 	test('equals the golden state, restricted to the kinds it models, byte for byte', async function() {
 		const [golden, second] = await Promise.all([read(GOLDEN_FILE), read(SECOND_IMPLEMENTATION_FILE)]);
+		const difference = firstDifference(restrictedToComparedKinds(golden), second);
 
-		expect(firstDifference(restrictedToComparedKinds(golden), second)).toBeNull();
+		expect(difference, disagreement(difference)).toBeNull();
 	});
 
 	test('is a state dump of only the kinds it models, each line valid under the schema', async function() {
