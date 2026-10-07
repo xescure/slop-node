@@ -10,3 +10,4 @@ node_modules/
 CLAUDE.md
 .claude/
 .superpowers/
+utils/__pycache__/
