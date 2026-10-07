@@ -63,6 +63,12 @@ export type LiveTraffic = {
 
 type LiveState = LiveTraffic & { readonly since: number; made: number };
 
+/** Staples a peer commits after it has served pages from their moments: so many at each request, at moments up to that long before. */
+export type LateCommits = {
+	readonly perRequest: number;
+	readonly within: number;
+};
+
 export type SimulatedPeerOptions = {
 	/** How far the peer's clock runs ahead of the node's, negative when behind. */
 	readonly clockOffset?: number;
@@ -75,6 +81,15 @@ export type SimulatedPeerOptions = {
 	 */
 	readonly answersAtMost?: number;
 };
+
+/** A deterministic source of numbers below 1, so that a scenario runs the same each time. */
+export function deterministicRandom(seed: number): () => number {
+	let state = seed;
+	return(function(): number {
+		state = (state * 48271) % 2147483647;
+		return(state / 2147483647);
+	});
+}
 
 /**
  * A representative answering bootstrap pages as this node's API does: the
@@ -91,9 +106,11 @@ export class SimulatedPeer {
 	readonly #latency: number;
 	readonly #answersAtMost: number;
 	readonly #filters = new Map<string, BloomFilter>();
+	readonly #random = deterministicRandom(7);
 	#nextID = 0;
 	#nextSequence = 0;
 	#live: LiveState | undefined;
+	#lateCommits: LateCommits | undefined;
 	#forcedFalsePositive: number | undefined;
 	#requests = 0;
 
@@ -133,6 +150,11 @@ export class SimulatedPeer {
 		return(simulatedStaple(staple.id, staple.moment, staple.sequence, staple.timestamp().getTime(), 1));
 	}
 
+	/** Commits staples late at every request from now on, until stopped. */
+	commitLate(late: LateCommits | undefined): void {
+		this.#lateCommits = late;
+	}
+
 	/** Applies staples as they are made from now on, as a representative that is live does, until stopped. */
 	goLive(traffic: LiveTraffic): void {
 		this.#live = { ...traffic, since: Date.now(), made: 0 };
@@ -154,6 +176,7 @@ export class SimulatedPeer {
 		this.#requests++;
 		advanceClock(this.#latency);
 		this.#catchUpLive();
+		this.#commitLate();
 		const filter = this.#filterOf(request.bloomFilter);
 		const start = request.start.getTime();
 		const staples: SimulatedStaple[] = [];
@@ -203,6 +226,17 @@ export class SimulatedPeer {
 			}
 		}
 		return(low);
+	}
+
+	#commitLate(): void {
+		const late = this.#lateCommits;
+		if (late === undefined) {
+			return;
+		}
+		for (let count = 0; count < late.perRequest; count++) {
+			const moment = this.now() - Math.ceil(this.#random() * late.within);
+			this.apply(moment, moment);
+		}
 	}
 
 	/** Applies the staples made since the last request, each at the real time it was made. */

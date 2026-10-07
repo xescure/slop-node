@@ -4,6 +4,7 @@ import type { LiveTraffic, SimulatedPeerOptions, SimulatedStaple } from '../test
 import { advanceClock, freezeClock } from '../testing/network.js';
 import { DEEP_SCAN_PERIOD_MILLISECONDS, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, bootstrapPeer } from './bootstrap-pass.js';
 import type { PassOutcome, PeerIO, PeerOutcome, PeerProgress } from './bootstrap-pass.js';
+import { BLOOM_CAPACITY } from './bootstrap-window.js';
 
 /*
  * Catch-ups against a simulated representative that pages and filters as
@@ -240,6 +241,89 @@ describe('bootstrapping against a simulated peer', { timeout: 120_000 }, functio
 		scenario.expectEveryUpdateBounded();
 	});
 
+	test.each([['caps the limit', 400], ['runs out of time for a request', 100]])('holds every staple of a peer that %s, whose pages come back short', async function(_ignored: string, answersAtMost: number) {
+		freezeClock(new Date(NOW));
+		const scenario = new Scenario({ answersAtMost });
+		liveHistory(scenario.peer, 20_000, 100, NOW - HOUR);
+
+		await scenario.untilComplete(10);
+
+		expect(scenario.missing()).toEqual([]);
+		scenario.expectEveryUpdateBounded();
+	});
+
+	test('holds every staple of a peer that holds blocks the node holds with other votes', async function() {
+		freezeClock(new Date(NOW));
+		const scenario = new Scenario();
+		liveHistory(scenario.peer, 3000, 10, NOW - HOUR);
+		for (const staple of scenario.peer.staples.slice(1000, 1100)) {
+			await scenario.node.add(scenario.peer.otherVotesOn(staple));
+		}
+
+		await scenario.untilComplete(5);
+
+		expect(scenario.missing()).toEqual([]);
+		expect(scenario.updates.map(function(update): string {
+			return(update.outcome.live.kind);
+		})).toEqual(['drained']);
+	});
+
+	test('holds every staple of a peer that applied more at one moment than a filter and a page hold, as one releasing deferred staples does', async function() {
+		freezeClock(new Date(NOW));
+		const scenario = new Scenario();
+		const burst = BLOOM_CAPACITY + LIMIT + 800;
+		liveHistory(scenario.peer, 1000, 10, NOW - 2 * HOUR);
+		for (let index = 0; index < burst; index++) {
+			scenario.peer.apply(NOW - 3 * HOUR + index, NOW - HOUR);
+		}
+		liveHistory(scenario.peer, 1000, 10, NOW);
+
+		await scenario.untilComplete(5);
+
+		expect(scenario.missing()).toEqual([]);
+		scenario.expectEveryUpdateBounded();
+	});
+
+	/*
+	 * A peer commits staples at moments the passes have read past: within the
+	 * margin, which the next pass reads again, or further back, which only a
+	 * deep re-scan reads.
+	 */
+	describe('against a peer that commits staples late', function() {
+		async function lateCommitting(within: number): Promise<Scenario> {
+			const scenario = new Scenario();
+			liveHistory(scenario.peer, 20_000, 100, NOW);
+			scenario.peer.goLive(steady(100));
+			scenario.peer.commitLate({ perRequest: 5, within });
+			await scenario.update();
+			await scenario.periodically(3 * PERIOD);
+			scenario.peer.stopLive();
+			scenario.peer.commitLate(undefined);
+			await scenario.periodically(PERIOD);
+			return(scenario);
+		}
+
+		test('holds, once the next pass has read the margin again, every staple committed up to 55 s late', async function() {
+			freezeClock(new Date(NOW));
+
+			const scenario = await lateCommitting(55 * SECOND);
+
+			expect(scenario.missing()).toEqual([]);
+			scenario.expectEveryUpdateBounded();
+		});
+
+		test('holds, once a deep re-scan has read the peer again, every staple committed up to 20 min late', async function() {
+			freezeClock(new Date(NOW));
+
+			const scenario = await lateCommitting(20 * MINUTE);
+
+			expect((await scenario.untilDeepScans(1)).length).toBeGreaterThan(0);
+			expect(scenario.missing()).toEqual([]);
+			expect(scenario.deepScans().every(completes)).toBe(true);
+			scenario.expectEveryUpdateBounded();
+		});
+	});
+
 	test('recovers, with the deep re-scan, a staple a filter named by mistake during the catch-up', async function() {
 		freezeClock(new Date(NOW));
 		const scenario = new Scenario();
@@ -254,6 +338,25 @@ describe('bootstrapping against a simulated peer', { timeout: 120_000 }, functio
 		expect(await scenario.untilDeepScans(1)).toEqual([unlucky?.id]);
 		expect(scenario.missing()).toEqual([]);
 		expect(scenario.deepScans()).toEqual([{ kind: 'drained' }]);
+		scenario.expectEveryUpdateBounded();
+	});
+
+	test('recovers, with the next deep re-scan, a staple committed later than the margin that the first deep re-scan\'s filter named by mistake', async function() {
+		freezeClock(new Date(NOW));
+		const scenario = new Scenario();
+		liveHistory(scenario.peer, 3000, 10, NOW);
+		await scenario.untilComplete(1);
+		await scenario.periodically(2 * PERIOD);
+		const late = scenario.peer.apply(Date.now() - 20 * MINUTE, Date.now() - 20 * MINUTE);
+		scenario.peer.forceFalsePositive(late);
+
+		expect(await scenario.untilDeepScans(1)).toEqual([late.id]);
+		expect(scenario.missing()).toEqual([late.id]);
+		scenario.peer.forceFalsePositive(undefined);
+
+		expect(await scenario.untilDeepScans(2)).toEqual([late.id]);
+		expect(scenario.missing()).toEqual([]);
+		expect(scenario.deepScans().every(completes)).toBe(true);
 		scenario.expectEveryUpdateBounded();
 	});
 });
