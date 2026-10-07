@@ -114,7 +114,7 @@ After the head, the same replay adds the 90 staples of `mainnet/edge-cases.jsonl
 | `deferred` | 89 |
 | `refused` | 0 |
 
-No staple is refused. `Ledger.add` checks a staple's voting weight before anything is deferred [Keeta TS] index.js:69397-69405, so every edge case carries enough weight for the head's representatives. Each one decodes and verifies, including the sends to recipients that are not points on the curve and the blocks of the all-zero account.
+No staple is refused. `Ledger.add` checks a staple's voting weight before it defers anything [Keeta TS] index.js:69397-69405, and every edge case passes that check. Each one decodes and verifies, including the sends to recipients that are not points on the curve and the blocks of the all-zero account.
 
 Of the deferred staples, 13 wait only on blocks that are in neither file, from the history between the head and the edge cases. The other 76 wait only on blocks of other edge-case staples, which are themselves deferred.
 
@@ -129,3 +129,19 @@ The file is a dump in format `slop-node/state-dump@1` (`STATE-DUMP.md`) with eve
 Its model differs from the format in two places, and the values are converted. It counts an account's opening block as height 1, so a head's height is its own minus one. It keeps a representative for every account, so an account whose key type cannot delegate is written with none, as `STATE-DUMP.md` section 3.1 requires; no account of the set needed it.
 
 The file equals `mainnet/head.state.jsonl` without its `idempotent` records, byte for byte. `make test` checks that equality and the file's validity under the schema from the committed files; it does not build or run the second implementation.
+
+`make conformance` does not regenerate the file. When `mainnet/head.state.jsonl` changes on purpose, a line where the two files then differ is an open disagreement between the two implementations, and it stays one until that implementation's maintainers regenerate and commit their dump. The file is never edited or deleted to make the check pass.
+
+## 9. What the replay shows
+
+The replay shows three things about the head file:
+
+- **Following.** Every staple applies and none stays deferred. A ledger on the in-memory driver and one on the Postgres driver end in byte-identical state, and that state, the ledger checksum included, equals `mainnet/head.state.jsonl`.
+- **Voting.** The 0.18.7 ledger votes for every staple except 466, and each of those has one named reason (section 6). The 465 of `self-requirement-return` are refused because of the change between 0.18.4 and 0.18.7 that section 6.1 cites; the genesis staple is refused by a ledger of either version, because no representative voted on it (section 6.3).
+- **A second implementation.** The independent implementation of section 8 reaches the same state for every record kind except `idempotent`, which it does not store.
+
+It does not show:
+
+- **Agreement with a live node.** No state of the replay was compared with what a mainnet representative serves.
+- **Agreement with the network's checksum.** The checksum was not checked against the network, and it cannot be: it is the XOR over the blocks of the head file, a prefix of the chain, while a representative serves the checksum of its own ledger, which holds the whole chain (`STATE-DUMP.md` section 3.5).
+- **Anything after the head,** except the 90 edge cases of section 7. Their outcomes are pinned, but 89 of them are deferred, so the state they reach on a ledger that holds the history between is not compared.

@@ -127,7 +127,7 @@ One record for each certificate that `getAccountCertificates` returns for an acc
 
 Exactly one record: the node's ledger checksum, the XOR of the hash of every block of every staple the ledger applied. `Ledger.add` folds in the staples it applies [Keeta TS] index.js:69413-69417, and a driver folds in the staples that gc applies (`CONTRACT.md` section 2.6). It is not read from storage: a node's statistics hold it, and the producer writes the value it was given.
 
-A representative serves the same value at `GET /node/ledger/checksum`, as the `checksum` field (`api/node.d.ts` lines 49-53 of the package). Its JSON encoding of a `bigint` is `"0x"` followed by uppercase hex without leading zeros [Keeta TS] index.js:78411-78434, 78476, so the two spellings differ while the values agree. They are compared as numbers: `BigInt(served) === BigInt('0x' + ledgerChecksum)`.
+A representative serves the checksum of its own ledger at `GET /node/ledger/checksum`, as the `checksum` field (`api/node.d.ts` lines 49-53 of the package). That value equals this record only for a ledger that applied exactly the staples the dump was produced from. Its JSON encoding of a `bigint` is `"0x"` followed by uppercase hex without leading zeros [Keeta TS] index.js:78411-78434, 78476, so even equal values are spelled differently. They are compared as numbers: `BigInt(served) === BigInt('0x' + ledgerChecksum)`.
 
 ### 3.6 `head`
 
