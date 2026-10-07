@@ -10,3 +10,7 @@ export { MigrationError, SCHEMA_MIGRATIONS, applyMigrations } from './ledger/sto
 export type { MigrationProblem, SchemaVersion } from './ledger/storage/postgres/migrations.js';
 export { DEFAULT_POOL_OPTIONS } from './ledger/storage/postgres/pool.js';
 export type { PostgresPoolOptions, PostgresPoolSource } from './ledger/storage/postgres/pool.js';
+export { LocalNodeError } from './node/errors.js';
+export type { LocalNodeProblem } from './node/errors.js';
+export { LocalNode } from './node/local.js';
+export type { ApiErrorResponse, LocalNodeConfig } from './node/local.js';

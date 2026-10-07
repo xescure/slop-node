@@ -206,6 +206,17 @@ export function pathParameters(route: Route, path: string): Readonly<Record<stri
 	return(parameters);
 }
 
+/** How the document writes a path the node routes below its prefix, with each ":name" parameter as "{name}". */
+export function documentPathOf(routedPath: string): string {
+	const segments = routedPath.split('/').map(function(segment): string {
+		if (segment.startsWith(':')) {
+			return(`{${segment.slice(1)}}`);
+		}
+		return(segment);
+	});
+	return(`${API_BASE}${segments.join('/')}`);
+}
+
 /** The routes an OpenAPI document describes, from its operations under "paths". */
 export function documentRoutes(document: unknown): readonly Route[] {
 	if (!isRecord(document) || !isRecord(document['paths'])) {

@@ -106,7 +106,11 @@ const DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS = 5000;
 // Upstream's gc loop checks its time budget only between batches, so a batch stays small.
 const GC_BATCH_LIMIT = 100;
 
-const LEDGER_CHECKSUM_KEY = 'ledgerChecksum';
+/**
+ * The node statistic upstream's ledger folds every applied block's hash into
+ * by XOR [Keeta TS] index.js:69415.
+ */
+export const LEDGER_CHECKSUM_KEY = 'ledgerChecksum';
 
 const LOG_SOURCE = 'ledger';
 

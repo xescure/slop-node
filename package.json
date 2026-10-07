@@ -12,10 +12,12 @@
 	},
 	"dependencies": {
 		"@keetanetwork/keetanet-client": "0.18.7",
+		"express": "5.2.1",
 		"pg": "8.23.1"
 	},
 	"devDependencies": {
 		"@eslint/js": "9.39.5",
+		"@types/express": "5.0.6",
 		"@types/node": "24.19.1",
 		"@types/pg": "8.23.1",
 		"ajv": "8.20.0",

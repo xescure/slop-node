@@ -76,6 +76,8 @@ export type TestLedgerFactory = {
 	createLedger(storageDriver: LedgerStorageAPI, representative: Account, options?: TestLedgerOptions): Ledger;
 	/** A ledger of a node that is not a representative: it holds no key, so it can never vote. */
 	createAccountLedger(storageDriver: LedgerStorageAPI, options?: TestLedgerOptions): Ledger;
+	/** The configuration createNode builds its node from, for nodes of other classes. */
+	nodeConfig(storageDriver: LedgerStorageAPI, representative: Account, options?: TestLedgerOptions): NodeConfig;
 	/**
 	 * A representative node that owns its ledger, so the ledger records the
 	 * statistics that upstream gathers only when a node is attached.
@@ -301,6 +303,20 @@ export function createTestLedgerFactory(trustedRoot: Account): TestLedgerFactory
 		}
 		return(config);
 	}
+	function nodeConfig(storageDriver: LedgerStorageAPI, representative: Account, ledgerOptions: TestLedgerOptions = {}): NodeConfig {
+		// Peers are never connected, so the node only ever talks to its own ledger.
+		return({
+			kind: lib.Node.Kind.REPRESENTATIVE,
+			// A log without targets discards everything.
+			log: new lib.Log(),
+			initialTrustedAccount: trustedRoot,
+			ledgerPrivateKey: representative,
+			network: NETWORK,
+			networkAlias: 'test',
+			ledger: ledgerSettings(storageDriver, ledgerOptions),
+			stats: { kv: null }
+		});
+	}
 	return({
 		createLedger(storageDriver, representative, ledgerOptions = {}) {
 			return(new lib.Ledger({ ...ledgerConfig(storageDriver, ledgerOptions), kind: lib.Ledger.Kind.REPRESENTATIVE, privateKey: representative }));
@@ -308,19 +324,9 @@ export function createTestLedgerFactory(trustedRoot: Account): TestLedgerFactory
 		createAccountLedger(storageDriver, ledgerOptions = {}) {
 			return(new lib.Ledger(ledgerConfig(storageDriver, ledgerOptions)));
 		},
+		nodeConfig,
 		createNode(storageDriver, representative, ledgerOptions = {}) {
-			// Peers are never connected, so the node only ever talks to its own ledger.
-			return(new lib.Node({
-				kind: lib.Node.Kind.REPRESENTATIVE,
-				// A log without targets discards everything.
-				log: new lib.Log(),
-				initialTrustedAccount: trustedRoot,
-				ledgerPrivateKey: representative,
-				network: NETWORK,
-				networkAlias: 'test',
-				ledger: ledgerSettings(storageDriver, ledgerOptions),
-				stats: { kv: null }
-			}));
+			return(new lib.Node(nodeConfig(storageDriver, representative, ledgerOptions)));
 		}
 	});
 }

@@ -32,6 +32,13 @@ describe('the built package', function() {
 		expect(built.DEFAULT_POOL_OPTIONS).toMatchObject({ keepAlive: true });
 	});
 
+	test('exports the node and its error', async function() {
+		const built = await importBuiltEntry();
+
+		expect(built.LocalNode).toBeTypeOf('function');
+		expect(built.LocalNodeError).toBeTypeOf('function');
+	});
+
 	test('migrates a fresh database from the migrations at the package root', async function() {
 		const built = await importBuiltEntry();
 		const database = await createDatabase(inject('postgresCluster'));

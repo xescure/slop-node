@@ -5,3 +5,6 @@
 export function assertNever(value: never): never {
 	throw(new Error(`unexpected value: ${String(value)}`));
 }
+
+/** Type-checks only when the type is never: each member of a union it is given names a mismatch. */
+export type AssertNever<T extends never> = T;
