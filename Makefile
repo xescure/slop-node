@@ -116,7 +116,7 @@ test: dist/.done build/utils/.done | $(filter conformance,$(MAKECMDGOALS))
 # after the head, so all are regenerated rather than edited; "make test" then
 # checks they are current.
 conformance: node_modules/.patched
-	SLOP_NODE_UPDATE_CONFORMANCE=1 npm run vitest -- run --config .vitest.config.js src/conformance/corpus.test.ts src/conformance/mainnet/head.test.ts
+	SLOP_NODE_UPDATE_CONFORMANCE=1 npm run vitest -- run --config .vitest.config.js src/conformance/corpus.test.ts src/conformance/mainnet/head.memory.test.ts
 
 # git grep exits 1 when nothing matches and 128 when it fails, and only the
 # first means the tree is clean.

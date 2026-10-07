@@ -357,7 +357,7 @@ getBalance: (transaction: any, account: GenericAccount, token: TokenAddress) => 
 getAllBalances: (transaction: any, account: GenericAccount) => Promise<GetAllBalancesResponse>;
 ```
 
-- **Semantics.** One `{ token, balance }` entry per token with a non-zero stored balance on the account, or `[]` for an account with none. Zero balances are omitted (provisional: confirmed by the live parity checks), including a balance that was non-zero and was spent back to zero. Tested by `src/conformance/mainnet/head.test.ts: "an account that sent all of a token away has a zero balance of it, and getAllBalances omits it"`, where the replayed mainnet head brings stored balances back to zero.
+- **Semantics.** One `{ token, balance }` entry per token with a non-zero stored balance on the account, or `[]` for an account with none. Zero balances are omitted (provisional: confirmed by the live parity checks), including a balance that was non-zero and was spent back to zero. Tested by `src/conformance/mainnet/head-replay.ts: "an account that sent all of a token away has a zero balance of it, and getAllBalances omits it"`, where the replayed mainnet head brings stored balances back to zero.
 - **Selector.** Main only.
 - **Ordering.** Unspecified.
 - **Tested by** `genesis.ts: "genesis state reads back"`, `confirmed.ts: "send moves balances and credits the receiver"` and `confirmed.ts: "token creation, supply and token-account balances"`.
@@ -1172,7 +1172,7 @@ The catch-up key of a main staple is the moment this node applied it, which is t
 ### D9. Balances and weights are stored values
 
 - Balances and weights are returned as stored, without clamping, negative values included.
-- `getAllBalances` omits zero balances (provisional: confirmed by the live parity checks), including balances spent back to zero. Tested by `src/conformance/mainnet/head.test.ts: "an account that sent all of a token away has a zero balance of it, and getAllBalances omits it"`.
+- `getAllBalances` omits zero balances (provisional: confirmed by the live parity checks), including balances spent back to zero. Tested by `src/conformance/mainnet/head-replay.ts: "an account that sent all of a token away has a zero balance of it, and getAllBalances omits it"`.
 - `getAccountInfo` never returns `null`. Only the vote cases T1 and T7 test it for an account with no stored info (see `getAccountInfo`).
 
 **Reason.**
