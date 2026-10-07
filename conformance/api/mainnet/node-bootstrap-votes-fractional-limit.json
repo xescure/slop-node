@@ -1,0 +1,385 @@
+{
+  "body": {
+    "voteStaples": [
+      {
+        "$binary": "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",
+        "blocks": [
+          {
+            "$hash": "D6650E58AA2442F22E4A90020DA8BF829BC7787099F7B65741CE5E2162B4B53B",
+            "$opening": false,
+            "account": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+            "date": "2025-09-23T05:35:52.094Z",
+            "network": "0x5382",
+            "operations": [
+              {
+                "amount": "0xAE80D59D05A97C00",
+                "method": 0,
+                "type": 5
+              },
+              {
+                "amount": "0xAE80D59D05A97C00",
+                "to": "keeta_aqltdal4rshtky5iehd765y3mdjkcmku5d4ulo5fgonzqrxulwepnogq33mle",
+                "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                "type": 0
+              }
+            ],
+            "previous": "D5BB8756CC5F6A6A715A2626B6C374C3A823439D897FCF2BBF258D49C3D62DDF",
+            "purpose": 0,
+            "signatures": [
+              "3043E8B5BF39A8A9461D37DA01C50320D1ACA3355F3AD1A54A42047A805103402325F46BFFC91CBC4C9AA290C03CD7BCB52405C9725D7A0FBB32565325200638",
+              "0BF265A00E29E149A38B381F21B483DC90508ED003F3D38A72448B473B6C177B520109D6F6FE3A7C548AB16A643A79ABD9BC15781D64DED3AB30180A4C8D0513",
+              "1F9A74896952F6F32E4D8E055F5490AC34670284840D099FA5251A3B73CDF4FA3C25701AC249326B2C4F5F0B695290A621B40C4DCFCBC50152BEAF2CAEE5073A"
+            ],
+            "signer": [
+              "keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm",
+              [
+                "keeta_aabz6thqrfrudjy4afvdtatkix35yeawz2q6dkq5gquvw2q4h55uzmhq6cdyaha",
+                "keeta_aabv2543ohbw7jysb5z3ji7xbnnl6a63e55lnvej4k3ggv7o4o4x4po5mchj5uy",
+                "keeta_aabfxxk7j72rsxzew5tthmg35ffxcf3k76xyr5fvvq7mkg6le4lmxibrdkvqn5y"
+              ]
+            ],
+            "version": 2
+          },
+          {
+            "$hash": "812F3FD0AAC840D60D999037BFDA1BB78917E173D4FCC06EB90986A105D695E6",
+            "$opening": false,
+            "account": "keeta_aqltdal4rshtky5iehd765y3mdjkcmku5d4ulo5fgonzqrxulwepnogq33mle",
+            "date": "2025-09-23T05:35:52.186Z",
+            "network": "0x5382",
+            "operations": [
+              {
+                "amount": "0x23B9B2987BC17C00",
+                "to": "keeta_aablvoi7oaslnfqqub32sghnn532ruuz6mc7cpai4pldm3lq7pvidlbum6vnwdy",
+                "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                "type": 0
+              },
+              {
+                "amount": "0x8AC7230489E80000",
+                "to": "keeta_aabxln76zcx2lw7cu3lzl6znuwfhenot3q3zhpgeigfbimepd2xzdxb4ynt7pjy",
+                "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+                "type": 0
+              }
+            ],
+            "previous": "8717B079195C6781CFB8C90DAF22898019AD8ADA2C50A3FFD15CC89486A4D3CA",
+            "purpose": 0,
+            "signatures": [
+              "EB875ED744D7E18E78F2BD97CAFEEE2598159C30B1A86B7F21893BFDEABC98FB28B024D7109EB2E954B13F432B213466949A1AE85A6FCA7BE19D2C296FAC58F4",
+              "E099D92459AF971B5CF7E333B18710F0A9CCC67FDFA8133024555C6E805D70725E5673741BF9E4CEED41133953D6C4AA115C99F0BA743FC77C20F4C465B61794",
+              "E50550ADC2F76DE4B4BEF44187F63BDEF81F3292FA89F9407AB4F93BE9A908F7313BC42E881317FEA40692B369E194B173229A4A0B4C0A4A902939E66C83D9D9"
+            ],
+            "signer": [
+              "keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm",
+              [
+                "keeta_aabz6thqrfrudjy4afvdtatkix35yeawz2q6dkq5gquvw2q4h55uzmhq6cdyaha",
+                "keeta_aabv2543ohbw7jysb5z3ji7xbnnl6a63e55lnvej4k3ggv7o4o4x4po5mchj5uy",
+                "keeta_aabfxxk7j72rsxzew5tthmg35ffxcf3k76xyr5fvvq7mkg6le4lmxibrdkvqn5y"
+              ]
+            ],
+            "version": 2
+          }
+        ],
+        "votes": [
+          {
+            "$id": "9F161AE04BB69EE39D3EB58688F6B17D29BF4260FB96EECA67CF430153BBBDEA",
+            "$permanent": true,
+            "$trusted": false,
+            "$uid": "ID=keeta_aablpogflko72eusdhuuqgsto2rwcvy2m5mo5snmvrmbacz3qczwjtwpmzf5ufq/Serial=384",
+            "blocks": [
+              "D6650E58AA2442F22E4A90020DA8BF829BC7787099F7B65741CE5E2162B4B53B",
+              "812F3FD0AAC840D60D999037BFDA1BB78917E173D4FCC06EB90986A105D695E6"
+            ],
+            "issuer": "keeta_aablpogflko72eusdhuuqgsto2rwcvy2m5mo5snmvrmbacz3qczwjtwpmzf5ufq",
+            "serial": "0x180",
+            "signature": "3044022038D9FB0B92EE2097A586442D485CF7E011BCC59C32D81BCB65E25BBB587FB25202206C53467305ADC035B01513C3B4B9C76A0A7E79C5FAEE32D6DF1154D0EFB78DED",
+            "validityFrom": "2025-09-23T05:35:52.694Z",
+            "validityTo": "3026-01-31T00:00:00.000Z"
+          },
+          {
+            "$id": "87C77D0BDCC30E68DE7E988084B7AE3D0132885BD93AAC9BB6E37F21B47F5C77",
+            "$permanent": true,
+            "$trusted": false,
+            "$uid": "ID=keeta_aabwqf5fnta4t2v2atieis545b3rqoq6z7x5w3geugiilqlz5jdsb5og2rmxvdq/Serial=384",
+            "blocks": [
+              "D6650E58AA2442F22E4A90020DA8BF829BC7787099F7B65741CE5E2162B4B53B",
+              "812F3FD0AAC840D60D999037BFDA1BB78917E173D4FCC06EB90986A105D695E6"
+            ],
+            "issuer": "keeta_aabwqf5fnta4t2v2atieis545b3rqoq6z7x5w3geugiilqlz5jdsb5og2rmxvdq",
+            "serial": "0x180",
+            "signature": "304402202AD73212C41E99D82A1CD4BA9F9D1443BBFBDD10070EADB5BF1CD908EAF32E4F02202D838086D888267CCC938C2072E238007420622AC94EC8B49A804791108CFDBD",
+            "validityFrom": "2025-09-23T05:35:52.717Z",
+            "validityTo": "3026-01-31T00:00:00.000Z"
+          },
+          {
+            "$id": "1897C8B75AE47DC23395F770913A69DE8B5E05B147F3B739277603EBFE5A212A",
+            "$permanent": true,
+            "$trusted": false,
+            "$uid": "ID=keeta_aabvmwxttv4q56gbfveighwfwp3yvitlrdfsacic3ckqc7lqelsspvmhc7oldmq/Serial=384",
+            "blocks": [
+              "D6650E58AA2442F22E4A90020DA8BF829BC7787099F7B65741CE5E2162B4B53B",
+              "812F3FD0AAC840D60D999037BFDA1BB78917E173D4FCC06EB90986A105D695E6"
+            ],
+            "issuer": "keeta_aabvmwxttv4q56gbfveighwfwp3yvitlrdfsacic3ckqc7lqelsspvmhc7oldmq",
+            "serial": "0x180",
+            "signature": "304402201408EA0B48527FE92DC0AB045B7543F5BD47FD7279FD50181D515FEFCF111460022033E81FE299B10A18B97EDE5D194EF581D695AA043FA528EEC0FE656817CC650D",
+            "validityFrom": "2025-09-23T05:35:52.742Z",
+            "validityTo": "3026-01-31T00:00:00.000Z"
+          },
+          {
+            "$id": "22D273CF16150499C6C3F9E78FAC79176175FE3008A1936D5D9B4EF57953B91D",
+            "$permanent": true,
+            "$trusted": false,
+            "$uid": "ID=keeta_aabwip6zeo2fnzfxp5hssrrqtascs2277w2zk7vqd6d3k3m4dkt2flcbca2mqki/Serial=384",
+            "blocks": [
+              "D6650E58AA2442F22E4A90020DA8BF829BC7787099F7B65741CE5E2162B4B53B",
+              "812F3FD0AAC840D60D999037BFDA1BB78917E173D4FCC06EB90986A105D695E6"
+            ],
+            "issuer": "keeta_aabwip6zeo2fnzfxp5hssrrqtascs2277w2zk7vqd6d3k3m4dkt2flcbca2mqki",
+            "serial": "0x180",
+            "signature": "304402200B3139E5A6BFBE506A5C7F49D350AB2E64405B67E4C57C56E0E655F15382F6D002200D061B187A90ECCD5792FDEA5C1C377D5AF433FE04B53911712B7E4382F931F8",
+            "validityFrom": "2025-09-23T05:35:52.729Z",
+            "validityTo": "3026-01-31T00:00:00.000Z"
+          }
+        ]
+      },
+      {
+        "$binary": "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",
+        "blocks": [
+          {
+            "$hash": "AC0C463CF31C0B70E85890E902A271178BCE1568906C1EA5DC4EE87C4A585A75",
+            "$opening": false,
+            "account": "keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai",
+            "date": "2025-09-23T04:25:44.877Z",
+            "network": "0x5382",
+            "operations": [
+              {
+                "identifier": "keeta_amnkge74xitii5dsobstldatv3irmyimujfjotftx7plaaaseam4bntb7wnna",
+                "type": 4
+              },
+              {
+                "identifier": "keeta_apblhar4ncp3ln62wrygsn73pt3houuvj7ic47aarnolpcu67oqn4xqcji3au",
+                "type": 4
+              },
+              {
+                "identifier": "keeta_apyez4az5r6shtblf3qtzirmikq3tghb5svrmmrltdkxgnnzzhlstby3cuscc",
+                "type": 4
+              }
+            ],
+            "previous": "7952E21FE0F4A9795F69406E6D2DEFB904A8A063AE7F5385B6D53D1E110E807E",
+            "purpose": 0,
+            "signature": "171E779113D21FD7854E8E1FB8E4B8285A3053BE86A4550D7B2602479E3D9BE1034E3851B2BCAEDEF0EF67CC1951ABBAC42C91888FA923CC03F1BFCE6EF5E059",
+            "signer": "keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai",
+            "version": 1
+          },
+          {
+            "$hash": "46825D8CEEB18E6FC4644B68D329584027EEC030EF58CD58A57FD1C076A77713",
+            "$opening": true,
+            "account": "keeta_amnkge74xitii5dsobstldatv3irmyimujfjotftx7plaaaseam4bntb7wnna",
+            "date": "2025-09-23T04:25:44.957Z",
+            "network": "0x5382",
+            "operations": [
+              {
+                "defaultPermission": [
+                  "0x1",
+                  "0x0"
+                ],
+                "description": "USD Coin",
+                "metadata": "eyJkZWNpbWFsUGxhY2VzIjo2fQ==",
+                "name": "USDC",
+                "type": 2
+              },
+              {
+                "method": 2,
+                "permissions": [
+                  "0x3",
+                  "0x0"
+                ],
+                "principal": "keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai",
+                "type": 3
+              },
+              {
+                "method": 2,
+                "permissions": [
+                  "0x5",
+                  "0x0"
+                ],
+                "principal": "keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm",
+                "type": 3
+              }
+            ],
+            "previous": "C428C7DEA907CA40338BE12A38B04E5EACFE5CFF7A982D486CE4C74FB093C47F",
+            "purpose": 0,
+            "signature": "D015683752A4F2658CFF94FD316B5614C6D73439372B689011F90C00C7B4BE700C8205296277F687274A5C2AEE200C5585FC1485985861E1BC51639A088E1096",
+            "signer": "keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai",
+            "version": 1
+          },
+          {
+            "$hash": "8B6259BE541B4F75849AB4BA7B288B07193D3D77D818F5E6A2CEB730353A903C",
+            "$opening": true,
+            "account": "keeta_apblhar4ncp3ln62wrygsn73pt3houuvj7ic47aarnolpcu67oqn4xqcji3au",
+            "date": "2025-09-23T04:25:45.034Z",
+            "network": "0x5382",
+            "operations": [
+              {
+                "defaultPermission": [
+                  "0x1",
+                  "0x0"
+                ],
+                "description": "EUR Coin",
+                "metadata": "eyJkZWNpbWFsUGxhY2VzIjo2fQ==",
+                "name": "EURC",
+                "type": 2
+              },
+              {
+                "method": 2,
+                "permissions": [
+                  "0x3",
+                  "0x0"
+                ],
+                "principal": "keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai",
+                "type": 3
+              },
+              {
+                "method": 2,
+                "permissions": [
+                  "0x5",
+                  "0x0"
+                ],
+                "principal": "keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm",
+                "type": 3
+              }
+            ],
+            "previous": "E92D0ADA2A971FB13029AE0402B589617AB16983463A332D6D18D3BE05F187D8",
+            "purpose": 0,
+            "signature": "585C5204C6DB9C7911EA676DED033BF40D676C98B5B64BF0D738284847239D6228E3CD72D5FC5832BC3F6729F62F50AD5921DC9EDE3A4A7AA84390880AD95851",
+            "signer": "keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai",
+            "version": 1
+          },
+          {
+            "$hash": "87083ACCED485DCB91A43FAD2B547902D15F486C37E562275FD4C0C63831DC37",
+            "$opening": true,
+            "account": "keeta_apyez4az5r6shtblf3qtzirmikq3tghb5svrmmrltdkxgnnzzhlstby3cuscc",
+            "date": "2025-09-23T04:25:45.145Z",
+            "network": "0x5382",
+            "operations": [
+              {
+                "defaultPermission": [
+                  "0x1",
+                  "0x0"
+                ],
+                "description": "Coinbase Bitcoin",
+                "metadata": "eyJkZWNpbWFsUGxhY2VzIjo4fQ==",
+                "name": "CBBTC",
+                "type": 2
+              },
+              {
+                "method": 2,
+                "permissions": [
+                  "0x3",
+                  "0x0"
+                ],
+                "principal": "keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai",
+                "type": 3
+              },
+              {
+                "method": 2,
+                "permissions": [
+                  "0x5",
+                  "0x0"
+                ],
+                "principal": "keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw4vvqm",
+                "type": 3
+              }
+            ],
+            "previous": "823C916A949A36C0FD29DC15A2022D4DC94444FB1885F2C044D1434FFEB3D853",
+            "purpose": 0,
+            "signature": "B44D56D2F32EAF67F72A557483DD42F559B993AECBBE83172B1FAE1AF2BDAEDB67D88CF9A930FE90A283A1852C1B577A50A65796FA7E928050CA1861161CAA5D",
+            "signer": "keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai",
+            "version": 1
+          }
+        ],
+        "votes": [
+          {
+            "$id": "7AA41002DF94AE74D41300EE74568C88644DF90C818F525BBF23F63392F4BF83",
+            "$permanent": true,
+            "$trusted": false,
+            "$uid": "ID=keeta_aabvmwxttv4q56gbfveighwfwp3yvitlrdfsacic3ckqc7lqelsspvmhc7oldmq/Serial=344",
+            "blocks": [
+              "AC0C463CF31C0B70E85890E902A271178BCE1568906C1EA5DC4EE87C4A585A75",
+              "46825D8CEEB18E6FC4644B68D329584027EEC030EF58CD58A57FD1C076A77713",
+              "8B6259BE541B4F75849AB4BA7B288B07193D3D77D818F5E6A2CEB730353A903C",
+              "87083ACCED485DCB91A43FAD2B547902D15F486C37E562275FD4C0C63831DC37"
+            ],
+            "issuer": "keeta_aabvmwxttv4q56gbfveighwfwp3yvitlrdfsacic3ckqc7lqelsspvmhc7oldmq",
+            "serial": "0x158",
+            "signature": "3044022078067A92B34B2AC0B9317281C0F1C79633BBC6A9007324139D6E3019D17A05010220260B2860B0B502CCDEF6A5C0023862FCE8754834428A83C2BDAF6899249259A9",
+            "validityFrom": "2025-09-23T04:25:45.803Z",
+            "validityTo": "3026-01-31T00:00:00.000Z"
+          },
+          {
+            "$id": "3BA3D2EE2F5545445ECEEA2B0B9E4BAF7FB089D5E5B42A2A11442F998635BDC4",
+            "$permanent": true,
+            "$trusted": false,
+            "$uid": "ID=keeta_aabwip6zeo2fnzfxp5hssrrqtascs2277w2zk7vqd6d3k3m4dkt2flcbca2mqki/Serial=344",
+            "blocks": [
+              "AC0C463CF31C0B70E85890E902A271178BCE1568906C1EA5DC4EE87C4A585A75",
+              "46825D8CEEB18E6FC4644B68D329584027EEC030EF58CD58A57FD1C076A77713",
+              "8B6259BE541B4F75849AB4BA7B288B07193D3D77D818F5E6A2CEB730353A903C",
+              "87083ACCED485DCB91A43FAD2B547902D15F486C37E562275FD4C0C63831DC37"
+            ],
+            "issuer": "keeta_aabwip6zeo2fnzfxp5hssrrqtascs2277w2zk7vqd6d3k3m4dkt2flcbca2mqki",
+            "serial": "0x158",
+            "signature": "3045022100F2F45F54CAE19BF44CFC45D30258C6D87F51093461DB361F8131DDCED2C1BDDD022055455BEA081D2EB6D068299A4D669696C819D6508D5EA39B8559B24DE3CB4501",
+            "validityFrom": "2025-09-23T04:25:45.799Z",
+            "validityTo": "3026-01-31T00:00:00.000Z"
+          },
+          {
+            "$id": "AD00E68588BC83B72170DC8BC5E3F7CCAE5A117700207D68015E2E08CE3C1481",
+            "$permanent": true,
+            "$trusted": false,
+            "$uid": "ID=keeta_aablpogflko72eusdhuuqgsto2rwcvy2m5mo5snmvrmbacz3qczwjtwpmzf5ufq/Serial=344",
+            "blocks": [
+              "AC0C463CF31C0B70E85890E902A271178BCE1568906C1EA5DC4EE87C4A585A75",
+              "46825D8CEEB18E6FC4644B68D329584027EEC030EF58CD58A57FD1C076A77713",
+              "8B6259BE541B4F75849AB4BA7B288B07193D3D77D818F5E6A2CEB730353A903C",
+              "87083ACCED485DCB91A43FAD2B547902D15F486C37E562275FD4C0C63831DC37"
+            ],
+            "issuer": "keeta_aablpogflko72eusdhuuqgsto2rwcvy2m5mo5snmvrmbacz3qczwjtwpmzf5ufq",
+            "serial": "0x158",
+            "signature": "304402200C23C2E303D39BAB74664C7B9C0B77A1FC7A567E1380CE5757F11B6801A74C110220196BD3D760ABAE8CE0088E885ED0D9C1FAAF613D01D84C7A7AC0995FFCD8B412",
+            "validityFrom": "2025-09-23T04:25:45.975Z",
+            "validityTo": "3026-01-31T00:00:00.000Z"
+          },
+          {
+            "$id": "4188E11953B00CA9098C8603430D8134E2D5516C675B7C8CA700CF890F28CF99",
+            "$permanent": true,
+            "$trusted": false,
+            "$uid": "ID=keeta_aabwqf5fnta4t2v2atieis545b3rqoq6z7x5w3geugiilqlz5jdsb5og2rmxvdq/Serial=344",
+            "blocks": [
+              "AC0C463CF31C0B70E85890E902A271178BCE1568906C1EA5DC4EE87C4A585A75",
+              "46825D8CEEB18E6FC4644B68D329584027EEC030EF58CD58A57FD1C076A77713",
+              "8B6259BE541B4F75849AB4BA7B288B07193D3D77D818F5E6A2CEB730353A903C",
+              "87083ACCED485DCB91A43FAD2B547902D15F486C37E562275FD4C0C63831DC37"
+            ],
+            "issuer": "keeta_aabwqf5fnta4t2v2atieis545b3rqoq6z7x5w3geugiilqlz5jdsb5og2rmxvdq",
+            "serial": "0x158",
+            "signature": "3045022100E888242C93ABEBA10332CBB10892163CAE46BF9E1BFF06A6D87C3E88212736370220070D62AB4D96D2CD437359DE0A2765B39EA103CC7E6FE0959DEE07906B3C131A",
+            "validityFrom": "2025-09-23T04:25:45.823Z",
+            "validityTo": "3026-01-31T00:00:00.000Z"
+          }
+        ]
+      }
+    ]
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/bootstrap/votes",
+    "query": {
+      "limit": "1.5",
+      "start": "1970-01-01T00:00:00.000Z"
+    }
+  },
+  "status": 200
+}

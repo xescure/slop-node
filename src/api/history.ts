@@ -13,9 +13,6 @@ export type HistoryPage = DeclaredResult<DeclaredLedgerGroup['history']['GET']>;
 /** A page holds 25 staples unless the request asks for fewer, or for more up to 200. */
 const HISTORY_LIMIT: LimitBounds = { defaultLimit: 25, maximum: 200 };
 
-/** One staple more than the page holds tells whether another page follows. */
-const LOOKAHEAD = 1;
-
 type HistoryEntry = HistoryPage['history'][number];
 
 /**
@@ -30,28 +27,25 @@ function historyEntry(staple: VoteStaple, representative: Parameters<VoteStaple[
 
 /**
  * A page of the history of an account, or of the whole ledger, newest first,
- * continuing after the staple named by start; nextKey names the page's last
- * staple when another page follows, and is null on the last page.
+ * continuing after the staple named by start. A page holds only whole
+ * staples, as many as the limit allows. nextKey names the page's last
+ * staple, or on an empty page the staple it continued after, as a
+ * representative answers; the client stops at an empty page
+ * [Keeta TS] index.js:58969-58996.
  * [node-lite] adapted from getAccountHistory.
  */
 export async function historyPage(request: APIRequest, account: GenericAccount | null, startText: string | undefined): Promise<HistoryPage> {
-	const limit = parseLimit(request.query, HISTORY_LIMIT);
+	const limit = Math.trunc(parseLimit(request.query, HISTORY_LIMIT));
 	let start: VoteBlockHash | null = null;
 	if (startText !== undefined) {
 		start = new lib.Vote.VoteBlocksHash(startText);
 	}
-	const staples = await request.node.ledger.getHistory(account, start, limit + LOOKAHEAD);
-	const page = staples.slice(0, limit);
+	const page = await request.node.ledger.getHistory(account, start, limit);
 	const representative = request.node.config.ledgerPrivateKey;
-	let nextKey: VoteBlockHash | null = null;
-	const last = page.at(-1);
-	if (staples.length > page.length && last !== undefined) {
-		nextKey = last.blocksHash;
-	}
 	return({
 		history: page.map(function(staple): HistoryEntry {
 			return(historyEntry(staple, representative));
 		}),
-		nextKey
+		nextKey: page.at(-1)?.blocksHash ?? start
 	});
 }

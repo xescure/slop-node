@@ -1,0 +1,18 @@
+{
+  "body": {
+    "error": true,
+    "message": "Internal error occurred (error ID: e86ebf2b-29a0-4dc7-863f-2a66b27d2d95)"
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/bootstrap/votes",
+    "query": {
+      "limit": "1",
+      "start": "yesterday"
+    }
+  },
+  "status": 500
+}

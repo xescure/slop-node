@@ -148,9 +148,11 @@ async function chainStart(ledger: LedgerReader, account: GenericAccount, start: 
 
 /**
  * A page of the account's chain, newest first, from the block named by start
- * (the head by default) down to, but not including, the block named by end.
- * nextKey is the block the next page starts from, and null once the chain or
- * the range is exhausted, as the client pages [Keeta TS] index.js:58868-58901.
+ * (the head by default) down to the block named by end, which it includes,
+ * holding blocks until their count reaches the limit. nextKey is the block
+ * the next page starts from, which may be end itself, and null once the
+ * chain or the range is exhausted, as a representative answers and the
+ * client pages [Keeta TS] index.js:58868-58901.
  * [node-lite] adapted from getAccountChain.
  */
 function getAccountChain(request: APIRequest, text: string): Promise<ChainPage> {
@@ -170,17 +172,11 @@ function getAccountChain(request: APIRequest, text: string): Promise<ChainPage> 
 	return(readLedger(request, 'account-chain', async function(ledger): Promise<ChainPage> {
 		const blocks: ChainPage['blocks'] = [];
 		for (let block = await chainStart(ledger, account, start); block !== null; block = await ledger.getBlock(block.previous, 'main')) {
-			if (end !== undefined && block.hash.compare(end)) {
-				break;
-			}
 			blocks.push({ block });
-			if (block.$opening) {
+			if (block.$opening || (end !== undefined && block.hash.compare(end))) {
 				break;
 			}
-			if (blocks.length === limit) {
-				if (end !== undefined && block.previous.compare(end)) {
-					break;
-				}
+			if (blocks.length >= limit) {
 				return({ account: accountText, blocks, nextKey: block.previous });
 			}
 		}

@@ -1,0 +1,18 @@
+{
+  "body": {
+    "history": [],
+    "nextKey": "8E007DDC76554D1BFE13E0A6AD38FD78E1505BAE3E420A9D82F2D34FCB1A6D85"
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/history",
+    "query": {
+      "limit": "2",
+      "start": "8E007DDC76554D1BFE13E0A6AD38FD78E1505BAE3E420A9D82F2D34FCB1A6D85"
+    }
+  },
+  "status": 200
+}

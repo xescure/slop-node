@@ -137,7 +137,9 @@ function parseBootstrapStart(text: string | undefined): Date {
 /**
  * The staples added to the ledger on or after the moment, leaving out those
  * the bloom filter says the client already holds; a page is empty once every
- * staple has been sent [Keeta TS] index.js:59140-59182, 69633-69700.
+ * staple has been sent [Keeta TS] index.js:59140-59182, 69633-69700. The
+ * ledger adds staples until their count reaches the limit, so a fractional
+ * limit holds one staple more than its whole part [Keeta TS] index.js:69639.
  * [node-lite] adapted from getVoteStaplesAfter.
  */
 async function getVoteStaplesAfter(request: APIRequest): Promise<DeclaredResult<DeclaredNodeGroup['bootstrap']['votes']['GET']>> {

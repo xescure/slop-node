@@ -1,0 +1,19 @@
+{
+  "body": {
+    "code": "API_INVALID_SIDE",
+    "error": true,
+    "message": "Invalid side: ",
+    "type": "API"
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/block/1C8C249A599545D70245D3ECD02C741AB0F4A09317D708C95C5416513EF61017",
+    "query": {
+      "side": ""
+    }
+  },
+  "status": 500
+}

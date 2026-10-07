@@ -36,10 +36,10 @@ export type LimitBounds = {
 
 /**
  * The limit a request asks for, within the bounds: absent, the default; above
- * the maximum, the maximum. Only the integer prefix counts, as parseInt reads
- * it: a representative answers limit=1.5 with one entry, and limit=1e3 asks
- * for one. A value without such a prefix, or not above zero, is refused with
- * the codes and messages a representative answers with.
+ * the maximum, the maximum. A representative reads the text as Number does,
+ * fraction and all: it refuses an empty limit as not above zero, and answers
+ * limit=1.5 with two blocks of a chain or two staples of a bootstrap, and
+ * with one staple of history. Each route applies the limit as it counts.
  * [node-lite] adapted from parseLimit.
  */
 export function parseLimit(query: APIRequest['query'], bounds: LimitBounds): number {
@@ -47,7 +47,7 @@ export function parseLimit(query: APIRequest['query'], bounds: LimitBounds): num
 	if (text === undefined) {
 		return(bounds.defaultLimit);
 	}
-	const limit = parseInt(text, 10);
+	const limit = Number(text);
 	if (Number.isNaN(limit)) {
 		throw(apiError('API_LIMIT_NOT_NUMBER', 'Limit must be a number'));
 	}

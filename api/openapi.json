@@ -622,7 +622,7 @@
       "get": {
         "operationId": "getAccountChain",
         "summary": "The blocks of an account's chain, newest first",
-        "description": "Pages through the chain; \"nextKey\" is the \"start\" of the next page and null after the last [Keeta TS] index.js:58868-58901.",
+        "description": "Pages through the chain, newest first, from \"start\" down to and including \"end\"; \"nextKey\" is the \"start\" of the next page, which may be \"end\" itself, and null once the chain or the range is exhausted [Keeta TS] index.js:58868-58901.",
         "parameters": [
           {
             "name": "start",
@@ -640,7 +640,7 @@
             "name": "end",
             "in": "query",
             "required": false,
-            "description": "The hash of the block to stop at [Keeta TS] index.js:58878-58880.",
+            "description": "The hash of the block to stop at, which the page includes [Keeta TS] index.js:58878-58880.",
             "schema": { "$ref": "#/components/schemas/HashInput" }
           },
           {
@@ -1694,7 +1694,7 @@
         "additionalProperties": false
       },
       "HistoryPage": {
-        "description": "A page of staples, newest first; \"nextKey\" is the \"$id\" of the page's last staple, the \"start\" of the next page, and null after the last page [Keeta TS] index.js:58969-58996.",
+        "description": "A page of staples, newest first; \"nextKey\" is the \"$id\" of the page's last staple, the \"start\" of the next page. A page without staples, which the client takes as the end of the history [Keeta TS] index.js:58969-58971, gives the \"start\" it was asked for, or null when it was asked for none [Keeta TS] index.js:58986-58996.",
         "type": "object",
         "required": ["history", "nextKey"],
         "properties": {

@@ -34,7 +34,7 @@ The vote request's lists have a lower bound where something enforces one: `block
 - **Library serialization:** every block, vote and staple in a captured body or a fixture is exactly what the package's JSON conversion with `addBinary` makes of the value its `$binary` encodes [Keeta TS] index.js:78476-78481, 63910-63939, 80606-80630, 81088-81101.
 - **Votes and quotes:** a quote is told from a vote by `quote`, which is true for a quote and false or absent for a vote, and a quote always carries its fee [Keeta TS] index.js:80213-80218, 80660-80662, 80696-80698; the local quote and vote each validate only as their own kind.
 - **Certificates:** every certificate and intermediate a representative served is PEM text, and parses into exactly the fields `Certificate` lists; a block adding a certificate authority's certificate, made locally, validates as a block.
-- **History pages:** the `$id` of each entry is the hash of its staple's blocks [Keeta TS] index.js:81044-81053, and `nextKey` is the `$id` of the page's last entry.
+- **History pages:** the `$id` of each entry is the hash of its staple's blocks [Keeta TS] index.js:81044-81053, and `nextKey` is the `$id` of the page's last entry or, for a page without entries, the `start` it was asked for.
 - **POST routes**, which the capture never sends: request bodies are built locally the way the client builds them, from blocks, votes, quotes and staples made by the package on a local test network, and validate against the request schemas: `POST /api/vote/quote` [Keeta TS] index.js:59844-59849, `POST /api/vote` with another representative's vote and a quote [Keeta TS] index.js:59852-59866, 59775, `POST /api/node/publish` [Keeta TS] index.js:58481-58485 and `POST /api/p2p/message` with an `add` message and a representative's greeting [Keeta TS] index.js:71402-71404, 73043-73047, 72200-72212. The quote and the vote the local ledger returns validate against the response schemas once serialized as above, and the error the ledger refuses a vote with, `LEDGER_NOT_SUCCESSOR`, validates as a refusal in the envelope every captured failure has.
 
 ### Mainnet captures
@@ -50,7 +50,9 @@ The vote request's lists have a lower bound where something enforces one: `block
 
 The capture was made on 2026-10-07 between 08:44:15 and 08:44:54 UTC from `https://rep1.main.network.api.keeta.com/api`, a representative of the Keeta mainnet, network `0x5382` [Keeta TS] index.js:61293-61298. `GET /api/node/version` reported the version `0.18.4+gbd3f30c7e7903e4990e5a283f15c23d0df18bbb4`. The three pages of the account's history were captured again from the same representative on 2026-10-07 between 09:16:09 and 09:16:12 UTC, with one staple to a page rather than two, since a single staple of this account can hold a block of several hundred operations.
 
-The capture made 50 HTTP GET requests, and the second run 3, one at a time with half a second between them, and nothing else: it published nothing, asked for no vote or quote and sent no peer message. `GET /api/node/ledger/clearstats` was not requested: it clears the representative's statistics, so it changes the representative's state although it is a GET.
+A third run, on 2026-10-07 between 10:36:51 and 10:39:24 UTC, captured the requests that probe how the representative reads limits, sides, starts and ends, and where paging stops (the rows of the table below from the bootstrap with a `start` that is no date onwards). It made 26 requests in three passes while their list was settled; each file holds the answer to the last request of its name.
+
+The capture made 50 HTTP GET requests, the second run 3 and the third 26, one at a time with half a second between them, and nothing else: it published nothing, asked for no vote or quote and sent no peer message. `GET /api/node/ledger/clearstats` was not requested: it clears the representative's statistics, so it changes the representative's state although it is a GET.
 
 The requests name accounts, blocks and a token that `mainnet/head.state.jsonl` lists, chosen by fixed rules:
 
@@ -60,9 +62,9 @@ The requests name accounts, blocks and a token that `mainnet/head.state.jsonl` l
 - the multisig account, which is also the principal for the permission routes, with the base token as entity
 - the representative with the most weight
 
-Where a request needs a value only an earlier response holds, it takes it from there: the `start` of a second history page is the `nextKey` of the first, as the client pages [Keeta TS] index.js:58986-58995.
+Where a request needs a value only an earlier response holds, it takes it from there: the `start` of a second history page is the `nextKey` of the first, as the client pages [Keeta TS] index.js:58986-58995; the `end` of a range of the chain is the `nextKey` of the chain page that starts at the account's head block in the head; and the `start` of the last pages of the ledger's history is the hash of the blocks of the second staple a bootstrap from the epoch returns, the SHA3-256 of its blocks' hashes [Keeta TS] index.js:80126-80135, 78985.
 
-Some requests name values that do not exist or are malformed. The representative answered them as follows:
+Some requests name values that do not exist or are malformed, or probe where pages stop. The representative answered them as follows:
 
 | Request | Status | Answer |
 |---|---|---|
@@ -76,6 +78,16 @@ Some requests name values that do not exist or are malformed. The representative
 | history, of the ledger or of an account, with `limit=0` | 500 | `API_LIMIT_NOT_GREATER_THAN_ZERO` |
 | a block with `side=neither` | 500 | `API_INVALID_SIDE` |
 | a block or its votes by a malformed hash | 500 | only `error` and a message naming an error ID |
+| bootstrap votes with a `start` that is no date (`yesterday`) | 500 | only `error` and a message naming an error ID |
+| a block with an empty `side` | 500 | `API_INVALID_SIDE` |
+| history with `limit=-1`, or with an empty `limit` | 500 | `API_LIMIT_NOT_GREATER_THAN_ZERO` |
+| history with `limit=abc` | 500 | `API_LIMIT_NOT_NUMBER` |
+| history with `limit=1.5`, or with `limit=0.5` | 200 | one staple, or none |
+| the chain, or bootstrap votes, with `limit=1.5` | 200 | two blocks, or two staples |
+| the chain from a block to an `end` two blocks older | 200 | three blocks, `end` the last, and `nextKey` null |
+| the same range with `limit=2` | 200 | two blocks, and `nextKey` the `end` |
+| the ledger's history after its third-oldest staple, with no `limit`, and with `limit=2` | 200 | the two oldest staples, and `nextKey` the last of them |
+| the ledger's history after its oldest staple | 200 | no staples, and `nextKey` the `start` |
 
 A failure of the whole request may have any non-2xx status: the client reads the error from the body of any response that is not ok [Keeta TS] index.js:59629-59652, and returns the body of a 200 as data [Keeta TS] index.js:59673-59685. Representatives use 500: every failure the representative reported had status 500, whether it refused the request or failed to serve it, so the document gives each operation a 200 and a 500 response. The body of a failure has `"error": true` and one of two forms: a refusal names the KeetaNet error's `type`, `code` and `message`, and an internal failure has nothing but a `message` naming an error ID, `Internal error occurred (error ID: <UUID>)`. A malformed account is not a failure of the whole request: it is answered with a 200 (see Differences).
 
@@ -97,6 +109,12 @@ It needs only Python's standard library. It writes into a directory beside the o
 utils/capture-api-responses --only ledger-account-history,ledger-account-history-from-start,ledger-account-history-start conformance/mainnet/head.state.jsonl conformance/api/mainnet
 ```
 
+The third run's requests, with the two they page from, are sent again by:
+
+```
+utils/capture-api-responses --only node-bootstrap-votes-malformed-start,node-bootstrap-votes-fractional-limit,ledger-block-empty-side,ledger-account-chain-from-start,ledger-account-chain-fractional-limit,ledger-account-chain-to-end,ledger-account-chain-full-page-at-end,ledger-history-final-page,ledger-history-full-final-page,ledger-history-after-final-page,ledger-account-history-limit-fractional,ledger-account-history-limit-below-one,ledger-account-history-limit-negative,ledger-account-history-limit-empty,ledger-account-history-limit-not-a-number conformance/mainnet/head.state.jsonl conformance/api/mainnet
+```
+
 ### Fixtures
 
 `api/fixtures/` holds eight responses that mainnet representatives served, as recorded in the test suite of an independent node implementation and copied here byte for byte:
@@ -115,7 +133,7 @@ They cover a storage account, which the capture does not request.
 
 Places where the document deliberately differs from what a live representative returns, and places where the typings and live responses disagree.
 
-- **Malformed parameters.** The document's parameter schemas describe the values the client sends: well-formed accounts and hashes, positive limits, and `main` or `side`. A representative also answers requests outside them, as the table above shows: a malformed account with a 200 and an `{"account", "error"}` object, and a malformed hash, a zero limit or another side with a 500. These answers validate against the documented 200 and 500 responses.
+- **Malformed parameters.** The document's parameter schemas describe the values the client sends: well-formed accounts, hashes and dates, positive integer limits, and `main` or `side`. A representative also answers requests outside them, as the table above shows: a malformed account with a 200 and an `{"account", "error"}` object, and a malformed hash, a start that is no date, a limit that is no number or not above zero, or an empty or another side with a 500. It reads a limit as a number, fraction and all, so an empty limit is zero, and a fractional limit is answered with a 200: the chain and a bootstrap hold entries until their count reaches the limit, as the ledger's own bootstrap loop does [Keeta TS] index.js:69639, and history holds the whole staples it allows. These answers validate against the documented 200 and 500 responses.
 
 No captured response or fixture disagrees with the typings. Where the typings give only `string`, the document states the form every captured response has, which is narrower:
 

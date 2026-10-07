@@ -1,0 +1,87 @@
+{
+  "body": {
+    "account": "keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a",
+    "blocks": [
+      {
+        "block": {
+          "$binary": "oYIB/jCCAfoCAlOCGBMyMDI1MDkyMzA4NDQxOC41MzVaAgEBBCIAA+8OQijTpWjxnkkiEcVXHeSiH/z7lCVk8bVzDmMSu2V6BQAEINn7GpVexaYj911AmPNeQ56W+qotFXWxR7iMPR/soK0PMIIBUKBSMFAEIgACl2/sWKriYAOAKV3qXUgYkJPRtdJ7DYJ9oz1eViEmUGICBwOWlvM5IAAEIQNgNC3gyMih04AVvdKn8mLmJ+vWDFCxqhOWYVqSK0vs8qBSMFAEIgACFXWADRLHsCfmGi9v65GNjHUU9gFNk30kgB8BmN2/aVACBwOWlvM5IAAEIQNgNC3gyMih04AVvdKn8mLmJ+vWDFCxqhOWYVqSK0vs8qBSMFAEIgACCbJh1pvft9CODNrH2C+OUzdpclWzVVEi1flvoqK5PA8CBwOWlvM5IAAEIQNgNC3gyMih04AVvdKn8mLmJ+vWDFCxqhOWYVqSK0vs8qBSMFAEIgACFKHicy/2eRUWV0dzhEwXz2XrXPubfo/w35SusoZPoy4CBwOWlvM5IAAEIQNgNC3gyMih04AVvdKn8mLmJ+vWDFCxqhOWYVqSK0vs8gRAmWSAt/UWOZPQC8Z+2ZOuV6ENAOFXwZa9HMZcEwin9FVwQbCa6cWGQxybyhK+Lb3TkIiIiqE4WNDwLOAhHHqrog==",
+          "$hash": "1C8C249A599545D70245D3ECD02C741AB0F4A09317D708C95C5416513EF61017",
+          "$opening": false,
+          "account": "keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a",
+          "date": "2025-09-23T08:44:18.535Z",
+          "network": "0x5382",
+          "operations": [
+            {
+              "amount": "0x39696F3392000",
+              "to": "keeta_aabjo37mlcvoeyadqauv32s5jamjbe6rwxjhwdmcpwrt2xsweetfayqubpudlei",
+              "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+              "type": 0
+            },
+            {
+              "amount": "0x39696F3392000",
+              "to": "keeta_aabbk5mabujmpmbh4ync637lsggyy5iu6yau3e35esab6amy3w7wsuh6dx2wt2q",
+              "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+              "type": 0
+            },
+            {
+              "amount": "0x39696F3392000",
+              "to": "keeta_aabatmtb22n57n6qrygnvr6yf6hfgn3jojk3gvkrelk7s35cuk4tyd2zxengc4y",
+              "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+              "type": 0
+            },
+            {
+              "amount": "0x39696F3392000",
+              "to": "keeta_aabbjipcomx7m6ivczluo44ejql46zpllt5zw7up6dpzjlvsqzh2gltxwnhyc3i",
+              "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg",
+              "type": 0
+            }
+          ],
+          "previous": "D9FB1A955EC5A623F75D4098F35E439E96FAAA2D1575B147B88C3D1FECA0AD0F",
+          "purpose": 1,
+          "signatures": [
+            "996480B7F5163993D00BC67ED993AE57A10D00E157C196BD1CC65C1308A7F4557041B09AE9C586431C9BCA12BE2DBDD39088888AA13858D0F02CE0211C7AABA2"
+          ],
+          "signer": "keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a",
+          "version": 2
+        }
+      },
+      {
+        "block": {
+          "$binary": "MIH7AgEAAgJTggUAGBMyMDI1MDkyMzA4NDQxNi44NDBaBCIAA+8OQijTpWjxnkkiEcVXHeSiH/z7lCVk8bVzDmMSu2V6BQAEIPLd9WMA+zh8V1uUeX3YrxBK/JzpgFJYxfVtYj6afo4WMFGgTzBNBCIAA6AbdqgIkrh3mEGNUtTd2gau5KTkU2FBJoSNFRlSXsv1AgQ7msoABCEDb9aRWFJjjIgnQsZJR2UFrgu35kiCPvXn4OXTwUeJTmQEQMfz4ku/vWS30jlXXgffHqPslxQlrqxPTIcYsr4LjbLDD69Wmu1ilVjlo22UUFD8s9rgyPzgBacFMOT20adtez4=",
+          "$hash": "D9FB1A955EC5A623F75D4098F35E439E96FAAA2D1575B147B88C3D1FECA0AD0F",
+          "$opening": false,
+          "account": "keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a",
+          "date": "2025-09-23T08:44:16.840Z",
+          "network": "0x5382",
+          "operations": [
+            {
+              "amount": "0x3B9ACA00",
+              "to": "keeta_aab2ag3wvaejfodxtbay2uwu3xnanlxeutsfgykbe2ci2fizkjpmx5jl5lv5xay",
+              "token": "keeta_anx5nekykjryzcbhildesr3fawxaxn7gjcbd55ph4ds5hqkhrfhgjlskmjhsm",
+              "type": 0
+            }
+          ],
+          "previous": "F2DDF56300FB387C575B94797DD8AF104AFC9CE9805258C5F56D623E9A7E8E16",
+          "purpose": 0,
+          "signature": "C7F3E24BBFBD64B7D239575E07DF1EA3EC971425AEAC4F4C8718B2BE0B8DB2C30FAF569AED629558E5A36D945050FCB3DAE0C8FCE005A70530E4F6D1A76D7B3E",
+          "signer": "keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a",
+          "version": 1
+        }
+      }
+    ],
+    "nextKey": "F2DDF56300FB387C575B94797DD8AF104AFC9CE9805258C5F56D623E9A7E8E16"
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/account/keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a/chain",
+    "query": {
+      "end": "F2DDF56300FB387C575B94797DD8AF104AFC9CE9805258C5F56D623E9A7E8E16",
+      "limit": "2",
+      "start": "1C8C249A599545D70245D3ECD02C741AB0F4A09317D708C95C5416513EF61017"
+    }
+  },
+  "status": 200
+}

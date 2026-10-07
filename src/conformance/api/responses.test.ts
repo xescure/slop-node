@@ -1,4 +1,3 @@
-import { readdirSync, readFileSync } from 'node:fs';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account } from '@keetanetwork/keetanet-client/lib/account.js';
@@ -8,13 +7,14 @@ import { MemoryLedgerStorage } from '../../ledger/storage/memory/driver.js';
 import { confirmedStaple, manageCertificateBlock, sendBlock } from '../../testing/blocks.js';
 import { createTestNetwork, freezeClock } from '../../testing/network.js';
 import type { TestNetwork } from '../../testing/network.js';
+import { CAPTURE_DIRECTORY, jsonFiles, readCapture, readJSON } from './captures.js';
+import type { Capture } from './captures.js';
 import { APIDocument, isJSONObject } from './document.js';
 import { pathParameters, routeOfRequest } from './routes.js';
 import type { Route } from './routes.js';
 
 const lib = KeetaNet.lib;
 
-const CAPTURE_DIRECTORY = new URL('../../../conformance/api/mainnet/', import.meta.url);
 const FIXTURE_DIRECTORY = new URL('../../../conformance/api/fixtures/', import.meta.url);
 
 const api = new APIDocument();
@@ -40,50 +40,27 @@ const FIXTURE_ROUTES: Readonly<Record<string, string>> = {
  * each breaks.
  */
 const MALFORMED_PARAMETER_CAPTURES: Readonly<Record<string, string>> = {
+	'ledger-account-chain-fractional-limit.json': 'query limit',
+	'ledger-account-history-limit-below-one.json': 'query limit',
+	'ledger-account-history-limit-empty.json': 'query limit',
+	'ledger-account-history-limit-fractional.json': 'query limit',
+	'ledger-account-history-limit-negative.json': 'query limit',
+	'ledger-account-history-limit-not-a-number.json': 'query limit',
 	'ledger-account-history-limit-zero.json': 'query limit',
 	'ledger-account-malformed.json': 'path account',
 	'ledger-accounts-malformed.json': 'path accounts',
+	'ledger-block-empty-side.json': 'query side',
 	'ledger-block-invalid-side.json': 'query side',
 	'ledger-block-malformed.json': 'path blockhash',
 	'ledger-history-limit-zero.json': 'query limit',
+	'node-bootstrap-votes-fractional-limit.json': 'query limit',
+	'node-bootstrap-votes-malformed-start.json': 'query start',
 	'node-bootstrap-votes-without-start.json': 'query start',
 	'vote-malformed.json': 'path blockhash'
 };
 
 /** Where the local representative says it serves; nothing is ever sent there. */
 const LOCAL_ENDPOINTS = { api: 'https://representative.invalid/api', p2p: 'wss://representative.invalid/p2p' } as const;
-
-type Capture = {
-	readonly request: { readonly method: 'GET'; readonly path: string; readonly query: Readonly<Record<string, string>> };
-	readonly status: number;
-	readonly contentType: string | null;
-	readonly body: unknown;
-};
-
-function isStringRecord(value: unknown): value is Readonly<Record<string, string>> {
-	return(isJSONObject(value) && Object.values(value).every(function(entry): boolean {
-		return(typeof entry === 'string');
-	}));
-}
-
-function readJSON(file: URL): unknown {
-	const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
-	return(parsed);
-}
-
-function readCapture(name: string): Capture {
-	const parsed = readJSON(new URL(name, CAPTURE_DIRECTORY));
-	if (!isJSONObject(parsed) || !isJSONObject(parsed['request']) || !isJSONObject(parsed['headers'])) {
-		throw(new Error(`${name}: not a capture`));
-	}
-	const { request, headers, status } = parsed;
-	const { method, path, query } = request;
-	const contentType = headers['content-type'];
-	if (method !== 'GET' || typeof path !== 'string' || !isStringRecord(query) || typeof status !== 'number' || (typeof contentType !== 'string' && contentType !== null)) {
-		throw(new Error(`${name}: not a GET capture`));
-	}
-	return({ request: { method, path, query }, status, contentType, body: parsed['body'] });
-}
 
 function captureBody(name: string): Readonly<Record<string, unknown>> {
 	const { body } = readCapture(name);
@@ -115,12 +92,6 @@ function without(object: unknown, name: string): Readonly<Record<string, unknown
 	return(Object.fromEntries(Object.entries(object).filter(function([key]): boolean {
 		return(key !== name);
 	})));
-}
-
-function jsonFiles(directory: URL): readonly string[] {
-	return(readdirSync(directory).filter(function(name): boolean {
-		return(name.endsWith('.json'));
-	}).sort());
 }
 
 function spelled(route: Route): string {
@@ -291,15 +262,19 @@ describe('responses a mainnet representative gave', function() {
 		}
 	});
 
-	test('the "$id" of a history entry is the hash of the blocks of its staple, and "nextKey" the last "$id" of the page', function() {
+	test('the "$id" of a history entry is the hash of the blocks of its staple, and "nextKey" the last "$id" of the page, or of an empty page its start', function() {
 		const pages = captures.map(readCapture).filter(function(capture): boolean {
 			return(capture.status === 200 && routeOfCapture(capture).path.includes('/history'));
 		}).map(function(capture) {
-			return(historyPage(capture.body));
+			const start = pathParameters(routeOfCapture(capture), capture.request.path)['block'] ?? capture.request.query['start'] ?? null;
+			return({ ...historyPage(capture.body), start });
 		});
 
 		expect(pages.length).toBeGreaterThan(0);
-		for (const { entries, nextKey } of pages) {
+		expect(pages.some(function({ entries, start }): boolean {
+			return(entries.length === 0 && start !== null);
+		})).toBe(true);
+		for (const { entries, nextKey, start } of pages) {
 			const ids = entries.map(function({ id }): unknown {
 				return(id);
 			});
@@ -307,7 +282,7 @@ describe('responses a mainnet representative gave', function() {
 				return(decodeStaple(stapleBinary).blocksHash.toString());
 			});
 			expect(ids).toEqual(blocksHashes);
-			expect(nextKey).toBe(ids.at(-1) ?? null);
+			expect(nextKey).toBe(ids.at(-1) ?? start);
 		}
 	});
 });

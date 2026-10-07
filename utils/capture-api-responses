@@ -3,16 +3,18 @@
 
 Usage: capture-api-responses [--only <name>[,<name>...]] <head-state> <output-directory>
 
-Sends one GET request for every GET route of api/openapi.json, and a few that
-a representative must refuse, to one public mainnet representative, and writes
-each request with the status, content type and body of its response to its own
-JSON file in <output-directory>, named <name>.json. With --only, only the named
+Sends one GET request for every GET route of api/openapi.json, and others that
+probe how a representative reads malformed parameters and where its pages stop,
+to one public mainnet representative, and writes each request with the status,
+content type and body of its response to its own JSON file in
+<output-directory>, named <name>.json. With --only, only the named
 requests are sent, and their files replace those in <output-directory>; the
 other files are left as they are. The accounts, tokens and blocks named in the
 requests are taken from <head-state>, the state dump of the mainnet head
 (conformance/mainnet/head.state.jsonl); the start of a second history page is
-the "nextKey" of the first, as the client pages. conformance/API.md describes
-the capture.
+the "nextKey" of the first, as the client pages, and the other values taken
+from earlier answers are named where they are taken. conformance/API.md
+describes the capture.
 
 Only HTTP GET requests are made, one at a time with a pause between them:
 nothing is published, no vote is asked for and no peer message is sent. The
@@ -205,6 +207,29 @@ def next_key(name, body):
 	return body["nextKey"]
 
 
+def page_length(name, body):
+	"""How many staples <name>'s history page holds, as a limit, or None when <name> was not requested."""
+	if body is None:
+		return None
+	if not isinstance(body, dict) or not isinstance(body.get("history"), list) or not body["history"]:
+		fail(f"{name} has no history to count")
+	return str(len(body["history"]))
+
+
+def last_staple_id(name, body):
+	"""
+	The blocks hash of the last staple <name> returned, the SHA3-256 of its
+	blocks' hashes [Keeta TS] index.js:80126-80135, or None when <name> was
+	not requested.
+	"""
+	if body is None:
+		return None
+	if not isinstance(body, dict) or not isinstance(body.get("voteStaples"), list) or not body["voteStaples"]:
+		fail(f"{name} has no staple to page from")
+	blocks = body["voteStaples"][-1]["blocks"]
+	return hashlib.sha3_256(b"".join(bytes.fromhex(block["$hash"]) for block in blocks)).hexdigest().upper()
+
+
 def capture(parameters, directory, selected):
 	p = parameters
 	c = Capture(directory, selected)
@@ -215,6 +240,8 @@ def capture(parameters, directory, selected):
 	c.get("node-stats", ["node", "stats"])
 	c.get("node-bootstrap-votes", ["node", "bootstrap", "votes"], {"start": EPOCH, "limit": "1"})
 	c.get("node-bootstrap-votes-without-start", ["node", "bootstrap", "votes"], {"limit": "1"})
+	c.get("node-bootstrap-votes-malformed-start", ["node", "bootstrap", "votes"], {"start": "yesterday", "limit": "1"})
+	oldest = c.get("node-bootstrap-votes-fractional-limit", ["node", "bootstrap", "votes"], {"start": EPOCH, "limit": "1.5"})
 
 	c.get("ledger-checksum", [*ledger, "checksum"])
 	c.get("ledger-representative", [*ledger, "representative"])
@@ -223,12 +250,21 @@ def capture(parameters, directory, selected):
 	page = c.get("ledger-history", [*ledger, "history"], {"limit": PAGE_LIMIT})
 	c.get("ledger-history-from-start", [*ledger, "history"], {"start": next_key("ledger-history", page), "limit": PAGE_LIMIT})
 	c.get("ledger-history-limit-zero", [*ledger, "history"], {"limit": "0"})
+	# The staples a bootstrap from the epoch starts with are among the
+	# ledger's oldest, so the history after them is a last page shorter than
+	# the default limit, and again a last page exactly as long as its limit.
+	start = last_staple_id("node-bootstrap-votes-fractional-limit", oldest)
+	page = c.get("ledger-history-final-page", [*ledger, "history"], {"start": start})
+	limit = page_length("ledger-history-final-page", page)
+	page = c.get("ledger-history-full-final-page", [*ledger, "history"], {"start": start, "limit": limit})
+	c.get("ledger-history-after-final-page", [*ledger, "history"], {"start": next_key("ledger-history-full-final-page", page), "limit": limit})
 
 	c.get("ledger-block", [*ledger, "block", p.user_head])
 	c.get("ledger-block-side", [*ledger, "block", p.user_head], {"side": "side"})
 	c.get("ledger-block-unknown", [*ledger, "block", UNKNOWN_HASH])
 	c.get("ledger-block-malformed", [*ledger, "block", MALFORMED_HASH])
 	c.get("ledger-block-invalid-side", [*ledger, "block", p.user_head], {"side": "neither"})
+	c.get("ledger-block-empty-side", [*ledger, "block", p.user_head], {"side": ""})
 	c.get("ledger-block-successor", [*ledger, "block", p.user_head, "successor"])
 	c.get("ledger-block-successor-unknown", [*ledger, "block", UNKNOWN_HASH, "successor"])
 
@@ -250,12 +286,21 @@ def capture(parameters, directory, selected):
 	c.get("ledger-account-head", [*account, p.user, "head"])
 	c.get("ledger-account-head-unknown", [*account, UNKNOWN_ACCOUNT, "head"])
 	c.get("ledger-account-chain", [*account, p.user, "chain"], {"limit": PAGE_LIMIT})
-	c.get("ledger-account-chain-from-start", [*account, p.user, "chain"], {"start": p.user_head, "limit": PAGE_LIMIT})
+	page = c.get("ledger-account-chain-from-start", [*account, p.user, "chain"], {"start": p.user_head, "limit": PAGE_LIMIT})
+	end = next_key("ledger-account-chain-from-start", page)
+	c.get("ledger-account-chain-fractional-limit", [*account, p.user, "chain"], {"start": p.user_head, "limit": "1.5"})
+	c.get("ledger-account-chain-to-end", [*account, p.user, "chain"], {"start": p.user_head, "end": end})
+	c.get("ledger-account-chain-full-page-at-end", [*account, p.user, "chain"], {"start": p.user_head, "end": end, "limit": PAGE_LIMIT})
 	page = c.get("ledger-account-history", [*account, p.user, "history"], {"limit": ACCOUNT_HISTORY_LIMIT})
 	start = next_key("ledger-account-history", page)
 	c.get("ledger-account-history-from-start", [*account, p.user, "history"], {"start": start, "limit": ACCOUNT_HISTORY_LIMIT})
 	c.get("ledger-account-history-start", [*account, p.user, "history", "start", start], {"limit": ACCOUNT_HISTORY_LIMIT})
 	c.get("ledger-account-history-limit-zero", [*account, p.user, "history"], {"limit": "0"})
+	c.get("ledger-account-history-limit-fractional", [*account, p.user, "history"], {"limit": "1.5"})
+	c.get("ledger-account-history-limit-below-one", [*account, p.user, "history"], {"limit": "0.5"})
+	c.get("ledger-account-history-limit-negative", [*account, p.user, "history"], {"limit": "-1"})
+	c.get("ledger-account-history-limit-empty", [*account, p.user, "history"], {"limit": ""})
+	c.get("ledger-account-history-limit-not-a-number", [*account, p.user, "history"], {"limit": "abc"})
 	c.get("ledger-account-balance", [*account, p.user, "balance"])
 	c.get("ledger-account-balance-of-token", [*account, p.user, "balance", p.token])
 	c.get("ledger-account-acl", [*account, p.principal, "acl"])

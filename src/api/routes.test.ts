@@ -89,7 +89,10 @@ function blockHashes(body: unknown): readonly string[] {
 	}));
 }
 
-/** Every page of a history, following nextKey from the first page. */
+/**
+ * Every page of a history, following nextKey from the first page until an
+ * empty page, as the client pages [Keeta TS] index.js:58969-58996.
+ */
 async function allPages(node: RunningLocalNode, path: string, limit: number): Promise<readonly (readonly string[])[]> {
 	const pages: (readonly string[])[] = [];
 	let start: string | null = null;
@@ -100,18 +103,18 @@ async function allPages(node: RunningLocalNode, path: string, limit: number): Pr
 		}
 		const answer = await request(node, `${path}?${query}`);
 		expect(answer.status).toBe(200);
-		pages.push(ids(answer.body));
-		if (field(answer.body, 'nextKey') === null) {
+		const page = ids(answer.body);
+		expect(field(answer.body, 'nextKey')).toBe(page.at(-1) ?? start);
+		if (page.length === 0) {
 			return(pages);
 		}
-		const nextKey = text(answer.body, 'nextKey');
-		expect(nextKey).toBe(ids(answer.body).at(-1));
-		start = nextKey;
+		pages.push(page);
+		start = text(answer.body, 'nextKey');
 	}
 }
 
 describe('history', function() {
-	test('pages continue after the staple named by start, and the last page has no nextKey', async function() {
+	test('pages continue after the staple named by start, nextKey names the page\'s last staple, and an empty page ends the history', async function() {
 		const node = await populated();
 		const user = keyOf(node.user);
 		const whole = ids((await request(node, `/node/ledger/account/${user}/history?limit=200`)).body);
@@ -147,27 +150,41 @@ describe('history', function() {
 			return(pageSizes.mock.calls[0]?.[2]);
 		};
 
-		// One staple more than the page, to tell whether another page follows.
-		expect(await asked('')).toBe(26);
-		expect(await asked('?limit=7')).toBe(8);
-		expect(await asked('?limit=200')).toBe(201);
-		expect(await asked('?limit=1000')).toBe(201);
+		expect(await asked('')).toBe(25);
+		expect(await asked('?limit=7')).toBe(7);
+		expect(await asked('?limit=200')).toBe(200);
+		expect(await asked('?limit=1e3')).toBe(200);
 	});
 
 	test.each([
 		{ limit: '1.5', entries: 1 },
-		{ limit: '1e3', entries: 1 },
-		{ limit: '2.9', entries: 2 }
-	])('limit=$limit asks for its integer prefix, $entries, as parseInt reads it', async function({ limit, entries }) {
+		{ limit: '2.9', entries: 2 },
+		{ limit: '0.5', entries: 0 }
+	])('limit=$limit holds the $entries whole staples it allows', async function({ limit, entries }) {
 		const node = await populated();
-		const pageSizes = vi.spyOn(lib.Ledger.prototype, 'getHistory');
 		const answer = await request(node, `/node/ledger/history?limit=${limit}`);
 
 		expect(answer.status).toBe(200);
 		expect(list(answer.body, 'history')).toHaveLength(entries);
-		expect(pageSizes.mock.calls[0]?.[2]).toBe(entries + 1);
-		expect(text(answer.body, 'nextKey')).toBe(ids(answer.body)[entries - 1]);
+		expect(field(answer.body, 'nextKey')).toBe(ids(answer.body).at(-1) ?? null);
 		expectDocumented('GET', '/node/ledger/history', answer);
+	});
+
+	test('the last page names its last staple, and the empty page after it the staple it started after', async function() {
+		const node = await populated();
+		const whole = ids((await request(node, '/node/ledger/history?limit=200')).body);
+		const oldest = whole.at(-1);
+		const beforeOldest = whole.at(-2);
+		if (oldest === undefined || beforeOldest === undefined) {
+			throw(new Error('the ledger holds fewer than two staples'));
+		}
+		const last = await request(node, `/node/ledger/history?start=${beforeOldest}`);
+		const after = await request(node, `/node/ledger/history?start=${oldest}`);
+
+		expect(last.body).toMatchObject({ nextKey: oldest });
+		expect(ids(last.body)).toEqual([oldest]);
+		expect(after.body).toEqual({ history: [], nextKey: oldest });
+		expectDocumented('GET', '/node/ledger/history', after);
 	});
 
 	test('an entry\'s time is this node\'s own vote for the staple, as the staple\'s timestamp prefers it', async function() {
@@ -192,7 +209,7 @@ describe('history', function() {
 
 	test.each([
 		{ limit: 'abc', code: 'API_LIMIT_NOT_NUMBER', message: 'Limit must be a number' },
-		{ limit: '', code: 'API_LIMIT_NOT_NUMBER', message: 'Limit must be a number' },
+		{ limit: '', code: 'API_LIMIT_NOT_GREATER_THAN_ZERO', message: 'Limit must be greater than 0' },
 		{ limit: '0', code: 'API_LIMIT_NOT_GREATER_THAN_ZERO', message: 'Limit must be greater than 0' },
 		{ limit: '-3', code: 'API_LIMIT_NOT_GREATER_THAN_ZERO', message: 'Limit must be greater than 0' }
 	])('limit=$limit is refused with $code', async function({ limit, code, message }) {
@@ -219,40 +236,50 @@ describe('the chain', function() {
 		expect(field(rest.body, 'nextKey')).toBeNull();
 	});
 
-	test('a page stops before the block named by end', async function() {
+	test('a page ends with the block named by end', async function() {
 		const node = await populated();
 		const user = keyOf(node.user);
 		const whole = blockHashes((await request(node, `/node/ledger/account/${user}/chain`)).body);
 		const answer = await request(node, `/node/ledger/account/${user}/chain?start=${whole[1] ?? ''}&end=${whole[3] ?? ''}`);
 
-		expect(blockHashes(answer.body)).toEqual(whole.slice(1, 3));
+		expect(blockHashes(answer.body)).toEqual(whole.slice(1, 4));
 		expect(field(answer.body, 'nextKey')).toBeNull();
 	});
 
-	test('a full page that stops right above end has no next page', async function() {
+	test('a full page that stops right above end names end as the next page', async function() {
 		const node = await populated();
 		const user = keyOf(node.user);
 		const whole = blockHashes((await request(node, `/node/ledger/account/${user}/chain`)).body);
 		const answer = await request(node, `/node/ledger/account/${user}/chain?limit=2&end=${whole[2] ?? ''}`);
 
 		expect(blockHashes(answer.body)).toEqual(whole.slice(0, 2));
-		expect(field(answer.body, 'nextKey')).toBeNull();
+		expect(field(answer.body, 'nextKey')).toBe(whole[2]);
 
-		const shorter = await request(node, `/node/ledger/account/${user}/chain?limit=1&end=${whole[2] ?? ''}`);
-		expect(blockHashes(shorter.body)).toEqual(whole.slice(0, 1));
-		expect(field(shorter.body, 'nextKey')).toBe(whole[1]);
+		const throughEnd = await request(node, `/node/ledger/account/${user}/chain?limit=3&end=${whole[2] ?? ''}`);
+		expect(blockHashes(throughEnd.body)).toEqual(whole.slice(0, 3));
+		expect(field(throughEnd.body, 'nextKey')).toBeNull();
 	});
 
 	test.each([
-		{ limit: '1.5', blocks: 1 },
-		{ limit: '1e3', blocks: 1 }
-	])('limit=$limit holds $blocks block of the chain', async function({ limit, blocks }) {
+		{ limit: '1.5', blocks: 2 },
+		{ limit: '0.5', blocks: 1 }
+	])('limit=$limit holds blocks until their count reaches it, $blocks', async function({ limit, blocks }) {
 		const node = await populated();
 		const user = keyOf(node.user);
+		const whole = blockHashes((await request(node, `/node/ledger/account/${user}/chain`)).body);
 		const answer = await request(node, `/node/ledger/account/${user}/chain?limit=${limit}`);
 
 		expect(answer.status).toBe(200);
-		expect(blockHashes(answer.body)).toHaveLength(blocks);
+		expect(blockHashes(answer.body)).toEqual(whole.slice(0, blocks));
+		expect(field(answer.body, 'nextKey')).toBe(whole[blocks]);
+	});
+
+	test('limit=1e3 is read as the number it writes, a thousand, and holds the whole chain', async function() {
+		const node = await populated();
+		const user = keyOf(node.user);
+		const whole = await request(node, `/node/ledger/account/${user}/chain`);
+
+		expect((await request(node, `/node/ledger/account/${user}/chain?limit=1e3`)).body).toEqual(whole.body);
 	});
 
 	test('a start that is no block of the account starts no page', async function() {
@@ -336,12 +363,15 @@ describe('requests a representative answers without a failure', function() {
 		expectDocumented('GET', '/node/ledger/representatives', answer);
 	});
 
-	test.each(['1.5', '1e3'])('a bootstrap limit of %s holds one staple', async function(limit) {
+	test.each([
+		{ limit: '1.5', staples: 2 },
+		{ limit: '0.5', staples: 1 }
+	])('a bootstrap limit of $limit holds staples until their count reaches it: $staples', async function({ limit, staples }) {
 		const node = await populated();
 		const answer = await request(node, `/node/bootstrap/votes?start=1970-01-01T00%3A00%3A00.000Z&limit=${limit}`);
 
 		expect(answer.status).toBe(200);
-		expect(list(answer.body, 'voteStaples')).toHaveLength(1);
+		expect(list(answer.body, 'voteStaples')).toHaveLength(staples);
 		expectDocumented('GET', '/node/bootstrap/votes', answer);
 	});
 
