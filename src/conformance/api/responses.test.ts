@@ -9,7 +9,7 @@ import { confirmedStaple, manageCertificateBlock, sendBlock } from '../../testin
 import { createTestNetwork, freezeClock } from '../../testing/network.js';
 import type { TestNetwork } from '../../testing/network.js';
 import { APIDocument, isJSONObject } from './document.js';
-import { routeOfRequest } from './routes.js';
+import { pathParameters, routeOfRequest } from './routes.js';
 import type { Route } from './routes.js';
 
 const lib = KeetaNet.lib;
@@ -32,6 +32,22 @@ const FIXTURE_ROUTES: Readonly<Record<string, string>> = {
 	'head_base_token.json': '/api/node/ledger/account/{account}/head',
 	'head_no_chain.json': '/api/node/ledger/account/{account}/head',
 	'representatives.json': '/api/node/ledger/representatives'
+};
+
+/**
+ * The captures that send a value outside the operation's parameters on
+ * purpose, to record how a representative answers it, and the one parameter
+ * each breaks.
+ */
+const MALFORMED_PARAMETER_CAPTURES: Readonly<Record<string, string>> = {
+	'ledger-account-history-limit-zero.json': 'query limit',
+	'ledger-account-malformed.json': 'path account',
+	'ledger-accounts-malformed.json': 'path accounts',
+	'ledger-block-invalid-side.json': 'query side',
+	'ledger-block-malformed.json': 'path blockhash',
+	'ledger-history-limit-zero.json': 'query limit',
+	'node-bootstrap-votes-without-start.json': 'query start',
+	'vote-malformed.json': 'path blockhash'
 };
 
 /** Where the local representative says it serves; nothing is ever sent there. */
@@ -208,6 +224,43 @@ describe('responses a mainnet representative gave', function() {
 		}).map(spelled);
 
 		expect([...captured].sort()).toEqual(expected);
+	});
+
+	test('every capture sends parameters the operation has, with values its schemas allow, but the deliberately malformed ones', function() {
+		for (const name of captures) {
+			const capture = readCapture(name);
+			const route = routeOfCapture(capture);
+			const violations = api.parameterViolations(route, { path: pathParameters(route, capture.request.path), query: capture.request.query });
+			const broken = [...new Set(violations.map(function(violation): string {
+				return(violation.slice(0, violation.indexOf(':')));
+			}))];
+			const malformed = Object.entries(MALFORMED_PARAMETER_CAPTURES).filter(function([capture]): boolean {
+				return(capture === name);
+			}).map(function([, parameter]): string {
+				return(parameter);
+			});
+
+			expect({ name, broken }).toEqual({ name, broken: malformed });
+		}
+		expect(captures).toEqual(expect.arrayContaining(Object.keys(MALFORMED_PARAMETER_CAPTURES)));
+	});
+
+	test('the document refuses parameters the client never sends', function() {
+		const bootstrap = documentRoute('GET', '/api/node/bootstrap/votes');
+		const history = documentRoute('GET', '/api/node/ledger/history');
+
+		expect(api.parameterViolations(bootstrap, { path: {}, query: { start: '1970-01-01T00:00:00.000Z' } })).toEqual([]);
+		expect(api.parameterViolations(bootstrap, { path: {}, query: { start: '1970-01-01' } })).not.toEqual([]);
+		expect(api.parameterViolations(history, { path: {}, query: { limit: '2' } })).toEqual([]);
+		expect(api.parameterViolations(history, { path: {}, query: { limit: '2', offset: '1' } })).toEqual(['query offset: not a parameter of the operation']);
+	});
+
+	test('an account\'s history from a staple is the same page whether the staple is named in the path or in "start"', function() {
+		const fromPath = readCapture('ledger-account-history-start.json');
+		const fromQuery = readCapture('ledger-account-history-from-start.json');
+
+		expect(fromPath.status).toBe(200);
+		expect(fromPath.body).toEqual(fromQuery.body);
 	});
 
 	test('every failure a representative reported is a refusal or an internal failure, and it reported both', function() {

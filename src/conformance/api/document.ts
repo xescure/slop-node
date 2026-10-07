@@ -15,6 +15,29 @@ const JSON_MEDIA_TYPE = 'application/json';
 
 const RESPONSE_REF_PREFIX = '#/components/responses/';
 
+const PARAMETER_REF_PREFIX = '#/components/parameters/';
+
+const PARAMETER_LOCATIONS = ['path', 'query'] as const;
+
+export type ParameterLocation = typeof PARAMETER_LOCATIONS[number];
+
+/** The parameter values of one request, decoded, by where they travel. */
+export type ParameterValues = Readonly<Record<ParameterLocation, Readonly<Record<string, string>>>>;
+
+type DeclaredParameter = {
+	readonly name: string;
+	readonly location: ParameterLocation;
+	readonly required: boolean;
+	/** Where the parameter object sits in the document. */
+	readonly tokens: readonly string[];
+};
+
+function asParameterLocation(value: unknown): ParameterLocation | undefined {
+	return(PARAMETER_LOCATIONS.find(function(location): boolean {
+		return(location === value);
+	}));
+}
+
 type JSONObject = Readonly<Record<string, unknown>>;
 
 export function isJSONObject(value: unknown): value is JSONObject {
@@ -75,6 +98,83 @@ export class APIDocument {
 		return((validate.errors ?? []).map(function(error): string {
 			return(`${error.instancePath}: ${error.message ?? error.keyword}`);
 		}));
+	}
+
+	/** The parameters of the path item and of the operation, each resolved to where its schema sits. */
+	#parameters(route: Route): readonly DeclaredParameter[] {
+		const method = route.method.toLowerCase();
+		const item = field(field(this.document, 'paths', 'the document'), route.path, 'paths');
+		const lists = [
+			{ owner: item, tokens: ['paths', route.path] },
+			{ owner: this.#operation(route), tokens: ['paths', route.path, method] }
+		];
+		return(lists.flatMap(({ owner, tokens }): readonly DeclaredParameter[] => {
+			const list = owner['parameters'];
+			if (list === undefined) {
+				return([]);
+			}
+			if (!Array.isArray(list)) {
+				throw(new Error(`${tokens.join(' ')}: "parameters" is not a list`));
+			}
+			return(list.map((entry: unknown, index): DeclaredParameter => {
+				return(this.#declaredParameter(entry, [...tokens, 'parameters', String(index)]));
+			}));
+		}));
+	}
+
+	#declaredParameter(entry: unknown, tokens: readonly string[]): DeclaredParameter {
+		const where = tokens.join(' ');
+		if (!isJSONObject(entry)) {
+			throw(new Error(`${where} is not an object`));
+		}
+		const ref = entry['$ref'];
+		if (typeof ref === 'string') {
+			if (!ref.startsWith(PARAMETER_REF_PREFIX)) {
+				throw(new Error(`${where}: unexpected reference ${ref}`));
+			}
+			const name = ref.slice(PARAMETER_REF_PREFIX.length);
+			return(this.#declaredParameter(field(field(field(this.document, 'components', 'the document'), 'parameters', 'components'), name, 'parameters'), ['components', 'parameters', name]));
+		}
+		const { name, required } = entry;
+		const location = asParameterLocation(entry['in']);
+		if (typeof name !== 'string' || location === undefined || (required !== undefined && typeof required !== 'boolean')) {
+			throw(new Error(`${where} is not a path or query parameter`));
+		}
+		return({ name, location, required: required === true, tokens });
+	}
+
+	/**
+	 * Every way a request's parameters break the operation's: a value its
+	 * schema refuses, a required parameter left out, or a parameter the
+	 * operation does not have, each prefixed with "<location> <name>:".
+	 */
+	parameterViolations(route: Route, values: ParameterValues): Violations {
+		const declared = this.#parameters(route);
+		const violations: string[] = [];
+		for (const parameter of declared) {
+			const value = values[parameter.location][parameter.name];
+			const prefix = `${parameter.location} ${parameter.name}`;
+			if (value === undefined) {
+				if (parameter.required) {
+					violations.push(`${prefix}: required but missing`);
+				}
+				continue;
+			}
+			for (const violation of this.#validate([...parameter.tokens, 'schema'], value)) {
+				violations.push(`${prefix}: ${violation}`);
+			}
+		}
+		for (const location of PARAMETER_LOCATIONS) {
+			for (const name of Object.keys(values[location])) {
+				const known = declared.some(function(parameter): boolean {
+					return(parameter.location === location && parameter.name === name);
+				});
+				if (!known) {
+					violations.push(`${location} ${name}: not a parameter of the operation`);
+				}
+			}
+		}
+		return(violations);
 	}
 
 	/** Every way a value breaks the document's schema of that name. */

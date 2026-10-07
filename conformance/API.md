@@ -27,6 +27,8 @@ The vote request's lists have a lower bound where something enforces one: `block
 `src/conformance/api/responses.test.ts` validates real responses against the document with Ajv in the JSON Schema 2020-12 dialect, each against the schema the document gives for its route and status:
 
 - **Mainnet captures** (`api/mainnet/`): every captured body validates; together the captures cover every GET route but one (see below); every capture is JSON; and every status a representative answered with is one the operation documents.
+- **Capture parameters:** every capture's path parameters, decoded, and query parameters are parameters of its operation and validate against their schemas, apart from the captures that send a malformed value on purpose (see the table below), each of which breaks exactly the one parameter it is meant to.
+- **One page, two routes:** a page of an account's history is the same whether the staple it continues after is named in the path or in `start`.
 - **Fixtures** (`api/fixtures/`): every fixture validates against its route's 200 schema.
 - **Library serialization:** every block, vote and staple in a captured body or a fixture is exactly what the package's JSON conversion with `addBinary` makes of the value its `$binary` encodes [Keeta TS] index.js:78476-78481, 63910-63939, 80606-80630, 81088-81101.
 - **Votes and quotes:** a quote is told from a vote by `quote`, which is true for a quote and false or absent for a vote, and a quote always carries its fee [Keeta TS] index.js:80213-80218, 80660-80662, 80696-80698; the local quote and vote each validate only as their own kind.

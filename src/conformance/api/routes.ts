@@ -189,6 +189,23 @@ export function routeOfRequest(routes: readonly Route[], method: HTTPMethod, pat
 	return(best.route);
 }
 
+/** The path parameters of a request the route serves, by name, decoded as the client encoded them [Keeta TS] index.js:59717-59725. */
+export function pathParameters(route: Route, path: string): Readonly<Record<string, string>> {
+	const segments = path.split('/');
+	const template = route.path.split('/');
+	if (literalMatches(route, segments) === undefined) {
+		throw(new Error(`${route.path} does not serve ${path}`));
+	}
+	const parameters: Record<string, string> = {};
+	for (const [index, part] of template.entries()) {
+		const segment = segments[index];
+		if (segment !== undefined && isParameterSegment(part)) {
+			parameters[part.slice(1, -1)] = decodeURIComponent(segment);
+		}
+	}
+	return(parameters);
+}
+
 /** The routes an OpenAPI document describes, from its operations under "paths". */
 export function documentRoutes(document: unknown): readonly Route[] {
 	if (!isRecord(document) || !isRecord(document['paths'])) {
