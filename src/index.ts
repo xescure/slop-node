@@ -10,7 +10,13 @@ export { MigrationError, SCHEMA_MIGRATIONS, applyMigrations } from './ledger/sto
 export type { MigrationProblem, SchemaVersion } from './ledger/storage/postgres/migrations.js';
 export { DEFAULT_POOL_OPTIONS } from './ledger/storage/postgres/pool.js';
 export type { PostgresPoolOptions, PostgresPoolSource } from './ledger/storage/postgres/pool.js';
+export { ConfigError, getConfigFromEnv, localNodeConfig } from './node/config.js';
+export type { ConfigProblem, ConfigVariable, Environment, EnvironmentConfig, LedgerWriteMode, NetworkSelection, NodeResources, StorageChoice } from './node/config.js';
 export { LocalNodeError } from './node/errors.js';
 export type { LocalNodeProblem } from './node/errors.js';
+export { computeFeeFromBlocksFor, parseFeeSchedule } from './node/fees.js';
+export type { FeeAccount, FeePolicy, FeeSchedule } from './node/fees.js';
+export { addGenesis, GenesisError, getGenesisConfigFromEnv } from './node/genesis.js';
+export type { GenesisProblem, GenesisSettings } from './node/genesis.js';
 export { LocalNode } from './node/local.js';
 export type { ApiErrorResponse, LocalNodeConfig } from './node/local.js';

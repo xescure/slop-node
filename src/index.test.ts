@@ -39,6 +39,19 @@ describe('the built package', function() {
 		expect(built.LocalNodeError).toBeTypeOf('function');
 	});
 
+	test('exports the configuration from the environment, the fee policy and genesis', async function() {
+		const built = await importBuiltEntry();
+
+		expect(built.getConfigFromEnv).toBeTypeOf('function');
+		expect(built.ConfigError).toBeTypeOf('function');
+		expect(built.localNodeConfig).toBeTypeOf('function');
+		expect(built.computeFeeFromBlocksFor).toBeTypeOf('function');
+		expect(built.parseFeeSchedule('flat:1')).toEqual({ kind: 'flat', amountPerBlock: 1n });
+		expect(built.addGenesis).toBeTypeOf('function');
+		expect(built.getGenesisConfigFromEnv).toBeTypeOf('function');
+		expect(built.GenesisError).toBeTypeOf('function');
+	});
+
 	test('migrates a fresh database from the migrations at the package root', async function() {
 		const built = await importBuiltEntry();
 		const database = await createDatabase(inject('postgresCluster'));

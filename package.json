@@ -3,6 +3,9 @@
 	"private": true,
 	"type": "module",
 	"sideEffects": false,
+	"bin": {
+		"slop-node": "dist/main.js"
+	},
 	"license": "SEE LICENSE IN LICENSE",
 	"scripts": {
 		"tsc": "tsc",

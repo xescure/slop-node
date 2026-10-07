@@ -88,10 +88,12 @@ node_modules: node_modules/.patched
 # which an incremental build would not notice, so it starts from scratch. The
 # prerequisites are the sources tsconfig.build.json compiles: it leaves out the
 # tests, src/testing, src/conformance and the storage suites, and nothing it
-# compiles imports them.
+# compiles imports them. The command's entry, the package's bin, runs as a
+# program of its own.
 dist/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts' -not -path 'src/testing/*' -not -path 'src/conformance/*' -not -path '*/suite/*') tsconfig.json tsconfig.build.json node_modules/.patched
 	@[ -e dist/.done ] || rm -f dist/.tsbuildinfo
 	npm run tsc -- -p tsconfig.build.json
+	chmod +x dist/main.js
 	@touch dist/.done
 
 dist: dist/.done
