@@ -18,6 +18,8 @@ export default {
 		'esac',
 		'blockhash',
 		'savepoint',
+		'savepoints',
+		'sqlstate',
 		'bytea',
 		'timestamptz',
 		'regclass',
@@ -32,7 +34,9 @@ export default {
 		'ordinality',
 		'datname',
 		'pkey',
-		'cmdline'
+		'cmdline',
+		// The migration lock key, 0x6b656574616c6467, read as ASCII.
+		'keetaldg'
 	],
 	// Account strings are base32 public keys, not words.
 	ignoreRegExpList: ['/keeta_[a-z2-7]+/g'],
