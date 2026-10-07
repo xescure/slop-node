@@ -10,6 +10,8 @@ export type PostgresPoolOptions = {
 	readonly connectionTimeoutMillis: number;
 	/** TCP keepalive on every connection, so a peer that vanished is noticed while a connection idles. */
 	readonly keepAlive: boolean;
+	/** How long a connection idles before the first keepalive probe; left at 0, the operating system's default applies, two hours on Linux. */
+	readonly keepAliveInitialDelayMillis: number;
 	/** The session's statement_timeout: the server cancels a statement that runs longer. */
 	readonly statementTimeoutMillis: number;
 	/** The session's idle_in_transaction_session_timeout: the server ends a session left idle inside a transaction this long. */
@@ -34,6 +36,7 @@ export const DEFAULT_POOL_OPTIONS: PostgresPoolOptions = {
 	max: 10,
 	connectionTimeoutMillis: 5000,
 	keepAlive: true,
+	keepAliveInitialDelayMillis: 10000,
 	statementTimeoutMillis: 30000,
 	idleInTransactionTimeoutMillis: 10000
 };
@@ -55,6 +58,7 @@ const poolConfig = function(connectionString: string, overrides: Partial<Postgre
 		max: options.max,
 		connectionTimeoutMillis: options.connectionTimeoutMillis,
 		keepAlive: options.keepAlive,
+		keepAliveInitialDelayMillis: options.keepAliveInitialDelayMillis,
 		statement_timeout: options.statementTimeoutMillis,
 		idle_in_transaction_session_timeout: options.idleInTransactionTimeoutMillis
 	});

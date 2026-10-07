@@ -202,6 +202,14 @@ describe('mapDatabaseError', function() {
 		expectUnchanged(failure, COMMIT);
 	});
 
+	test('a session ended for idling in its transaction is a retryable conflict only before COMMIT', function() {
+		const failure = new pg.DatabaseError('terminating connection due to idle-in-transaction timeout', 0, 'error');
+		failure.code = '25P03';
+
+		expectRetryable(failure);
+		expectUnchanged(failure, COMMIT);
+	});
+
 	test('other errors are returned unchanged', function() {
 		expectUnchanged(new Error('disk on fire'));
 		expectUnchanged('not even an error');

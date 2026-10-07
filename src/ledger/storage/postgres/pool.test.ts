@@ -34,7 +34,8 @@ describe('PostgresPool', function() {
 		expect(pool.pool.options).toMatchObject({
 			max: DEFAULT_POOL_OPTIONS.max,
 			connectionTimeoutMillis: DEFAULT_POOL_OPTIONS.connectionTimeoutMillis,
-			keepAlive: true
+			keepAlive: true,
+			keepAliveInitialDelayMillis: DEFAULT_POOL_OPTIONS.keepAliveInitialDelayMillis
 		});
 	});
 
@@ -43,7 +44,7 @@ describe('PostgresPool', function() {
 		const pool = await PostgresPool.open({
 			kind: 'connection-string',
 			connectionString: database.connectionString,
-			options: { max: 3, connectionTimeoutMillis: 250, keepAlive: false, statementTimeoutMillis: 1500, idleInTransactionTimeoutMillis: 2500 }
+			options: { max: 3, connectionTimeoutMillis: 250, keepAlive: false, keepAliveInitialDelayMillis: 750, statementTimeoutMillis: 1500, idleInTransactionTimeoutMillis: 2500 }
 		});
 		onTestFinished(function() {
 			return(pool.close());
@@ -51,7 +52,7 @@ describe('PostgresPool', function() {
 
 		expect(await sessionSetting(pool, 'statement_timeout')).toBe('1500ms');
 		expect(await sessionSetting(pool, 'idle_in_transaction_session_timeout')).toBe('2500ms');
-		expect(pool.pool.options).toMatchObject({ max: 3, connectionTimeoutMillis: 250, keepAlive: false });
+		expect(pool.pool.options).toMatchObject({ max: 3, connectionTimeoutMillis: 250, keepAlive: false, keepAliveInitialDelayMillis: 750 });
 	});
 
 	test('a pool opened from a connection string is owned and ended on close', async function() {

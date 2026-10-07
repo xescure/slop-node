@@ -19,8 +19,8 @@ const SERIALIZATION_FAILURE = '40001';
 const DEADLOCK_DETECTED = '40P01';
 const UNIQUE_VIOLATION = '23505';
 
-// The server ending the session while a statement runs: an administrator's or a shutdown's termination.
-const SESSION_TERMINATED = ['57P01', '57P02'] as const;
+// The server ending the session while a statement runs: an administrator's or a shutdown's termination, or the idle-in-transaction timeout.
+const SESSION_TERMINATED = ['57P01', '57P02', '25P03'] as const;
 const CONNECTION_EXCEPTION_CLASS = '08';
 
 /*
