@@ -35,6 +35,8 @@ export default {
 		'datname',
 		'pkey',
 		'cmdline',
+		// Elliptic curve names in upstream's key algorithms.
+		'secp',
 		// The migration lock key, 0x6b656574616c6467, read as ASCII.
 		'keetaldg'
 	],

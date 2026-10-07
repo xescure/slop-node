@@ -1346,20 +1346,20 @@ A batch reports whether work remains. A deferred retry that failed in this trans
 
 ## 6. The Postgres schema
 
-The Postgres driver keeps the ledger, and the Postgres key-value store the node's statistics and peer-to-peer state, in the schema that the files in `schema/migrations/` create. Any other implementation that opens the same database, in any language, applies the same files, under the same rules, and reads and writes the tables as the "Postgres" paragraphs of section 4 and section 6.4 state.
+The Postgres driver keeps the ledger, and the Postgres key-value store the node's statistics and peer-to-peer state, in the schema that the files in `schema/migrations/` create. Any other implementation that opens the same database, in any language, applies the same files, under the same rules, and reads and writes the tables as the "Postgres" paragraphs of section 4 and sections 6.4 and 6.5 state.
 
 ### 6.1 Layout
 
 - **Main and side.** A row that can exist on both ledgers carries `ledger` (`'main'` or `'side'`): `blocks`, `votes` and `idempotent_keys`. A block is one row, so it is never on both ledgers: promotion turns a side row into the main row in place. Main votes are unique per staple and `uid` (`votes_main`); side votes per `uid` (`votes_side`). A side vote lists its blocks in `vote_blocks`, which outlives the side copies of those blocks.
 - **Accounts.** Every account the ledger names is interned once in `accounts`, with its public key spelled as upstream prints it and its key type, and other tables refer to it by its `bigint` ID. IDs are local to one database.
-- **Types.** Hashes are `hash32`, a `bytea` of exactly 32 bytes. Balances, supplies and weights are `amount`, an integer-valued `numeric` without bounds or a sign check (D9). Permission sets are two `permission_bits` columns, base and external: integer-valued `numeric`, since the flag offsets exceed 63 bits and a decoded set may be negative.
+- **Types.** Hashes are `hash32`, a `bytea` of exactly 32 bytes. Balances, supplies and weights are `amount`, an integer-valued `numeric` without bounds or a sign check (D9). Permission sets are two `permission_bits` columns, base and external: integer-valued `numeric`, since the flag offsets exceed 63 bits and a decoded set may be negative. Section 6.5 states the format of every column whose content is not plain SQL data.
 - **Staples.** `staples` holds each main staple under its `blocksHash`, with its history key (`staple_time`) and its catch-up key (`moment`, `sequence`). `sequence` is an identity column, local to the database.
 - **Deferral.** `deferred_staples` holds a deferred staple's bytes; `deferred_waits` the blocks it waits on; `deferred_blocks` the previous of each of its blocks, for the check that it can never apply.
 - **Serials.** The sequence `vote_serials` (section 3.6).
 
 ### 6.2 Moments and the database clock
 
-- Every moment the schema stores comes from the caller: the transaction moment, a vote's validity, a staple's time, or, for `schema_version.applied_at`, the clock of the process that migrates. Each is stored as `timestamptz`, which holds a JavaScript millisecond time exactly and reaches far beyond the year 3027 that a permanent vote's validity reaches.
+- Every moment the schema stores comes from the caller: the transaction moment, a vote's validity, a staple's time, or, for `schema_version.applied_at`, the clock of the process that migrates. Each is stored as a `timestamptz`, which holds a JavaScript millisecond time exactly and reaches far beyond the year 3027 that a permanent vote's validity reaches.
 - No statement reads the database clock: not `now()`, `CURRENT_TIMESTAMP`, `CURRENT_TIME`, `CURRENT_DATE`, `LOCALTIMESTAMP`, `LOCALTIME`, `clock_timestamp()`, `statement_timestamp()`, `transaction_timestamp()`, `timeofday()` or `age()`, nor the inputs `'now'`, `'today'`, `'tomorrow'` and `'yesterday'` in any quoting. The database's clock is not the node's, and a moment taken from it would make one transaction's expiry decisions disagree with the moment `Ledger` fixed for the attempt.
 - **Whole milliseconds.** Every `timestamptz` column the migrations create has the domain `timestamptz_ms`, which refuses a moment that is not a whole number of milliseconds: `CHECK (VALUE = date_trunc('milliseconds', VALUE))`. Every moment the node writes is a JavaScript `Date`, which is whole milliseconds; another implementation must truncate, or refuse, a finer moment before writing it. The rule protects the keys built from moments: the catch-up page key carries the moment in milliseconds (`src/ledger/storage/paging.ts`), so a stored moment with a fraction would compare after the key of its own page, and the next page would return the same staple again, forever. `schema_version.applied_at`, which no key reads, is a plain `timestamptz`. Tested by `src/ledger/storage/postgres/schema.test.ts`.
 - Moments need not increase. A transaction that began earlier can commit later (section 3.5), and the node's clock can step back. Order keys therefore break ties with the node-local `sequence`, never with "the latest moment".
@@ -1369,11 +1369,13 @@ Tested by `src/ledger/storage/sql-clock.test.ts: "no SQL uses the database clock
 ### 6.3 Migrations
 
 - **Files.** Each migration is a plain SQL file, `schema/migrations/NNNN_<name>.sql`, numbered from `0001` without gaps; `<name>` is lowercase letters, digits and single underscores. A file is applied as its exact bytes, which must be valid UTF-8. Once a file has been applied anywhere it is never edited: a change is a new file.
+- **Directory entries.** Every entry of the directory must be a migration: a regular file whose whole name matches `^(\d{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$` with a number of at least 1. Anything else refuses the whole migration before any file applies: a subdirectory, a symbolic link, a hidden file, a file named otherwise (`0000_x.sql`, `1_x.sql`, `0001-x.sql`, `README`), a file that is not valid UTF-8, two files with one number, a gap in the numbers, or no file at all.
 - **Shipping.** The migration files are part of the package: `schema/migrations/` is shipped beside `dist/`, and the built runner reads it there, at `../../../../schema/migrations/` from its own module. It is the one copy every implementation applies. Tested by `src/index.test.ts: "migrates a fresh database from the migrations at the package root"`, which imports the built package.
-- **Record.** The table `schema_version (version integer PRIMARY KEY, sha256 bytea NOT NULL, applied_at timestamptz NOT NULL)` holds one row per applied file: its number, the SHA-256 of its bytes, and when it was applied, by the migrating process's clock.
+- **Record.** The table `schema_version (version integer PRIMARY KEY, sha256 bytea NOT NULL, applied_at timestamptz NOT NULL)` holds one row per applied file: its number; in `sha256`, the raw 32-byte SHA-256 digest of the file's exact bytes, not its hex spelling; and when it was applied, by the migrating process's clock.
+- **Sending a file.** Each file is sent to the server whole, as one simple-query (`Query`) message whose text is the file's decoded contents, and is never split on `;`: the server splits it into statements itself, so a file may hold any number of statements and bodies that contain `;`. The message runs inside the explicit transaction the procedure opens, so a file must not contain transaction control or a statement Postgres refuses inside a transaction block, such as `CREATE INDEX CONCURRENTLY`.
 - **Timeout.** The migrating session runs with `statement_timeout` set to 0 until it releases the lock, then resets it: waiting for another process's migration, or a migration itself, may take longer than any statement of the ledger. Tested by `src/ledger/storage/postgres/migrations.test.ts: "a migration runs without the session's statement timeout, which the session gets back afterwards"`.
 - **Lock.** Every process that migrates takes the session advisory lock `pg_advisory_lock(7738703085231170663)`, which is `0x6b656574616c6467`, the ASCII bytes `keetaldg` read as a big-endian `bigint`, before it creates or reads `schema_version`, and releases it when done, whether it succeeded or refused. An implementation in another language must use the same key and the same table, so that processes of both start safely together.
-- **Procedure.** Under the lock: create `schema_version` if it does not exist; read its rows in version order; refuse if the recorded versions are not 1, 2, 3 and so on without a gap, if the newest of them is newer than the newest file this build has, or if a recorded SHA-256 differs from its file's; then apply each file the database lacks, in order, each in a transaction of its own that also inserts its `schema_version` row. A file that fails leaves nothing of itself and stops the migration. Several processes starting at once apply each file exactly once.
+- **Procedure.** Under the lock: create `schema_version` if it does not exist; read its rows in version order; refuse if the recorded versions are not 1, 2, 3 and so on without a gap, if the newest of them is newer than the newest file this build has, or if a recorded SHA-256 differs from its file's; then apply each file the database lacks, in order, each as `BEGIN`, the file's message, the insert of its `schema_version` row, and `COMMIT`. A file that fails is rolled back, leaves nothing of itself and stops the migration. Several processes starting at once apply each file exactly once.
 
 Tested by the cases of `src/ledger/storage/postgres/migrations.test.ts`, among them `"concurrent starts migrate exactly once"`, `"a database at an unknown version is refused"`, `"an edited migration is refused"`, `"a database without the record of an earlier version is refused"` and `"a failing migration leaves nothing of itself behind"`, and by `src/ledger/storage/postgres/driver.test.ts: "the first use migrates an empty database"`.
 
@@ -1389,3 +1391,52 @@ Upstream's statistics and peer-to-peer layers keep their state in a key-value st
 - **Isolation.** Every operation is one transaction, `BEGIN ISOLATION LEVEL READ COMMITTED`, whatever the database's default. Each write is decided by the row lock its upsert takes: concurrent increments, folds and exclusive creates of one key wait for each other, and each reads the committed result of the one before, so increments from any number of processes sum exactly and one exclusive create wins. Under `SERIALIZABLE`, one of two such writes would abort instead, for a retry that reaches the same result.
 
 Tested by `src/kv/providers.test.ts`, which runs the cases of `src/kv/suite/` against upstream's memory store and the Postgres store, among them `src/kv/suite/counters.ts: "increments from two processes on one store sum exactly"` and `src/kv/suite/entries.ts: "of exclusive creates of one key by two processes, exactly one succeeds"`, and by `src/kv/postgres.test.ts: "concurrent increments sum exactly even where the database defaults to SERIALIZABLE"` and the other cases of that file.
+
+### 6.5 Column formats
+
+What another implementation must write, and can expect to read, in each column whose content is not plain SQL data. Every hash is upstream's `Hash`, SHA3-256 [Keeta TS] index.js:78985-79001.
+
+**Bytes.**
+
+| Column | Holds |
+|---|---|
+| `blocks.bytes` | `Block.toBytes()`: the ASN.1 encoding of the block with its signatures. A block decoded from bytes returns exactly those bytes; a block built in the process returns upstream's encoding of it [Keeta TS] index.js:63836-63844, 64051-64122 |
+| `votes.bytes` | `Vote.toBytes()`: the vote, an X.509 certificate signed by its issuer, as the bytes it was decoded from or sealed as [Keeta TS] index.js:80588-80590 |
+| `deferred_staples.bytes` | `VoteStaple.toBytes()` without an argument: a zlib stream (RFC 1950) of the staple's ASN.1 encoding, the compressed bytes it was decoded from when it arrived compressed [Keeta TS] index.js:81016-81027. A reader inflates bytes that begin with a zlib header and reads any other bytes as the encoding itself [Keeta TS] index.js:79804-79817, 80969-81003, so a writer may store either. No key is built from these bytes |
+| `certificates.certificate` | `Certificate.toDER()`: the certificate's DER, as the bytes it was decoded from [Keeta TS] index.js:78102-78105 |
+| `certificates.intermediates` | `CertificateBundle.getDERBuffer()` of the operation's intermediate certificates: the DER of a `SEQUENCE OF Certificate`, or the bytes the bundle was decoded from, or `NULL` when the operation names none [Keeta TS] index.js:77436-77500 |
+| `hash32` columns | The 32 bytes of the hash: a block's `hash`, a staple's `blocksHash` (the hash of its blocks' hashes in vote order [Keeta TS] index.js:80126-80143), a certificate's `hash()` [Keeta TS] index.js:78134-78137, or an idempotent key, the hash of the account's key type byte and public key followed by the block's idempotent bytes [Keeta TS] index.js:62911-62918, 68920-68931. `previous` of an account's first block is its opening hash (section 1) |
+| `kv_buffers.value` | The accumulator's bytes, as `BufferStorage.getBuffer()` returns them |
+
+**`accounts.key_type`.** Upstream's `AccountKeyAlgorithm` [Keeta TS] index.js:61546-61555:
+
+| Value | Algorithm |
+|---|---|
+| 0 | `ECDSA_SECP256K1` |
+| 1 | `ED25519` |
+| 2 | `NETWORK` |
+| 3 | `TOKEN` |
+| 4 | `STORAGE` |
+| 6 | `ECDSA_SECP256R1` |
+| 7 | `MULTISIG` |
+
+5 is unassigned. `accounts.public_key` is the account's `publicKeyString`, as upstream prints it (`keeta_...`).
+
+**`votes.uid`.** The vote's `$uid`: `ID=` followed by the issuer's `publicKeyString`, `/Serial=`, and the vote's serial as a decimal integer without sign or leading zeros [Keeta TS] index.js:80317, 80569. For example `ID=keeta_aab.../Serial=42`.
+
+**Permission sets.** `acls.base_permissions`, `acls.external_permissions`, `account_info.default_base_permission` and `account_info.default_external_permission` each hold one of upstream's bit fields as the integer it reads as, `Permissions.base.bigint` or `Permissions.external.bigint`, in decimal `numeric`. Bit k is set when `value & (1 << k)` is non-zero, with a negative value read in two's complement [Keeta TS] index.js:76531-76545, 76569-76571. The base bits are the `BaseFlag` offsets [Keeta TS] index.js:73715-73731:
+
+| Bit | Flag | Bit | Flag |
+|---|---|---|---|
+| 0 | `ACCESS` | 8 | `STORAGE_CREATE` |
+| 1 | `OWNER` | 9 | `STORAGE_CAN_HOLD` |
+| 2 | `ADMIN` | 10 | `STORAGE_DEPOSIT` |
+| 3 | `UPDATE_INFO` | 11 | `PERMISSION_DELEGATE_ADD` |
+| 4 | `SEND_ON_BEHALF` | 12 | `PERMISSION_DELEGATE_REMOVE` |
+| 5 | `TOKEN_ADMIN_CREATE` | 13 | `MANAGE_CERTIFICATE` |
+| 6 | `TOKEN_ADMIN_SUPPLY` | 14 | `MULTISIG_SIGNER` |
+| 7 | `TOKEN_ADMIN_MODIFY_BALANCE` | | |
+
+An external set's bit k is external offset k, an application-defined flag that the network bounds by its `maxExternalOffset` [Keeta TS] index.js:74101-74106. Values are stored as the set held them, so a stored set decodes to the same `Permissions`; a statement that tests a flag reads its bit, as `listOwners` reads bit 1.
+
+**`blocks.operation_count`.** The number of operations in the block, `block.operations.length`. The sum over main blocks is `transactionCount` in `stats` (D19).
