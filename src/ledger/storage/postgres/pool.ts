@@ -27,7 +27,7 @@ export type PostgresPoolOptions = {
  * gc runs its batches in one transaction for up to its time limit, 280 s by
  * default [Keeta TS] index.js:67852-67862, though each statement handles at
  * most one batch, and stats counts the whole main ledger in one statement.
- * Thirty seconds lets those finish on a large ledger and still ends a
+ * Thirty seconds leaves room for those on a large ledger and still ends a
  * statement stuck waiting for a lock, which the idle limit frees long before.
  */
 export const DEFAULT_POOL_OPTIONS: PostgresPoolOptions = {
