@@ -678,6 +678,30 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(blocksHashesOf(staples)).toEqual(blocksHashesOf([network.genesis, earlier, later]));
 		});
 
+		test('catch-up orders by the moment each staple was applied, then by application, even when the clock goes back', async function() {
+			const { network, ledger } = await startNetwork();
+			await ledger.add(network.genesis);
+			const [first, second, third] = await Promise.all([0, 1, 2].map(async function(index) {
+				const sender = requireAt(network.users, index);
+				return(await confirmedStaple([await sendBlock({ from: sender, previous: headOf(network.genesis, sender), to: requireAt(network.users, (index + 1) % 3), amount: 1n, token: network.baseToken, network: network.network })], network.representatives));
+			}));
+			if (first === undefined || second === undefined || third === undefined) {
+				throw(new Error('three staples expected'));
+			}
+
+			advanceClock(2000);
+			await ledger.add(first);
+			advanceClock(-1000);
+			const wentBack = new Date(Date.now());
+			await ledger.add(second);
+			await ledger.add(third);
+
+			const fromBack = await ledger.getVoteStaplesAfter(wentBack, 1000, { maxVotesPerPage: 1 });
+			expect(blocksHashesOf(fromBack)).toEqual(blocksHashesOf([second, third, first]));
+			const afterBack = await ledger.getVoteStaplesAfter(new Date(wentBack.getTime() + 1), 1000, { maxVotesPerPage: 1 });
+			expect(blocksHashesOf(afterBack)).toEqual(blocksHashesOf([first]));
+		});
+
 		test('fork in confirmed history is rejected with LEDGER_PREVIOUS_ALREADY_USED', async function() {
 			const { network, ledger } = await startNetwork();
 			const user = requireAt(network.users, 0);

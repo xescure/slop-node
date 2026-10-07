@@ -47,6 +47,16 @@ const groups: readonly Group[] = [
 
 const UPDATE = process.env['SLOP_NODE_UPDATE_CONFORMANCE'] === '1';
 
+/*
+ * A group replays its cases one after another, each on storage of its own.
+ * On Postgres that is a database copied from the template and dropped
+ * afterwards, and the slowest group, fees, with 31 cases on 80 databases,
+ * took 4.0 to 4.6 s while make -j8 ran the other tests and the linters
+ * beside it, close to the default timeout of 5 s. This leaves room for a
+ * machine several times slower.
+ */
+const REPLAY_TIMEOUT_MILLISECONDS = 30_000;
+
 const CORPUS_DIRECTORY = new URL('../../conformance/vote-cases/', import.meta.url);
 
 function fileOf(group: Group): URL {
@@ -164,7 +174,7 @@ describe('vote-decision corpus', function() {
 			}
 		}
 
-		test.each(groups)('the committed $name cases replay from their data alone', async function(group) {
+		test.each(groups)('the committed $name cases replay from their data alone', { timeout: REPLAY_TIMEOUT_MILLISECONDS }, async function(group) {
 			const { cases } = decodeVoteCaseFile(await readCommitted(group));
 			const failures: ReplayFailure[] = [];
 			for (const voteCase of cases) {

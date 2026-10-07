@@ -9,15 +9,29 @@ import type { DriverUnderTest, SuiteGroup } from './types.js';
 type PostgresInstance = {
 	readonly storage: PostgresLedgerStorage;
 	readonly database: TestDatabase;
+	readonly siblings: PostgresLedgerStorage[];
 };
 
 const postgresInstances = new WeakMap<LedgerStorageDriverBase, PostgresInstance>();
+
+const postgresInstanceOf = function(storage: LedgerStorageDriverBase): PostgresInstance {
+	const instance = postgresInstances.get(storage);
+	if (instance === undefined) {
+		throw(new Error('this storage was not created by the postgres entry'));
+	}
+	return(instance);
+};
+
+const openPostgresStorage = function(database: TestDatabase): PostgresLedgerStorage {
+	return(new PostgresLedgerStorage({ kind: 'connection-string', connectionString: database.connectionString }));
+};
 
 /** Every driver the shared suite and the conformance corpus run against. */
 export const driversUnderTest: readonly DriverUnderTest[] = [
 	{
 		name: 'memory',
 		groups: 'all',
+		sharing: { kind: 'process-local' },
 		create: function(): Promise<LedgerStorageDriverBase> {
 			return(Promise.resolve(new MemoryLedgerStorage()));
 		},
@@ -27,20 +41,29 @@ export const driversUnderTest: readonly DriverUnderTest[] = [
 	},
 	{
 		name: 'postgres',
-		groups: ['transactions', 'genesis', 'confirmed', 'stats', 'votes', 'deferral', 'gc', 'canaries'],
+		groups: 'all',
+		sharing: {
+			kind: 'shared',
+			openSibling: function(storage: LedgerStorageDriverBase): Promise<LedgerStorageDriverBase> {
+				const instance = postgresInstanceOf(storage);
+				const sibling = openPostgresStorage(instance.database);
+				instance.siblings.push(sibling);
+				return(Promise.resolve(sibling));
+			}
+		},
 		// Each instance is a fresh database copied from the migrated template, dropped with it.
 		create: async function(): Promise<LedgerStorageDriverBase> {
 			const database = await createDatabase(inject('postgresCluster'), inject('postgresLedgerTemplate'));
-			const storage = new PostgresLedgerStorage({ kind: 'connection-string', connectionString: database.connectionString });
-			postgresInstances.set(storage, { storage, database });
+			const storage = openPostgresStorage(database);
+			postgresInstances.set(storage, { storage, database, siblings: [] });
 			return(storage);
 		},
 		destroy: async function(created: LedgerStorageDriverBase): Promise<void> {
-			const instance = postgresInstances.get(created);
-			if (instance === undefined) {
-				throw(new Error('this storage was not created by the postgres entry'));
-			}
+			const instance = postgresInstanceOf(created);
 			postgresInstances.delete(created);
+			for (const sibling of instance.siblings.splice(0)) {
+				await sibling.destroy();
+			}
 			await instance.storage.destroy();
 			await instance.database.drop();
 		}

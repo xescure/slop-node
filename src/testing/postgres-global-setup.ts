@@ -1,5 +1,5 @@
 import type { TestProject } from 'vitest/node';
-import { connectionOf, createLedgerTemplate, startCluster, sweepAbandonedClusters } from './postgres.js';
+import { closeMaintenanceConnections, connectionOf, createLedgerTemplate, startCluster, sweepAbandonedClusters } from './postgres.js';
 
 /**
  * One cluster for the whole run, with one migrated template; each test makes
@@ -8,12 +8,16 @@ import { connectionOf, createLedgerTemplate, startCluster, sweepAbandonedCluster
 export const setup = async function(project: TestProject): Promise<() => Promise<void>> {
 	await sweepAbandonedClusters();
 	const cluster = await startCluster();
+	const stop = async function(): Promise<void> {
+		await closeMaintenanceConnections();
+		await cluster.stop();
+	};
 	try {
 		project.provide('postgresLedgerTemplate', await createLedgerTemplate(cluster));
 	} catch (error: unknown) {
-		await cluster.stop();
+		await stop();
 		throw(error);
 	}
 	project.provide('postgresCluster', connectionOf(cluster));
-	return(cluster.stop);
+	return(stop);
 };
