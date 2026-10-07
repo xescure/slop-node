@@ -3,8 +3,9 @@ import type { Account, GenericAccount } from '@keetanetwork/keetanet-client/lib/
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { ACLRow, AccountInfo, CertificateWithIntermediates } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
 import type { Permissions } from '@keetanetwork/keetanet-client/lib/permissions.js';
+import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { assertNever } from '../../util/assert-never.js';
-import { compareText } from './replay.js';
+import { compareText, touchedBy } from './replay.js';
 import type { ReplayResult } from './replay.js';
 
 const lib = KeetaNet.lib;
@@ -56,6 +57,7 @@ type ACLRecord =
 type BalanceRecord = { readonly kind: 'balance'; readonly account: PublicKeyText; readonly token: PublicKeyText; readonly amount: DecimalText };
 type CertificateRecord = { readonly kind: 'certificate'; readonly account: PublicKeyText; readonly hash: HashText; readonly certificate: Base64Text; readonly intermediates: readonly Base64Text[] | null };
 type ChecksumRecord = { readonly kind: 'checksum'; readonly ledgerChecksum: HashText };
+type IdempotentRecord = { readonly kind: 'idempotent'; readonly account: PublicKeyText; readonly key: Base64Text; readonly block: HashText | null };
 type HeadRecord = { readonly kind: 'head'; readonly account: PublicKeyText; readonly height: DecimalText; readonly block: HashText };
 type SupplyRecord = { readonly kind: 'supply'; readonly token: PublicKeyText; readonly amount: DecimalText };
 type WeightRecord = { readonly kind: 'weight'; readonly representative: PublicKeyText; readonly weight: DecimalText };
@@ -65,7 +67,7 @@ type WeightRecord = { readonly kind: 'weight'; readonly representative: PublicKe
  * key fields first, which is what makes the byte order of the lines the order
  * by kind and key.
  */
-export type StateDumpRecord = AccountRecord | ACLRecord | BalanceRecord | CertificateRecord | ChecksumRecord | HeadRecord | SupplyRecord | WeightRecord;
+export type StateDumpRecord = AccountRecord | ACLRecord | BalanceRecord | CertificateRecord | ChecksumRecord | HeadRecord | IdempotentRecord | SupplyRecord | WeightRecord;
 
 export type StateDumpKind = StateDumpRecord['kind'];
 
@@ -103,7 +105,7 @@ function hashText(hash: { toString(): string }): HashText {
 	return(text);
 }
 
-function base64Text(bytes: ArrayBuffer): Base64Text {
+function base64Text(bytes: ArrayBuffer | Buffer): Base64Text {
 	// The brand marks the canonical, padded base64 that Buffer writes.
 	return(Buffer.from(bytes).toString('base64') as Base64Text);
 }
@@ -214,12 +216,36 @@ async function headRecords(reader: LedgerReader, accounts: readonly GenericAccou
 }
 
 /*
+ * Storage cannot list idempotent keys, so each key is one that an applied
+ * block carries, looked up on the main ledger under the block's account as
+ * the ledger keys it.
+ * [Keeta TS] index.js:68921-68931, 69711-69716
+ */
+async function idempotentRecords(reader: LedgerReader, staples: readonly VoteStaple[]): Promise<IdempotentRecord[]> {
+	const records: IdempotentRecord[] = [];
+	for (const block of staples.flatMap(function(staple) {
+		return(staple.blocks);
+	})) {
+		if (block.idempotent === undefined) {
+			continue;
+		}
+		const holder = await reader.getIdempotentBlockHash(block.account, block.idempotent, 'main');
+		let held: HashText | null = null;
+		if (holder !== null) {
+			held = hashText(holder);
+		}
+		records.push({ kind: 'idempotent', account: publicKeyText(block.account), key: base64Text(block.idempotent), block: held });
+	}
+	return(records);
+}
+
+/*
  * Every read goes through the ledger's own transaction interface, which reads
  * the main ledger, so any storage driver yields the same records. ACL rows are
  * listed from both sides, so a row whose entity lies outside the set is still
  * found through its principal.
  */
-async function readRecords(reader: LedgerReader, accounts: readonly GenericAccount[]): Promise<StateDumpRecord[]> {
+async function readRecords(reader: LedgerReader, accounts: readonly GenericAccount[], staples: readonly VoteStaple[]): Promise<StateDumpRecord[]> {
 	const records: StateDumpRecord[] = [];
 	const representatives = new Map<PublicKeyText, Account>();
 	for (const account of accounts) {
@@ -229,6 +255,10 @@ async function readRecords(reader: LedgerReader, accounts: readonly GenericAccou
 		}
 		records.push(...await accountRecords(reader, account, representative));
 		for (const { token, balance } of await reader.getAllBalances(account)) {
+			// A balance of zero is the same state as no balance, so the format has no record for it.
+			if (balance === 0n) {
+				continue;
+			}
 			records.push({ kind: 'balance', account: publicKeyText(account), token: publicKeyText(token), amount: decimalText(balance) });
 		}
 		for (const row of [...await reader.listACLsByEntity(account), ...await reader.listACLsByPrincipal(account)]) {
@@ -239,6 +269,7 @@ async function readRecords(reader: LedgerReader, accounts: readonly GenericAccou
 		}
 	}
 	records.push(...await headRecords(reader, accounts));
+	records.push(...await idempotentRecords(reader, staples));
 	for (const [key, representative] of representatives) {
 		records.push({ kind: 'weight', representative: key, weight: decimalText(await reader.votingPower(representative)) });
 	}
@@ -257,14 +288,15 @@ function renderLine(value: object): string {
 }
 
 /**
- * The confirmed state a ledger holds for the accounts, in format
- * slop-node/state-dump@1 (conformance/STATE-DUMP.md): the format line, then
- * one record per line in ascending byte order.
+ * The confirmed state that a ledger holds after applying the staples, in
+ * format slop-node/state-dump@1 (conformance/STATE-DUMP.md): the format line,
+ * then one record per line in ascending byte order. The dumped accounts are
+ * those the staples touch, the base token and the network address.
  */
-export async function renderStateDump(ledger: Ledger, accounts: readonly GenericAccount[], ledgerChecksum: bigint): Promise<string> {
-	const distinct = [...new lib.Account.Set(accounts)];
+export async function renderStateDump(ledger: Ledger, appliedStaples: readonly VoteStaple[], ledgerChecksum: bigint): Promise<string> {
+	const accounts = [...new lib.Account.Set([...touchedBy(appliedStaples), ledger.baseToken, ledger.networkAddress])];
 	const records = await ledger.runReadOnly('state-dump', function(reader) {
-		return(readRecords(reader, distinct));
+		return(readRecords(reader, accounts, appliedStaples));
 	});
 	records.push(checksumRecord(ledgerChecksum));
 	const lines = [...new Set(records.map(renderLine))].sort(compareText);
@@ -273,7 +305,6 @@ export async function renderStateDump(ledger: Ledger, accounts: readonly Generic
 	}).join(''));
 }
 
-/** The dumped set of a replay: every account its staples touched, the base token and the network address. */
 export function renderReplayStateDump(result: ReplayResult): Promise<string> {
-	return(renderStateDump(result.ledger, [...result.touched, result.baseToken, result.networkAddress], result.ledgerChecksum));
+	return(renderStateDump(result.ledger, result.appliedStaples, result.ledgerChecksum));
 }

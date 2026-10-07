@@ -20,6 +20,8 @@ export type ReplayResult = {
 	readonly ledger: Ledger;
 	/** The staples of the input that are on the main ledger once deferral is drained. */
 	readonly applied: number;
+	/** The staples of the input that are on the main ledger, in replay order. */
+	readonly appliedStaples: readonly VoteStaple[];
 	/** The staples of the input that are not on the main ledger, in replay order. */
 	readonly deferred: readonly VoteStaple[];
 	/** What the node's statistics hold under ledgerChecksum: the XOR of the hash of every block applied. */
@@ -93,7 +95,8 @@ async function appliedAmong(ledger: Ledger, staples: readonly VoteStaple[]): Pro
 	})));
 }
 
-function touchedBy(staples: Iterable<VoteStaple>): GenericAccount[] {
+/** Every account the staples' effects touch, once each, in code-point order of their public key strings. */
+export function touchedBy(staples: Iterable<VoteStaple>): GenericAccount[] {
 	const touched = new lib.Account.Set();
 	for (const staple of staples) {
 		for (const account of LedgerInternals.computeEffectOfBlocks(staple.blocks).touched) {
@@ -122,6 +125,9 @@ async function replayOnNode(node: ReplayNode, staples: readonly VoteStaple[], op
 	return({
 		ledger,
 		applied: applied.size,
+		appliedStaples: ordered.filter(function(staple): boolean {
+			return(applied.has(staple));
+		}),
 		deferred: ordered.filter(function(staple): boolean {
 			return(!applied.has(staple));
 		}),

@@ -25,6 +25,9 @@
       "$ref": "#/$defs/headRecord"
     },
     {
+      "$ref": "#/$defs/idempotentRecord"
+    },
+    {
       "$ref": "#/$defs/supplyRecord"
     },
     {
@@ -42,13 +45,18 @@
       "type": "string",
       "pattern": "^(?:0|[1-9][0-9]*)$"
     },
+    "positiveDecimal": {
+      "description": "A positive integer in decimal, without leading zeros.",
+      "type": "string",
+      "pattern": "^[1-9][0-9]*$"
+    },
     "hash": {
       "description": "A 32-byte hash in uppercase hex.",
       "type": "string",
       "pattern": "^[0-9A-F]{64}$"
     },
     "base64": {
-      "description": "Canonical base64, with padding, of DER bytes.",
+      "description": "Canonical base64, with padding, of bytes.",
       "type": "string",
       "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
     },
@@ -143,7 +151,7 @@
       }
     },
     "aclRecord": {
-      "description": "One permission row: what a principal may do on an entity, optionally scoped to a target. A CERTIFICATE row names the certificate's holder as its principal and the certificate's hash.",
+      "description": "One permission row: what a principal may do on an entity, optionally scoped to a target. A CERTIFICATE row names the certificate's holder as its principal and the certificate's hash. A row without permissions is written with base and external 0.",
       "oneOf": [
         {
           "type": "object",
@@ -224,7 +232,7 @@
       ]
     },
     "balanceRecord": {
-      "description": "A non-zero balance of a token on an account of the dumped set.",
+      "description": "A non-zero balance of a token on an account of the dumped set. A balance of zero has no record.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -244,7 +252,7 @@
           "$ref": "#/$defs/publicKey"
         },
         "amount": {
-          "$ref": "#/$defs/decimal"
+          "$ref": "#/$defs/positiveDecimal"
         }
       }
     },
@@ -326,6 +334,38 @@
         },
         "block": {
           "$ref": "#/$defs/hash"
+        }
+      }
+    },
+    "idempotentRecord": {
+      "description": "The block of the main ledger that holds the idempotent key an applied block carries, under that block's account, or null when no main block holds it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "account",
+        "key",
+        "block"
+      ],
+      "properties": {
+        "kind": {
+          "const": "idempotent"
+        },
+        "account": {
+          "$ref": "#/$defs/publicKey"
+        },
+        "key": {
+          "$ref": "#/$defs/base64"
+        },
+        "block": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },

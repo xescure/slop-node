@@ -13,12 +13,12 @@ import {
 	createTokenBlock,
 	manageCertificateBlock,
 	modifyPermissionsBlock,
+	sendBlock,
 	setInfoBlock,
 	tokenSupplyBlock
 } from '../../testing/blocks.js';
 import { createTestNetwork, freezeClock } from '../../testing/network.js';
 import type { TestNetwork } from '../../testing/network.js';
-import { LedgerInternals } from '../../upstream/internals.js';
 import { stateDumpViolations } from '../schema.js';
 import { STATE_DUMP_FORMAT, renderStateDump } from './dump.js';
 import { compareText } from './replay.js';
@@ -27,21 +27,19 @@ const lib = KeetaNet.lib;
 
 const WEIGHTS: readonly bigint[] = [400n, 300n, 300n];
 
+// User 1 sends all of its balance away, which moves its weight to representative 2.
+const FINAL_WEIGHTS: readonly bigint[] = [400n, 0n, 600n];
+
+const IDEMPOTENT_KEY = 'c3dlZXA=';
+
 type Built = {
 	readonly network: TestNetwork;
 	readonly ledger: Ledger;
 	readonly staples: readonly VoteStaple[];
-	readonly accounts: readonly GenericAccount[];
 };
 
 function key(account: GenericAccount): string {
 	return(account.publicKeyString.get());
-}
-
-function touchedBy(staples: readonly VoteStaple[]): GenericAccount[] {
-	return(staples.flatMap(function(staple): GenericAccount[] {
-		return([...LedgerInternals.computeEffectOfBlocks(staple.blocks).touched]);
-	}));
 }
 
 function linesOf(dump: string): string[] {
@@ -73,7 +71,7 @@ describe.each(driversUnderTest)('the canonical state dump on the $name driver', 
 		}
 	});
 
-	async function build(): Promise<Built & { readonly holder: Account; readonly entity: Account; readonly owner: Account; readonly certificate: Awaited<ReturnType<typeof certificateFor>>; readonly token: GenericAccount; readonly multisig: GenericAccount; readonly cursor: ChainCursor }> {
+	async function build(): Promise<Built & { readonly holder: Account; readonly entity: Account; readonly owner: Account; readonly certificate: Awaited<ReturnType<typeof certificateFor>>; readonly token: GenericAccount; readonly multisig: GenericAccount; readonly cursor: ChainCursor; readonly sweep: Block }> {
 		freezeClock(GENESIS_MOMENT);
 		const network = await createTestNetwork({ representativeWeights: WEIGHTS });
 		const storage = await driver.create();
@@ -108,14 +106,17 @@ describe.each(driversUnderTest)('the canonical state dump on the $name driver', 
 		const { block: multisigBlock, multisig } = await createMultisigBlock({ owner, signers: [holder, entity], quorum: 2n, previous: cursor.previous(owner), network: network.network });
 		await confirm(multisigBlock);
 
-		const accounts = [...touchedBy(staples), network.baseToken, network.networkAddress];
-		return({ network, ledger, staples, accounts, cursor, holder, entity, owner, certificate, token, multisig });
+		await confirm(await modifyPermissionsBlock({ account: holder, previous: cursor.previous(holder), network: network.network, principal: owner, method: lib.Block.AdjustMethod.SET, permissions: new lib.Permissions([]) }));
+		const sweep = await sendBlock({ from: entity, to: owner, amount: requireAt(WEIGHTS, 1), token: network.baseToken, previous: cursor.previous(entity), network: network.network, idempotent: IDEMPOTENT_KEY });
+		await confirm(sweep);
+
+		return({ network, ledger, staples, cursor, holder, entity, owner, certificate, token, multisig, sweep });
 	}
 
 	test('starts with the format line, and its records are sorted, distinct and valid under the published schema', async function() {
-		const { ledger, accounts } = await build();
+		const { ledger, staples } = await build();
 
-		const dump = await renderStateDump(ledger, accounts, 0n);
+		const dump = await renderStateDump(ledger, staples, 0n);
 		const records = recordsOf(dump);
 
 		expect(records.length).toBeGreaterThan(0);
@@ -126,10 +127,10 @@ describe.each(driversUnderTest)('the canonical state dump on the $name driver', 
 	});
 
 	test('records a certificate with its bytes, and an ACL granted to its holders', async function() {
-		const { ledger, accounts, holder, entity, certificate } = await build();
+		const { ledger, staples, holder, entity, certificate } = await build();
 		const hash = certificate.hash().toString();
 
-		const dump = await renderStateDump(ledger, accounts, 0n);
+		const dump = await renderStateDump(ledger, staples, 0n);
 
 		expect(recordsOfKind(dump, 'certificate')).toEqual([{
 			kind: 'certificate',
@@ -151,9 +152,9 @@ describe.each(driversUnderTest)('the canonical state dump on the $name driver', 
 	});
 
 	test('records identifier settings by account type, the supply of a token, and every representative weight', async function() {
-		const { network, ledger, accounts, cursor, holder, entity, owner, token, multisig } = await build();
+		const { network, ledger, staples, cursor, holder, entity, owner, token, multisig } = await build();
 
-		const dump = await renderStateDump(ledger, accounts, 0n);
+		const dump = await renderStateDump(ledger, staples, 0n);
 		const accountRecords = recordsOfKind(dump, 'account');
 
 		expect(accountRecords).toContainEqual({ kind: 'account', account: key(multisig), name: '', description: '', metadata: '', representative: null, defaultPermission: { base: '0', external: '0' }, multisigQuorum: '2' });
@@ -162,7 +163,7 @@ describe.each(driversUnderTest)('the canonical state dump on the $name driver', 
 		expect(recordsOfKind(dump, 'supply')).toContainEqual({ kind: 'supply', token: key(token), amount: '25' });
 		expect(recordsOfKind(dump, 'balance')).toContainEqual({ kind: 'balance', account: key(token), token: key(token), amount: '25' });
 		expect(recordsOfKind(dump, 'weight')).toEqual(network.representatives.map(function(representative, index) {
-			return({ kind: 'weight', representative: key(representative), weight: requireAt(WEIGHTS, index).toString() });
+			return({ kind: 'weight', representative: key(representative), weight: requireAt(FINAL_WEIGHTS, index).toString() });
 		}).sort(function(left, right): number {
 			return(compareText(left.representative, right.representative));
 		}));
@@ -176,32 +177,51 @@ describe.each(driversUnderTest)('the canonical state dump on the $name driver', 
 	});
 
 	test('writes text outside printable ASCII as escapes, so every line is ASCII', async function() {
-		const { ledger, accounts } = await build();
+		const { ledger, staples } = await build();
 
-		const dump = await renderStateDump(ledger, accounts, 0n);
+		const dump = await renderStateDump(ledger, staples, 0n);
 
 		expect(dump).toMatch(/^[\x20-\x7e\n]*$/u);
 		expect(dump).toContain(String.raw`"description":"says \"it\u2018s\" \\ here"`);
 	});
 
 	test('records the ledger checksum as 64 uppercase hex digits', async function() {
-		const { ledger, accounts } = await build();
+		const { ledger, staples } = await build();
 
-		const dump = await renderStateDump(ledger, accounts, 0xabcdefn);
+		const dump = await renderStateDump(ledger, staples, 0xabcdefn);
 
 		expect(recordsOfKind(dump, 'checksum')).toEqual([{ kind: 'checksum', ledgerChecksum: `${'0'.repeat(58)}ABCDEF` }]);
-		await expect(renderStateDump(ledger, accounts, 1n << 256n)).rejects.toThrow();
-		await expect(renderStateDump(ledger, accounts, -1n)).rejects.toThrow();
+		await expect(renderStateDump(ledger, staples, 1n << 256n)).rejects.toThrow();
+		await expect(renderStateDump(ledger, staples, -1n)).rejects.toThrow();
 	});
 
-	test('does not depend on the order of the accounts or on repeats', async function() {
-		const { ledger, accounts } = await build();
+	test('does not depend on the order of the staples or on repeats', async function() {
+		const { ledger, staples } = await build();
 
-		const forward = await renderStateDump(ledger, accounts, 7n);
-		const reversed = await renderStateDump(ledger, [...accounts].reverse(), 7n);
-		const repeated = await renderStateDump(ledger, [...accounts, ...accounts], 7n);
+		const forward = await renderStateDump(ledger, staples, 7n);
+		const reversed = await renderStateDump(ledger, [...staples].reverse(), 7n);
+		const repeated = await renderStateDump(ledger, [...staples, ...staples], 7n);
 
 		expect(reversed).toBe(forward);
 		expect(repeated).toBe(forward);
+	});
+	test('records the block that holds each idempotent key of the applied blocks', async function() {
+		const { ledger, staples, entity, sweep } = await build();
+
+		const dump = await renderStateDump(ledger, staples, 0n);
+
+		expect(recordsOfKind(dump, 'idempotent')).toEqual([{ kind: 'idempotent', account: key(entity), key: IDEMPOTENT_KEY, block: sweep.hash.toString() }]);
+	});
+
+	test('omits a balance of zero, and writes an ACL row without permissions', async function() {
+		const { network, ledger, staples, holder, entity, owner } = await build();
+
+		const dump = await renderStateDump(ledger, staples, 0n);
+
+		expect(recordsOfKind(dump, 'balance').filter(function(record): boolean {
+			return(Reflect.get(Object(record), 'account') === key(entity));
+		})).toEqual([]);
+		expect(recordsOfKind(dump, 'balance')).toContainEqual({ kind: 'balance', account: key(owner), token: key(network.baseToken), amount: (requireAt(WEIGHTS, 1) + requireAt(WEIGHTS, 2)).toString() });
+		expect(recordsOfKind(dump, 'acl')).toContainEqual({ kind: 'acl', principalType: 'ACCOUNT', principal: key(owner), entity: key(holder), target: key(holder), base: '0', external: '0' });
 	});
 });

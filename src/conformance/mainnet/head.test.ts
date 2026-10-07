@@ -1,5 +1,8 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { afterAll, describe, expect, test } from 'vitest';
+import * as KeetaNet from '@keetanetwork/keetanet-client';
+import type { GenericAccount, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
+import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import type { LedgerStorageDriverBase } from '../../ledger/storage/base.js';
 import { driversUnderTest } from '../../ledger/storage/suite/drivers.js';
 import type { DriverUnderTest } from '../../ledger/storage/suite/types.js';
@@ -9,6 +12,8 @@ import type { StateDumpKind } from './dump.js';
 import { loadMainnetFixture } from './fixture.js';
 import { compareText, replayMainnet } from './replay.js';
 import type { ReplayResult } from './replay.js';
+
+const lib = KeetaNet.lib;
 
 /*
  * One replay of the head per driver serves every assertion about it, so the
@@ -44,6 +49,7 @@ const RECORD_KEYS = {
 	certificate: ['account', 'hash'],
 	checksum: [],
 	head: ['account'],
+	idempotent: ['account', 'key'],
 	supply: ['token'],
 	weight: ['representative']
 } as const satisfies Record<StateDumpKind, readonly string[]>;
@@ -68,10 +74,23 @@ async function replayHead(driver: DriverUnderTest): Promise<HeadReplay> {
 	return({ result, dump: await renderReplayStateDump(result) });
 }
 
+// A replay sets the one fake clock of the worker, so two replays never run at once.
+let replayQueue: Promise<unknown> = Promise.resolve();
+
+function queuedReplay(driver: DriverUnderTest): Promise<HeadReplay> {
+	const replay = replayQueue.then(function() {
+		return(replayHead(driver));
+	});
+	replayQueue = replay.catch(function() {
+		return(undefined);
+	});
+	return(replay);
+}
+
 const sharedReplays = new Map<string, Promise<HeadReplay>>();
 
 function sharedReplay(driver: DriverUnderTest): Promise<HeadReplay> {
-	const replay = sharedReplays.get(driver.name) ?? replayHead(driver);
+	const replay = sharedReplays.get(driver.name) ?? queuedReplay(driver);
 	sharedReplays.set(driver.name, replay);
 	return(replay);
 }
@@ -150,6 +169,23 @@ function recordLinesOf(dump: string): string[] {
 	return(dump.split('\n').slice(1, -1));
 }
 
+type SentToken = { readonly account: GenericAccount; readonly token: TokenAddress };
+
+/** Each account and token that some applied SEND moved, once. */
+function sentTokens(staples: readonly VoteStaple[]): SentToken[] {
+	const sent = new Map<string, SentToken>();
+	for (const block of staples.flatMap(function(staple) {
+		return(staple.blocks);
+	})) {
+		for (const operation of block.operations) {
+			if (operation.type === lib.Block.OperationType.SEND) {
+				sent.set(`${block.account.publicKeyString.get()}/${operation.token.publicKeyString.get()}`, { account: block.account, token: operation.token });
+			}
+		}
+	}
+	return([...sent.values()]);
+}
+
 describe.each(driversUnderTest)('the mainnet head replayed on the $name driver', function(driver) {
 	test('every staple applies and none stays deferred', { timeout: REPLAY_TIMEOUT_MILLISECONDS }, async function() {
 		const { result } = await sharedReplay(driver);
@@ -169,6 +205,29 @@ describe.each(driversUnderTest)('the mainnet head replayed on the $name driver',
 
 		expect(firstDifference(await committedGolden(), dump)).toBeNull();
 	});
+
+	test('an account that sent all of a token away has a zero balance of it, and getAllBalances omits it', { timeout: REPLAY_TIMEOUT_MILLISECONDS }, async function() {
+		const { result } = await sharedReplay(driver);
+
+		const emptied = await result.ledger.runReadOnly('emptied-balances', async function(reader) {
+			const found: { readonly account: string; readonly token: string; readonly listed: boolean }[] = [];
+			for (const { account, token } of sentTokens(result.appliedStaples)) {
+				if (await reader.getBalance(account, token) !== 0n) {
+					continue;
+				}
+				const listed = (await reader.getAllBalances(account)).some(function(entry): boolean {
+					return(entry.token.comparePublicKey(token));
+				});
+				found.push({ account: account.publicKeyString.get(), token: token.publicKeyString.get(), listed });
+			}
+			return(found);
+		});
+
+		expect(emptied.length).toBeGreaterThan(0);
+		expect(emptied.filter(function(entry): boolean {
+			return(entry.listed);
+		})).toEqual([]);
+	});
 });
 
 describe('the mainnet head state', function() {
@@ -185,7 +244,7 @@ describe('the mainnet head state', function() {
 
 	test(`a second replay on the ${REFERENCE_DRIVER_NAME} driver dumps the same state`, { timeout: 2 * REPLAY_TIMEOUT_MILLISECONDS }, async function() {
 		const first = await sharedReplay(reference);
-		const second = await replayHead(reference);
+		const second = await queuedReplay(reference);
 
 		expect(firstDifference(first.dump, second.dump)).toBeNull();
 	});
