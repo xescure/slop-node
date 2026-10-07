@@ -48,8 +48,8 @@ help:
 	@echo "  test           - Type-checks and runs the test suite"
 	@echo "                   Specify extra flags with SLOP_NODE_TEST_EXTRA_ARGS"
 	@echo "  do-lint        - Runs the ASCII check, eslint and cspell"
-	@echo "  conformance    - Regenerates the vote-decision corpus and the mainnet"
-	@echo "                   head state in conformance/"
+	@echo "  conformance    - Regenerates the vote-decision corpus, and the mainnet"
+	@echo "                   head state and shadow-vote exceptions in conformance/"
 	@echo "  reference      - Extracts the reference tree for the pinned keetanet-client"
 	@echo "  reference-diff - Diffs the reference trees of two versions"
 	@echo "                   Specify FROM=<version> TO=<version>"
@@ -109,8 +109,9 @@ test: dist/.done build/utils/.done | $(filter conformance,$(MAKECMDGOALS))
 	npm run tsc -- --noEmit --incremental false -p utils
 	npm run vitest -- run --config .vitest.config.js $(SLOP_NODE_TEST_EXTRA_ARGS)
 
-# The corpus records what upstream's ledger decides, and the mainnet head state
-# what it reaches, so both are regenerated rather than edited; "make test" then
+# The corpus records what upstream's ledger decides, the mainnet head state
+# what it reaches, and the shadow-vote exceptions which head staples it refuses
+# to vote for, so all are regenerated rather than edited; "make test" then
 # checks they are current.
 conformance: node_modules/.patched
 	SLOP_NODE_UPDATE_CONFORMANCE=1 npm run vitest -- run --config .vitest.config.js src/conformance/corpus.test.ts src/conformance/mainnet/head.test.ts

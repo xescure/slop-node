@@ -2,24 +2,31 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { afterAll, describe, expect, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { GenericAccount, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
+import type { BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import type { LedgerStorageDriverBase } from '../../ledger/storage/base.js';
 import { driversUnderTest } from '../../ledger/storage/suite/drivers.js';
+import { blocksHashesOf, orphanedSideRowsOf } from '../../ledger/storage/suite/support.js';
 import type { DriverUnderTest } from '../../ledger/storage/suite/types.js';
+import { assertNever } from '../../util/assert-never.js';
 import { stateDumpViolations } from '../schema.js';
 import { STATE_DUMP_FORMAT, renderReplayStateDump } from './dump.js';
 import type { StateDumpKind } from './dump.js';
 import { loadMainnetFixture } from './fixture.js';
 import { compareText, replayMainnet } from './replay.js';
-import type { ReplayResult } from './replay.js';
+import type { ReplayOptions, ReplayResult } from './replay.js';
+import { SHADOW_REFUSAL_REASONS, renderShadowVoteExceptions, shadowVoteExceptions, shadowVoter } from './shadow.js';
+import type { ShadowVote } from './shadow.js';
 
 const lib = KeetaNet.lib;
 
 /*
  * One replay of the head per driver serves every assertion about it, so the
- * test time does not grow with each property checked. The committed golden
- * file must equal what the reference driver's replay dumps now; with
- * SLOP_NODE_UPDATE_CONFORMANCE=1 it is written instead.
+ * test time does not grow with each property checked: it shadow-votes each
+ * staple before adding it, and dumps the state it reaches. The committed
+ * golden state and exception set must equal what the reference driver's
+ * replay produces now; with SLOP_NODE_UPDATE_CONFORMANCE=1 they are written
+ * instead.
  */
 
 const UPDATE = process.env['SLOP_NODE_UPDATE_CONFORMANCE'] === '1';
@@ -30,14 +37,19 @@ const HEAD_LEDGER_CHECKSUM = 0xc4896d171cb02d3c9cd929de064de0df788d100c20cb8260c
 
 const GOLDEN_FILE = new URL('../../../conformance/mainnet/head.state.jsonl', import.meta.url);
 
+const EXCEPTIONS_FILE = new URL('../../../conformance/mainnet/shadow-vote-exceptions.json', import.meta.url);
+
 const STATE_DUMP_DOCUMENT = new URL('../../../conformance/STATE-DUMP.md', import.meta.url);
 
+const MAINNET_DOCUMENT = new URL('../../../conformance/MAINNET.md', import.meta.url);
+
 /*
- * One replay of the head with its dump took 10 s on the memory driver,
- * parsing the head included, and 25 s on Postgres on an idle machine; while
- * make -j8 ran the other tests and the linters beside it, 19 s and 29 s. The
- * dump alone took 0.3 s and 2.4 s. The limit is about eight times the slowest,
- * so it leaves room for a machine several times slower.
+ * One replay of the head with its shadow votes and its dump took 16 s on the
+ * memory driver, parsing the head included, and 38 s on Postgres on an idle
+ * machine; while make -j8 ran the other tests and the linters beside it,
+ * 23-29 s and 40-49 s. Without the votes the memory replay took 8-10 s. The
+ * limit is about five times the slowest, so it leaves room for a machine
+ * several times slower.
  */
 const REPLAY_TIMEOUT_MILLISECONDS = 240_000;
 
@@ -54,9 +66,14 @@ const RECORD_KEYS = {
 	weight: ['representative']
 } as const satisfies Record<StateDumpKind, readonly string[]>;
 
-type HeadReplay = {
+type PlainReplay = {
 	readonly result: ReplayResult;
 	readonly dump: string;
+};
+
+type HeadReplay = PlainReplay & {
+	readonly shadowVotes: readonly ShadowVote[];
+	readonly orphanedSideRows: number;
 };
 
 const opened: { readonly driver: DriverUnderTest; readonly storage: LedgerStorageDriverBase }[] = [];
@@ -67,19 +84,35 @@ afterAll(async function() {
 	}
 });
 
-async function replayHead(driver: DriverUnderTest): Promise<HeadReplay> {
+async function openStorage(driver: DriverUnderTest): Promise<LedgerStorageDriverBase> {
 	const storage = await driver.create();
 	opened.push({ driver, storage });
-	const result = await replayMainnet(storage, await loadMainnetFixture('head'));
+	return(storage);
+}
+
+async function replayHeadOn(storage: LedgerStorageDriverBase, options: ReplayOptions): Promise<PlainReplay> {
+	const result = await replayMainnet(storage, await loadMainnetFixture('head'), options);
 	return({ result, dump: await renderReplayStateDump(result) });
+}
+
+async function replayHead(driver: DriverUnderTest): Promise<HeadReplay> {
+	const storage = await openStorage(driver);
+	const voter = shadowVoter();
+	const replay = await replayHeadOn(storage, { beforeAdd: voter.beforeAdd });
+	return({ ...replay, shadowVotes: voter.votes, orphanedSideRows: await orphanedSideRowsOf(storage) });
+}
+
+/** Without shadow votes, so that comparing it with a shadow-voting replay shows the votes leave the state as it was. */
+async function replayHeadWithoutVoting(driver: DriverUnderTest): Promise<PlainReplay> {
+	return(await replayHeadOn(await openStorage(driver), {}));
 }
 
 // A replay sets the one fake clock of the worker, so two replays never run at once.
 let replayQueue: Promise<unknown> = Promise.resolve();
 
-function queuedReplay(driver: DriverUnderTest): Promise<HeadReplay> {
+function queued<Replay>(replayOn: (driver: DriverUnderTest) => Promise<Replay>, driver: DriverUnderTest): Promise<Replay> {
 	const replay = replayQueue.then(function() {
-		return(replayHead(driver));
+		return(replayOn(driver));
 	});
 	replayQueue = replay.catch(function() {
 		return(undefined);
@@ -90,7 +123,7 @@ function queuedReplay(driver: DriverUnderTest): Promise<HeadReplay> {
 const sharedReplays = new Map<string, Promise<HeadReplay>>();
 
 function sharedReplay(driver: DriverUnderTest): Promise<HeadReplay> {
-	const replay = sharedReplays.get(driver.name) ?? queuedReplay(driver);
+	const replay = sharedReplays.get(driver.name) ?? queued(replayHead, driver);
 	sharedReplays.set(driver.name, replay);
 	return(replay);
 }
@@ -105,22 +138,37 @@ function driverNamed(name: string): DriverUnderTest {
 	return(driver);
 }
 
-async function readGolden(): Promise<string> {
+function exceptionsOf({ result, shadowVotes }: HeadReplay): string {
+	return(renderShadowVoteExceptions(shadowVoteExceptions(shadowVotes, result.ledger)));
+}
+
+async function readCommitted(file: URL, generate: (replay: HeadReplay) => string): Promise<string> {
 	if (UPDATE) {
-		await writeFile(GOLDEN_FILE, (await sharedReplay(driverNamed(REFERENCE_DRIVER_NAME))).dump);
+		await writeFile(file, generate(await sharedReplay(driverNamed(REFERENCE_DRIVER_NAME))));
 	}
 	try {
-		return(await readFile(GOLDEN_FILE, 'utf8'));
+		return(await readFile(file, 'utf8'));
 	} catch (error: unknown) {
-		throw(new Error('cannot read the committed mainnet head state; run make conformance', { cause: error }));
+		throw(new Error(`cannot read the committed ${file.pathname}; run make conformance`, { cause: error }));
 	}
 }
 
-let golden: Promise<string> | undefined;
+const committedFiles = new Map<string, Promise<string>>();
+
+function committed(file: URL, generate: (replay: HeadReplay) => string): Promise<string> {
+	const text = committedFiles.get(file.href) ?? readCommitted(file, generate);
+	committedFiles.set(file.href, text);
+	return(text);
+}
 
 function committedGolden(): Promise<string> {
-	golden ??= readGolden();
-	return(golden);
+	return(committed(GOLDEN_FILE, function({ dump }): string {
+		return(dump);
+	}));
+}
+
+function committedExceptions(): Promise<string> {
+	return(committed(EXCEPTIONS_FILE, exceptionsOf));
 }
 
 type LineDifference = { readonly line: number; readonly expected: string | undefined; readonly actual: string | undefined };
@@ -186,6 +234,12 @@ function sentTokens(staples: readonly VoteStaple[]): SentToken[] {
 	return([...sent.values()]);
 }
 
+function sameHashes(left: readonly BlockHash[], right: readonly BlockHash[]): boolean {
+	return(left.length === right.length && left.every(function(hash, index): boolean {
+		return(hash.toString() === right[index]?.toString());
+	}));
+}
+
 describe.each(driversUnderTest)('the mainnet head replayed on the $name driver', function(driver) {
 	test('every staple applies and none stays deferred', { timeout: REPLAY_TIMEOUT_MILLISECONDS }, async function() {
 		const { result } = await sharedReplay(driver);
@@ -228,6 +282,41 @@ describe.each(driversUnderTest)('the mainnet head replayed on the $name driver',
 			return(entry.listed);
 		})).toEqual([]);
 	});
+
+	test('shadow votes refuse exactly the classified staples', { timeout: REPLAY_TIMEOUT_MILLISECONDS }, async function() {
+		const replay = await sharedReplay(driver);
+
+		expect(exceptionsOf(replay)).toBe(await committedExceptions());
+	});
+
+	test('every staple is shadow-voted, and each vote given is a temporary vote over exactly the staple\'s blocks', { timeout: REPLAY_TIMEOUT_MILLISECONDS }, async function() {
+		const { result, shadowVotes } = await sharedReplay(driver);
+
+		expect(blocksHashesOf(shadowVotes.map(function(shadow) {
+			return(shadow.staple);
+		}))).toEqual(blocksHashesOf(result.appliedStaples));
+		const unlike = shadowVotes.filter(function(shadow): boolean {
+			switch (shadow.outcome) {
+				case 'voted':
+					return(shadow.vote.$permanent || !sameHashes(shadow.vote.blocks, shadow.staple.blocks.map(function(block): BlockHash {
+						return(block.hash);
+					})));
+				case 'refused':
+					return(false);
+				default:
+					return(assertNever(shadow));
+			}
+		});
+		expect(blocksHashesOf(unlike.map(function(shadow) {
+			return(shadow.staple);
+		}))).toEqual([]);
+	});
+
+	test('the shadow votes leave no side rows behind', { timeout: REPLAY_TIMEOUT_MILLISECONDS }, async function() {
+		const { orphanedSideRows } = await sharedReplay(driver);
+
+		expect(orphanedSideRows).toBe(0);
+	});
 });
 
 describe('the mainnet head state', function() {
@@ -242,9 +331,9 @@ describe('the mainnet head state', function() {
 		expect(firstDifference(expected.dump, actual.dump)).toBeNull();
 	});
 
-	test(`a second replay on the ${REFERENCE_DRIVER_NAME} driver dumps the same state`, { timeout: 2 * REPLAY_TIMEOUT_MILLISECONDS }, async function() {
+	test(`a second replay on the ${REFERENCE_DRIVER_NAME} driver, without shadow votes, dumps the same state`, { timeout: 2 * REPLAY_TIMEOUT_MILLISECONDS }, async function() {
 		const first = await sharedReplay(reference);
-		const second = await queuedReplay(reference);
+		const second = await queued(replayHeadWithoutVoting, reference);
 
 		expect(firstDifference(first.dump, second.dump)).toBeNull();
 	});
@@ -280,6 +369,16 @@ describe('the mainnet head state', function() {
 				return(record.kind === kind);
 			}).length;
 			expect(document).toContain(`| \`${kind}\` | ${count.toLocaleString('en-US')} |`);
+		}
+	});
+
+	test('MAINNET.md states the staple count of each reason in the shadow-vote exceptions', { timeout: REPLAY_TIMEOUT_MILLISECONDS }, async function() {
+		const exceptions = await committedExceptions();
+		const document = await readFile(MAINNET_DOCUMENT, 'utf8');
+
+		for (const reason of SHADOW_REFUSAL_REASONS) {
+			const count = exceptions.split(`"reason": ${JSON.stringify(reason)}`).length - 1;
+			expect(document).toContain(`| \`${reason}\` | ${count.toLocaleString('en-US')} |`);
 		}
 	});
 });
