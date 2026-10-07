@@ -265,6 +265,26 @@ describe('a bootstrap client', function() {
 		expect(await client.stats()).toMatchObject({ completeCount: 0 });
 	});
 
+	test('adds nothing more of a page it fetched once it is stopped', async function() {
+		const peer = await representative();
+		const late = await joiner({ bootstrapFrom: [peer.apiURL] });
+		await addAll(peer.node, await sendsFrom(peer.network, 0, 4));
+		const client = clientOf(late.node);
+		const add = late.node.ledger.add.bind(late.node.ledger);
+		let stopped: Promise<void> | undefined;
+		const adds = vi.spyOn(late.node.ledger, 'add').mockImplementation(function(...args: Parameters<typeof add>): Promise<VoteStaple[]> {
+			stopped ??= client.stop();
+			return(add(...args));
+		});
+
+		expect(await client.update()).toEqual({ complete: false });
+		await stopped;
+
+		// Genesis, the first staple of the page, was being added as the client stopped.
+		expect(adds).toHaveBeenCalledTimes(1);
+		expect(await heldBlocksHashes(late.node)).toEqual([peer.network.genesis.blocksHash.toString()]);
+	});
+
 	test('gives up on a peer that sends again what the filter names, rather than page through it forever', async function() {
 		const peer = await representative();
 		const ignoring = await startRecordingPeer(peer.apiURL, { filter: 'dropped' });

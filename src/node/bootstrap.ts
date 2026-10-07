@@ -262,12 +262,15 @@ export class BootstrapClient {
 	 * one refused because another peer's pass or a P2P message added it
 	 * meanwhile. One that fills a gap may release staples deferred until
 	 * then, and the callback hears of each staple added
-	 * [Keeta TS] index.js:69361-69420.
+	 * [Keeta TS] index.js:69361-69420. Once the client is stopped, the rest of
+	 * a page already fetched is not added: the node stopping it may close its
+	 * storage next.
 	 */
 	async #add(staple: VoteStaple): Promise<Added> {
 		if (await this.#holds(staple)) {
 			return('held');
 		}
+		this.#stopping.signal.throwIfAborted();
 		let added: VoteStaple[];
 		try {
 			added = await this.#node.ledger.add(staple, 'bootstrap');
