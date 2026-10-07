@@ -14,11 +14,12 @@ The document describes version 0.18.7 of `@keetanetwork/keetanet-client`:
 
 ## Closed and open objects
 
-Every object a response holds is closed (`"additionalProperties": false`) and lists every field the package writes into it, so a field the document does not name is an error in the response. The objects that differ, and why:
+Every object in a response is closed (`"additionalProperties": false`) and lists every field the package writes into it, so a field the document does not name is an error in the response. That includes the two objects whose fields the package writes in several places:
 
-- **Request bodies** of `POST /api/vote`, `POST /api/vote/quote`, `POST /api/node/publish` and `POST /api/p2p/message` are open. The client sends exactly the fields each lists [Keeta TS] index.js:59844-59849, 59852-59866, 58481-58485, 72209-72212; the node reads those and ignores any other, so a client of another version that sends one more field is still served.
-- **`Certificate`**, the certificate an operation carries, is closed: it lists the fields a certificate writes [Keeta TS] index.js:78141-78167, down to each base extension the package parses [Keeta TS] index.js:78236-78275. An operation always includes the PEM text in `$binary` [Keeta TS] index.js:65760-65767.
+- **`Certificate`**, the certificate an operation carries, lists the fields a certificate writes [Keeta TS] index.js:78141-78167, down to each base extension the package parses [Keeta TS] index.js:78236-78275. An operation always includes the PEM text in `$binary` [Keeta TS] index.js:65760-65767.
 - **`Error`** is closed in each of its two forms. A refusal lists every field a KeetaNet error writes or the client reads back [Keeta TS] index.js:66067-66073, 66533-66540, 66575-66590, 66334-66410, and an internal failure is exactly `error` and `message`.
+
+The request bodies of `POST /api/vote`, `POST /api/vote/quote`, `POST /api/node/publish` and `POST /api/p2p/message` are the only open objects. The client sends exactly the fields each lists [Keeta TS] index.js:59844-59849, 59852-59866, 58481-58485, 72209-72212; the node reads those and ignores any other, so a client of another version that sends one more field is still served.
 
 The vote request's lists have a lower bound where something enforces one: `blocks` holds at least one block, because the ledger issues no vote for none [Keeta TS] index.js:69012-69015, and `votes`, when present, at least one vote, because the client refuses to ask with an empty list [Keeta TS] index.js:59861-59863. The quote request's `blocks` has none: the client sends the list it is given [Keeta TS] index.js:59844-59849, and the ledger's quote, unlike its vote, makes no such check [Keeta TS] index.js:69356-69360.
 
