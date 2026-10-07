@@ -94,10 +94,16 @@ function usage(): string {
 	].join(''));
 }
 
+/** The spellings of help that command-line tools conventionally accept. */
+const HELP_OPTIONS: ReadonlySet<string> = new Set(['--help', '-h']);
+
 function parseCommand(argv: readonly string[]): Command | undefined {
 	const [name, ...rest] = argv;
 	if (rest.length > 0) {
 		return(undefined);
+	}
+	if (name !== undefined && HELP_OPTIONS.has(name)) {
+		return('help');
 	}
 	return(COMMANDS.find(function(command): boolean {
 		return(command === name);

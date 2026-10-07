@@ -319,8 +319,8 @@ describe('slop-node genesis', function() {
 });
 
 describe('slop-node', function() {
-	test('explains itself when asked', async function() {
-		const cli = startCLI(['help'], {});
+	test.each(['help', '--help', '-h'])('explains itself when asked with %j', async function(argument) {
+		const cli = startCLI([argument], {});
 		expect(await cli.exited).toEqual({ code: 0, signal: null });
 		expect(cli.stdout()).toContain('Usage: slop-node <command>');
 		expect(cli.stdout()).toContain('KEETANET_LOCAL_NODE_POSTGRES_URL');
