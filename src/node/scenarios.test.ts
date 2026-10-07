@@ -4,6 +4,8 @@ import type { TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js'
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { RECEIVER, REPRESENTATIVE, stapleHashes, STORAGES_UNDER_TEST, SUPPLY, TRUSTED_SIGNER, useSDKNodes } from '../testing/sdk.js';
 import type { ServingNode, StorageUnderTest, UserClient } from '../testing/sdk.js';
+import { startCLI } from '../testing/cli.js';
+import { TEST_NETWORK_SEEDS } from '../testing/network.js';
 import type { Environment } from './config.js';
 
 const lib = KeetaNet.lib;
@@ -33,6 +35,17 @@ async function refusalOf(promise: Promise<unknown>): Promise<unknown> {
 		return(error);
 	}
 	throw(new Error('the request was not refused'));
+}
+
+/** Publishes a token of the supply, issued by the client's account. */
+async function createToken(issuer: UserClient, supply: bigint): Promise<{ readonly token: TokenAddress; readonly created: Awaited<ReturnType<UserClient['publishBuilder']>> }> {
+	const builder = issuer.initBuilder();
+	const pending = builder.generateIdentifier(lib.Account.AccountKeyAlgorithm.TOKEN);
+	await builder.computeBlocks();
+	const token: TokenAddress = pending.account;
+	builder.modifyTokenSupply(supply, { account: token });
+	builder.setInfo({ name: 'SCENARIO', description: 'A token of the SDK scenarios', metadata: '', defaultPermission: new lib.Permissions(['ACCESS']) }, { account: token });
+	return({ token, created: await issuer.publishBuilder(builder) });
 }
 
 /** What every scenario starts from: a node, and its network initialized by the trusted key through the SDK. */
@@ -118,13 +131,7 @@ describe.each(STORAGES_UNDER_TEST)('the official SDK against a node on %s', func
 		const issuer = nodes.userClient(serving, ISSUER);
 		const receiver = nodes.userClient(serving, RECEIVER);
 
-		const builder = issuer.initBuilder();
-		const pending = builder.generateIdentifier(lib.Account.AccountKeyAlgorithm.TOKEN);
-		await builder.computeBlocks();
-		const token: TokenAddress = pending.account;
-		builder.modifyTokenSupply(1_000n, { account: token });
-		builder.setInfo({ name: 'SCENARIO', description: 'A token of the SDK scenarios', metadata: '', defaultPermission: new lib.Permissions(['ACCESS']) }, { account: token });
-		const created = await issuer.publishBuilder(builder);
+		const { token, created } = await createToken(issuer, 1_000n);
 		expect(created.publish).toBe(true);
 		expect(await issuer.client.getTokenSupply(token)).toBe(1_000n);
 		expect(await issuer.client.getBalance(token, token)).toBe(1_000n);
@@ -195,3 +202,36 @@ describe.each(STORAGES_UNDER_TEST)('the official SDK against a node on %s', func
 	});
 });
 
+
+describe('a network created by the genesis command', function() {
+	const nodes = useSDKNodes();
+
+	/** Runs the built command's genesis on a fresh database, then serves the ledger it wrote. */
+	async function networkFromGenesis(extra: Environment): Promise<ServingNode> {
+		const environment = await nodes.environmentFor('postgres');
+		const genesis = startCLI(['genesis'], {
+			...environment,
+			KEETANET_GENESIS_TRUSTED_SEED: TEST_NETWORK_SEEDS.trustedRoot,
+			KEETANET_GENESIS_SUPPLY: String(SUPPLY),
+			...extra
+		});
+		expect(await genesis.exited).toEqual({ code: 0, signal: null });
+		return(await nodes.start(environment));
+	}
+
+	test('lets a user who is not the trusted key create a token when the genesis grants it', async function() {
+		const serving = await networkFromGenesis({ KEETANET_GENESIS_NETWORK_DEFAULT_PERMISSION: NETWORK_DEFAULT_PERMISSION.join(',') });
+		const issuer = nodes.userClient(serving, ISSUER);
+		const { token, created } = await createToken(issuer, 1_000n);
+		expect(created.publish).toBe(true);
+		expect(await issuer.client.getTokenSupply(token)).toBe(1_000n);
+	});
+
+	test('refuses that user the token under the default permission, which grants storage accounts only', async function() {
+		const serving = await networkFromGenesis({});
+		const issuer = nodes.userClient(serving, ISSUER);
+		const refusal = await refusalOf(createToken(issuer, 1_000n));
+		expect(lib.Error.isInstance(refusal)).toBe(true);
+		expect(refusal).toMatchObject({ code: 'LEDGER_INVALID_PERMISSIONS', type: 'LEDGER' });
+	});
+});

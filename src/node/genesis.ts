@@ -1,8 +1,11 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account } from '@keetanetwork/keetanet-client/lib/account.js';
+import type { BaseFlagName } from '@keetanetwork/keetanet-client/lib/permissions.js';
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
+import type { BaseNetworkInfo } from '@keetanetwork/keetanet-client/lib/utils/initial.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { assertNever } from '../util/assert-never.js';
+import type { AssertNever } from '../util/assert-never.js';
 import { AMOUNT } from './amount.js';
 import { ConfigError, EnvironmentReader, parseAccountKey, publicNetworkOf, publicOnly, readSeedAccount } from './config.js';
 import type { Environment, EnvironmentConfig } from './config.js';
@@ -20,7 +23,57 @@ export type GenesisSettings = {
 	readonly supply: bigint;
 	/** This node's representative unless another is named. */
 	readonly delegateTo: Account;
+	/** What anyone may do on the network address; undefined keeps upstream's STORAGE_CREATE only [Keeta TS] index.js:79607. */
+	readonly networkDefaultPermission: readonly BaseFlagName[] | undefined;
 };
+
+const BASE_FLAG_NAMES = [
+	'ACCESS',
+	'OWNER',
+	'ADMIN',
+	'UPDATE_INFO',
+	'SEND_ON_BEHALF',
+	'STORAGE_CAN_HOLD',
+	'STORAGE_DEPOSIT',
+	'STORAGE_CREATE',
+	'TOKEN_ADMIN_CREATE',
+	'TOKEN_ADMIN_SUPPLY',
+	'TOKEN_ADMIN_MODIFY_BALANCE',
+	'PERMISSION_DELEGATE_ADD',
+	'PERMISSION_DELEGATE_REMOVE',
+	'MANAGE_CERTIFICATE',
+	'MULTISIG_SIGNER'
+] as const satisfies readonly BaseFlagName[];
+
+/** Fails to compile when upstream adds a base flag that the list above does not offer. */
+type _EveryBaseFlagListed = AssertNever<Exclude<BaseFlagName, typeof BASE_FLAG_NAMES[number]>>;
+
+function parseBaseFlagName(name: string): BaseFlagName | undefined {
+	return(BASE_FLAG_NAMES.find(function(candidate): boolean {
+		return(candidate === name);
+	}));
+}
+
+/**
+ * Base flags separated by commas. Only flags that may be a default permission
+ * are accepted, as the client's block validation requires
+ * [Keeta TS] index.js:65435-65437.
+ */
+function parseDefaultPermission(text: string): readonly BaseFlagName[] {
+	const variable = 'KEETANET_GENESIS_NETWORK_DEFAULT_PERMISSION';
+	const names: BaseFlagName[] = [];
+	for (const entry of text.split(',')) {
+		const name = parseBaseFlagName(entry.trim());
+		if (name === undefined) {
+			throw(new ConfigError({ kind: 'invalid', variable, expected: `a comma-separated list of ${BASE_FLAG_NAMES.join(', ')}`, value: text }));
+		}
+		names.push(name);
+	}
+	if (!new lib.Permissions(names).base.isValidForDefault) {
+		throw(new ConfigError({ kind: 'invalid', variable, expected: 'base flags that may be a default permission', value: text }));
+	}
+	return(names);
+}
 
 function parseSupply(text: string): bigint {
 	if (!AMOUNT.test(text)) {
@@ -65,7 +118,8 @@ export function getGenesisConfigFromEnv(environment: Environment, config: Enviro
 		supply: parseSupply(reader.required('KEETANET_GENESIS_SUPPLY')),
 		delegateTo: reader.read('KEETANET_GENESIS_DELEGATE_TO', function(text: string): Account {
 			return(parseAccountKey('KEETANET_GENESIS_DELEGATE_TO', text));
-		}, publicOnly(config.representative))
+		}, publicOnly(config.representative)),
+		networkDefaultPermission: reader.read<readonly BaseFlagName[] | undefined>('KEETANET_GENESIS_NETWORK_DEFAULT_PERMISSION', parseDefaultPermission, undefined)
 	});
 }
 
@@ -80,6 +134,14 @@ export class GenesisError extends Error {
 		this.name = 'GenesisError';
 		this.problem = problem;
 	}
+}
+
+/** UserClient.initializeNetwork passes the same option [Keeta TS] index.js:60460-60478. */
+function baseNetworkInfoOf(settings: GenesisSettings): BaseNetworkInfo {
+	if (settings.networkDefaultPermission === undefined) {
+		return({});
+	}
+	return({ defaultPermission: new lib.Permissions([...settings.networkDefaultPermission]) });
 }
 
 /**
@@ -101,7 +163,8 @@ export async function addGenesis(node: Node, settings: GenesisSettings): Promise
 			amount: settings.supply,
 			delegate: true,
 			delegateTo: settings.delegateTo
-		}
+		},
+		baseNetworkInfo: baseNetworkInfoOf(settings)
 	});
 	await node.ledger.add(voteStaple);
 	return(voteStaple);

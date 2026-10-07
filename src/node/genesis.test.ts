@@ -64,6 +64,24 @@ describe('the genesis settings', function() {
 		expect(settings.trustedSigner.publicKeyString.get()).toBe(trusted);
 	});
 
+	test('keep upstream\'s default permission of the network address unless one is named', function() {
+		expect(settingsFor({}).networkDefaultPermission).toBeUndefined();
+	});
+
+	test('read the default permission as base flag names', function() {
+		expect(settingsFor({ KEETANET_GENESIS_NETWORK_DEFAULT_PERMISSION: 'ACCESS, STORAGE_CREATE,TOKEN_ADMIN_CREATE' }).networkDefaultPermission).toEqual(['ACCESS', 'STORAGE_CREATE', 'TOKEN_ADMIN_CREATE']);
+	});
+
+	test.each(['access', 'ACCESS,CREATE_TOKEN', 'ACCESS,', ',', 'ACCESS;STORAGE_CREATE'])('refuse the default permission %j, naming the variable', function(permission) {
+		const problem = problemOf({ KEETANET_GENESIS_NETWORK_DEFAULT_PERMISSION: permission });
+		expect(problem).toMatchObject({ kind: 'invalid', variable: 'KEETANET_GENESIS_NETWORK_DEFAULT_PERMISSION', value: permission });
+		expect(new ConfigError(problem).message).toContain('KEETANET_GENESIS_NETWORK_DEFAULT_PERMISSION');
+	});
+
+	test.each(['OWNER', 'ACCESS,ADMIN'])('refuse the default permission %j, which a default may not hold', function(permission) {
+		expect(problemOf({ KEETANET_GENESIS_NETWORK_DEFAULT_PERMISSION: permission })).toMatchObject({ kind: 'invalid', variable: 'KEETANET_GENESIS_NETWORK_DEFAULT_PERMISSION', expected: 'base flags that may be a default permission' });
+	});
+
 	test('need the trusted seed and the supply', function() {
 		expect(problemOf({ KEETANET_GENESIS_TRUSTED_SEED: undefined })).toEqual({ kind: 'missing', variable: 'KEETANET_GENESIS_TRUSTED_SEED' });
 		expect(problemOf({ KEETANET_GENESIS_SUPPLY: undefined })).toEqual({ kind: 'missing', variable: 'KEETANET_GENESIS_SUPPLY' });
@@ -139,6 +157,34 @@ describe('adding genesis', function() {
 			throw(new Error('genesis does not end in a delegation'));
 		}
 		expect(delegation.to.publicKeyString.get()).toBe(REPRESENTATIVE.publicKeyString.get());
+		await node.stop();
+	});
+
+	test('names the default permission of the network address when one is given', async function() {
+		const node = nodeOf(config);
+		const settings = settingsFor({ KEETANET_GENESIS_NETWORK_DEFAULT_PERMISSION: 'ACCESS,STORAGE_CREATE,TOKEN_ADMIN_CREATE' });
+		const staple = await addGenesis(node, settings);
+		const info = staple.blocks[0]?.operations.find(function(operation): boolean {
+			return(operation.type === lib.Block.OperationType.SET_INFO);
+		});
+		if (info?.type !== lib.Block.OperationType.SET_INFO) {
+			throw(new Error('the network address block sets no info'));
+		}
+		expect(info.defaultPermission?.base.flags).toEqual(expect.arrayContaining(['ACCESS', 'STORAGE_CREATE', 'TOKEN_ADMIN_CREATE']));
+		expect(info.defaultPermission?.base.flags).toHaveLength(3);
+		await node.stop();
+	});
+
+	test('gives the network address upstream\'s default permission otherwise', async function() {
+		const node = nodeOf(config);
+		const staple = await addGenesis(node, settingsFor({}));
+		const info = staple.blocks[0]?.operations.find(function(operation): boolean {
+			return(operation.type === lib.Block.OperationType.SET_INFO);
+		});
+		if (info?.type !== lib.Block.OperationType.SET_INFO) {
+			throw(new Error('the network address block sets no info'));
+		}
+		expect(info.defaultPermission?.base.flags).toEqual(['ACCESS', 'STORAGE_CREATE']);
 		await node.stop();
 	});
 

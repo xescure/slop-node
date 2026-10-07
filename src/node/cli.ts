@@ -55,7 +55,8 @@ const VARIABLE_HELP: Readonly<Record<ConfigVariable, string>> = {
 	KEETANET_GENESIS_TRUSTED_SEED: 'the seed of the trusted account (required)',
 	KEETANET_GENESIS_TRUSTED_SEED_INDEX: 'the index of its key under the seed (0)',
 	KEETANET_GENESIS_SUPPLY: 'the base token supply, in base units, held by the trusted account (required)',
-	KEETANET_GENESIS_DELEGATE_TO: 'the representative the supply is delegated to (this node\'s)'
+	KEETANET_GENESIS_DELEGATE_TO: 'the representative the supply is delegated to (this node\'s)',
+	KEETANET_GENESIS_NETWORK_DEFAULT_PERMISSION: 'base flags, separated by commas, that anyone holds on the network address (STORAGE_CREATE); TOKEN_ADMIN_CREATE lets anyone create tokens'
 };
 
 const NODE_SETTINGS: readonly ConfigVariable[] = [...NODE_VARIABLES, TRUSTED_ACCOUNT_VARIABLE];
