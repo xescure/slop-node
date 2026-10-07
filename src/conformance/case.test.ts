@@ -13,7 +13,7 @@ import {
 	toMoment
 } from './case.js';
 import type { CaseAction, CaseExpectation, CaseStep, VoteCase, VoteCaseFile } from './case.js';
-import { schemaViolations } from './schema.js';
+import { voteCaseViolations } from './schema.js';
 
 const lib = KeetaNet.lib;
 
@@ -353,7 +353,7 @@ describe('vote case format', function() {
 			return(decodeVoteCaseFile(text));
 		}).toThrow(message);
 		// The schema checks structure only; references, ranges and code lists need the decoder.
-		expect(schemaViolations(JSON.parse(text)).length > 0).toBe(schemaRejects);
+		expect(voteCaseViolations(JSON.parse(text)).length > 0).toBe(schemaRejects);
 	});
 
 	describe('a step\'s outcome must be one its action can have', function() {
@@ -390,18 +390,18 @@ describe('vote case format', function() {
 
 			if (valid) {
 				expect(decodeVoteCaseFile(text).cases[0]?.steps[0]?.expect).toEqual(expectation);
-				expect(schemaViolations(JSON.parse(text))).toEqual([]);
+				expect(voteCaseViolations(JSON.parse(text))).toEqual([]);
 			} else {
 				expect(function() {
 					return(decodeVoteCaseFile(text));
 				}).toThrow(`cases file.cases[0].steps[0].expect.outcome: a ${action.type} step cannot have the outcome "${expectation.outcome}"`);
-				expect(schemaViolations(JSON.parse(text)).length > 0).toBe(true);
+				expect(voteCaseViolations(JSON.parse(text)).length > 0).toBe(true);
 			}
 		});
 	});
 
 	test('the schema accepts every shape the format has', function() {
-		expect(schemaViolations(JSON.parse(encodeVoteCaseFile(file)))).toEqual([]);
+		expect(voteCaseViolations(JSON.parse(encodeVoteCaseFile(file)))).toEqual([]);
 	});
 
 	test('decoding rejects text that is not JSON', function() {

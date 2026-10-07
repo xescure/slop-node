@@ -30,7 +30,7 @@ export type ReplayResult = {
 	readonly networkAddress: NetworkAddress;
 };
 
-function compareText(left: string, right: string): number {
+export function compareText(left: string, right: string): number {
 	if (left < right) {
 		return(-1);
 	}
@@ -56,12 +56,14 @@ export function replayOrder<Staple extends Orderable>(staples: readonly Staple[]
 	}));
 }
 
+type ReplayNode = InstanceType<typeof lib.Node>;
+
 /*
  * The ledger belongs to a node so that the checksum its adds and gc passes
  * fold is recorded: a bare ledger discards those statistics.
  * [Keeta TS] index.js:69001-69006
  */
-function createReplayNode(storage: LedgerStorageAPI): InstanceType<typeof lib.Node> {
+function createReplayNode(storage: LedgerStorageAPI): ReplayNode {
 	return(new lib.Node({
 		kind: lib.Node.Kind.REPRESENTATIVE,
 		// A log without targets discards everything.
@@ -103,15 +105,7 @@ function touchedBy(staples: Iterable<VoteStaple>): GenericAccount[] {
 	}));
 }
 
-/**
- * Adds every staple to a fresh representative ledger on the storage, oldest
- * first, with the clock frozen at each staple's timestamp, and then runs gc
- * until nothing remains to retry. A staple that the ledger refuses fails the
- * replay; one that is deferred is reported if gc could not apply it.
- * [Keeta TS] index.js:67865-67876
- */
-export async function replayMainnet(storage: LedgerStorageAPI, staples: readonly VoteStaple[], options: ReplayOptions = {}): Promise<ReplayResult> {
-	const node = createReplayNode(storage);
+async function replayOnNode(node: ReplayNode, staples: readonly VoteStaple[], options: ReplayOptions): Promise<ReplayResult> {
 	const { ledger } = node;
 	const ordered = replayOrder(staples);
 	try {
@@ -136,4 +130,27 @@ export async function replayMainnet(storage: LedgerStorageAPI, staples: readonly
 		baseToken: node.baseToken,
 		networkAddress: node.networkAddress
 	});
+}
+
+/**
+ * Adds every staple to a fresh representative ledger on the storage, oldest
+ * first, with the clock frozen at each staple's timestamp, and then runs gc
+ * until nothing remains to retry. A staple that the ledger refuses fails the
+ * replay; one that is deferred is reported if gc could not apply it.
+ * [Keeta TS] index.js:67852-67863
+ */
+export async function replayMainnet(storage: LedgerStorageAPI, staples: readonly VoteStaple[], options: ReplayOptions = {}): Promise<ReplayResult> {
+	const node = createReplayNode(storage);
+	try {
+		return(await replayOnNode(node, staples, options));
+	} finally {
+		/*
+		 * Stopping flushes the node's statistics and closes its switch, which
+		 * never had a peer. The ledger stays readable: it never uses the
+		 * switch, and later transactions still merge their statistics into
+		 * the node.
+		 * [Keeta TS] index.js:71373-71383
+		 */
+		await node.stop();
+	}
 }

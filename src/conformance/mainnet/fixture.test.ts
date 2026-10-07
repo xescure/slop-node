@@ -35,6 +35,14 @@ describe.each(FIXTURES)('the $name fixture', function({ name, file, staples, blo
 		}, 0)).toBe(blocks);
 	});
 
+	test('has no two staples with one timestamp, so the replay order never falls back to the blocks hash', { timeout: PARSE_TIMEOUT_MILLISECONDS }, async function() {
+		const loaded = await loadMainnetFixture(name);
+
+		expect(new Set(loaded.map(function(staple): number {
+			return(staple.timestamp().valueOf());
+		})).size).toBe(staples);
+	});
+
 	test('has the sha256 that conformance/MAINNET.md states', async function() {
 		const digest = createHash('sha256').update(await readFile(new URL(file, DIRECTORY))).digest('hex');
 		const document = await readFile(new URL('../MAINNET.md', DIRECTORY), 'utf8');

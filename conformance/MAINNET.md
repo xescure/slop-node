@@ -22,7 +22,7 @@ Both files are public chain data. Every staple in them is a confirmed mainnet st
 
 The head file was read from the bootstrap endpoint of one representative, `https://rep1.main.network.api.keeta.com/api/node/bootstrap/votes`. It is the endpoint that Keeta's client calls as `GET /node/bootstrap/votes` to fetch the staples a representative's ledger has confirmed since a moment [Keeta TS] index.js:59139-59183. The network is mainnet, network `0x5382` [Keeta TS] index.js:61293-61298.
 
-The head file was captured no later than 2026-09-25, the day it was first committed to the repository it was copied from. It holds the first staples of the chain from the epoch, all within 2025-09-23.
+The head file was captured no later than 2026-09-25, the day it was first committed. It holds the first staples of the chain from the epoch, all within 2025-09-23.
 
 The edge-case file holds staples from later in the chain, which a node that replays only the head does not reach. They were taken from a full backfill of mainnet by an independent Rust decoder: it first rejected these 90 although mainnet had confirmed them. The rejected inputs were of two kinds:
 
@@ -51,7 +51,7 @@ Each file is gzip-compressed text with one staple per line, each line ending in 
 
 ## 5. Replay
 
-The order of the lines is not causal. The head file is in the order the capture received staples, which is in page order and, within a page, not in staple order: in the head file 745 staples are older than the one before them. A replay must therefore sort the staples itself, by `VoteStaple.timestamp()`, oldest first, with equal timestamps ordered by `blocksHash`. With that order every staple of the head file is added to a ledger without any staple waiting for a previous block.
+The order of the lines is not causal. The head file is in the order the capture received staples, which is in page order and, within a page, not in staple order: in the head file 745 staples are older than the one before them. A replay must therefore sort the staples itself, by `VoteStaple.timestamp()`, oldest first, with equal timestamps ordered by `blocksHash`. No two staples of either file share a timestamp, so the tie-break only makes the order total for other captures. With that order every staple of the head file is added to a ledger without any staple waiting for a previous block.
 
 The network settings of a mainnet ledger are:
 

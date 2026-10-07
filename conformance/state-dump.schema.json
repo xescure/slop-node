@@ -1,0 +1,375 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Canonical state dump, format slop-node/state-dump@1: one line",
+  "description": "A dump is UTF-8 text of ASCII lines, each one JSON object followed by a line feed. The first line is the format line; every later line is one record. The records are in ascending byte order, which is the order by kind and then by the record's key fields, and no two records share a key. conformance/STATE-DUMP.md defines each field and how a dump is produced.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/formatLine"
+    },
+    {
+      "$ref": "#/$defs/accountRecord"
+    },
+    {
+      "$ref": "#/$defs/aclRecord"
+    },
+    {
+      "$ref": "#/$defs/balanceRecord"
+    },
+    {
+      "$ref": "#/$defs/certificateRecord"
+    },
+    {
+      "$ref": "#/$defs/checksumRecord"
+    },
+    {
+      "$ref": "#/$defs/headRecord"
+    },
+    {
+      "$ref": "#/$defs/supplyRecord"
+    },
+    {
+      "$ref": "#/$defs/weightRecord"
+    }
+  ],
+  "$defs": {
+    "publicKey": {
+      "description": "An account's public key string.",
+      "type": "string",
+      "pattern": "^keeta_[a-z0-9]+$"
+    },
+    "decimal": {
+      "description": "A non-negative integer in decimal, without leading zeros.",
+      "type": "string",
+      "pattern": "^(?:0|[1-9][0-9]*)$"
+    },
+    "hash": {
+      "description": "A 32-byte hash in uppercase hex.",
+      "type": "string",
+      "pattern": "^[0-9A-F]{64}$"
+    },
+    "base64": {
+      "description": "Canonical base64, with padding, of DER bytes.",
+      "type": "string",
+      "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+    },
+    "permissions": {
+      "description": "The base flags and the external offsets of a permission set, each as the integer whose bits they are.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "external"
+      ],
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/decimal"
+        },
+        "external": {
+          "$ref": "#/$defs/decimal"
+        }
+      }
+    },
+    "formatLine": {
+      "description": "The first line of every dump.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "format"
+      ],
+      "properties": {
+        "format": {
+          "const": "slop-node/state-dump@1"
+        }
+      }
+    },
+    "accountRecord": {
+      "description": "The info and representative of an account of the dumped set. defaultPermission appears exactly for identifier accounts (network, token, storage and multisig), multisigQuorum exactly for multisig accounts.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "account",
+        "name",
+        "description",
+        "metadata",
+        "representative"
+      ],
+      "properties": {
+        "kind": {
+          "const": "account"
+        },
+        "account": {
+          "$ref": "#/$defs/publicKey"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "string"
+        },
+        "representative": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/publicKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultPermission": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/permissions"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "multisigQuorum": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/decimal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "aclRecord": {
+      "description": "One permission row: what a principal may do on an entity, optionally scoped to a target. A CERTIFICATE row names the certificate's holder as its principal and the certificate's hash.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "principalType",
+            "principal",
+            "entity",
+            "target",
+            "base",
+            "external"
+          ],
+          "properties": {
+            "kind": {
+              "const": "acl"
+            },
+            "principalType": {
+              "const": "ACCOUNT"
+            },
+            "principal": {
+              "$ref": "#/$defs/publicKey"
+            },
+            "entity": {
+              "$ref": "#/$defs/publicKey"
+            },
+            "target": {
+              "$ref": "#/$defs/publicKey"
+            },
+            "base": {
+              "$ref": "#/$defs/decimal"
+            },
+            "external": {
+              "$ref": "#/$defs/decimal"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "principalType",
+            "principal",
+            "certificate",
+            "entity",
+            "target",
+            "base",
+            "external"
+          ],
+          "properties": {
+            "kind": {
+              "const": "acl"
+            },
+            "principalType": {
+              "const": "CERTIFICATE"
+            },
+            "principal": {
+              "$ref": "#/$defs/publicKey"
+            },
+            "certificate": {
+              "$ref": "#/$defs/hash"
+            },
+            "entity": {
+              "$ref": "#/$defs/publicKey"
+            },
+            "target": {
+              "$ref": "#/$defs/publicKey"
+            },
+            "base": {
+              "$ref": "#/$defs/decimal"
+            },
+            "external": {
+              "$ref": "#/$defs/decimal"
+            }
+          }
+        }
+      ]
+    },
+    "balanceRecord": {
+      "description": "A non-zero balance of a token on an account of the dumped set.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "account",
+        "token",
+        "amount"
+      ],
+      "properties": {
+        "kind": {
+          "const": "balance"
+        },
+        "account": {
+          "$ref": "#/$defs/publicKey"
+        },
+        "token": {
+          "$ref": "#/$defs/publicKey"
+        },
+        "amount": {
+          "$ref": "#/$defs/decimal"
+        }
+      }
+    },
+    "certificateRecord": {
+      "description": "A certificate an account of the dumped set holds, with its intermediate certificates in their stored order, or null when it was added without any.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "account",
+        "hash",
+        "certificate",
+        "intermediates"
+      ],
+      "properties": {
+        "kind": {
+          "const": "certificate"
+        },
+        "account": {
+          "$ref": "#/$defs/publicKey"
+        },
+        "hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "certificate": {
+          "$ref": "#/$defs/base64"
+        },
+        "intermediates": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/base64"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "checksumRecord": {
+      "description": "The node's ledger checksum: the XOR of the hashes of every block the ledger applied.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "ledgerChecksum"
+      ],
+      "properties": {
+        "kind": {
+          "const": "checksum"
+        },
+        "ledgerChecksum": {
+          "$ref": "#/$defs/hash"
+        }
+      }
+    },
+    "headRecord": {
+      "description": "The head block of the main chain of an account of the dumped set, with its zero-based height.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "account",
+        "height",
+        "block"
+      ],
+      "properties": {
+        "kind": {
+          "const": "head"
+        },
+        "account": {
+          "$ref": "#/$defs/publicKey"
+        },
+        "height": {
+          "$ref": "#/$defs/decimal"
+        },
+        "block": {
+          "$ref": "#/$defs/hash"
+        }
+      }
+    },
+    "supplyRecord": {
+      "description": "The supply of a token account of the dumped set.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "token",
+        "amount"
+      ],
+      "properties": {
+        "kind": {
+          "const": "supply"
+        },
+        "token": {
+          "$ref": "#/$defs/publicKey"
+        },
+        "amount": {
+          "$ref": "#/$defs/decimal"
+        }
+      }
+    },
+    "weightRecord": {
+      "description": "The weight delegated to a representative that an account of the dumped set delegates to.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "representative",
+        "weight"
+      ],
+      "properties": {
+        "kind": {
+          "const": "weight"
+        },
+        "representative": {
+          "$ref": "#/$defs/publicKey"
+        },
+        "weight": {
+          "$ref": "#/$defs/decimal"
+        }
+      }
+    }
+  }
+}

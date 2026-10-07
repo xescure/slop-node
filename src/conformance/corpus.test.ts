@@ -10,7 +10,7 @@ import { EXCLUDED_ROWS } from './exclusions.js';
 import type { Scenario } from './record.js';
 import { replayVoteCase } from './replay.js';
 import type { ReplayFailure } from './replay.js';
-import { schemaViolations } from './schema.js';
+import { voteCaseViolations } from './schema.js';
 import { balanceScenarios } from './scenarios/balances.js';
 import { clockScenarios } from './scenarios/clock.js';
 import { conflictScenarios } from './scenarios/conflicts.js';
@@ -117,7 +117,7 @@ describe('vote-decision corpus', function() {
 		test('the committed file is valid under the schema and decodes', async function() {
 			const text = await readCommitted(group);
 
-			expect(schemaViolations(JSON.parse(text))).toEqual([]);
+			expect(voteCaseViolations(JSON.parse(text))).toEqual([]);
 			expect(encodeVoteCaseFile(decodeVoteCaseFile(text))).toBe(text);
 		});
 	});
