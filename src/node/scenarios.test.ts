@@ -93,6 +93,26 @@ describe.each(STORAGES_UNDER_TEST)('the official SDK against a node on %s', func
 		expect(vote?.issuer.publicKeyString.get()).toBe(keyOf(REPRESENTATIVE));
 	});
 
+	test('lets an account that only received funds open its chain by sending some back', async function() {
+		const { serving, holder } = await initializedNetwork();
+		const receiver = nodes.userClient(serving, RECEIVER);
+		await holder.send(RECEIVER, 250n, holder.baseToken);
+		expect(await receiver.head()).toBeNull();
+
+		const returned = await receiver.send(TRUSTED_SIGNER, 100n, receiver.baseToken);
+		expect(returned.publish).toBe(true);
+		if (returned.from !== 'direct') {
+			throw(new Error('the client published through a publish aid'));
+		}
+
+		expect(await receiver.balance(receiver.baseToken)).toBe(150n);
+		expect(await holder.balance(holder.baseToken)).toBe(SUPPLY - 250n + 100n);
+		const [opening] = returned.voteStaple.blocks;
+		expect(returned.voteStaple.blocks).toHaveLength(1);
+		expect((await receiver.head())?.toString()).toBe(opening?.hash.toString());
+		expect(stapleHashes(await receiver.history())).toHaveLength(2);
+	});
+
 	test('creates a token with a supply and transfers it', async function() {
 		const { serving } = await initializedNetwork();
 		const issuer = nodes.userClient(serving, ISSUER);
