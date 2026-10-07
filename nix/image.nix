@@ -71,7 +71,8 @@ dockerTools.buildLayeredImage {
       (lib.getExe slop-node)
     ];
     Cmd = [ "run" ];
-    User = "${user}:${user}";
+    # Numeric, since Kubernetes' runAsNonRoot cannot tell that a name is not root.
+    User = "${toString id}:${toString id}";
     WorkingDir = stateDirectory;
     Env = [
       "KEETANET_LOCAL_NODE_LISTEN_IP=0.0.0.0"

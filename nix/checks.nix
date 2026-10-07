@@ -134,7 +134,7 @@ in
           (lib.getExe slop-node)
         ];
         Cmd = [ "run" ];
-        User = "slop-node:slop-node";
+        User = "10001:10001";
         WorkingDir = "/var/lib/slop-node";
         ExposedPorts."8080/tcp" = { };
         Env = [
@@ -212,8 +212,11 @@ in
       [ -z "$found" ] || fail "tests or development files are in the image: $found"
 
       user=$(jq --raw-output '.config.User' "$config")
-      uid=$(awk -F: -v name="''${user%%:*}" '$1 == name { print $3 }' "$passwd")
-      gid=$(awk -F: -v name="''${user#*:}" '$1 == name { print $3 }' "$group")
+      uid=''${user%%:*}
+      gid=''${user#*:}
+      [[ $uid =~ ^[0-9]+$ && $gid =~ ^[0-9]+$ ]] || fail "the image's user $user is not numeric"
+      [ "$(awk -F: -v id="$uid" '$3 == id { print $1 }' "$passwd")" = slop-node ] || fail "the image's user $uid is not slop-node"
+      [ "$(awk -F: -v id="$gid" '$3 == id { print $1 }' "$group")" = slop-node ] || fail "the image's group $gid is not slop-node"
       mapfile -t command < <(jq --raw-output '.config.Entrypoint[], .config.Cmd[]' "$config")
       environment=()
       while IFS= read -r variable; do
