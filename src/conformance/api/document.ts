@@ -77,6 +77,11 @@ export class APIDocument {
 		}));
 	}
 
+	/** Every way a value breaks the document's schema of that name. */
+	schemaViolations(name: string, value: unknown): Violations {
+		return(this.#validate(['components', 'schemas', name], value));
+	}
+
 	/** The statuses an operation documents, as the document spells them. */
 	statuses(route: Route): readonly string[] {
 		return(Object.keys(field(this.#operation(route), 'responses', `${route.method} ${route.path}`)));

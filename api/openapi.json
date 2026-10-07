@@ -54,7 +54,10 @@
               }
             }
           },
-          "500": { "$ref": "#/components/responses/Error" }
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "A failure of the whole request. Status 500 is inferred from the GET routes, where representatives answer every such failure with it; no POST was sent to a representative to observe it."
+          }
         }
       }
     },
@@ -98,7 +101,10 @@
               }
             }
           },
-          "500": { "$ref": "#/components/responses/Error" }
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "A failure of the whole request. Status 500 is inferred from the GET routes, where representatives answer every such failure with it; no POST was sent to a representative to observe it."
+          }
         }
       }
     },
@@ -205,7 +211,10 @@
               }
             }
           },
-          "500": { "$ref": "#/components/responses/Error" }
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "A failure of the whole request. Status 500 is inferred from the GET routes, where representatives answer every such failure with it; no POST was sent to a representative to observe it."
+          }
         }
       }
     },
@@ -1098,7 +1107,10 @@
               }
             }
           },
-          "500": { "$ref": "#/components/responses/Error" }
+          "500": {
+            "$ref": "#/components/responses/Error",
+            "description": "A failure of the whole request. Status 500 is inferred from the GET routes, where representatives answer every such failure with it; no POST was sent to a representative to observe it."
+          }
         }
       }
     }
@@ -1153,7 +1165,7 @@
     },
     "responses": {
       "Error": {
-        "description": "A failure. A representative answers every failure with status 500, a request it refuses as well as one it fails to serve; a failure it did not anticipate carries only \"error\" and a \"message\" naming an error ID. The client treats a body whose \"error\" is true as a KeetaNet error and rebuilds it from the body, whatever the status [Keeta TS] index.js:59629-59652; any other body is reported as text [Keeta TS] index.js:59656-59671.",
+        "description": "A failure of the whole request: any non-2xx status; representatives use 500, for a request they refuse as well as for one they fail to serve. The client reads the body of a response that is not ok and, when its \"error\" is true, rebuilds the KeetaNet error from it [Keeta TS] index.js:59629-59652; any other body of such a response is reported as text, and with a status of 500 or more the client stops retrying [Keeta TS] index.js:59658-59671. The body of a 200 is returned as data, whatever it holds [Keeta TS] index.js:59673-59685, so a failure scoped to one part of a request, such as a malformed account in an account-state request, is answered with a 200 and described by that route's 200 schema.",
         "content": {
           "application/json": {
             "schema": { "$ref": "#/components/schemas/Error" }
@@ -1916,9 +1928,16 @@
         "additionalProperties": false
       },
       "Error": {
-        "description": "A failure. A KeetaNet error serializes its type, code and message [Keeta TS] index.js:66067-66073, a ledger vote error adds the accounts party to the conflict [Keeta TS] index.js:66533-66540, and an idempotent-key error adds the account, the key and both block hashes [Keeta TS] index.js:66575-66590. The client rebuilds the error from these fields, reading \"shouldRetry\" and \"retryDelay\" of a ledger error when present [Keeta TS] index.js:66334-66410.",
+        "description": "The body of a failure of the whole request: a refusal, which names the KeetaNet error, or an internal failure, which names only an error ID.",
+        "oneOf": [
+          { "$ref": "#/components/schemas/ErrorRefusal" },
+          { "$ref": "#/components/schemas/ErrorInternal" }
+        ]
+      },
+      "ErrorRefusal": {
+        "description": "A request the node refuses, as the KeetaNet error it raised: its type, code and message [Keeta TS] index.js:66067-66073. A ledger vote error adds the accounts party to the conflict [Keeta TS] index.js:66533-66540, and an idempotent-key error adds the account, the key and both block hashes [Keeta TS] index.js:66575-66590. The client rebuilds the error from these fields, reading \"shouldRetry\" and \"retryDelay\" of a ledger error when present [Keeta TS] index.js:66334-66410.",
         "type": "object",
-        "required": ["error", "message"],
+        "required": ["error", "type", "code", "message"],
         "properties": {
           "error": { "const": true },
           "type": {
@@ -1942,6 +1961,19 @@
           "idempotentKey": { "$ref": "#/components/schemas/Base64" },
           "blockhash": { "$ref": "#/components/schemas/Hash" },
           "existingBlockhash": { "$ref": "#/components/schemas/Hash" }
+        },
+        "additionalProperties": false
+      },
+      "ErrorInternal": {
+        "description": "A failure the node did not anticipate: exactly \"error\" and a message naming the error ID under which the node recorded it.",
+        "type": "object",
+        "required": ["error", "message"],
+        "properties": {
+          "error": { "const": true },
+          "message": {
+            "type": "string",
+            "pattern": "^Internal error occurred \\(error ID: [0-9a-f-]{36}\\)$"
+          }
         },
         "additionalProperties": false
       }

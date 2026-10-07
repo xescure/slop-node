@@ -66,6 +66,20 @@ function readCapture(name: string): Capture {
 	return({ request: { method, path, query }, status, contentType, body: parsed['body'] });
 }
 
+function captureBody(name: string): Readonly<Record<string, unknown>> {
+	const { body } = readCapture(name);
+	if (!isJSONObject(body)) {
+		throw(new Error(`${name}: the body is not an object`));
+	}
+	return(body);
+}
+
+function without(object: Readonly<Record<string, unknown>>, name: string): Readonly<Record<string, unknown>> {
+	return(Object.fromEntries(Object.entries(object).filter(function([key]): boolean {
+		return(key !== name);
+	})));
+}
+
 function jsonFiles(directory: URL): readonly string[] {
 	return(readdirSync(directory).filter(function(name): boolean {
 		return(name.endsWith('.json'));
@@ -175,6 +189,23 @@ describe('responses a mainnet representative gave', function() {
 		expect([...captured].sort()).toEqual(expected);
 	});
 
+	test('every failure a representative reported is a refusal or an internal failure, and it reported both', function() {
+		const forms = captures.map(readCapture).filter(function(capture): boolean {
+			return(capture.status !== 200);
+		}).map(function(capture): readonly string[] {
+			return(['ErrorRefusal', 'ErrorInternal'].filter(function(form): boolean {
+				return(api.schemaViolations(form, capture.body).length === 0);
+			}));
+		});
+
+		expect(forms).not.toHaveLength(0);
+		for (const matched of forms) {
+			expect(matched).toHaveLength(1);
+		}
+		expect([...new Set(forms.flat())].sort()).toEqual(['ErrorInternal', 'ErrorRefusal']);
+
+	});
+
 	test('a representative answers with 200 or, on any failure, 500, and every operation documents both', function() {
 		const statuses = new Set(captures.map(function(name): number {
 			return(readCapture(name).status);
@@ -244,6 +275,22 @@ describe('the values the responses carry', function() {
 		expect(api.responseViolations(route, 200, { ...head, extra: true })).not.toEqual([]);
 		expect(api.responseViolations(route, 500, { error: true })).not.toEqual([]);
 		expect(api.responseViolations(route, 404, head)).toEqual(['GET /api/node/ledger/account/{account}/head documents no 404 response']);
+	});
+
+	test('a refusal names its type and code, and an internal failure carries only a message naming an error ID', function() {
+		const refusal = captureBody('ledger-history-limit-zero.json');
+		const refusalRoute = routeOfCapture(readCapture('ledger-history-limit-zero.json'));
+		const internal = captureBody('vote-malformed.json');
+		const internalRoute = routeOfCapture(readCapture('vote-malformed.json'));
+
+		expect(api.responseViolations(refusalRoute, 500, refusal)).toEqual([]);
+		for (const field of ['type', 'code', 'message']) {
+			expect(api.responseViolations(refusalRoute, 500, without(refusal, field))).not.toEqual([]);
+		}
+		expect(api.responseViolations(internalRoute, 500, internal)).toEqual([]);
+		expect(api.responseViolations(internalRoute, 500, { ...internal, message: 'Internal error occurred' })).not.toEqual([]);
+		expect(api.responseViolations(internalRoute, 500, { ...internal, code: 'API_INVALID_SIDE' })).not.toEqual([]);
+		expect(api.responseViolations(internalRoute, 500, { ...internal, error: false })).not.toEqual([]);
 	});
 });
 
@@ -337,7 +384,9 @@ describe('requests and responses of the POST routes, built locally', function() 
 			throw(refusal);
 		}
 
+		expect(refusal.code).toBe('LEDGER_NOT_SUCCESSOR');
 		expect(api.responseViolations(route, 500, { error: true, ...refusal.toJSON() })).toEqual([]);
+		expect(api.schemaViolations('ErrorRefusal', { error: true, ...refusal.toJSON() })).toEqual([]);
 	});
 
 	test('a publish request and its answer', async function() {

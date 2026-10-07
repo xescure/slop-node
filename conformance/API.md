@@ -20,7 +20,7 @@ The document describes version 0.18.7 of `@keetanetwork/keetanet-client`:
 - **Fixtures** (`api/fixtures/`): every fixture validates against its route's 200 schema.
 - **Library serialization:** every block, vote and staple in a captured body or a fixture is exactly what the package's JSON conversion with `addBinary` makes of the value its `$binary` encodes [Keeta TS] index.js:78476-78481, 63910-63939, 80606-80630, 81088-81101.
 - **History pages:** the `$id` of each entry is the hash of its staple's blocks [Keeta TS] index.js:81044-81053, and `nextKey` is the `$id` of the page's last entry.
-- **POST routes**, which the capture never sends: request bodies are built locally the way the client builds them, from blocks, votes, quotes and staples made by the package on a local test network, and validate against the request schemas: `POST /api/vote/quote` [Keeta TS] index.js:59844-59849, `POST /api/vote` with another representative's vote and a quote [Keeta TS] index.js:59852-59866, 59775, `POST /api/node/publish` [Keeta TS] index.js:58481-58485 and `POST /api/p2p/message` with an `add` message and a representative's greeting [Keeta TS] index.js:71402-71404, 73043-73047, 72200-72212. The quote and the vote the local ledger returns validate against the response schemas once serialized as above, and so does a refused vote's error in the envelope every captured failure has.
+- **POST routes**, which the capture never sends: request bodies are built locally the way the client builds them, from blocks, votes, quotes and staples made by the package on a local test network, and validate against the request schemas: `POST /api/vote/quote` [Keeta TS] index.js:59844-59849, `POST /api/vote` with another representative's vote and a quote [Keeta TS] index.js:59852-59866, 59775, `POST /api/node/publish` [Keeta TS] index.js:58481-58485 and `POST /api/p2p/message` with an `add` message and a representative's greeting [Keeta TS] index.js:71402-71404, 73043-73047, 72200-72212. The quote and the vote the local ledger returns validate against the response schemas once serialized as above, and the error the ledger refuses a vote with, `LEDGER_NOT_SUCCESSOR`, validates as a refusal in the envelope every captured failure has.
 
 ### Mainnet captures
 
@@ -62,7 +62,9 @@ Some requests name values that do not exist or are malformed. The representative
 | a block with `side=neither` | 500 | `API_INVALID_SIDE` |
 | a block or its votes by a malformed hash | 500 | only `error` and a message naming an error ID |
 
-Every failure the representative reported had status 500, whether it refused the request or failed to serve it, and the body of every failure had `"error": true`, so the document gives each operation a 200 and a 500 response.
+A failure of the whole request may have any non-2xx status: the client reads the error from the body of any response that is not ok [Keeta TS] index.js:59629-59652, and returns the body of a 200 as data [Keeta TS] index.js:59673-59685. Representatives use 500: every failure the representative reported had status 500, whether it refused the request or failed to serve it, so the document gives each operation a 200 and a 500 response. The body of a failure has `"error": true` and one of two forms: a refusal names the KeetaNet error's `type`, `code` and `message`, and an internal failure has nothing but a `message` naming an error ID, `Internal error occurred (error ID: <UUID>)`. A malformed account is not a failure of the whole request: it is answered with a 200 (see Differences).
+
+The capture sends no POST, so the 500 of the four POST routes is inferred from the GET routes rather than observed, and the document says so on each.
 
 To capture again, run:
 
