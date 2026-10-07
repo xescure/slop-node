@@ -54,7 +54,11 @@ type RepresentativeEntry = DeclaredResult<DeclaredLedgerGroup['representatives']
 
 type AdvertisedRepresentative = { readonly key: Account; readonly endpoints: Endpoints };
 
-/** The representatives the node can name with their endpoints: itself first, then every peer it has heard advertise itself. */
+/**
+ * The representatives the node can name with their endpoints: itself first,
+ * then each representative peer it holds a record of and has seen, however
+ * long ago and whether or not it has reached the peer itself.
+ */
 async function advertisedRepresentatives(request: APIRequest): Promise<AdvertisedRepresentative[]> {
 	const advertised: AdvertisedRepresentative[] = [];
 	const { ledgerPrivateKey, endpoints } = request.node.config;
