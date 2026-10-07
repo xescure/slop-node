@@ -85,6 +85,17 @@ function messageTypeOf(buffer: Buffer | ArrayBuffer): string | undefined {
 	}
 }
 
+/** The types of the messages peers deliver to the node from now on, as the switch reads them. */
+function deliveredTypes(node: LocalNode): (string | undefined)[] {
+	const handle = node.switch.recvMessageFromPeer.bind(node.switch);
+	const types: (string | undefined)[] = [];
+	vi.spyOn(node.switch, 'recvMessageFromPeer').mockImplementation(function(from: P2PConnection, buffer: Buffer | ArrayBuffer): Promise<boolean> {
+		types.push(messageTypeOf(buffer));
+		return(handle(from, buffer));
+	});
+	return(types);
+}
+
 /**
  * The switch's answers to the next messages of that type peers deliver to the
  * node, in the order they arrive, once the switch, and the node behind it,
@@ -231,8 +242,49 @@ async function advertisementWithUnsignedFields(node: LocalNode): Promise<JSONSer
 	return({ ...genuine, filter: keyOf(STRANGER), unsigned: 'unsigned', endpoints: { ...endpointsOf(node), unsigned: 'unsigned' } });
 }
 
-function testMessage(id: string): string {
-	return(JSON.stringify({ id, test: 'hello', ttl: 0 }));
+/** A peer passed on, as a representative passes on each peer it knows [Keeta TS] index.js:73466-73479. */
+function peerMessage(id: string, advertisement: JSONSerializableObject, ttl: number): string {
+	return(JSON.stringify({ id, peer: advertisement, ttl }));
+}
+
+/** A greeting as the message, with a filter beside the advertisement on an account the staples sent here do not touch. */
+async function filteringGreetingMessage(node: LocalNode): Promise<string> {
+	const genuine = await node.switch.getOutgoingGreetingInfo();
+	return(JSON.stringify({ id: 'smuggled', greeting: { ...genuine, filter: keyOf(STRANGER) }, ttl: 0 }));
+}
+
+/** A representative of another network, whose key the pair's nodes do not know. */
+async function startStranger(): Promise<RunningLocalNode> {
+	return(await nodes.start({ representativeWeights: [1000n, 1000n, 1000n], representative: 2, p2p: { useHTTPRepublish: true } }));
+}
+
+async function strangersGreeting(): Promise<JSONSerializableObject> {
+	return(await (await startStranger()).node.switch.getOutgoingGreetingInfo());
+}
+
+async function secondsGreeting(pair: Pair): Promise<JSONSerializableObject> {
+	return(await pair.second.node.switch.getOutgoingGreetingInfo());
+}
+
+/** A test message the switch would pass on [Keeta TS] index.js:72927-72930. */
+function relayedTestMessage(): Promise<string> {
+	return(Promise.resolve(JSON.stringify({ id: 'test', test: 'hello', ttl: 5 })));
+}
+
+function unknownMessage(): Promise<string> {
+	return(Promise.resolve(JSON.stringify({ id: 'unknown', unknown: 'hello', ttl: 0 })));
+}
+
+async function relayedPeerMessage(node: LocalNode): Promise<string> {
+	return(peerMessage('relayed-peer', await node.switch.getOutgoingGreetingInfo(), 1));
+}
+
+async function alteredPeerMessage(node: LocalNode): Promise<string> {
+	return(peerMessage('altered-peer', await alteredAdvertisement(node), 0));
+}
+
+function listenerPeerMessage(): Promise<string> {
+	return(Promise.resolve(peerMessage('listener-peer', { kind: lib.Node.Kind.PARTICIPANT }, 0)));
 }
 
 /** Sends from user 0 to user 1, each following the one before it, voted for by both representatives. */
@@ -448,9 +500,9 @@ describe('peers over HTTP republish', function() {
 	test('a greeting of a representative is accepted, as the API document describes the answer', async function() {
 		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
 		const greeted = nextHandled(second.node, 'greeting');
-		const message = JSON.stringify({ id: 'hello', test: 'hello', ttl: 0 });
+		const greeting = await first.node.switch.getOutgoingGreetingInfo();
 
-		const answer = await postJSON(second, '/p2p/message', { message, greeting: await first.node.switch.getOutgoingGreetingInfo() });
+		const answer = await postJSON(second, '/p2p/message', { message: peerMessage('hello', greeting, 0), greeting });
 
 		expect(answer.status).toBe(200);
 		expect(answer.body).toEqual({ success: true });
@@ -484,7 +536,7 @@ describe('peers over HTTP republish', function() {
 	])('refuses a message whose greeting is $forgery, and never makes a peer of it', async function({ advertise }) {
 		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
 		const handle = vi.spyOn(second.node.switch, 'recvMessageFromPeer');
-		const message = JSON.stringify({ id: 'forged', test: 'hello', ttl: 0 });
+		const message = peerMessage('forged', await second.node.switch.getOutgoingGreetingInfo(), 0);
 
 		const answer = await postJSON(second, '/p2p/message', { message, greeting: await advertise(first.node) });
 
@@ -500,12 +552,14 @@ describe('peers over HTTP republish', function() {
 		// The node's own connection to the representative has the name a filter in its greeting would be kept under.
 		await dial(first.node, second.node);
 		const recorded = recordedPotentialPeers(first.node);
+		const genuine = await second.node.switch.getOutgoingGreetingInfo();
 
-		const answer = await postJSON(first, '/p2p/message', { message: testMessage('replayed'), greeting: await advertisementWithUnsignedFields(second.node) });
+		const answer = await postJSON(first, '/p2p/message', { message: peerMessage('replayed', genuine, 0), greeting: await advertisementWithUnsignedFields(second.node) });
 
 		expect(answer.body).toEqual({ success: true });
 		await settleDeliveries(first.node);
-		expect(recorded).toEqual([await second.node.switch.getOutgoingGreetingInfo()]);
+		// Once for the greeting, once for the peer the message passes on.
+		expect(recorded).toEqual([genuine, genuine]);
 		expect(await first.node.switch.config.kv.getAll('messageFilters')).toEqual({});
 
 		const applied = nextHandled(second.node, 'add');
@@ -517,10 +571,14 @@ describe('peers over HTTP republish', function() {
 	test('handles a representative\'s greeting once, whatever fields its signature does not cover are added to it', async function() {
 		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
 		const recorded = recordedPotentialPeers(second.node);
+		const [plain, withUnsignedFields] = await chainedStaples(first.network, [10n, 20n]);
+		if (plain === undefined || withUnsignedFields === undefined) {
+			throw(new Error('internal error: fewer staples than amounts'));
+		}
 
-		await postJSON(second, '/p2p/message', { message: testMessage('plain'), greeting: await first.node.switch.getOutgoingGreetingInfo() });
+		await postJSON(second, '/p2p/message', { message: JSON.stringify({ id: 'plain', add: plain.toString(), ttl: 0 }), greeting: await first.node.switch.getOutgoingGreetingInfo() });
 		await settleDeliveries(second.node);
-		await postJSON(second, '/p2p/message', { message: testMessage('with-unsigned-fields'), greeting: await advertisementWithUnsignedFields(first.node) });
+		await postJSON(second, '/p2p/message', { message: JSON.stringify({ id: 'with-unsigned-fields', add: withUnsignedFields.toString(), ttl: 0 }), greeting: await advertisementWithUnsignedFields(first.node) });
 		await settleDeliveries(second.node);
 
 		expect(recorded).toEqual([await first.node.switch.getOutgoingGreetingInfo()]);
@@ -565,14 +623,71 @@ describe('peers over HTTP republish', function() {
 		expect(await second.node.ledger.getBalance(requireAt(second.network.users, 1), second.network.baseToken)).toBe(1060n);
 	});
 
-	test('refuses a message that is no peer-to-peer message', async function() {
+	test.each([
+		{ sender: 'its own key', greetingOf: strangersGreeting },
+		{ sender: 'the replayed greeting of the representative', greetingOf: secondsGreeting }
+	])('refuses a greeting as the message from a sender greeting with $sender, so a filter in it does not keep staples from that representative', async function({ greetingOf }) {
+		const pair = await startPair({ p2p: { useHTTPRepublish: true } });
+		const { first, second } = pair;
+		// The node's own connection to the representative has the name a filter in its greeting would be kept under.
+		await dial(first.node, second.node);
+		const greeting = await greetingOf(pair);
+		const delivered = deliveredTypes(first.node);
+
+		const answer = await postJSON(first, '/p2p/message', { message: await filteringGreetingMessage(second.node), greeting });
+
+		expect(answer.body).toEqual({ success: false });
+		expect(api.responseViolations(MESSAGE_ROUTE, answer.status, answer.body)).toEqual([]);
+		await settleDeliveries(first.node);
+		// Only the greeting the node builds from the greeting field.
+		expect([...delivered]).toEqual(['greeting']);
+		expect(await first.node.switch.config.kv.getAll('messageFilters')).toEqual({});
+
+		const applied = nextHandled(second.node, 'add');
+		expect(await first.node.addToLedger(await sendStaple(first.network, 10n))).toBe(true);
+		expect(await applied).toBe(true);
+	});
+
+	test.each([
+		{ refused: 'a test message, which the switch passes on to every peer', message: relayedTestMessage },
+		{ refused: 'a message of a type the node does not act on', message: unknownMessage },
+		{ refused: 'a peer to pass on to every peer', message: relayedPeerMessage },
+		{ refused: 'a peer whose advertisement was altered after signing', message: alteredPeerMessage },
+		{ refused: 'a peer that is no representative', message: listenerPeerMessage }
+	])('refuses $refused', async function({ message }) {
 		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
-		const handle = vi.spyOn(second.node.switch, 'recvMessageFromPeer');
+		const delivered = deliveredTypes(second.node);
+
+		const answer = await postJSON(second, '/p2p/message', { message: await message(first.node), greeting: await first.node.switch.getOutgoingGreetingInfo() });
+
+		expect(answer.body).toEqual({ success: false });
+		await settleDeliveries(second.node);
+		expect(delivered).toEqual(['greeting']);
+	});
+
+	test('keeps a peer passed on with only what its signature covers', async function() {
+		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
+		const stranger = await startStranger();
+		const genuine = await stranger.node.switch.getOutgoingGreetingInfo();
+
+		const answer = await postJSON(second, '/p2p/message', { message: peerMessage('passed-on', await advertisementWithUnsignedFields(stranger.node), 0), greeting: await first.node.switch.getOutgoingGreetingInfo() });
+
+		expect(answer.body).toEqual({ success: true });
+		await settleDeliveries(second.node);
+		expect(await second.node.switch.config.kv.get('potentialPeers', keyOf(representativeOf(stranger, 2)))).toEqual(genuine);
+		expect(await second.node.switch.config.kv.getAll('messageFilters')).toEqual({});
+	});
+
+	test('refuses a message that is no peer-to-peer message, and still takes the sender\'s greeting', async function() {
+		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
+		const delivered = deliveredTypes(second.node);
 
 		const answer = await postJSON(second, '/p2p/message', { message: '{"id": 7}', greeting: await first.node.switch.getOutgoingGreetingInfo() });
 
 		expect(answer.body).toEqual({ success: false });
-		expect(handle).not.toHaveBeenCalled();
+		await settleDeliveries(second.node);
+		expect(delivered).toEqual(['greeting']);
+		expect(representativeKeys(await second.node.switch.peers({ includeUnverified: true }))).toEqual([keyOf(representativeOf(first, 0))]);
 	});
 });
 
