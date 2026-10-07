@@ -1,3 +1,4 @@
+import http from 'node:http';
 import { describe, expect, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account } from '@keetanetwork/keetanet-client/lib/account.js';
@@ -16,11 +17,13 @@ import type { TestNetwork } from '../testing/network.js';
 import { watchOpenHandles } from '../testing/open-handles.js';
 import { NODE_ENVIRONMENT, useSDKNodes } from '../testing/sdk.js';
 import type { ServingNode } from '../testing/sdk.js';
+import { MAX_POSTED_MESSAGES_HANDLED } from '../api/p2p.js';
 import { P2PInternals } from '../upstream/internals.js';
 import type { LedgerWriteMode } from './config.js';
 import type { LocalNode } from './local.js';
 import { MESSAGE_SETTLE_MILLISECONDS, SwitchMessages } from './messages.js';
 import { rememberedPeerArenas } from './peer-store.js';
+import { MAX_PEER_SOCKETS, PEER_SOCKETS_FULL_STATUS } from './peers.js';
 
 const lib = KeetaNet.lib;
 
@@ -372,6 +375,82 @@ function listenerGreeting(id: string, filter: Account): string {
 	return(JSON.stringify({ id, greeting: { kind: lib.Node.Kind.PARTICIPANT, filter: keyOf(filter) }, ttl: 0 }));
 }
 
+/** A listener's socket, open and greeted, so that the switch takes it without waiting out a greeting. */
+async function listenerSocket(node: LocalNode, id: string): Promise<WebSocket> {
+	const socket = await rawPeerSocket(node);
+	socket.send(listenerGreeting(id, STRANGER));
+	return(socket);
+}
+
+/** The status the node answers a WebSocket upgrade of "/p2p" with, when it does not upgrade it. */
+function refusedUpgradeStatus(node: LocalNode): Promise<number> {
+	const endpoint = new URL(p2pEndpointOf(node));
+	return(new Promise<number>(function(resolve, reject) {
+		const upgrade = http.request({
+			host: endpoint.hostname,
+			port: endpoint.port,
+			path: endpoint.pathname,
+			headers: { connection: 'Upgrade', upgrade: 'websocket', 'sec-websocket-version': '13', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==' }
+		});
+		upgrade.once('response', function(response) {
+			response.resume();
+			resolve(response.statusCode ?? 0);
+		});
+		upgrade.once('upgrade', function(_response, socket) {
+			socket.destroy();
+			reject(new Error('the node upgraded the request'));
+		});
+		upgrade.once('error', reject);
+		upgrade.end();
+	}));
+}
+
+/** Resolves once the switch has been told to let go of a connection. */
+function nextUnregistered(node: LocalNode): Promise<void> {
+	const unregister = node.switch.unregisterConnection.bind(node.switch);
+	return(new Promise<void>(function(resolve) {
+		vi.spyOn(node.switch, 'unregisterConnection').mockImplementation(async function(connection: P2PConnection): Promise<void> {
+			resolve();
+			await unregister(connection);
+		});
+	}));
+}
+
+type HeldMessages = {
+	/** How many messages peers have delivered so far. */
+	readonly delivered: () => number;
+	/** Lets every message held go on to the switch, and resolves once the switch has handled each. */
+	readonly release: () => Promise<void>;
+};
+
+/** Holds every message peers deliver to the node, before the switch handles it, until released. */
+function holdMessages(node: LocalNode): HeldMessages {
+	const handle = node.switch.recvMessageFromPeer.bind(node.switch);
+	const handling: Promise<boolean>[] = [];
+	let release: () => void = function() {
+		throw(new Error('internal error: released before holding'));
+	};
+	const held = new Promise<void>(function(resolve) {
+		release = resolve;
+	});
+	vi.spyOn(node.switch, 'recvMessageFromPeer').mockImplementation(function(from: P2PConnection, buffer: Buffer | ArrayBuffer): Promise<boolean> {
+		const handled = held.then(function(): Promise<boolean> {
+			return(handle(from, buffer));
+		});
+		handling.push(handled);
+		return(handled);
+	});
+	return({
+		delivered: function(): number {
+			return(handling.length);
+		},
+		release: async function(): Promise<void> {
+			release();
+			await Promise.all(handling);
+		}
+	});
+}
+
 type HeldStaples = {
 	/** Resolves once a staple has arrived. */
 	readonly arrived: Promise<void>;
@@ -505,6 +584,48 @@ describe('peers over the /p2p WebSocket', function() {
 		expect(filteringReceived).not.toContain('add');
 		filtering.close();
 		touched.close();
+	});
+});
+
+describe('the bounds on peers', function() {
+	test('keep at most MAX_PEER_SOCKETS sockets open on /p2p, refusing another until one closes', async function() {
+		const { first } = await startPair();
+		const sockets: WebSocket[] = [];
+		for (let index = 0; index < MAX_PEER_SOCKETS; index++) {
+			sockets.push(await listenerSocket(first.node, `listener-${String(index)}`));
+		}
+
+		expect(await refusedUpgradeStatus(first.node)).toBe(PEER_SOCKETS_FULL_STATUS);
+
+		const released = nextUnregistered(first.node);
+		requireAt(sockets, 0).close();
+		await released;
+		sockets.push(await listenerSocket(first.node, 'listener-after'));
+		for (const socket of sockets) {
+			socket.close();
+		}
+	});
+
+	test('refuse a message posted over HTTP while the switch handles MAX_POSTED_MESSAGES_HANDLED of them, handing it nothing', async function() {
+		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
+		const greeting = await first.node.switch.getOutgoingGreetingInfo();
+		const held = holdMessages(second.node);
+		const post = function(id: string): Promise<unknown> {
+			return(postJSON(second, '/p2p/message', { message: peerMessage(id, greeting, 0), greeting }).then(function(answer): unknown {
+				return(answer.body);
+			}));
+		};
+
+		// Each post hands the switch the sender's greeting and the message.
+		for (let index = 0; index < MAX_POSTED_MESSAGES_HANDLED / 2; index++) {
+			expect(await post(`held-${String(index)}`)).toEqual({ success: true });
+		}
+		expect(held.delivered()).toBe(MAX_POSTED_MESSAGES_HANDLED);
+		expect(await post('refused')).toEqual({ success: false });
+		expect(held.delivered()).toBe(MAX_POSTED_MESSAGES_HANDLED);
+
+		await held.release();
+		expect(await post('after')).toEqual({ success: true });
 	});
 });
 

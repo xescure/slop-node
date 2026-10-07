@@ -61,10 +61,15 @@ export type BundledWebSocket = {
 	terminate(): void;
 };
 
+/** What the server is told of a socket asking to upgrade. */
+export type BundledUpgradeInfo = { readonly req: http.IncomingMessage };
+
 export type BundledWebSocketServerOptions = {
 	readonly server: http.Server;
 	readonly path: string;
 	readonly maxPayload: number;
+	/** With two parameters, the server upgrades once told so, and otherwise answers with the status given. */
+	readonly verifyClient?: (info: BundledUpgradeInfo, callback: (verified: boolean, code?: number) => void) => void;
 };
 
 /** The parts of the bundled "ws" 8 WebSocketServer that the node uses. */
