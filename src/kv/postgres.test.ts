@@ -118,10 +118,7 @@ describe('the Postgres key-value store', function() {
 
 	test('a statement that fails rolls back and returns its connection to the pool', async function() {
 		const database = await freshDatabase('migrated');
-		const pool = new pg.Pool({ connectionString: database.connectionString, max: 1 });
-		onTestFinished(function() {
-			return(pool.end());
-		});
+		const pool = database.pool({ max: 1 });
 		const store = injectedStoreOn(pool);
 		await store.incr('stats', 'large', Number.MAX_VALUE);
 
