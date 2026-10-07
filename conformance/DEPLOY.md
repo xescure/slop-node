@@ -16,9 +16,9 @@ This document states what an operator needs to run `slop-node` as a service: the
 | Environment | `KEETANET_LOCAL_NODE_LISTEN_IP=0.0.0.0`, `KEETANET_LOCAL_NODE_LISTEN_PORT=8080`, `SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt`, `TZ=UTC`, `TZDIR=/etc/zoneinfo` |
 | Labels | `org.opencontainers.image.title`, `.version` (the version `GET /api/node/version` reports), `.source`, `.licenses`, `.description`, and `.revision` when built from a clean checkout |
 
-The image holds the node with Node.js and what Node.js refers to, the CA bundle and the time zone database. It contains no keys and no other secret: every setting comes from the environment at run time.
+The image holds the node with Node.js and what Node.js refers to, the CA bundle and the time zone database. It contains no keys and no other secret: every setting comes from the environment at run time. It is not shell-free: Node.js's closure carries bash, grep and some `-dev` outputs (about 17.5 MiB) through its build-configuration strings, none of them on `PATH`.
 
-The node keeps nothing on disk. The ledger, the statistics and the peer-to-peer state are in Postgres, and the log goes to standard output and standard error. No volume needs mounting; the working directory is writable for the node's user only.
+The node keeps nothing on disk. When `KEETANET_LOCAL_NODE_POSTGRES_URL` is set, the ledger, the statistics and the peer-to-peer state are in Postgres; otherwise they are in memory and lost when the node exits. The log goes to standard output and standard error. No volume needs mounting; the working directory is writable for the node's user only.
 
 `tini` runs as PID 1 and passes every signal to the node. Linux delivers a signal to a PID 1 only if that process handles it. The node handles SIGTERM and SIGINT only from the start of `run` until the first one arrives, then removes its handlers, so that a second signal ends it at once if stopping hangs; as PID 1 it would ignore that second signal, and any signal sent while it starts.
 
@@ -31,8 +31,8 @@ What a deployment usually sets:
 | Variable | |
 |---|---|
 | `KEETANET_LOCAL_NODE_SEED` | The representative's seed. Secret. |
-| `KEETANET_INITIAL_TRUSTED_ACCOUNT` | The network's trusted account, a public key. Required on network 0. |
-| `KEETANET_LOCAL_NODE_NETWORK` | `local` (network 0, the default), or a network the client knows. |
+| `KEETANET_INITIAL_TRUSTED_ACCOUNT` | The network's trusted account, a public key. Required on `local`. |
+| `KEETANET_LOCAL_NODE_NETWORK` | `local` (network 0, the default), `dev`, `staging`, `test`, `main`, or the numeric ID of one of them. |
 | `KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE` | `read-write` (default), `no-voting`, `bootstrap-only` or `read-only`. |
 | `KEETANET_LOCAL_NODE_POSTGRES_URL` | The node's database. Secret, since it may hold a password. Without it the ledger is in memory and lost on stop. |
 | `KEETANET_LOCAL_NODE_ENDPOINT_API`, `KEETANET_LOCAL_NODE_ENDPOINT_P2P` | Where clients and peers reach the node (section 4). |
@@ -91,7 +91,7 @@ An outline for a network of several representatives that only the operator runs.
 1. **Keys.** Choose a seed for the trusted account and one seed per representative, 64 hexadecimal digits each. The trusted seed is needed only for genesis. Every node is given the trusted account's public key as `KEETANET_INITIAL_TRUSTED_ACCOUNT`.
 2. **Databases.** Create one empty database per node.
 3. **Genesis, once.** Run `genesis` against the first node's database, with that node's environment and `KEETANET_GENESIS_TRUSTED_SEED`, `KEETANET_GENESIS_SUPPLY` and optionally `KEETANET_GENESIS_DELEGATE_TO`, which is the first node's representative unless set. The supply's voting weight is delegated to that one representative. The command prints the genesis staple's hash and the network address.
-4. **Start every node** with `KEETANET_LOCAL_NODE_NETWORK=local`, `read-write`, its own seed, database and stable endpoints, behind a firewall that admits only the other nodes to the P2P surface. Give every other node `KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS` naming the first node's API endpoint: a node catches up from the peers it dials only once they hold at least a hundredth of the voting weight on its own ledger, and a node without genesis knows no weight, so it fetches genesis only from a bootstrap peer named this way. Collect each node's `peer:` line.
+4. **Start every node** with `KEETANET_LOCAL_NODE_NETWORK=local`, `KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE=read-write`, its own seed, database and stable endpoints, behind a firewall that admits only the other nodes to the P2P surface. Collect each node's `peer:` line. `KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS` is not needed: the manual peers of the next step are always sources a node catches up from, so a node without genesis fetches it from them once restarted. Only a representative that the node merely heard of through its peers must hold a hundredth of the voting weight on the node's own ledger to be one, and a node without genesis knows no weight.
 5. **Peers.** Set `KEETANET_LOCAL_NODE_MANUAL_PEERS` on every node to the other nodes' `peer:` lines, and restart them.
 6. **Genesis first.** Before publishing anything, wait until every node holds genesis: `GET <api>/node/ledger/account/<network address>/head` answers a `block` other than `null` on every node. Do the same after each staple that changes voting weight, such as a delegation, checking `GET <api>/node/ledger/block/<hash>` on every node, before publishing the next transaction.
 7. **Publish** to any node's `POST <api>/node/publish`.
