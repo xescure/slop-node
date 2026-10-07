@@ -59,6 +59,7 @@ const VARIABLE_HELP: Readonly<Record<ConfigVariable, string>> = {
 	KEETANET_LOCAL_NODE_ENDPOINT_P2P: `the ws:// or wss:// URL peers reach it at, with the path ${P2P_PATH} (where it listens)`,
 	KEETANET_LOCAL_NODE_PREFER_UPDATES: 'http or websocket: how peers send it staples (websocket)',
 	KEETANET_LOCAL_NODE_MANUAL_PEERS: `the peers it dials, separated by commas, each ${MANUAL_PEER_FORM}, as a node prints on its "peer:" line (none; auto is not supported)`,
+	KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: 'the API URLs of representatives it catches up from besides its peers, without dialing them, separated by commas (none)',
 	KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE: 'true lets the node vote for TOKEN_ADMIN_MODIFY_BALANCE (false)',
 	KEETANET_GENESIS_TRUSTED_SEED: 'the seed of the trusted account (required)',
 	KEETANET_GENESIS_TRUSTED_SEED_INDEX: 'the index of its key under the seed (0)',
@@ -171,6 +172,7 @@ async function startupSummary(config: EnvironmentConfig, storage: OpenedStorage,
 		`ledger write mode: ${config.ledgerWriteMode}\n`,
 		`storage: ${storage.kind}\n`,
 		`manual peers: ${String(config.manualPeers.length)}\n`,
+		`bootstrap peers: ${String(config.bootstrapPeers.length)}\n`,
 		`api: ${node.config.endpoints?.api ?? 'not served'}\n`,
 		`peer: ${await ownPeer(node)}\n`
 	].join(''));

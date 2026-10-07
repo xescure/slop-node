@@ -7,7 +7,9 @@ import type { LedgerStorageDriverBase } from '../ledger/storage/base.js';
 import { driverUnderTestNamed } from '../ledger/storage/suite/drivers.js';
 import { GENESIS_MOMENT, requireAt } from '../ledger/storage/suite/support.js';
 import type { DriverUnderTest } from '../ledger/storage/suite/types.js';
+import { bootstrapFrom } from '../node/bootstrap-peers.js';
 import { LocalNode } from '../node/local.js';
+import { assertNever } from '../util/assert-never.js';
 import { createTestNetwork, freezeClock } from './network.js';
 import type { TestFeePolicy, TestLedgerOptions, TestNetwork } from './network.js';
 
@@ -25,6 +27,12 @@ export type LocalNodeOptions = {
 	readonly endpoints?: LocalNodeConfig['endpoints'];
 	readonly fee?: TestFeePolicy;
 	readonly representativeWeights?: readonly bigint[];
+	readonly ledgerWriteMode?: TestLedgerOptions['ledgerWriteMode'];
+	/** Whether the node starts holding genesis, as it does unless told otherwise, or must bootstrap it. */
+	readonly genesis?: 'held' | 'absent';
+	readonly bootstrap?: LocalNodeConfig['bootstrap'];
+	/** API endpoints the node bootstraps from besides the peers it knows. */
+	readonly bootstrapFrom?: readonly string[];
 };
 
 /** A representative node of a test network, holding genesis, as built before it runs. */
@@ -95,6 +103,9 @@ export function useLocalNodes(): LocalNodes {
 		if (options.fee !== undefined) {
 			ledgerOptions.fee = options.fee;
 		}
+		if (options.ledgerWriteMode !== undefined) {
+			ledgerOptions.ledgerWriteMode = options.ledgerWriteMode;
+		}
 		const config: LocalNodeConfig = {
 			...network.nodeConfig(storage, requireAt(network.representatives, options.representative ?? 0), ledgerOptions),
 			log,
@@ -106,9 +117,22 @@ export function useLocalNodes(): LocalNodes {
 		if (options.p2p !== undefined) {
 			config.p2p = options.p2p;
 		}
+		if (options.bootstrap !== undefined) {
+			config.bootstrap = options.bootstrap;
+		}
+		bootstrapFrom(config, options.bootstrapFrom ?? []);
 		const node = new LocalNode(config);
 		made.push({ node, driver, storage });
-		await node.ledger.add(network.genesis);
+		const genesis = options.genesis ?? 'held';
+		switch (genesis) {
+			case 'held':
+				await node.ledger.add(network.genesis);
+				break;
+			case 'absent':
+				break;
+			default:
+				assertNever(genesis);
+		}
 		return({ node, network, storage, logs });
 	}
 

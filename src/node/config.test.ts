@@ -8,6 +8,7 @@ import { PostgresKVStorage } from '../kv/postgres.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { requireAt } from '../ledger/storage/suite/support.js';
 import { deriveTestKeys, TEST_NETWORK_SEEDS } from '../testing/network.js';
+import { bootstrapEndpointsOf } from './bootstrap-peers.js';
 import { ConfigError, formatManualPeer, getConfigFromEnv, LEDGER_WRITE_MODES, localNodeConfig, MAX_FEE_SEED_ACCOUNTS } from './config.js';
 import type { ConfigProblem, Environment, EnvironmentConfig, LedgerWriteMode } from './config.js';
 import { LocalNode } from './local.js';
@@ -261,6 +262,27 @@ describe('the safety rule', function() {
 		expect(config.manualPeers.length > 0).toBe(peers);
 	});
 
+	test.each(matrix)('$network in $mode mode, bootstrapping from peers: $peers', function({ network, mode, peers }) {
+		let bootstrapPeers: string | undefined;
+		if (peers) {
+			bootstrapPeers = PEER_API;
+		}
+		const environment: Environment = { KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: mode, KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: bootstrapPeers };
+		if (network !== 'local' && PUBLIC.includes(network) && VOTING.includes(mode)) {
+			expect(problemOf(environment)).toEqual({ kind: 'writable-on-public-network', network, ledgerWriteMode: mode });
+			return;
+		}
+		if (network !== 'local' && peers && VOTING.includes(mode)) {
+			expect(problemOf(environment)).toEqual({ kind: 'peers-on-keeta-network', network, ledgerWriteMode: mode, variable: 'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS' });
+			return;
+		}
+		expect(parse(environment).bootstrapPeers.length > 0).toBe(peers);
+	});
+
+	test('says why bootstrapping from peers makes a node only follow dev and staging', function() {
+		expect(messageOf({ KEETANET_LOCAL_NODE_NETWORK: 'dev', KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'no-voting', KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: PEER_API })).toBe('the dev network is Keeta\'s, so a node with peers on it may only follow it: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to read-only or bootstrap-only (it is no-voting), or leave KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS unset');
+	});
+
 	test('applies to peers on the ID of a network as on its name', function() {
 		expect(problemOf({ KEETANET_LOCAL_NODE_NETWORK: `0x${NetworkConfig.NetworkIDs.dev.toString(16)}`, KEETANET_LOCAL_NODE_MANUAL_PEERS: PEER })).toEqual({ kind: 'peers-on-keeta-network', network: 'dev', ledgerWriteMode: 'read-write', variable: 'KEETANET_LOCAL_NODE_MANUAL_PEERS' });
 	});
@@ -271,7 +293,9 @@ describe('the safety rule', function() {
 
 	/* A network alias names upstream's own representatives [Keeta TS] index.js:61369-61466; none of them becomes a peer unless listed. */
 	test.each(['local', ...NetworkConfig.networksArray])('derives no peer from the %s network', function(network) {
-		expect(parse({ KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-only' }).manualPeers).toEqual([]);
+		const config = parse({ KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-only' });
+		expect(config.manualPeers).toEqual([]);
+		expect(config.bootstrapPeers).toEqual([]);
 	});
 
 	test('applies to the default write mode', function() {
@@ -567,6 +591,31 @@ describe('KEETANET_LOCAL_NODE_MANUAL_PEERS', function() {
 	});
 });
 
+describe('KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS', function() {
+	test('lists API endpoints separated by commas, each once and as written', function() {
+		expect(parse({ KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: ` ${PEER_API} ,, https://rep.example:8443/keeta/api,${PEER_API}, ` }).bootstrapPeers).toEqual([PEER_API, 'https://rep.example:8443/keeta/api']);
+	});
+
+	test.each(['127.0.0.1:7001/api', 'ws://127.0.0.1:7001/p2p', 'http://127.0.0.1:7001/api?x=1', 'http://127.0.0.1:7001/api#top', 'http://127.0.0.1:7001/a|b', PEER])('refuses the endpoint %j', function(value) {
+		expect(problemOf({ KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: value })).toMatchObject({ kind: 'invalid', variable: 'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS' });
+	});
+
+	test('says what an endpoint is written as', function() {
+		expect(messageOf({ KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: 'ws://127.0.0.1:7001/p2p' })).toBe('KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS must be a comma-separated list, each an http:// or https:// API URL without a user, password, query, fragment, "|" or "," (it is "ws://127.0.0.1:7001/p2p")');
+	});
+
+	test('refuses a list of no endpoints', function() {
+		expect(problemOf({ KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: ' , ' })).toMatchObject({ kind: 'invalid', variable: 'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS', value: ' , ' });
+	});
+
+	test('refuses a user or password, without repeating it', function() {
+		const problem = problemOf({ KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: 'https://slop:hunter2@rep.example/api' });
+		expect(problem).toMatchObject({ kind: 'invalid', variable: 'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS' });
+		expect(problem).not.toHaveProperty('value');
+		expect(messageOf({ KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: 'https://slop:hunter2@rep.example/api' })).not.toContain('hunter2');
+	});
+});
+
 describe('KEETANET_LOCAL_NODE_ENDPOINT_API and KEETANET_LOCAL_NODE_ENDPOINT_P2P', function() {
 	test('advertise where peers and clients reach the node, as written', function() {
 		const endpoints = { KEETANET_LOCAL_NODE_ENDPOINT_API: 'https://rep.example/keeta/api', KEETANET_LOCAL_NODE_ENDPOINT_P2P: 'wss://rep.example:8443/p2p' };
@@ -698,6 +747,9 @@ describe('the node configuration', function() {
 		expect(node.nodeOptions).toEqual({ listenIP: '127.0.0.1', listenPort: 7000 });
 		expect(node.endpoints).toBeUndefined();
 		expect(node.manualPeers).toEqual([]);
+		expect(node.bootstrap).toEqual({ kv });
+		expect(node.bootstrap?.kv).toBe(kv);
+		expect(bootstrapEndpointsOf(node)).toEqual([]);
 	});
 
 	test('carries the peers, the advertised endpoints and the preference for HTTP updates', function() {
@@ -716,6 +768,12 @@ describe('the node configuration', function() {
 			}
 			return(formatManualPeer(peer));
 		})).toEqual([`${PEER}|websocket`]);
+	});
+
+	test('carries the endpoints the node bootstraps from, and keeps its cursors in memory when it keeps nothing else in a store', function() {
+		const node = localNodeConfig(parse({ KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: `${PEER_API},https://rep.example/api` }), { storageDriver: new MemoryLedgerStorage(), kv: null, log: new lib.Log() });
+		expect(bootstrapEndpointsOf(node)).toEqual([PEER_API, 'https://rep.example/api']);
+		expect(node.bootstrap).toBeUndefined();
 	});
 
 	test('carries one advertised endpoint alone, leaving the other to the node', function() {

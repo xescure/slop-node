@@ -10,6 +10,7 @@ import type { JSONSerializableObject } from '@keetanetwork/keetanet-client/lib/u
 import { P2PInternals } from '../upstream/internals.js';
 import { assertNever } from '../util/assert-never.js';
 import type { AssertNever } from '../util/assert-never.js';
+import { bootstrapFrom } from './bootstrap-peers.js';
 import { computeFeeFromBlocksFor, parseFeeSchedule } from './fees.js';
 import type { FeeAccount, FeePolicy } from './fees.js';
 import type { PeerArena } from './peer-store.js';
@@ -50,6 +51,7 @@ export const NODE_VARIABLES = [
 	'KEETANET_LOCAL_NODE_ENDPOINT_P2P',
 	'KEETANET_LOCAL_NODE_PREFER_UPDATES',
 	'KEETANET_LOCAL_NODE_MANUAL_PEERS',
+	'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS',
 	'KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE'
 ] as const;
 
@@ -98,8 +100,8 @@ export const FOLLOWING_WRITE_MODES: readonly FollowingWriteMode[] = ['read-only'
  * The variables that name peers. A node with peers on one of Keeta's
  * networks takes part in it, so there too it may only follow the ledger.
  */
-export type PeerVariable = Extract<ConfigVariable, 'KEETANET_LOCAL_NODE_MANUAL_PEERS'>;
-export const PEER_VARIABLES: readonly PeerVariable[] = ['KEETANET_LOCAL_NODE_MANUAL_PEERS'];
+export type PeerVariable = Extract<ConfigVariable, 'KEETANET_LOCAL_NODE_MANUAL_PEERS' | 'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS'>;
+export const PEER_VARIABLES: readonly PeerVariable[] = ['KEETANET_LOCAL_NODE_MANUAL_PEERS', 'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS'];
 
 const UPDATE_PREFERENCES = ['http', 'websocket'] as const satisfies readonly P2PUpdateOptions[];
 
@@ -246,6 +248,8 @@ export type EnvironmentConfig = {
 	/** How the node asks its peers to send it staples. */
 	readonly preferUpdates: P2PUpdateOptions;
 	readonly manualPeers: readonly ManualPeer[];
+	/** The API endpoints of representatives the node bootstraps from without dialing them. */
+	readonly bootstrapPeers: readonly string[];
 	readonly fee: FeePolicy;
 	/** Off by default, as upstream has it [Keeta TS] index.js:68983. */
 	readonly enableTokenAdminModifyBalance: boolean;
@@ -687,6 +691,34 @@ function parseManualPeers(text: string, representative: Account): ManualPeer[] {
 	return(peers);
 }
 
+const BOOTSTRAP_PEER_FORM = `an http:// or https:// API URL ${FIT_TO_ADVERTISE}`;
+
+/**
+ * An API endpoint, which the node requests each page at, followed by the
+ * route's path, as the client does [Keeta TS] index.js:59584-59585, and names
+ * in its log, so it holds no user or password.
+ */
+function parseBootstrapPeer(entry: string): string {
+	const url = urlOf(entry, API_PROTOCOLS);
+	if (url === undefined || !isFitToAdvertise(entry, url)) {
+		throw(invalidEndpoint('KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS', `a comma-separated list, each ${BOOTSTRAP_PEER_FORM}`, entry));
+	}
+	return(entry);
+}
+
+/** Entries are separated by commas; space around them and empty ones are ignored, and so is an endpoint given twice. */
+function parseBootstrapPeers(text: string): string[] {
+	const entries = text.split(',').map(function(entry): string {
+		return(entry.trim());
+	}).filter(function(entry): boolean {
+		return(entry !== '');
+	});
+	if (entries.length === 0) {
+		throw(invalid('KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS', `a comma-separated list, each ${BOOTSTRAP_PEER_FORM}`, text));
+	}
+	return([...new Set(entries.map(parseBootstrapPeer))]);
+}
+
 /** A representative's advertisement, as its switch greets peers with it, if its signature holds. */
 export function manualPeerOf(advertisement: JSONSerializableObject): ManualPeer | undefined {
 	const peer = P2PInternals.P2PPeerFromJSO(advertisement);
@@ -901,6 +933,7 @@ export function getConfigFromEnv(environment: Environment): EnvironmentConfig {
 		manualPeers: reader.read('KEETANET_LOCAL_NODE_MANUAL_PEERS', function(text: string): ManualPeer[] {
 			return(parseManualPeers(text, representative));
 		}, []),
+		bootstrapPeers: reader.read('KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS', parseBootstrapPeers, []),
 		fee: readFeePolicy(reader),
 		enableTokenAdminModifyBalance: reader.read('KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE', function(text: string): boolean {
 			return(parseBoolean('KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE', text));
@@ -977,7 +1010,9 @@ export function localNodeConfig(config: EnvironmentConfig, resources: NodeResour
 	};
 	if (kv !== null) {
 		retval.p2p = { ...retval.p2p, kv };
+		retval.bootstrap = { kv };
 	}
+	bootstrapFrom(retval, config.bootstrapPeers);
 	const endpoints = configuredEndpoints(config.endpoints);
 	if (endpoints !== undefined) {
 		retval.endpoints = endpoints;

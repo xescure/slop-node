@@ -2,7 +2,6 @@ import type { AddressInfo } from 'node:net';
 import express from 'express';
 import type { Express, NextFunction, Request as ExpressRequest, Response as ExpressResponse } from 'express';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import type { BootstrapClient } from '@keetanetwork/keetanet-client/lib/bootstrap.js';
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { LocalNode as DeclaredLocalNode, LocalNodeConfig } from '@keetanetwork/keetanet-client/lib/node/local.js';
 import { answerError, ERROR_STATUS, newErrorID } from '../api/errors.js';
@@ -12,6 +11,7 @@ import type { APIRequest, Route } from '../api/index.js';
 import { assertNever } from '../util/assert-never.js';
 import type { AssertNever } from '../util/assert-never.js';
 import type { ClassSurface } from '../util/class-surface.js';
+import { BootstrapClient } from './bootstrap.js';
 import { SwitchConnections } from './connections.js';
 import { LocalNodeError } from './errors.js';
 import { P2P_PATH, PeerServer } from './peers.js';
@@ -54,6 +54,13 @@ const CORS_HEADERS: Readonly<Record<string, string>> = {
 	'access-control-allow-headers': 'content-type, user-agent, accept',
 	'access-control-max-age': '86400'
 };
+
+/**
+ * How long the node waits after one bootstrap update ends before the next,
+ * unless configured otherwise. Staples reach a node that is online over P2P,
+ * so updates only catch up on what that missed.
+ */
+const DEFAULT_BOOTSTRAP_PERIOD_MILLISECONDS = 60_000;
 
 /** Addresses that stand for every interface, which peers cannot be sent to. */
 const UNSPECIFIED_ADDRESSES: ReadonlySet<string> = new Set(['0.0.0.0', '::', '']);
@@ -210,6 +217,7 @@ export class LocalNode extends ClientNode {
 	#listening: Listening | undefined;
 	#peers: PeerServer | undefined;
 	readonly #connections: SwitchConnections;
+	#bootstrap: BootstrapClient | undefined;
 	#running = false;
 
 	constructor(config: LocalNodeConfig) {
@@ -333,8 +341,8 @@ export class LocalNode extends ClientNode {
 	/**
 	 * Mounts the routes, listens, advertises where it listens if no endpoints
 	 * are configured, so that the node describes itself to peers correctly,
-	 * then serves peers on "/p2p" unless told not to, and dials its manual
-	 * peers. The bootstrap client is not started yet.
+	 * then serves peers on "/p2p" unless told not to, dials its manual peers,
+	 * and starts bootstrapping from its peers.
 	 */
 	override async run(options?: RunOptions): Promise<void> {
 		if (this.#running) {
@@ -360,9 +368,25 @@ export class LocalNode extends ClientNode {
 			for (const peer of this.config.manualPeers ?? []) {
 				this.switch.addManualPeer(peer);
 			}
+			this.#bootstrap = this.#startBootstrap();
 		} catch (error) {
 			this.#running = false;
 			throw(error);
+		}
+	}
+
+	/** A ledger that is read-only adds nothing, bootstrapped or not [Keeta TS] index.js:69363-69365. */
+	#startBootstrap(): BootstrapClient | undefined {
+		const mode = this.ledger.ledgerWriteMode;
+		switch (mode) {
+			case 'read-only':
+				return(undefined);
+			case 'bootstrap-only':
+			case 'read-write':
+			case 'no-voting':
+				return(new BootstrapClient(this, { period: DEFAULT_BOOTSTRAP_PERIOD_MILLISECONDS, ...this.config.bootstrap }));
+			default:
+				return(assertNever(mode));
 		}
 	}
 
@@ -392,12 +416,13 @@ export class LocalNode extends ClientNode {
 	}
 
 	/**
-	 * Stops serving peers and requests, waiting for the requests in flight
-	 * and the messages peers posted, then stops the node, and waits until its
-	 * switch is done with every connection, so that the storage can be closed
-	 * after.
+	 * Stops bootstrapping, then serving peers and requests, waiting for the
+	 * requests in flight and the messages peers posted, then stops the node,
+	 * and waits until its switch is done with every connection, so that the
+	 * storage can be closed after.
 	 */
 	override async stop(): Promise<void> {
+		await this.#bootstrap?.stop();
 		const peers = this.#peers;
 		this.#peers = undefined;
 		if (peers !== undefined) {
@@ -415,9 +440,9 @@ export class LocalNode extends ClientNode {
 		await this.#connections.closed();
 	}
 
-	/** Bootstrapping from peers is not offered yet. */
+	/** The client that catches the node up from its peers once it runs, unless its ledger is read-only. */
 	get bootstrap(): BootstrapClient | undefined {
-		return(undefined);
+		return(this.#bootstrap);
 	}
 }
 
@@ -426,7 +451,8 @@ export default LocalNode;
 type DeclaredLocalModule = typeof import('@keetanetwork/keetanet-client/lib/node/local.js');
 type LocalModule = typeof import('./local.js');
 
-type _HasEveryDeclaredMember = AssertNever<ClassSurface<typeof LocalNode> extends ClassSurface<typeof DeclaredLocalNode> ? never : ClassSurface<typeof LocalNode>>;
-type _HasNoUndeclaredMember = AssertNever<ClassSurface<typeof DeclaredLocalNode> extends ClassSurface<typeof LocalNode> ? never : ClassSurface<typeof DeclaredLocalNode>>;
+/* The bootstrap client is compared by its own surface, which bootstrap.ts proves equal to its declaration both ways. */
+type _HasEveryDeclaredMember = AssertNever<ClassSurface<typeof LocalNode, 'bootstrap'> extends ClassSurface<typeof DeclaredLocalNode, 'bootstrap'> ? never : ClassSurface<typeof LocalNode, 'bootstrap'>>;
+type _HasNoUndeclaredMember = AssertNever<ClassSurface<typeof DeclaredLocalNode, 'bootstrap'> extends ClassSurface<typeof LocalNode, 'bootstrap'> ? never : ClassSurface<typeof DeclaredLocalNode, 'bootstrap'>>;
 type _ExportsNoUndeclaredValue = AssertNever<Exclude<keyof LocalModule, keyof DeclaredLocalModule>>;
 type _ExportsEveryDeclaredValue = AssertNever<Exclude<keyof DeclaredLocalModule, keyof LocalModule>>;
