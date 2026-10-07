@@ -10,8 +10,17 @@ type Constructor = abstract new (...args: never[]) => object;
 
 type Checkable = { isInstance: (...args: never[]) => boolean };
 
-/** Every public member of an instance. */
-export type InstanceSurface<Instance> = { [Name in keyof Instance]: Instance[Name] };
+/**
+ * A method's type as a function type of its own. Signatures declared as
+ * methods have their parameters compared in either direction even under
+ * strictFunctionTypes, so a method that accepts less than its declaration
+ * would still pass; a function type written here is compared strictly.
+ * An overloaded method keeps its last signature, on both sides alike.
+ */
+type StrictMember<Member> = Member extends (...args: infer Parameters) => infer Result ? (...args: Parameters) => Result : Member;
+
+/** Every public member of an instance, each method compared strictly. */
+export type InstanceSurface<Instance> = { [Name in keyof Instance]: StrictMember<Instance[Name]> };
 
 /**
  * Every public static member, the constructor's parameters and the public
@@ -19,7 +28,7 @@ export type InstanceSurface<Instance> = { [Name in keyof Instance]: Instance[Nam
  * its type predicate names the branded class.
  */
 export type ClassSurface<Class extends Constructor & Checkable> =
-	{ [Name in keyof Class as Exclude<Name, 'prototype' | 'isInstance'>]: Class[Name] } &
+	{ [Name in keyof Class as Exclude<Name, 'prototype' | 'isInstance'>]: StrictMember<Class[Name]> } &
 	{
 		isInstance: (...args: Parameters<Class['isInstance']>) => boolean;
 		new (...args: ConstructorParameters<Class>): InstanceSurface<InstanceType<Class>>;
