@@ -15,8 +15,8 @@ import { createIdempotentKeyError, createLedgerError } from '../errors.js';
 import { voteExpirySlopMilliseconds } from '../expiry.js';
 import { toAccountKey, toBlockHashKey, toIdempotentKeyString } from '../keys.js';
 import type { AccountKey, StapleKey } from '../keys.js';
-import type { AccountInfoRow } from '../memory/state.js';
 import { DEFAULT_HISTORY_LIMIT, DEFAULT_VOTES_PER_PAGE, decodeCatchUpKey, encodeCatchUpKey } from '../paging.js';
+import type { AccountInfoRow } from '../rows.js';
 import {
 	accountHistory,
 	accountHistoryAfter,
@@ -85,6 +85,7 @@ import {
 	insertSideVote,
 	insertVoteBlocks,
 	obsoleteSideVotes,
+	orphanedSideRows,
 	releasedDeferredStaples,
 	removeSideVotes,
 	sideBlock,
@@ -1045,7 +1046,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * [Keeta TS] index.js:69310-69316, 69342-69354
 	 */
 	async addPendingVote(transaction: PostgresTransaction, staple: VoteStaple): Promise<void> {
-		await transaction.isolate(async () => {
+		await this.runIsolatedInTurn(transaction, async () => {
 			const { blocks, votes } = staple;
 			const named = new Map<string, AccountKeyAlgorithm>();
 			for (const account of [...blocks.map(function(block) {
@@ -1185,6 +1186,14 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * blocks they covered that no remaining side vote covers. Main rows are
 	 * never touched (D20).
 	 */
+	protected async countOrphanedSideRows(transaction: PostgresTransaction): Promise<number> {
+		const row = onlyRow(await transaction.run(orphanedSideRows, []));
+		if (row === undefined) {
+			throw(new Error('internal error: the orphaned side row count returned no row'));
+		}
+		return(Number(fromInteger(row.orphaned)));
+	}
+
 	protected async collectObsoleteSideVotes(transaction: PostgresTransaction, limit: number): Promise<boolean> {
 		const obsolete = await transaction.run(obsoleteSideVotes, [unexpiredSince(transaction.moment), limit + 1]);
 		const collected = obsolete.slice(0, limit).map(function(row) {

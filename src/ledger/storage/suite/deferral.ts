@@ -13,6 +13,7 @@ import {
 	hashOf,
 	headOf,
 	ledgerChecksumOf,
+	orphanedSideRowsOf,
 	readStorage,
 	requireAt,
 	useFixtures
@@ -252,6 +253,41 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			expect(blocksHashesOf(await node.ledger.getHistory(user, null))).toEqual(blocksHashesOf([secondStaple, firstStaple, network.genesis]));
 			expect(await deferredWaitingOn(storage, second.hash)).toEqual(blocksHashesOf([thirdStaple]));
 			expect(await ledgerChecksumOf(node)).toBe(checksumOf([network.genesis, firstStaple, secondStaple]));
+		});
+
+		test('a replayed staple that promotes a voted block and then fails keeps its side rows, and applies when it arrives again', async function() {
+			const { network, startNode } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			const waiter = requireAt(network.users, 1);
+			const idempotent = btoa('replayed-order');
+			const { node, storage } = await startNode(0);
+			const voted = await sendBlock({ from: user, previous: headOf(network.genesis, user), to: waiter, amount: 5n, token: network.baseToken, network: network.network, idempotent });
+			await node.ledger.vote([voted]);
+			// The staple holds our voted block beside one whose previous this node lacks, so it waits.
+			const missing = await sendBlock({ from: waiter, previous: headOf(network.genesis, waiter), to: user, amount: 1n, token: network.baseToken, network: network.network });
+			const waiting = await sendBlock({ from: waiter, previous: missing.hash, to: user, amount: 2n, token: network.baseToken, network: network.network });
+			const stapleOfVoted = await confirmedStaple([voted, waiting], network.representatives);
+			const missingStaple = await confirmedStaple([missing], network.representatives);
+			expect(await node.ledger.add(stapleOfVoted)).toEqual([]);
+			const restore = failAfterPersisting(storage, stapleOfVoted);
+
+			expect(blocksHashesOf(await node.ledger.add(missingStaple))).toEqual(blocksHashesOf([missingStaple]));
+
+			// The promotion of our block was undone with the replay.
+			expect(await node.ledger.getBlock(voted.hash, 'main')).toBeNull();
+			expect(hashOf(await node.ledger.getBlock(voted.hash, 'side'))).toBe(hashOf(voted));
+			expect(hashOf(await node.ledger.getIdempotentBlockHash(user, idempotent, 'side'))).toBe(hashOf(voted));
+			expect(await orphanedSideRowsOf(storage)).toBe(0);
+			expect(await deferredWaitingOn(storage, missing.hash)).toEqual(blocksHashesOf([stapleOfVoted]));
+
+			restore();
+			expect(blocksHashesOf(await node.ledger.add(stapleOfVoted))).toEqual(blocksHashesOf([stapleOfVoted]));
+
+			expect(hashOf(await node.ledger.getBlock(voted.hash, 'main'))).toBe(hashOf(voted));
+			expect(await node.ledger.getBlock(voted.hash, 'side')).toBeNull();
+			expect(await node.ledger.getIdempotentBlockHash(user, idempotent, 'side')).toBeNull();
+			expect(await orphanedSideRowsOf(storage)).toBe(0);
+			expect(await deferredWaitingOn(storage, missing.hash)).toEqual([]);
 		});
 
 		test('a replayed staple that conflicts stays deferred while its trigger applies', async function() {

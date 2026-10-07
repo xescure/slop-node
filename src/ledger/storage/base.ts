@@ -261,6 +261,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	_Testing(key: string): {
 		deferredStaplesWaitingOn(transaction: Transaction, blockHashes: readonly BlockHash[]): Promise<readonly VoteStaple[]>;
 		gcBatch(transaction: Transaction, limit: number): Promise<boolean>;
+		orphanedSideRows(transaction: Transaction): Promise<number>;
 		persist(transaction: Transaction, change: ConfirmedStapleChange): Promise<void>;
 	} {
 		if (key !== TESTING_KEY) {
@@ -272,6 +273,9 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			},
 			gcBatch: (transaction, limit) => {
 				return(this.#gcBatch(transaction, limit));
+			},
+			orphanedSideRows: (transaction) => {
+				return(this.countOrphanedSideRows(transaction));
 			},
 			persist: (transaction, change) => {
 				return(this.persistConfirmedStaple(transaction, change));
@@ -290,6 +294,20 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 */
 	protected runIsolated<Result>(_transaction: Transaction, unit: () => Promise<Result>): Promise<Result> {
 		return(unit());
+	}
+
+	/**
+	 * Runs a unit for a member that upstream may call while the base is
+	 * applying a staple on the same transaction. The unit waits for its turn
+	 * behind that work, so units of one transaction never overlap, and then
+	 * runs as runIsolated does. It must not be called from inside work the
+	 * base has already queued on the transaction (adjust, gc, a replayed
+	 * staple, persistConfirmedStaple), which would wait for itself.
+	 */
+	protected runIsolatedInTurn<Result>(transaction: Transaction, unit: () => Promise<Result>): Promise<Result> {
+		return(this.#exclusively(transaction, () => {
+			return(this.runIsolated(transaction, unit));
+		}));
 	}
 
 	/**
@@ -334,6 +352,16 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * kept on a dead competitor would hold its idempotent keys forever.
 	 */
 	protected abstract collectObsoleteSideVotes(transaction: Transaction, limit: number): Promise<boolean>;
+
+	/**
+	 * Counts the side rows that no side vote accounts for, which no read can
+	 * see because side reads require a live vote: side blocks covered by no
+	 * side vote, side blocks that are also on the main ledger, and idempotent
+	 * claims held for a block that is not a covered side block. A vote that
+	 * has expired but is not yet collected still covers its blocks. Only the
+	 * test hook reads it.
+	 */
+	protected abstract countOrphanedSideRows(transaction: Transaction): Promise<number>;
 
 	/** The counts stats() reports, as of one consistent snapshot of the main ledger. */
 	protected abstract countLedger(): Promise<LedgerCountsSnapshot>;

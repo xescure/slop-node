@@ -1,9 +1,7 @@
 import type { Account, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { ACLRow, CertificateWithIntermediates } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
-import type { Permissions } from '@keetanetwork/keetanet-client/lib/permissions.js';
 import type { Vote, VoteBlockHash, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
-import type { LedgerInternals } from '../../../upstream/internals.js';
 import type {
 	ACLScopeKey,
 	AccountKey,
@@ -14,6 +12,7 @@ import type {
 	StapleKey,
 	VoteKey
 } from '../keys.js';
+import type { AccountInfoRow } from '../rows.js';
 
 /** A block on the main ledger, with its place in its account's chain. */
 export type ConfirmedBlockRow = {
@@ -38,23 +37,6 @@ export type BalanceRow = {
 	readonly token: TokenAddress;
 	readonly balance: bigint;
 };
-
-type UpstreamAccountInfoRow = NonNullable<Parameters<InstanceType<typeof LedgerInternals.LedgerStorageBase>['_formatAccountInfoFromRow']>[1]>;
-
-/** Stored account info, in the row shape upstream's formatter reads. */
-export type AccountInfoRow = {
-	readonly name?: string;
-	readonly description?: string;
-	readonly metadata?: string;
-	readonly supply?: bigint;
-	readonly multisigQuorum?: bigint;
-	readonly defaultBasePermission?: Permissions['base'];
-	readonly defaultExternalPermission?: Permissions['external'];
-};
-
-type AssertExtends<Narrow extends Wide, Wide> = Narrow;
-// Fails to compile if a stored row stops being something the formatter accepts.
-type _AccountInfoRowFitsFormatter = AssertExtends<AccountInfoRow, UpstreamAccountInfoRow>;
 
 /** An account this node has seen in a confirmed staple. */
 export type AccountRow = {

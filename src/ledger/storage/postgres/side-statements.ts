@@ -144,6 +144,23 @@ export const deleteUncoveredSideBlocks: Statement<[Buffer[]]> = statement('delet
 	WHERE ledger = 'side' AND hash = ANY($1::bytea[])
 		AND NOT EXISTS (SELECT 1 FROM vote_blocks WHERE vote_blocks.block_hash = blocks.hash)`);
 
+/*
+ * Side rows that no side vote accounts for. A vote's block list outlives
+ * the side copy of a block, so a block is covered by any row of vote_blocks;
+ * a side claim needs a side copy that is covered.
+ */
+export const orphanedSideRows: Statement<[], { orphaned: IntegerText }> = statement('orphaned_side_rows', `
+	SELECT (
+		(SELECT count(*) FROM blocks
+			WHERE blocks.ledger = 'side'
+				AND NOT EXISTS (SELECT 1 FROM vote_blocks WHERE vote_blocks.block_hash = blocks.hash))
+		+ (SELECT count(*) FROM idempotent_keys claims
+			WHERE claims.ledger = 'side'
+				AND NOT EXISTS (
+					SELECT 1 FROM blocks JOIN vote_blocks ON vote_blocks.block_hash = blocks.hash
+					WHERE blocks.hash = claims.block_hash AND blocks.ledger = 'side'))
+	) AS orphaned`);
+
 export type DeferredStapleColumns = {
 	readonly blocks_hash: Buffer;
 	readonly bytes: Buffer;

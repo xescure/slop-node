@@ -24,8 +24,9 @@ import {
 import type { AccountKey, BlockHashKey, IdempotentKeyString, StapleKey, VoteKey } from '../keys.js';
 import { DEFAULT_HISTORY_LIMIT, DEFAULT_VOTES_PER_PAGE, compareCatchUpPositions, decodeCatchUpKey, encodeCatchUpKey } from '../paging.js';
 import type { CatchUpPosition } from '../paging.js';
+import type { AccountInfoRow } from '../rows.js';
 import { commitOverlay, createCommittedLedger, openOverlay } from './state.js';
-import type { AccountInfoRow, BalanceRow, CommittedLedger, LedgerOverlay, SideVoteRow, StapleRow, TableOverlay } from './state.js';
+import type { BalanceRow, CommittedLedger, LedgerOverlay, SideVoteRow, StapleRow, TableOverlay } from './state.js';
 
 const lib = KeetaNet.lib;
 
@@ -793,6 +794,25 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 			}),
 			more: dead.length > limit
 		});
+	}
+
+	protected async countOrphanedSideRows(transaction: MemoryTransaction): Promise<number> {
+		const overlay = await transaction.view();
+		const uncovered = new Set<BlockHashKey>();
+		for (const [blockKey] of overlay.sideBlocks.entries()) {
+			if (overlay.blocks.get(blockKey) !== undefined || overlay.sideVotesByBlock.get(blockKey) === undefined) {
+				uncovered.add(blockKey);
+			}
+		}
+		let orphaned = uncovered.size;
+		for (const [, blockKeys] of overlay.sideIdempotentKeys.entries()) {
+			for (const blockKey of blockKeys) {
+				if (uncovered.has(blockKey) || overlay.sideBlocks.get(blockKey) === undefined) {
+					orphaned++;
+				}
+			}
+		}
+		return(orphaned);
 	}
 
 	protected async collectObsoleteSideVotes(transaction: MemoryTransaction, limit: number): Promise<boolean> {

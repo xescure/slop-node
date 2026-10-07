@@ -27,7 +27,7 @@ export const driversUnderTest: readonly DriverUnderTest[] = [
 	},
 	{
 		name: 'postgres',
-		groups: ['transactions', 'genesis', 'confirmed', 'stats'],
+		groups: ['transactions', 'genesis', 'confirmed', 'stats', 'votes', 'deferral', 'gc', 'canaries'],
 		// Each instance is a fresh database copied from the migrated template, dropped with it.
 		create: async function(): Promise<LedgerStorageDriverBase> {
 			const database = await createDatabase(inject('postgresCluster'), inject('postgresLedgerTemplate'));

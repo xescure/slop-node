@@ -130,6 +130,13 @@ export async function readStorageAt<Result>(storage: LedgerStorageDriverBase, mo
 	}
 }
 
+/** The side rows that no side vote accounts for; no read can see them, so only a count shows a leak. */
+export function orphanedSideRowsOf(storage: LedgerStorageDriverBase): Promise<number> {
+	return(readStorage(storage, function(transaction) {
+		return(storage._Testing(TESTING_KEY).orphanedSideRows(transaction));
+	}));
+}
+
 /** Runs storage writes in a transaction of their own, committed when they succeed. */
 export async function writeStorage<Result>(storage: LedgerStorageDriverBase, write: (transaction: LedgerDriverTransaction) => Promise<Result>): Promise<Result> {
 	const transaction = await storage.beginTransaction({ identifier: 'suite-write-storage', readOnly: false });
@@ -249,15 +256,22 @@ export class ChainCursor {
 	}
 }
 
-/** A self-signed certificate valid for a day either side of genesis. */
-export async function certificateFor(subject: Account, serial: number): Promise<InstanceType<typeof KeetaNet.lib.Utils.Certificate.Certificate>> {
-	const day = 24 * 60 * 60 * 1000;
+const DAY_MILLISECONDS = 24 * 60 * 60 * 1000;
+
+/** A certificate for the subject, signed by the issuer, valid for a day either side of genesis. */
+export async function certificateIssuedBy(issuer: Account, subject: Account, serial: number, isCA: boolean): Promise<InstanceType<typeof KeetaNet.lib.Utils.Certificate.Certificate>> {
 	return(await new lib.Utils.Certificate.CertificateBuilder({
-		issuer: subject,
-		validFrom: new Date(GENESIS_MOMENT.getTime() - day),
-		validTo: new Date(GENESIS_MOMENT.getTime() + day),
-		serial
+		issuer,
+		validFrom: new Date(GENESIS_MOMENT.getTime() - DAY_MILLISECONDS),
+		validTo: new Date(GENESIS_MOMENT.getTime() + DAY_MILLISECONDS),
+		serial,
+		isCA
 	}).build({ subjectPublicKey: subject }));
+}
+
+/** A self-signed certificate valid for a day either side of genesis. */
+export function certificateFor(subject: Account, serial: number): Promise<InstanceType<typeof KeetaNet.lib.Utils.Certificate.Certificate>> {
+	return(certificateIssuedBy(subject, subject, serial, true));
 }
 
 /** Moves the clock to the last moment the vote is still live. */

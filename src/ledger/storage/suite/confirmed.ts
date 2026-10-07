@@ -3,7 +3,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Ledger, PaginatedVotes } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
-import type { ACLRow } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
+import type { ACLRow, CertificateWithIntermediates } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerInternals } from '../../../upstream/internals.js';
 import { assertNever } from '../../../util/assert-never.js';
@@ -28,6 +28,7 @@ import {
 	GENESIS_MOMENT,
 	TESTING_KEY,
 	certificateFor,
+	certificateIssuedBy,
 	blockHashesOf,
 	blocksHashesOf,
 	chainLengthOf,
@@ -435,6 +436,38 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(found?.certificate.hash().toString()).toBe(hash.toString());
 			expect(found?.certificate.checkValid()).toBe(false);
 			expect(found?.intermediates).toBeNull();
+		});
+
+		test('a certificate is read back with its intermediates', async function() {
+			const { network, ledger } = await startNetwork();
+			const holder = requireAt(network.users, 0);
+			const cursor = new ChainCursor(network.genesis);
+			await ledger.add(network.genesis);
+			const middle = requireAt(network.users, 1);
+			const root = requireAt(network.users, 2);
+			// Upstream accepts intermediates only when each one leads to the certificate.
+			const certificate = await certificateIssuedBy(middle, holder, 3, false);
+			const hash = certificate.hash();
+			const intermediates = [await certificateIssuedBy(root, middle, 4, true), await certificateFor(root, 5)];
+			const bundle = new lib.Utils.Certificate.CertificateBundle(intermediates);
+			await ledger.add(await confirmedStaple([cursor.append(await manageCertificateBlock({ account: holder, previous: cursor.previous(holder), network: network.network, method: lib.Block.AdjustMethod.ADD, certificateOrHash: certificate, intermediateCertificates: bundle }))], network.representatives));
+
+			const listed = await ledger.getAccountCertificates(holder);
+			const found = await ledger.getAccountCertificateByHash(holder, hash);
+
+			const hashesOf = function(entry: CertificateWithIntermediates | null | undefined): string[] | null {
+				return(entry?.intermediates?.getCertificates().map(function(intermediate): string {
+					return(intermediate.hash().toString());
+				}) ?? null);
+			};
+			const expected = intermediates.map(function(intermediate): string {
+				return(intermediate.hash().toString());
+			});
+			expect(listed).toHaveLength(1);
+			expect(hashesOf(listed[0])).toEqual(expected);
+			expect(hashesOf(found)).toEqual(expected);
+			expect(found?.intermediates?.getDERBuffer().equals(bundle.getDERBuffer())).toBe(true);
+			expect(found?.certificate.hash().toString()).toBe(hash.toString());
 		});
 
 		test('idempotent keys resolve on main', async function() {

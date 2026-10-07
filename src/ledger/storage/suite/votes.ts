@@ -18,6 +18,7 @@ import {
 	hashOf,
 	headOf,
 	identitiesOf,
+	orphanedSideRowsOf,
 	readStorage,
 	readStorageAt,
 	requireAt,
@@ -222,7 +223,7 @@ export const voteLifecycleCases: readonly SuiteCase[] = [
 			const { network, startNode, startPeer } = await startNetwork();
 			const user = requireAt(network.users, 0);
 			const genesisHead = headOf(network.genesis, user);
-			const { node } = await startNode(0, FLAT_FEE);
+			const { node, storage } = await startNode(0, FLAT_FEE);
 			const ours = node.ledger;
 			const peer = await startPeer(1, FLAT_FEE);
 			const { send, fee, ourTemporary, ourPermanent, staple } = await voteThroughPermanent(network, ours, peer);
@@ -249,6 +250,7 @@ export const voteLifecycleCases: readonly SuiteCase[] = [
 			expect(hashOf(await ours.getBlockFromPrevious(genesisHead, 'both'))).toBe(hashOf(send));
 			// Our temporary vote is not part of the staple and stays until it expires.
 			expect(identitiesOf(await ours.getVotes(send.hash, 'side'))).toEqual([ourTemporary.$uid]);
+			expect(await orphanedSideRowsOf(storage)).toBe(0);
 
 			// Upstream measured settlement from our temporary vote while applying the staple.
 			expect(await node.stats.get('ledger', 'settlementTime@1000ms')).toBe(1);
@@ -387,6 +389,28 @@ export const voteLifecycleCases: readonly SuiteCase[] = [
 			advancePastExpiry(vote);
 			expect(await holderOf('side')).toBeNull();
 			expect(await holderOf('both')).toBe(hashOf(competing));
+		}
+	},
+	{
+		name: 'publishing a voted block that holds an idempotent key leaves no orphaned side rows',
+		async run(startNetwork: FixtureFactory): Promise<void> {
+			const { network, storage, ledger } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			const idempotent = btoa('order-2');
+			await ledger.add(network.genesis);
+			const held = await sendFromFirstUser(network, headOf(network.genesis, user), 1n, idempotent);
+			const vote = await ledger.vote([held]);
+			expect(await orphanedSideRowsOf(storage)).toBe(0);
+
+			await ledger.add(await confirmedStaple([held], network.representatives));
+
+			// The block and its claim now live on main, and our vote on it is still stored.
+			expect(await ledger.getBlock(held.hash, 'side')).toBeNull();
+			expect(await ledger.getIdempotentBlockHash(user, idempotent, 'side')).toBeNull();
+			expect(hashOf(await ledger.getIdempotentBlockHash(user, idempotent, 'main'))).toBe(hashOf(held));
+			expect(await orphanedSideRowsOf(storage)).toBe(0);
+			advancePastExpiry(vote);
+			expect(await orphanedSideRowsOf(storage)).toBe(0);
 		}
 	},
 	{

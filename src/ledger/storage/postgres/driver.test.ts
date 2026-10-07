@@ -2,11 +2,13 @@ import { afterEach, describe, expect, inject, onTestFinished, test, vi } from 'v
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type pg from 'pg';
+import { sendBlock } from '../../../testing/blocks.js';
 import { createTestNetwork, freezeClock } from '../../../testing/network.js';
 import type { TestNetwork } from '../../../testing/network.js';
 import { createDatabase } from '../../../testing/postgres.js';
 import type { TestDatabase } from '../../../testing/postgres.js';
-import { GENESIS_MOMENT, requireAt } from '../suite/support.js';
+import { MemoryLedgerStorage } from '../memory/driver.js';
+import { GENESIS_MOMENT, headOf, requireAt } from '../suite/support.js';
 import type { TransactionOptions } from '../base.js';
 import { PostgresLedgerStorage } from './driver.js';
 import type { PostgresTransaction } from './driver.js';
@@ -227,6 +229,53 @@ describe('the Postgres driver', function() {
 		expect(result.rows.map(function(row) {
 			return(row.name);
 		})).toEqual(['after', 'outer']);
+	});
+
+	test('pending votes added concurrently on one transaction open their units one at a time', async function() {
+		const database = await ledgerDatabase();
+		freezeClock(GENESIS_MOMENT);
+		const network = await createTestNetwork({ representativeWeights: [400n, 300n, 300n] });
+		const storage = ownedStorageOn(database);
+		const representative = requireAt(network.representatives, 0);
+		await network.createLedger(storage, representative).add(network.genesis);
+		const voter = network.createLedger(new MemoryLedgerStorage(), representative);
+		await voter.add(network.genesis);
+		const staples = await Promise.all([0, 1].map(async function(index) {
+			const from = requireAt(network.users, index);
+			const send = await sendBlock({ from, previous: headOf(network.genesis, from), to: requireAt(network.users, 2), amount: 1n, token: network.baseToken, network: network.network });
+			return(lib.Vote.Staple.fromVotesAndBlocks([await voter.vote([send])], [send]));
+		}));
+		const transaction = await storage.beginTransaction({ identifier: 'concurrent-votes', readOnly: false });
+		const isolate = transaction.isolate.bind(transaction);
+		let open = 0;
+		let mostOpen = 0;
+		const tracked: PostgresTransaction['isolate'] = async function(unit) {
+			open++;
+			mostOpen = Math.max(mostOpen, open);
+			try {
+				return(await isolate(unit));
+			} finally {
+				open--;
+			}
+		};
+		Reflect.set(transaction, 'isolate', tracked);
+
+		await Promise.all(staples.map(function(staple) {
+			return(storage.addPendingVote(transaction, staple));
+		}));
+		await storage.commitTransaction(transaction);
+
+		expect(mostOpen).toBe(1);
+		for (const staple of staples) {
+			const stored = await readOn(storage, function(reading) {
+				return(storage.getVotes(reading, requireAt(staple.blocks, 0).hash, 'side'));
+			});
+			expect(stored?.map(function(vote) {
+				return(vote.$uid);
+			})).toEqual(staple.votes.map(function(vote) {
+				return(vote.$uid);
+			}));
+		}
 	});
 
 	test('a conflict inside a unit fails the commit even when the unit\'s failure is handled', async function() {

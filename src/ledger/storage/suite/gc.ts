@@ -22,6 +22,7 @@ import {
 	headOf,
 	identitiesOf,
 	ledgerChecksumOf,
+	orphanedSideRowsOf,
 	readStorage,
 	readStorageAt,
 	requireAt,
@@ -147,8 +148,11 @@ export function defineGcCases(driver: DriverUnderTest): void {
 				loneKeyHolder: hashOf(lone),
 				temporaryStaple: [ourTemporary.$uid]
 			});
+			// An expired vote that gc has not yet collected still covers its blocks.
+			expect(await orphanedSideRowsOf(storage)).toBe(0);
 
 			expect(await ledger.gc()).toBe(false);
+			expect(await orphanedSideRowsOf(storage)).toBe(0);
 
 			// The permanent vote keeps the send's side block; the lone block lost its only vote.
 			expect(await storedAtVote()).toEqual({
@@ -191,6 +195,7 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			expect(await ledger.gc()).toBe(false);
 
 			expect(await sideAfterPublish()).toEqual({ send: null, fee: null, staple: null });
+			expect(await orphanedSideRowsOf(storage)).toBe(0);
 			expect(identitiesOf(await ledger.getVotes(fee.hash, 'main'))).toEqual(identitiesOf(published.votes));
 			expect(hashOf(await ledger.getHeadBlock(requireAt(network.users, 0), 'main'))).toBe(hashOf(fee));
 		});
@@ -223,6 +228,7 @@ export function defineGcCases(driver: DriverUnderTest): void {
 					staple: await sideStapleVotes(storage, transaction, ourPermanent.blocksHash)
 				});
 			})).toEqual({ fee: { votes: null, block: null }, successor: null, staple: null });
+			expect(await orphanedSideRowsOf(storage)).toBe(0);
 			expect(hashOf(await ledger.getBlockFromPrevious(send.hash, 'main'))).toBe(hashOf(otherFee));
 		});
 
@@ -255,6 +261,7 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			expect(await ledger.gc()).toBe(false);
 
 			expect(await storedAtVote()).toEqual({ votes: null, block: null });
+			expect(await orphanedSideRowsOf(storage)).toBe(0);
 			expect((await ledger.vote([reusing])).$permanent).toBe(false);
 		});
 

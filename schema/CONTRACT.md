@@ -439,7 +439,7 @@ addPendingVote: (transaction: any, blocksAndVote: VoteStaple) => Promise<void>;
   - by each block's `previous`, including the opening sentinel
   - by its `blocksHash`
 
-  Each block not already on the main ledger gets a side copy, and the block's idempotent key, if any, is claimed on the side. A block already on the main ledger gets neither (untested: voting refuses such a block first). The vote and its indexes land together or not at all.
+  Each block not already on the main ledger gets a side copy, and the block's idempotent key, if any, is claimed on the side. A block already on the main ledger gets neither (untested: voting refuses such a block first). The vote and its indexes land together or not at all. A driver that isolates this write runs it with `runIsolatedInTurn`, so it never overlaps a unit that `adjust` or gc has open on the same transaction.
 - No other side vote is removed. A permanent vote is stored beside the temporary vote on the same blocks (D6). The issuer is not checked.
 - **Selector.** Writes to the side ledger only.
 - **Tested by**:
@@ -447,6 +447,7 @@ addPendingVote: (transaction: any, blocksAndVote: VoteStaple) => Promise<void>;
   - `votes.ts: "a permanent vote with a fee block joins the temporary vote"`
   - `votes.ts: "without a fee block the permanent vote shares its staple with the temporary vote"`
   - `votes.ts: "quote consumes a serial and stores nothing on the side ledger"`
+  - `src/ledger/storage/postgres/driver.test.ts: "pending votes added concurrently on one transaction open their units one at a time"`, for the Postgres driver's use of `runIsolatedInTurn`
 - Replacement of a stored vote with the same `$uid` is untested.
 - **Upstream.** [Keeta TS] index.js:69310-69316, 69342-69354.
 
@@ -734,7 +735,7 @@ getAccountCertificates: (transaction: any, account: GenericAccount) => Promise<C
 - **Semantics.** Every certificate the account holds, whether or not it is currently valid, as `{ certificate, intermediates }` with `intermediates` `null` when none were given. Returns `[]` when there are none. Callers check validity themselves [Keeta TS] index.js:69787-69810.
 - **Selector.** Main only.
 - **Ordering.** Unspecified.
-- **Tested by** `confirmed.ts: "certificates add and remove"` and `confirmed.ts: "an expired certificate is still read back"`.
+- **Tested by** `confirmed.ts: "certificates add and remove"`, `confirmed.ts: "an expired certificate is still read back"` and, for stored intermediates, `confirmed.ts: "a certificate is read back with its intermediates"`.
 
 ### `getAccountCertificateByHash`
 
@@ -744,7 +745,7 @@ getAccountCertificateByHash: (transaction: any, account: GenericAccount, hash: C
 
 - **Semantics.** The certificate with this hash that the account holds, or `null`. A `null` answer during `adjust` makes `computeLedgerEffect` refuse an ACL granted to that certificate with `LEDGER_CERTIFICATE_NOT_FOUND` (D15) [Keeta TS] index.js:67233-67239, 67456-67460.
 - **Selector.** Main only.
-- **Tested by** `confirmed.ts: "certificates add and remove"`, `confirmed.ts: "an expired certificate is still read back"` and `confirmed.ts: "an ACL granted to a certificate this node lacks is rejected"`.
+- **Tested by** `confirmed.ts: "certificates add and remove"`, `confirmed.ts: "an expired certificate is still read back"`, `confirmed.ts: "a certificate is read back with its intermediates"` and `confirmed.ts: "an ACL granted to a certificate this node lacks is rejected"`.
 
 ### `getIdempotentBlockHash`
 
@@ -825,13 +826,23 @@ Writes everything that one confirmed staple changes, all of it or none of it (se
 
   Every other side vote stays, including this node's temporary vote on these blocks and its votes on competing blocks (D6).
 
+  No side row may outlive its promotion: a side block that is also on the main ledger, and its side idempotent claims, are leaks even while a side vote still covers them. Tested by `votes.ts: "publishing promotes the staple and deletes side copies of promoted rows"`, `votes.ts: "publishing a voted block that holds an idempotent key leaves no orphaned side rows"` and `deferral.ts: "a replayed staple that promotes a voted block and then fails keeps its side rows, and applies when it arrives again"`, each through `countOrphanedSideRows`.
+
 #### `runIsolated`
 
 ```ts
 protected runIsolated<Result>(transaction: Transaction, unit: () => Promise<Result>): Promise<Result>;
 ```
 
-Runs `unit` so that its writes join the transaction if it succeeds, and none of them remain if it throws, after which the transaction carries on as it was before the unit. Units nest, and the base never runs two at once on one transaction. The base's default calls `unit` and adds no isolation. Every driver whose writes can fail part-way through a unit must override it. The memory driver opens a nested overlay, and a database driver uses a savepoint (section 3.3, item 4). Tested by `deferral.ts: "a replayed staple that fails after its write leaves nothing behind and stays deferred"` and `gc.ts: "a gc retry that fails after its write leaves nothing behind and stays deferred"`.
+Runs `unit` so that its writes join the transaction if it succeeds, and none of them remain if it throws, after which the transaction carries on as it was before the unit. Units nest, and the base never runs two at once on one transaction. The base's default calls `unit` and adds no isolation. Every driver whose writes can fail part-way through a unit must override it. The memory driver opens a nested overlay, and a database driver uses a savepoint (section 3.3, item 4). Tested by `deferral.ts: "a replayed staple that fails after its write leaves nothing behind and stays deferred"`, `deferral.ts: "a replayed staple that promotes a voted block and then fails keeps its side rows, and applies when it arrives again"` and `gc.ts: "a gc retry that fails after its write leaves nothing behind and stays deferred"`.
+
+#### `runIsolatedInTurn`
+
+```ts
+protected runIsolatedInTurn<Result>(transaction: Transaction, unit: () => Promise<Result>): Promise<Result>;
+```
+
+Provided by the base, not implemented by drivers. Runs `unit` as `runIsolated` does, after the work the base has already queued on the transaction (`adjust`, gc, replayed staples). A member that upstream may call on a transaction while `adjust` is running uses it, so units of one transaction never overlap. It must not be called from work the base has queued, which would wait for itself. `addPendingVote` is its only caller. Tested by `src/ledger/storage/postgres/driver.test.ts: "pending votes added concurrently on one transaction open their units one at a time"`.
 
 #### `storeDeferredStaple`
 
@@ -895,7 +906,20 @@ Tested by:
 - `gc.ts: "gc reports whether more work remains"`
 - `concurrency.ts: "gc queued behind a long transaction keeps a vote committed meanwhile"`
 
-Deletion of a side block that no vote covers any more is untested. No read can observe such a block, because side reads require an unexpired vote, so only the size of the store shows whether it was removed.
+No read can observe a side block that no vote covers any more, because side reads require an unexpired vote, so only a count of such rows shows whether it was removed. `countOrphanedSideRows` provides that count, and the first four cases above assert that it is 0 afterwards.
+
+#### `countOrphanedSideRows`
+
+```ts
+protected abstract countOrphanedSideRows(transaction: Transaction): Promise<number>;
+```
+
+Counts the side rows that no side vote accounts for. Only the base's key-gated test hook reads it. A row is counted once for each of these:
+- a side block that no side vote covers
+- a side block that is also on the main ledger
+- a side idempotent claim whose block is not a side block covered by a side vote
+
+A vote that has expired but is not yet collected still covers its blocks, so it is not counted. A healthy store reports 0 after every member, and gc brings it back to 0. Tested by every case that asserts the count: `votes.ts: "publishing promotes the staple and deletes side copies of promoted rows"`, `votes.ts: "publishing a voted block that holds an idempotent key leaves no orphaned side rows"`, `deferral.ts: "a replayed staple that promotes a voted block and then fails keeps its side rows, and applies when it arrives again"`, `gc.ts: "gc removes expired side votes and their unreferenced blocks but keeps permanent ones"`, `gc.ts: "gc removes side votes whose blocks were all confirmed under another staple"`, `gc.ts: "gc removes side votes whose staple can no longer be published"` and `gc.ts: "gc removes our votes on a competitor of a confirmed block and frees its idempotent key"`.
 
 #### `countLedger`
 
