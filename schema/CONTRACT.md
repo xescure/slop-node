@@ -586,7 +586,7 @@ getHistory: (transaction: any, account: GenericAccount | null, start: VoteBlockH
 
 - **Semantics.** The `blocksHash` of each main staple that touched the account, or of every main staple when `account` is `null`. A staple touches every account in the effects' `touched` set (D18). At most `limit` entries are returned; upstream always passes a number, and the default is 25 [Keeta TS] index.js:69532. Every returned hash must resolve through `getVoteStaples(..., 'main')` [Keeta TS] index.js:69540-69548.
 - **Ordering and paging.** Newest first in history order (D8):
-  - The key is the ordered pair (staple time, `blocksHash`), descending. The staple time is `VoteStaple.timestamp()` with no argument [Keeta TS] index.js:81070-81096, and `blocksHash` is compared as bytes (provisional: confirmed by the live parity checks).
+  - The key is the ordered pair (staple time, `blocksHash`), descending (provisional: confirmed by the live parity checks). The staple time is `VoteStaple.timestamp()` with no argument, as an integer count of milliseconds since the Unix epoch [Keeta TS] index.js:81070-81096, and `blocksHash` is compared as unsigned bytes.
   - `start` is exclusive.
   - A `start` that is unknown, or not in the listed history, gives `[]`.
 - **Selector.** Main only.
@@ -801,6 +801,7 @@ Writes everything that one confirmed staple changes, all of it or none of it (se
 - **`staple`, `blockHeights`, `moment`.**
   - Store the staple under its `blocksHash`, with its block order and every vote keyed by `$uid`. Votes are kept per staple: a vote stored once globally could be overwritten by an equivocating representative's vote with the same `$uid`.
   - Stamp the staple with `moment` and a node-local sequence number that is never reused.
+  - Store the staple with its history key: its staple time and its `blocksHash` (D8).
   - Store each block with its height, record it as the successor of its `previous` (opening sentinel included), and make it the account's head when its height exceeds the current head's.
   - Refuse a block already on the main ledger with `LEDGER_BLOCK_ALREADY_EXISTS`.
   - Refuse a block whose `previous` already has a successor with the error from `confirmedHistoryConflict`, which logs the conflict as a network integrity alarm.
@@ -999,11 +1000,11 @@ Main staples have two order keys. History is ordered by the staple itself; the c
 
 #### History order
 
-The history key of a main staple is the ordered pair:
-1. its staple time: `VoteStaple.timestamp()` called with no `preferRep`, which is the earliest `validityFrom` of its votes plus the floored mean offset of every vote's `validityFrom` from it [Keeta TS] index.js:81070-81096;
-2. its `blocksHash`, compared as bytes (equivalently, as equal-length uppercase hex).
+The history key of a main staple is the ordered pair (staple time, `blocksHash`) (provisional: confirmed by the live parity checks):
+1. its staple time: `VoteStaple.timestamp()` called with no `preferRep`, which is the earliest `validityFrom` of its votes plus the mean offset of every vote's `validityFrom` from it, floored to a whole millisecond [Keeta TS] index.js:81070-81096. It is an integer count of milliseconds since the Unix epoch, the value of the JavaScript `Date` that `timestamp` returns;
+2. its `blocksHash`, compared as a sequence of unsigned bytes, which orders the same as comparing its equal-length uppercase hex.
 
-- `getHistory` descends by the whole key. `start` is exclusive. A `start` that is unknown, or not in the listed history, gives `[]`. (provisional: confirmed by the live parity checks)
+- `getHistory` descends by the whole key. `start` is exclusive. A `start` that is unknown, or not in the listed history, gives `[]`.
 - The key is computed once, when the staple is stored, and kept with it. A staple applied late, for example after deferral, sorts by its staple time.
 
 **Reason.**
@@ -1184,7 +1185,7 @@ No member reads account rows, so their creation is untested.
 
 **Reason.** The upstream bundle does not define these fields, and no upstream code reads them.
 
-**Tested by** `stats.ts: "stats returns the upstream shape with counts that follow the staples added"` and `stats.ts: "stats reads settlement times and retries from the node"`.
+**Tested by** `stats.ts: "stats returns the upstream shape with counts that follow the staples added"`, `stats.ts: "stats reads settlement times and retries from the node"` and `stats.ts: "a replayed staple that rolls back does not record a settlement time"`.
 
 ### D20. Garbage collection
 
