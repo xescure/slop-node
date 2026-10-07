@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Captures a Keeta mainnet representative's responses to the node HTTP API.
 
-Usage: capture-api-responses <head-state> <output-directory>
+Usage: capture-api-responses [--only <name>[,<name>...]] <head-state> <output-directory>
 
 Sends one GET request for every GET route of api/openapi.json, and a few that
 a representative must refuse, to one public mainnet representative, and writes
 each request with the status, content type and body of its response to its own
-JSON file in <output-directory>. The accounts, tokens and blocks named in the
+JSON file in <output-directory>, named <name>.json. With --only, only the named
+requests are sent, and their files replace those in <output-directory>; the
+other files are left as they are. The accounts, tokens and blocks named in the
 requests are taken from <head-state>, the state dump of the mainnet head
 (conformance/mainnet/head.state.jsonl); the start of a second history page is
 the "nextKey" of the first, as the client pages. conformance/API.md describes
@@ -37,6 +39,9 @@ USER_AGENT = "slop-node-capture/1"
 TIMEOUT_SECONDS = 60
 PAUSE_SECONDS = 0.5
 PAGE_LIMIT = "2"
+# An account's history page holds whole staples, which are large; one per page
+# still shows how pages follow each other.
+ACCOUNT_HISTORY_LIMIT = "1"
 EPOCH = "1970-01-01T00:00:00.000Z"
 # A key derived from a fixed test seed, so no mainnet block has touched it.
 UNKNOWN_ACCOUNT = "keeta_aabx4z7qrrsongdomou3l6vcyuaovnfo6s3wlm4v3vub6zu4xhte5ntk6qifixa"
@@ -154,15 +159,25 @@ def decode_body(content_type, raw):
 
 
 class Capture:
-	def __init__(self, directory):
+	def __init__(self, directory, selected):
+		"""Sends the requests named in selected, or every request when selected is None."""
 		self.directory = directory
+		self.selected = selected
 		self.names = set()
 
 	def get(self, name, segments, query=None):
-		"""GETs /api followed by the segments, each encoded as one path segment, and records the exchange as <name>.json."""
+		"""
+		GETs /api followed by the segments, each encoded as one path segment,
+		records the exchange as <name>.json and returns the body; returns None
+		for a request that is not selected.
+		"""
 		if name in self.names:
 			fail(f"{name} is captured twice")
 		self.names.add(name)
+		if self.selected is not None and name not in self.selected:
+			return None
+		if None in segments or None in (query or {}).values():
+			fail(f"{name} pages from a request that is not selected")
 		query = dict(sorted((query or {}).items()))
 		path = "/api/" + "/".join(encode_segment(segment) for segment in segments)
 		time.sleep(PAUSE_SECONDS)
@@ -182,14 +197,17 @@ class Capture:
 
 
 def next_key(name, body):
+	"""The start of the page after <name>'s, or None when <name> was not requested."""
+	if body is None:
+		return None
 	if not isinstance(body, dict) or not isinstance(body.get("nextKey"), str):
 		fail(f"{name} has no nextKey to page from")
 	return body["nextKey"]
 
 
-def capture(parameters, directory):
+def capture(parameters, directory, selected):
 	p = parameters
-	c = Capture(directory)
+	c = Capture(directory, selected)
 	ledger = ["node", "ledger"]
 
 	c.get("node-version", ["node", "version"])
@@ -233,10 +251,10 @@ def capture(parameters, directory):
 	c.get("ledger-account-head-unknown", [*account, UNKNOWN_ACCOUNT, "head"])
 	c.get("ledger-account-chain", [*account, p.user, "chain"], {"limit": PAGE_LIMIT})
 	c.get("ledger-account-chain-from-start", [*account, p.user, "chain"], {"start": p.user_head, "limit": PAGE_LIMIT})
-	page = c.get("ledger-account-history", [*account, p.user, "history"], {"limit": PAGE_LIMIT})
+	page = c.get("ledger-account-history", [*account, p.user, "history"], {"limit": ACCOUNT_HISTORY_LIMIT})
 	start = next_key("ledger-account-history", page)
-	c.get("ledger-account-history-from-start", [*account, p.user, "history"], {"start": start, "limit": PAGE_LIMIT})
-	c.get("ledger-account-history-start", [*account, p.user, "history", "start", start], {"limit": PAGE_LIMIT})
+	c.get("ledger-account-history-from-start", [*account, p.user, "history"], {"start": start, "limit": ACCOUNT_HISTORY_LIMIT})
+	c.get("ledger-account-history-start", [*account, p.user, "history", "start", start], {"limit": ACCOUNT_HISTORY_LIMIT})
 	c.get("ledger-account-history-limit-zero", [*account, p.user, "history"], {"limit": "0"})
 	c.get("ledger-account-balance", [*account, p.user, "balance"])
 	c.get("ledger-account-balance-of-token", [*account, p.user, "balance", p.token])
@@ -249,21 +267,43 @@ def capture(parameters, directory):
 	c.get("ledger-account-certificate-unknown", [*account, p.user, "certificates", UNKNOWN_HASH])
 	c.get("ledger-account-pending", [*account, p.user, "pending"])
 	c.get("ledger-account-idempotent-unknown", [*account, p.user, "idempotent", UNKNOWN_IDEMPOTENT_KEY])
+	return c.names
+
+
+def parse_arguments(arguments):
+	"""The selected request names, or None for all of them, the head state and the output directory."""
+	selected = None
+	if len(arguments) == 4 and arguments[0] == "--only":
+		selected = set(arguments[1].split(","))
+		arguments = arguments[2:]
+	if len(arguments) != 2:
+		print(f"usage: {PROGRAM} [--only <name>[,<name>...]] <head-state> <output-directory>", file=sys.stderr)
+		sys.exit(2)
+	return selected, arguments[0], arguments[1].rstrip("/")
 
 
 def main():
-	if len(sys.argv) != 3:
-		print(f"usage: {PROGRAM} <head-state> <output-directory>", file=sys.stderr)
-		sys.exit(2)
-	parameters = Parameters(read_head_state(sys.argv[1]))
-	output = sys.argv[2].rstrip("/")
+	selected, head_state, output = parse_arguments(sys.argv[1:])
+	parameters = Parameters(read_head_state(head_state))
+	if selected is not None:
+		if not os.path.isdir(output):
+			fail(f"{output} must already hold a capture for --only to replace files in")
+		# Selecting nothing sends nothing and yields every request's name.
+		unknown = selected - capture(parameters, output, set())
+		if unknown:
+			fail(f"no request is named {', '.join(sorted(unknown))}")
 	# Beside the output, so a failed capture leaves the previous one whole and
 	# the final renames stay on one filesystem.
 	partial = f"{output}.partial"
 	previous = f"{output}.previous"
 	shutil.rmtree(partial, ignore_errors=True)
 	os.makedirs(partial)
-	capture(parameters, partial)
+	capture(parameters, partial, selected)
+	if selected is not None:
+		for name in sorted(selected):
+			os.replace(os.path.join(partial, f"{name}.json"), os.path.join(output, f"{name}.json"))
+		os.rmdir(partial)
+		return
 	shutil.rmtree(previous, ignore_errors=True)
 	if os.path.exists(output):
 		os.rename(output, previous)

@@ -47,9 +47,9 @@ The vote request's lists have a lower bound where something enforces one: `block
 | `headers` | `content-type` |
 | `body` | the body, parsed as JSON |
 
-The capture was made on 2026-10-07 between 08:44:15 and 08:44:54 UTC from `https://rep1.main.network.api.keeta.com/api`, a representative of the Keeta mainnet, network `0x5382` [Keeta TS] index.js:61293-61298. `GET /api/node/version` reported the version `0.18.4+gbd3f30c7e7903e4990e5a283f15c23d0df18bbb4`.
+The capture was made on 2026-10-07 between 08:44:15 and 08:44:54 UTC from `https://rep1.main.network.api.keeta.com/api`, a representative of the Keeta mainnet, network `0x5382` [Keeta TS] index.js:61293-61298. `GET /api/node/version` reported the version `0.18.4+gbd3f30c7e7903e4990e5a283f15c23d0df18bbb4`. The three pages of the account's history were captured again from the same representative on 2026-10-07 between 09:16:09 and 09:16:12 UTC, with one staple to a page rather than two, since a single staple of this account can hold a block of several hundred operations.
 
-The capture made 50 HTTP GET requests, one at a time with half a second between them, and nothing else: it published nothing, asked for no vote or quote and sent no peer message. `GET /api/node/ledger/clearstats` was not requested: it clears the representative's statistics, so it changes the representative's state although it is a GET.
+The capture made 50 HTTP GET requests, and the second run 3, one at a time with half a second between them, and nothing else: it published nothing, asked for no vote or quote and sent no peer message. `GET /api/node/ledger/clearstats` was not requested: it clears the representative's statistics, so it changes the representative's state although it is a GET.
 
 The requests name accounts, blocks and a token that `mainnet/head.state.jsonl` lists, chosen by fixed rules:
 
@@ -87,6 +87,12 @@ utils/capture-api-responses conformance/mainnet/head.state.jsonl conformance/api
 ```
 
 It needs only Python's standard library. It writes into a directory beside the output and replaces the output only once every request has been answered, so a request that fails to connect or times out (after 60 seconds) leaves the previous capture in place. A later capture differs in its bodies, because the ledger keeps moving, and the test then checks the new bodies.
+
+`--only`, followed by file names without `.json` separated by commas, sends only those requests and replaces only their files, once all of them have been answered. A request that pages from one left out is refused, and then no file is replaced. The second run was:
+
+```
+utils/capture-api-responses --only ledger-account-history,ledger-account-history-from-start,ledger-account-history-start conformance/mainnet/head.state.jsonl conformance/api/mainnet
+```
 
 ### Fixtures
 
