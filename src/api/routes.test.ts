@@ -236,6 +236,21 @@ describe('requests a representative answers without a failure', function() {
 		expect(Array.isArray(answer.body) && answer.body[1]).toEqual({ account: 'keeta_not-an-account', error: 'Error: Key is the wrong length (14)' });
 	});
 
+	test('an empty entity list, as the client sends one, lists the permissions on every entity', async function() {
+		const node = await populated();
+		const user = keyOf(node.user);
+		// The client joins no entities into an empty path segment [Keeta TS] index.js:58588-58597, 59958-59960.
+		const everyEntity = await request(node, `/node/ledger/account/${user}/acl/`);
+		const withInfo = await request(node, `/node/ledger/account/${user}/acl/additional/`);
+
+		expect(everyEntity.body).toEqual((await request(node, `/node/ledger/account/${user}/acl`)).body);
+		expect(list(everyEntity.body, 'permissions').length).toBeGreaterThan(1);
+		expect(withInfo.body).toEqual((await request(node, `/node/ledger/account/${user}/acl/additional`)).body);
+		expect(list(withInfo.body, 'access').map(function(entry): unknown {
+			return(field(entry, 'entity'));
+		})).toEqual(expect.arrayContaining([keyOf(node.token), keyOf(node.multisig)]));
+	});
+
 	test('a pending block is the side block after the account\'s main head', async function() {
 		const node = await populated();
 		const pending = await request(node, `/node/ledger/account/${keyOf(node.user)}/pending`);
