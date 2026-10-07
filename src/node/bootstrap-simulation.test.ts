@@ -58,6 +58,8 @@ class Scenario {
 	readonly peer: SimulatedPeer;
 	readonly node = new SimulatedNode();
 	readonly updates: UpdateRecord[] = [];
+	/** Staples the peer applies while each update reads it, and only then, so that a busy peer takes hours of updates without millions of staples. */
+	trafficWhileRead: LiveTraffic | undefined;
 	#progress: PeerProgress | undefined;
 	readonly #seed = seeds();
 
@@ -87,7 +89,13 @@ class Scenario {
 				return(Promise.resolve());
 			}
 		};
+		if (this.trafficWhileRead !== undefined) {
+			this.peer.goLive(this.trafficWhileRead);
+		}
 		const outcome = await bootstrapPeer(io, { limit: LIMIT, seed: this.#seed });
+		if (this.trafficWhileRead !== undefined) {
+			this.peer.stopLive();
+		}
 		this.updates.push({ outcome, requests: this.peer.requests - requests, elapsed: Date.now() - began });
 		return(outcome);
 	}
@@ -141,6 +149,12 @@ class Scenario {
 			expect(update.requests).toBeLessThanOrEqual(2 * MAX_PASS_REQUESTS);
 			expect(update.elapsed).toBeLessThanOrEqual(MAX_PASS_MILLISECONDS + 2 * LATENCY);
 		}
+	}
+
+	liveOutcomes(): readonly PassOutcome['kind'][] {
+		return(this.updates.map(function(update): PassOutcome['kind'] {
+			return(update.outcome.live.kind);
+		}));
 	}
 
 	deepScans(): readonly PassOutcome[] {
@@ -320,6 +334,56 @@ describe('bootstrapping against a simulated peer', { timeout: 120_000 }, functio
 			expect((await scenario.untilDeepScans(1)).length).toBeGreaterThan(0);
 			expect(scenario.missing()).toEqual([]);
 			expect(scenario.deepScans().every(completes)).toBe(true);
+			scenario.expectEveryUpdateBounded();
+		});
+	});
+
+	/*
+	 * A peer whose clock runs behind the node's by more than a pass lasts has
+	 * applied no staple at the moment a pass began while the pass runs, and
+	 * one that applies more than a staple per round trip never answers an
+	 * empty page.
+	 */
+	describe('against a peer applying 100 staples a second on a clock behind the node\'s', function() {
+		test('ends every pass caught up while the peer runs 90 s behind', async function() {
+			freezeClock(new Date(NOW));
+			const behind = 90 * SECOND;
+			const scenario = new Scenario({ clockOffset: -behind });
+			liveHistory(scenario.peer, 3000, 10, NOW - HOUR - behind);
+			scenario.peer.goLive(steady(100));
+
+			expect((await scenario.update()).live).toEqual({ kind: 'caught-up' });
+			await scenario.periodically(5 * PERIOD);
+			scenario.peer.stopLive();
+
+			expect(scenario.liveOutcomes()).toEqual(Array.from(scenario.updates, function(): string {
+				return('caught-up');
+			}));
+			await scenario.untilComplete(3);
+			expect(scenario.missing()).toEqual([]);
+			scenario.expectEveryUpdateBounded();
+		});
+
+		test.each([['90 s', 90 * SECOND], ['4 min', 4 * MINUTE]])('ends every pass caught up while the peer runs %s behind, so that a deep re-scan runs and recovers a staple a filter named by mistake', async function(_ignored: string, behind: number) {
+			freezeClock(new Date(NOW));
+			const scenario = new Scenario({ clockOffset: -behind });
+			liveHistory(scenario.peer, 3000, 10, NOW - HOUR - behind);
+			const unlucky = scenario.peer.staples[1500];
+			scenario.peer.forceFalsePositive(unlucky);
+			scenario.trafficWhileRead = steady(100);
+
+			expect((await scenario.update()).live).toEqual({ kind: 'caught-up' });
+			scenario.peer.forceFalsePositive(undefined);
+
+			expect(await scenario.untilDeepScans(1)).toContain(unlucky?.id);
+			expect(scenario.missing()).not.toContain(unlucky?.id);
+			expect(scenario.deepScans()).toEqual([{ kind: 'caught-up' }]);
+			expect(scenario.liveOutcomes()).toEqual(Array.from(scenario.updates, function(): string {
+				return('caught-up');
+			}));
+			scenario.trafficWhileRead = undefined;
+			await scenario.untilComplete(3);
+			expect(scenario.missing()).toEqual([]);
 			scenario.expectEveryUpdateBounded();
 		});
 	});

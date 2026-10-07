@@ -120,7 +120,8 @@ describe('a pass over a peer', function() {
 	});
 
 	test.each([['caps the limit', 300], ['runs out of time for a request', 37]])('holds every staple of a peer that %s, whose short pages are not the end', async function(_ignored: string, answersAtMost: number) {
-		freezeClock(new Date(NOW));
+		// Every staple precedes the horizon, so that only an empty page ends the pass.
+		freezeClock(new Date(NOW + BOOTSTRAP_MARGIN_MILLISECONDS));
 		const peer = peerWith(5000, { answersAtMost });
 		const harness = new Harness(function(request) {
 			return(peer.page(request));
@@ -266,7 +267,7 @@ describe('a pass over a peer', function() {
 		expect(harness.progress?.caughtUp).toBe(false);
 	});
 
-	test('ends caught up on a peer that keeps applying staples, once a page reaches the moment the pass began', async function() {
+	test('ends caught up on a peer that keeps applying staples, once a page reaches the margin before the pass began', async function() {
 		freezeClock(new Date(NOW));
 		const peer = peerWith(500, { latency: 25 });
 		const harness = new Harness(function(request) {
@@ -375,7 +376,7 @@ describe('deep re-scans of a peer', function() {
 		expect(await bootstrapPeer(harness.io, passOptions(1000))).toEqual({ live: { kind: 'drained' }, deepScan: { kind: 'drained' } });
 
 		expect(harness.starts().sort()).toEqual([caughtUp.deepScanFrom.getTime(), caughtUp.reached.getTime()].sort());
-		expect(harness.written[0]).toEqual({ ...caughtUp, deepScanFrom: caughtUp.reached, nextDeepScan: new Date(NOW + DEEP_SCAN_PERIOD_MILLISECONDS), deepScan: { reached: caughtUp.deepScanFrom, horizon: new Date(NOW) } });
+		expect(harness.written[0]).toEqual({ ...caughtUp, deepScanFrom: caughtUp.reached, nextDeepScan: new Date(NOW + DEEP_SCAN_PERIOD_MILLISECONDS), deepScan: { reached: caughtUp.deepScanFrom, horizon: new Date(NOW - BOOTSTRAP_MARGIN_MILLISECONDS) } });
 		expect(harness.progress).toMatchObject({ caughtUp: true, deepScanFrom: caughtUp.reached, deepScan: undefined });
 	});
 
@@ -405,7 +406,7 @@ describe('deep re-scans of a peer', function() {
 		expect(harness.starts()).toEqual([caughtUp.reached.getTime()]);
 	});
 
-	test('read on from where they reached, recording how far, up to the moment they began', async function() {
+	test('read on from where they reached, recording how far, up to their horizon', async function() {
 		freezeClock(new Date(NOW));
 		const peer = peerWith(8000);
 		const harness = new Harness(function(request) {

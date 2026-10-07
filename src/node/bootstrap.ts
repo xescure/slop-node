@@ -64,16 +64,16 @@ function pageLimit(limit: number): number {
  * through the peer's staples from where the node last reached on that peer
  * (src/node/bootstrap-pass.ts), adds each staple to the ledger as a
  * bootstrap, and is done with the peer once it is shown to hold every staple
- * the peer had applied when the pass began. A deep re-scan of the peer, when
- * one is under way, runs alongside. A pass is bounded in requests and time,
- * and one that reaches its bound is continued on the next update; a peer
- * that fails is logged and tried again on the next update. Neither holds up
- * any other peer for longer.
+ * the peer had applied before the margin before the pass began. A deep
+ * re-scan of the peer, when one is under way, runs alongside. A pass is
+ * bounded in requests and time, and one that reaches its bound is continued
+ * on the next update; a peer that fails is logged and tried again on the
+ * next update. Neither holds up any other peer for longer.
  *
  * stats() counts the updates in a row that were complete: every peer's pass
- * completed, so the node held all its peers had applied when each pass
- * began. An incomplete update sets the count back to 0, so a count above 0
- * says the node is caught up.
+ * completed, so the node held all its peers had applied before the margin
+ * before each pass began. An incomplete update sets the count back to 0, so
+ * a count above 0 says the node is caught up.
  */
 export class BootstrapClient {
 	static isInstance: (obj: unknown, strict?: boolean) => obj is BootstrapClient = lib.Utils.Helper.checkableGenerator(BootstrapClient);

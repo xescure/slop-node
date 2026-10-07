@@ -32,18 +32,32 @@ export const DEEP_SCAN_DELAY_MILLISECONDS: number = 15 * 60_000;
 
 /**
  * How long after its moment a peer may commit a staple, or how far its clock
- * may run off, for two deep re-scans to read the staple: the first, and the
- * next should a filter have named it by mistake in the first.
+ * may run off, for the node to read the staple at least twice, each time
+ * with a filter of its own, so that one naming it by mistake loses nothing.
+ *
+ * A staple committed at c at a moment m is read by every deep re-scan that
+ * begins at some b with c <= b and m < b - margin, the moment it reads up
+ * to, and starts at or before m. Deep re-scans begin at most a period and a
+ * delay apart and start at least the depth before they begin, so:
+ * - committed within this bound of its moment, a staple is read by the
+ *   first two deep re-scans that begin after max(c, m + margin): the second
+ *   begins by that plus twice a period and a delay, and starts at most the
+ *   depth before, which is at most m, the margin being within this bound;
+ * - committed later, but within the depth less a period and a delay
+ *   (1 h 45 min), it is read once, by the first of them;
+ * - committed later still, it may never be read.
+ * One committed within the margin of its moment is read by a pass from
+ * where the last reached as well.
+ *
+ * This holds while the passes from where the last reached complete, so that
+ * each deep re-scan begins within the delay of being due, and while each
+ * deep re-scan completes within a period. Against a peer they do not, the
+ * node reads staples only once, and those committed later than the margin
+ * not at all, until they do again.
  */
 export const LATE_COMMIT_BOUND_MILLISECONDS: number = 30 * 60_000;
 
-/**
- * How far before it begins a deep re-scan starts at least. A staple committed
- * at c at a moment m is read by every deep re-scan that begins at or after c
- * and starts at or before m. Deep re-scans begin at most a period and a delay
- * apart, so the first two that begin after c start by c plus twice that,
- * less this depth, which is at most m while c - m is within the bound.
- */
+/** How far before it begins a deep re-scan starts at least, for the bound above to hold. */
 export const DEEP_SCAN_DEPTH_MILLISECONDS: number = LATE_COMMIT_BOUND_MILLISECONDS + 2 * (DEEP_SCAN_PERIOD_MILLISECONDS + DEEP_SCAN_DELAY_MILLISECONDS);
 
 /** Seeds a filter takes: integers its hash functions read exactly. */
@@ -66,7 +80,7 @@ export type PassAnswer<Staple extends PassStaple> =
 /** Whether a staple a peer sent was new to the node, or one whose blocks it held already, perhaps with other votes. */
 export type Added = 'added' | 'held';
 
-/** A deep re-scan under way: it reads the peer again from where it has reached up to the moment it began. */
+/** A deep re-scan under way: it reads the peer again from where it has reached up to the horizon, the margin before it began. */
 export type DeepScan = {
 	readonly reached: Date;
 	readonly horizon: Date;
@@ -80,7 +94,7 @@ export type PeerProgress = {
 	 * committed later than the margin allows.
 	 */
 	readonly reached: Date;
-	/** Whether the last pass held every staple the peer had applied by the time it began. */
+	/** Whether the last pass held every staple the peer had applied before the margin before it began. */
 	readonly caughtUp: boolean;
 	/** Where the next deep re-scan starts at the latest: where the passes since the last one began started. */
 	readonly deepScanFrom: Date;
@@ -113,7 +127,7 @@ export type PassOptions = {
 export type PassOutcome =
 	/** An empty page came back: the node held every staple the peer had applied from the start. */
 	| { readonly kind: 'drained' }
-	/** The node was shown to hold every staple the peer applied before the pass's horizon. */
+	/** The node was shown to hold every staple the peer applied before the pass's horizon, the margin before it began. */
 	| { readonly kind: 'caught-up' }
 	/** The pass reached its bound first; the next one starts from where it reached. */
 	| { readonly kind: 'bounded'; readonly reached: Date };
@@ -161,6 +175,11 @@ function failureOf(result: PromiseRejectedResult): Error {
 	return(new Error(String(reason)));
 }
 
+/** The horizon of a pass that begins at the moment given: the margin before. */
+function floorOf(now: number): Date {
+	return(new Date(Math.max(0, now - BOOTSTRAP_MARGIN_MILLISECONDS)));
+}
+
 function firstProgress(now: number, stagger: number): PeerProgress {
 	return({ reached: EPOCH, caughtUp: false, deepScanFrom: EPOCH, nextDeepScan: new Date(now + DEEP_SCAN_PERIOD_MILLISECONDS + stagger), deepScan: undefined });
 }
@@ -180,7 +199,7 @@ function withDeepScanBegun(progress: PeerProgress, now: number): PeerProgress {
 		...progress,
 		deepScanFrom: progress.reached,
 		nextDeepScan: new Date(now + DEEP_SCAN_PERIOD_MILLISECONDS),
-		deepScan: { reached: from, horizon: new Date(now) }
+		deepScan: { reached: from, horizon: floorOf(now) }
 	});
 }
 
@@ -214,7 +233,22 @@ type Reach = { readonly start: number; readonly from: number };
  * those from it on do not. Probes gallop up from the start and then bisect,
  * until the staples from the moment found fit the filter with room for a
  * page. The same probe at the horizon, after short pages, shows the pass
- * has caught up while the peer keeps applying staples.
+ * has caught up while the peer keeps applying staples, when no page is
+ * ever empty.
+ *
+ * A pass completes once the node is shown to hold every staple before its
+ * horizon, the margin before the pass began: the next pass starts there
+ * whatever this one reads past it, so no more needs to be shown. It probes
+ * the horizon only after short pages, which a peer answers once the pass
+ * has read up to the present, and so reads that far all the same, unless
+ * the peer answers short pages throughout, when the next passes bring the
+ * rest. It stops earlier only when its start reaches its end: the moment it
+ * began, for a pass from where the last reached, and the horizon, for a
+ * deep re-scan, which need not read the present. The horizon must not be
+ * the moment the pass began: the probe needs a staple the peer applied at
+ * or after it, and a peer whose clock runs behind the node's by more than a
+ * pass lasts has applied none while the pass runs, whereas the margin
+ * allows for a clock that far behind.
  *
  * A filter names a staple it was not given at a small rate, and a conclusion
  * that the node holds every staple up to a moment is wrong when the filter
@@ -234,6 +268,7 @@ class Pass<Staple extends PassStaple> {
 	readonly #io: PeerIO<Staple>;
 	readonly #began = Date.now();
 	readonly #horizon: number;
+	readonly #end: number;
 	readonly #seed: () => number;
 	readonly #moved: (start: Date) => Promise<void>;
 	readonly #named = new NamedStaples();
@@ -243,10 +278,12 @@ class Pass<Staple extends PassStaple> {
 	/** How far the start last moved, from which probes look next. */
 	#step = FIRST_STEP_MILLISECONDS;
 
-	constructor(io: PeerIO<Staple>, start: Date, horizon: Date, options: PassOptions, moved: (start: Date) => Promise<void>) {
+	/** The end is at or after the horizon: the pass stops reading once its start reaches it. */
+	constructor(io: PeerIO<Staple>, start: Date, horizon: Date, end: Date, options: PassOptions, moved: (start: Date) => Promise<void>) {
 		this.#io = io;
 		this.#start = start.getTime();
 		this.#horizon = horizon.getTime();
+		this.#end = end.getTime();
 		this.#limit = options.limit;
 		this.#seed = options.seed ?? function(): number {
 			return(randomInt(SEED_LIMIT));
@@ -258,7 +295,7 @@ class Pass<Staple extends PassStaple> {
 		await this.#hold();
 		let shortPages = 0;
 		for (;;) {
-			if (this.#start >= this.#horizon) {
+			if (this.#start >= this.#end) {
 				return({ kind: 'caught-up' });
 			}
 			if (this.#exhausted()) {
@@ -282,7 +319,7 @@ class Pass<Staple extends PassStaple> {
 			} else {
 				shortPages = 0;
 			}
-			if (probesHorizonAfter(shortPages) && filter.errorRate <= ACCEPTED_ERROR_RATE && await this.#reachesHorizon(page, filter)) {
+			if (probesHorizonAfter(shortPages) && await this.#reachesHorizon(page, filter)) {
 				return({ kind: 'caught-up' });
 			}
 			if (this.#named.size + page.length <= BLOOM_CAPACITY) {
@@ -409,8 +446,14 @@ class Pass<Staple extends PassStaple> {
 		}
 	}
 
-	/** Whether the page, with no staple not named before it, reached the horizon. */
+	/** Whether the node holds every staple before the horizon: shown once the start has moved past it, or by the page, with no staple not named before it, reaching it. */
 	async #reachesHorizon(page: readonly Staple[], filter: Filter): Promise<boolean> {
+		if (this.#start >= this.#horizon) {
+			return(true);
+		}
+		if (filter.errorRate > ACCEPTED_ERROR_RATE) {
+			return(false);
+		}
 		return(await this.#probe(this.#horizon, filter.serialized, positionsOf(page)) !== undefined);
 	}
 
@@ -515,8 +558,9 @@ function positionsOf(page: readonly NamedStaple[]): Map<string, number> {
 
 /**
  * An update's passes over a peer: one from where the last reached, which
- * holds, once it completes, every staple the peer applied before it began,
- * and alongside it the deep re-scan under way, if any.
+ * reads on to the present and holds, once it completes, every staple the
+ * peer applied before the margin before it began, and alongside it the deep
+ * re-scan under way, if any.
  *
  * While the first moves on, the node records how far it has reached, less
  * the margin, so that an interrupted pass resumes there; once it completes,
@@ -524,18 +568,21 @@ function positionsOf(page: readonly NamedStaple[]): Map<string, number> {
  *
  * Every DEEP_SCAN_PERIOD_MILLISECONDS, staggered across peers, a deep
  * re-scan reads the peer again from DEEP_SCAN_DEPTH_MILLISECONDS back up to
- * when it began, over as many updates as it takes, which recovers staples a
- * filter named by mistake and staples committed later or by a clock further
- * off than the margin allows. So every staple is read, after it is applied,
- * by two passes with filters of their own: a pass from where the last
- * reached and a deep re-scan, or, for one committed later than the margin
- * allows but within LATE_COMMIT_BOUND_MILLISECONDS, two deep re-scans, which
- * overlap for that. A staple a filter of one named by mistake is read by the
- * other.
+ * the margin before it began, over as many updates as it takes, which
+ * recovers staples a filter named by mistake and staples committed later or
+ * by a clock further off than the margin allows. What it leaves of the
+ * margin, the passes from where the last reached read, and so does the next
+ * deep re-scan, which starts at least the depth less a period and a delay
+ * before this one began, long before the margin. So every staple is read,
+ * after it is applied, by two passes with filters of their own: a pass from
+ * where the last reached and a deep re-scan, or, for one committed later
+ * than the margin allows but within LATE_COMMIT_BOUND_MILLISECONDS, two deep
+ * re-scans, which overlap for that. A staple a filter of one named by
+ * mistake is read by the other.
  */
 export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple>, options: PassOptions): Promise<PeerOutcome> {
 	const began = Date.now();
-	const floor = new Date(Math.max(0, began - BOOTSTRAP_MARGIN_MILLISECONDS));
+	const floor = floorOf(began);
 	let progress = withDeepScanBegun(await io.readProgress() ?? firstProgress(began, options.stagger ?? 0), began);
 	// Both passes record their progress, so each write follows the one before.
 	let written = io.writeProgress(progress);
@@ -548,7 +595,7 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 		await written;
 	};
 	await written;
-	const live = new Pass(io, progress.reached, new Date(began), options, function(start) {
+	const live = new Pass(io, progress.reached, floor, new Date(began), options, function(start) {
 		return(record(function(current) {
 			return({ ...current, reached: earlier(start, floor) });
 		}));
@@ -556,7 +603,7 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 	const deepScan = progress.deepScan;
 	let deep: Pass<Staple> | undefined;
 	if (deepScan !== undefined) {
-		deep = new Pass(io, deepScan.reached, deepScan.horizon, options, function(start) {
+		deep = new Pass(io, deepScan.reached, deepScan.horizon, deepScan.horizon, options, function(start) {
 			return(record(function(current) {
 				return({ ...current, deepScan: { reached: start, horizon: deepScan.horizon } });
 			}));
