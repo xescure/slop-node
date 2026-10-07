@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, GenericAccount, StorageAddress, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
+import type { BlockOperations, BlockOperationSEND } from '@keetanetwork/keetanet-client/lib/block/operations.js';
 import type { ACLPermissionRequirement } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
 import { operationsBlock, sendBlock } from '../../testing/blocks.js';
 import { LedgerInternals } from '../../upstream/internals.js';
@@ -192,23 +193,59 @@ describe('the requirements a SEND puts on its account', function() {
 		})));
 	}
 
+	function isOnItself(requirement: ACLPermissionRequirement): boolean {
+		return(requirement.entity.comparePublicKey(requirement.principal));
+	}
+
+	function isSend(operation: BlockOperations): operation is BlockOperationSEND {
+		return(operation.type === lib.Block.OperationType.SEND);
+	}
+
+	/** A signer other than the account is required to hold permissions of its own, which no SEND lists. */
+	function isAccountRequirement(block: Block): (requirement: ACLPermissionRequirement) => boolean {
+		return(function(requirement): boolean {
+			return(block.account.comparePublicKey(block.principal) || !requirement.principal.comparePublicKey(block.principal));
+		});
+	}
+
+	/*
+	 * The classifier reads these lists in upstream's order, so they are checked
+	 * against what upstream records for the same block, in each shape the
+	 * classifier tells apart: 0.18.7 records every listed requirement except one
+	 * of an account on itself, which it skips, and keeps the ones after it.
+	 * [Keeta TS] index.js:68646-68648
+	 */
 	test.each([
-		{ kind: 'a keyed account', to: delegate },
-		{ kind: 'a storage account', to: storage }
-	])('are, for a send to $kind, what upstream records for it', async function({ to }) {
-		const block = await sendBlock({ from: user, to, amount: 10n, token, previous: null, network: NETWORK });
-		const [operation] = block.operations;
-		if (operation?.type !== lib.Block.OperationType.SEND) {
-			throw(new Error('the block holds no send'));
-		}
+		{ shape: 'a keyed account to a keyed account', onItself: 0, block: () => sendBlock({ from: user, to: delegate, amount: 10n, token, previous: null, network: NETWORK }) },
+		{ shape: 'a keyed account to a storage account', onItself: 0, block: () => sendBlock({ from: user, to: storage, amount: 10n, token, previous: null, network: NETWORK }) },
+		{ shape: 'a token to a keyed account', onItself: 1, block: () => blockOf(token, owner, [
+			{ type: lib.Block.OperationType.SEND, to: user, amount: 10n, token }
+		]) },
+		{ shape: 'a minting token to a storage account', onItself: 1, block: () => blockOf(token, owner, [
+			{ type: lib.Block.OperationType.TOKEN_ADMIN_SUPPLY, amount: 10n, method: lib.Block.AdjustMethod.ADD },
+			{ type: lib.Block.OperationType.SEND, to: storage, amount: 10n, token }
+		]) }
+	])('are, for a send from $shape, what upstream records for it once it skips each requirement of an account on itself', async function({ onItself, block: makeBlock }) {
+		const block = await makeBlock();
+		const listed = block.operations.filter(isSend).flatMap(function(operation): ACLPermissionRequirement[] {
+			return(sendRequirements(block, operation));
+		});
 
 		const recorded = Object.values(LedgerInternals.computeEffectOfBlocks([block], anchors).accounts).flatMap(function(effect): ACLPermissionRequirement[] {
 			return(effect.fields.permissionRequirements ?? []);
-		});
+		}).filter(isAccountRequirement(block));
 
-		const listed = sendRequirements(block, operation);
-		expect(recorded).toHaveLength(listed.length);
-		expect(described(listed)).toEqual(described(recorded));
+		const [first] = listed;
+		if (first === undefined) {
+			throw(new Error('a send lists at least two requirements'));
+		}
+		const kept = listed.filter(function(requirement): boolean {
+			return(!isOnItself(requirement));
+		});
+		expect(isOnItself(first)).toBe(onItself > 0);
+		expect(listed.length - kept.length).toBe(onItself);
+		expect(recorded).toHaveLength(kept.length);
+		expect(described(recorded)).toEqual(described(kept));
 	});
 });
 
