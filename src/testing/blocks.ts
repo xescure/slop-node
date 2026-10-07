@@ -277,13 +277,13 @@ type VoteValidity = {
 
 /*
  * A permanent vote's validity, as upstream sets it, but counted from the
- * newest block's date rather than from the clock. The clock has passed that
- * date by the time the blocks are voted on, so the vote is never issued in
- * the future.
+ * newest block's date, plus the vote's delay, rather than from the clock. The
+ * clock has passed that date by the time the blocks are voted on, so a vote
+ * without a delay is never issued in the future.
  * [Keeta TS] index.js:81533-81540
  */
-function permanentValidityForBlocks(blocks: readonly Block[]): VoteValidity {
-	const validFrom = new Date(Math.max(...blocks.map(function(block): number {
+function permanentValidityForBlocks(blocks: readonly Block[], delayMilliseconds: number): VoteValidity {
+	const validFrom = new Date(delayMilliseconds + Math.max(...blocks.map(function(block): number {
 		return(block.date.getTime());
 	})));
 	const validTo = new Date(validFrom);
@@ -292,16 +292,39 @@ function permanentValidityForBlocks(blocks: readonly Block[]): VoteValidity {
 	return({ validFrom, validTo });
 }
 
+export type ConfirmedStapleOptions = {
+	/**
+	 * Milliseconds after the newest block's date at which each signer's vote
+	 * becomes valid, one entry per signer in order; every vote is valid from
+	 * that date when absent.
+	 */
+	readonly voteDelays?: readonly number[] | undefined;
+};
+
+type DelayedSigner = {
+	readonly signer: Account;
+	readonly delayMilliseconds: number;
+};
+
+function delayedSigners(signers: readonly Account[], voteDelays: readonly number[] | undefined): readonly DelayedSigner[] {
+	if (voteDelays !== undefined && voteDelays.length !== signers.length) {
+		throw(new Error(`${String(voteDelays.length)} vote delays given for ${String(signers.length)} signers`));
+	}
+	return(signers.map(function(signer, index): DelayedSigner {
+		return({ signer, delayMilliseconds: voteDelays?.[index] ?? 0 });
+	}));
+}
+
 /*
  * Serial and validity both derive from the blocks, so a signer never issues
  * two different votes under one serial, however the clock moves between
  * calls, and repeated runs stay byte-identical.
  */
-export async function confirmedStaple(blocks: readonly Block[], signers: readonly Account[]): Promise<VoteStaple> {
+export async function confirmedStaple(blocks: readonly Block[], signers: readonly Account[], options: ConfirmedStapleOptions = {}): Promise<VoteStaple> {
 	const serial = serialForBlocks(blocks);
-	const { validFrom, validTo } = permanentValidityForBlocks(blocks);
 	const votes = [];
-	for (const signer of signers) {
+	for (const { signer, delayMilliseconds } of delayedSigners(signers, options.voteDelays)) {
+		const { validFrom, validTo } = permanentValidityForBlocks(blocks, delayMilliseconds);
 		votes.push(await new lib.Vote.Builder(signer, [...blocks]).seal(serial, validTo, validFrom));
 	}
 	return(lib.Vote.Staple.fromVotesAndBlocks(votes, [...blocks]));

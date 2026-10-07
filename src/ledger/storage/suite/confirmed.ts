@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Ledger, PaginatedVotes } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
+import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { ACLRow } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerInternals } from '../../../upstream/internals.js';
@@ -507,6 +508,40 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 				page = await ledger.getHistory(null, requireAt(page, 0).blocksHash, 1);
 			}
 			expect(blocksHashesOf(paged)).toEqual(expected);
+		});
+
+		test('history orders by the mean vote time of a staple, not the earliest or any single representative\'s', async function() {
+			const { network, ledger } = await startNetwork();
+			const receiver = requireAt(network.users, 2);
+			await ledger.add(network.genesis);
+			advanceClock(1000);
+			const sendFrom = async function(sender: Account, to: Account): Promise<Block> {
+				return(await sendBlock({ from: sender, previous: headOf(network.genesis, sender), to, amount: 1n, token: network.baseToken, network: network.network }));
+			};
+			const spreadBlock = await sendFrom(requireAt(network.users, 0), receiver);
+			const blockTime = spreadBlock.date.valueOf();
+			/*
+			 * The votes come 0, 1000 and 5000 ms after the block, so the staple
+			 * time is the block time plus 2000 ms, which no single vote carries.
+			 */
+			const spread = await confirmedStaple([spreadBlock], network.representatives, { voteDelays: [0, 1000, 5000] });
+			expect(spread.timestamp().valueOf()).toBe(blockTime + 2000);
+			advanceClock(1500);
+			const belowMean = await confirmedStaple([await sendFrom(requireAt(network.users, 1), receiver)], network.representatives);
+			advanceClock(1500);
+			const aboveMean = await confirmedStaple([await sendFrom(receiver, requireAt(network.users, 0))], network.representatives);
+			expect(belowMean.timestamp().valueOf()).toBe(blockTime + 1500);
+			expect(aboveMean.timestamp().valueOf()).toBe(blockTime + 3000);
+			advanceClock(3000);
+			for (const staple of [aboveMean, belowMean, spread]) {
+				advanceClock(1000);
+				await ledger.add(staple);
+			}
+
+			const expected = blocksHashesOf([aboveMean, spread, belowMean, network.genesis]);
+			expect(blocksHashesOf(await ledger.getHistory(null, null))).toEqual(expected);
+			expect(blocksHashesOf(await ledger.getHistory(receiver, null))).toEqual(expected);
+			expect(blocksHashesOf(await ledger.getHistory(null, spread.blocksHash, 1))).toEqual(blocksHashesOf([belowMean]));
 		});
 
 		test('getVotesAfter pages on staple boundaries', async function() {

@@ -594,6 +594,7 @@ getHistory: (transaction: any, account: GenericAccount | null, start: VoteBlockH
   - `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, unknown start empty"`
   - `confirmed.ts: "history orders staples by staple time, not by when they were applied"`
   - `confirmed.ts: "history breaks staple-time ties by blocks hash, descending, and pages across a tie"`
+  - `confirmed.ts: "history orders by the mean vote time of a staple, not the earliest or any single representative's"`
   - `concurrency.ts: "concurrent adds of one staple apply it once"`
 
 ### `getHeadBlocks`
@@ -1017,6 +1018,7 @@ The history key of a main staple is the ordered pair (staple time, `blocksHash`)
 - `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, unknown start empty"`
 - `confirmed.ts: "history orders staples by staple time, not by when they were applied"`
 - `confirmed.ts: "history breaks staple-time ties by blocks hash, descending, and pages across a tie"`
+- `confirmed.ts: "history orders by the mean vote time of a staple, not the earliest or any single representative's"`, where the votes of one staple carry different times
 
 #### Catch-up order
 
