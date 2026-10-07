@@ -27,7 +27,10 @@ export default {
 		'timeofday',
 		'pgdata',
 		'pghost',
-		'pgport'
+		'pgport',
+		'nextval',
+		'ordinality',
+		'datname'
 	],
 	// Account strings are base32 public keys, not words.
 	ignoreRegExpList: ['/keeta_[a-z2-7]+/g'],

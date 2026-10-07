@@ -205,19 +205,29 @@ const migrateLocked = async function(client: pg.PoolClient, migrations: readonly
 	return(toSchemaVersion(migrations.length));
 };
 
+/*
+ * pg reports a connection lost while a client is checked out as an event,
+ * which would end the process without a listener; the failing query reports
+ * it instead.
+ */
+const ignoreConnectionError = function(): void {
+	// The failing query carries the error.
+};
+
 /**
  * Unlocks and returns the connection to the pool, or, if the session cannot
  * unlock, closes it: closing a session releases its locks and rolls back its
  * transaction.
  */
 const releaseLock = async function(client: pg.PoolClient): Promise<void> {
+	let unlocked = true;
 	try {
 		await client.query('SELECT pg_advisory_unlock($1::bigint)', [MIGRATION_LOCK_KEY.toString()]);
 	} catch {
-		client.release(true);
-		return;
+		unlocked = false;
 	}
-	client.release();
+	client.removeListener('error', ignoreConnectionError);
+	client.release(!unlocked);
 };
 
 const currentDate = function(): Date {
@@ -235,6 +245,7 @@ const currentDate = function(): Date {
 export const applyMigrations = async function(pool: pg.Pool, directory: URL, clock: () => Date = currentDate): Promise<SchemaVersion> {
 	const migrations = await loadMigrations(directory);
 	const client = await pool.connect();
+	client.on('error', ignoreConnectionError);
 	let version: SchemaVersion;
 	try {
 		await client.query('SELECT pg_advisory_lock($1::bigint)', [MIGRATION_LOCK_KEY.toString()]);

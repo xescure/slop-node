@@ -66,7 +66,9 @@ const tableExists = async function(pool: pg.Pool, table: string): Promise<boolea
 };
 
 const advisoryLockCount = async function(pool: pg.Pool): Promise<number> {
-	const result = await pool.query<{ count: number }>("SELECT count(*)::integer AS count FROM pg_locks WHERE locktype = 'advisory'");
+	// pg_locks spans the cluster, where other tests migrate their own databases at the same time.
+	const result = await pool.query<{ count: number }>(`SELECT count(*)::integer AS count FROM pg_locks
+		WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`);
 	return(result.rows[0]?.count ?? -1);
 };
 

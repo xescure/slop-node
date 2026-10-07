@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import pg from 'pg';
+import { SCHEMA_MIGRATIONS, applyMigrations } from '../ledger/storage/postgres/migrations.js';
 
 /**
  * What a test needs to reach the cluster. It is plain data so that vitest can
@@ -24,6 +25,8 @@ export type Cluster = ClusterConnection & {
 declare module 'vitest' {
 	export interface ProvidedContext {
 		postgresCluster: ClusterConnection;
+		/** A database holding the shipped migrations and nothing else, to copy. */
+		postgresLedgerTemplate: DatabaseName;
 	}
 }
 
@@ -299,8 +302,8 @@ export class TestDatabase {
 		return(pool);
 	}
 
-	/** Ends every pool opened through this object, then drops the database. */
-	async drop(): Promise<void> {
+	/** Ends every pool opened through this object. */
+	async endPools(): Promise<void> {
 		const pools = this.#pools.splice(0);
 		await Promise.all(pools.map(function(pool) {
 			if (pool.ended) {
@@ -308,6 +311,11 @@ export class TestDatabase {
 			}
 			return(pool.end());
 		}));
+	}
+
+	/** Ends every pool opened through this object, then drops the database. */
+	async drop(): Promise<void> {
+		await this.endPools();
 		const name = this.name;
 		await withMaintenanceClient(this.#cluster, function(client) {
 			return(client.query(`DROP DATABASE ${pg.escapeIdentifier(name)} WITH (FORCE)`));
@@ -329,4 +337,19 @@ export const createDatabase = async function(cluster: ClusterConnection, templat
 		return(client.query(statement));
 	});
 	return(new TestDatabase(cluster, name));
+};
+
+/**
+ * Migrates a new database with the shipped migrations and makes it a template
+ * that accepts no connections, so that every copy starts from the same schema
+ * and nothing can change the template between copies.
+ */
+export const createLedgerTemplate = async function(cluster: ClusterConnection): Promise<DatabaseName> {
+	const database = await createDatabase(cluster);
+	await applyMigrations(database.pool(), SCHEMA_MIGRATIONS);
+	await database.endPools();
+	await withMaintenanceClient(cluster, function(client) {
+		return(client.query(`ALTER DATABASE ${pg.escapeIdentifier(database.name)} WITH IS_TEMPLATE true ALLOW_CONNECTIONS false`));
+	});
+	return(database.name);
 };
