@@ -128,16 +128,20 @@ export const P2PInternals: P2PInternalsAPI = {
 /** How a switch takes and lets go of its connections; both are public in lib/p2p.d.ts. */
 export type SwitchConnectionMethods = Pick<P2PSwitch, 'registerConnection' | 'unregisterConnection'>;
 
-const requiredSwitchConnectionMethods = {
-	registerConnection: true,
-	unregisterConnection: true
-} satisfies Record<keyof SwitchConnectionMethods, true>;
+/** How a switch takes each message a connection delivers; public in lib/p2p.d.ts. */
+export type SwitchReceiveMethod = Pick<P2PSwitch, 'recvMessageFromPeer'>;
 
-const missingSwitchMethods = Object.keys(requiredSwitchConnectionMethods).filter(function(name): boolean {
+const requiredSwitchMethods = {
+	registerConnection: true,
+	unregisterConnection: true,
+	recvMessageFromPeer: true
+} satisfies Record<keyof (SwitchConnectionMethods & SwitchReceiveMethod), true>;
+
+const missingSwitchMethods = Object.keys(requiredSwitchMethods).filter(function(name): boolean {
 	return(typeof Reflect.get(KeetaNet.lib.P2P.prototype, name) !== 'function');
 });
 if (missingSwitchMethods.length > 0) {
-	throw(new Error(`the switch no longer has its connection methods: ${missingSwitchMethods.join(', ')}`));
+	throw(new Error(`the switch no longer has the methods the node wraps: ${missingSwitchMethods.join(', ')}`));
 }
 
 /**
@@ -153,6 +157,17 @@ export function wrapSwitchConnections(p2pSwitch: P2PSwitch, wrap: (upstream: Swi
 	});
 	p2pSwitch.registerConnection = wrapped.registerConnection;
 	p2pSwitch.unregisterConnection = wrapped.unregisterConnection;
+}
+
+/**
+ * Replaces, on this switch alone, the method by which it takes a message
+ * with the one the wrapper builds around its own; a WebSocket hands it
+ * every message [Keeta TS] index.js:72362-72369, as the route peers post
+ * messages to does.
+ */
+export function wrapSwitchReceive(p2pSwitch: P2PSwitch, wrap: (upstream: SwitchReceiveMethod) => SwitchReceiveMethod): void {
+	const wrapped = wrap({ recvMessageFromPeer: p2pSwitch.recvMessageFromPeer.bind(p2pSwitch) });
+	p2pSwitch.recvMessageFromPeer = wrapped.recvMessageFromPeer;
 }
 
 function isStatsPendingConstructor(candidate: unknown): candidate is typeof StatsPendingClass {

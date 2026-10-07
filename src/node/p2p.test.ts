@@ -18,6 +18,7 @@ import type { TestNetwork } from '../testing/network.js';
 import { watchOpenHandles } from '../testing/open-handles.js';
 import { P2PInternals } from '../upstream/internals.js';
 import type { LocalNode } from './local.js';
+import { MESSAGE_SETTLE_MILLISECONDS, SwitchMessages } from './messages.js';
 
 const lib = KeetaNet.lib;
 
@@ -394,6 +395,34 @@ function holdStaples(node: LocalNode): HeldStaples {
 	return({ arrived, release });
 }
 
+/**
+ * Holds every staple the switch hands the node, inside the switch's handling
+ * of the message [Keeta TS] index.js:72870-72890, 71409-71415, until released.
+ */
+function holdStaplesInNode(node: LocalNode): HeldStaples {
+	const handle = node.recvMessageFromPeer.bind(node);
+	let arrive: () => void = function() {
+		throw(new Error('arrived before the test waited'));
+	};
+	const arrived = new Promise<void>(function(resolve) {
+		arrive = resolve;
+	});
+	let release: () => void = function() {
+		throw(new Error('released before the staple arrived'));
+	};
+	const held = new Promise<void>(function(resolve) {
+		release = resolve;
+	});
+	vi.spyOn(node, 'recvMessageFromPeer').mockImplementation(async function(...args: Parameters<LocalNode['recvMessageFromPeer']>): Promise<boolean> {
+		if (args[2] === 'add') {
+			arrive();
+			await held;
+		}
+		return(await handle(...args));
+	});
+	return({ arrived, release });
+}
+
 /** Turns of the event loop in which stopping a node has run out of anything to do but wait. */
 const STOPPING_TURNS = 50;
 
@@ -713,6 +742,107 @@ describe.each(driversUnderTest)('two representatives on the $name driver', funct
 });
 
 describe('stopping', function() {
+	/*
+	 * A WebSocket hands each message to the switch without waiting for it
+	 * [Keeta TS] index.js:72362-72369, and the switch writes the node's
+	 * statistics once it is done [Keeta TS] index.js:72813-72815, so a node
+	 * that stopped meanwhile would have them written to a closed store.
+	 */
+	test.each(driversUnderTest)('waits for a staple a peer sent over the WebSocket until the node has handled it, on $name', async function(driver) {
+		const { first, second } = await startPair({ driver });
+		await dial(first.node, second.node);
+		const receiver = requireAt(first.network.users, 1);
+		const { arrived, release } = holdStaplesInNode(second.node);
+
+		expect(await first.node.addToLedger(await sendStaple(first.network, 10n))).toBe(true);
+		await arrived;
+		let finished = false;
+		const stopped = second.node.stop().then(function() {
+			finished = true;
+		});
+		await eventLoopTurns(STOPPING_TURNS);
+		expect(finished).toBe(false);
+		release();
+		await stopped;
+
+		expect(await second.node.ledger.getBalance(receiver, second.network.baseToken)).toBe(1010n);
+	});
+
+	/*
+	 * A node passes on a staple it has added, dialing the peers it is not
+	 * connected to [Keeta TS] index.js:71460-71463, 73241-73306, so a staple
+	 * still being handled as the node stops dials after its connections were
+	 * closed.
+	 */
+	test('lets no peer be dialed by a staple it is still handling as it stops', async function() {
+		const register = vi.spyOn(lib.P2P.prototype, 'registerConnection');
+		const weights = [1000n, 1000n, 1000n];
+		const first = await nodes.start({ representativeWeights: weights, representative: 0 });
+		const second = await nodes.start({ representativeWeights: weights, representative: 1 });
+		const third = await nodes.start({ representativeWeights: weights, representative: 2 });
+		await dial(second.node, third.node);
+		await dial(first.node, second.node);
+		const { arrived, release } = holdStaplesInNode(second.node);
+		expect(await first.node.addToLedger(await sendStaple(first.network, 10n))).toBe(true);
+		await arrived;
+
+		const registeredBefore = register.mock.contexts.length;
+		const stopped = second.node.stop();
+		await eventLoopTurns(STOPPING_TURNS);
+		release();
+		await stopped;
+
+		const registeredWhileStopping = register.mock.contexts.slice(registeredBefore).filter(function(context): boolean {
+			return(context === second.node.switch);
+		});
+		expect(registeredWhileStopping).toEqual([]);
+		expect(await second.node.ledger.getBalance(requireAt(first.network.users, 1), second.network.baseToken)).toBe(1010n);
+	});
+
+	test('logs a message from a peer that the node fails to handle, rather than leaving the failure to end the process', async function() {
+		const { first, second } = await startPair();
+		await dial(first.node, second.node);
+		const failure = new Error('the node failed to handle the staple');
+		vi.spyOn(second.node, 'recvMessageFromPeer').mockRejectedValue(failure);
+		const logged = new Promise<unknown[]>(function(resolve) {
+			const error = second.node.log.error.bind(second.node.log);
+			vi.spyOn(second.node.log, 'error').mockImplementation(function(...args: Parameters<typeof error>): void {
+				error(...args);
+				resolve(args);
+			});
+		});
+
+		expect(await first.node.addToLedger(await sendStaple(first.network, 10n))).toBe(true);
+
+		expect(await logged).toEqual(['P2P', 'Handling a message from a peer failed:', failure]);
+	});
+
+	test('stops waiting for the messages peers sent after a bound, and says so', async function() {
+		const { first, second } = await startPair();
+		await dial(first.node, second.node);
+		const messages = new SwitchMessages(second.node.switch, second.node.log);
+		const { arrived, release } = holdStaplesInNode(second.node);
+		const warn = vi.spyOn(second.node.log, 'warn');
+		expect(await first.node.addToLedger(await sendStaple(first.network, 10n))).toBe(true);
+		await arrived;
+
+		// Only the bound's timer is faked; the clock freezeClock set is released with it.
+		vi.useRealTimers();
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+		let settled = false;
+		const settling = messages.settled().then(function() {
+			settled = true;
+		});
+		await vi.advanceTimersByTimeAsync(MESSAGE_SETTLE_MILLISECONDS - 1);
+		expect(settled).toBe(false);
+		await vi.advanceTimersByTimeAsync(1);
+		vi.useRealTimers();
+		await settling;
+
+		expect(warn).toHaveBeenCalledWith('P2P', `Stopped waiting for 1 messages from peers after ${String(MESSAGE_SETTLE_MILLISECONDS)} ms`);
+		release();
+	});
+
 	test('waits for a message posted over HTTP until the switch has handled it', async function() {
 		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
 		await dial(first.node, second.node);

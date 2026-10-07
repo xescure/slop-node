@@ -14,6 +14,7 @@ import type { ClassSurface } from '../util/class-surface.js';
 import { BootstrapClient } from './bootstrap.js';
 import { SwitchConnections } from './connections.js';
 import { LocalNodeError } from './errors.js';
+import { SwitchMessages } from './messages.js';
 import { P2P_PATH, PeerServer } from './peers.js';
 import { close, listen } from './server.js';
 import type { Listening, ListenTarget } from './server.js';
@@ -217,6 +218,7 @@ export class LocalNode extends ClientNode {
 	#listening: Listening | undefined;
 	#peers: PeerServer | undefined;
 	readonly #connections: SwitchConnections;
+	readonly #messages: SwitchMessages;
 	#bootstrap: BootstrapClient | undefined;
 	#running = false;
 
@@ -224,6 +226,7 @@ export class LocalNode extends ClientNode {
 		super(withoutManualPeers(config));
 		this.config = config;
 		this.#connections = new SwitchConnections(this.switch, this.log);
+		this.#messages = new SwitchMessages(this.switch, this.log);
 		// Outside production Express answers a failure that escapes every handler with its stack.
 		this.#app.set('env', 'production');
 	}
@@ -418,8 +421,9 @@ export class LocalNode extends ClientNode {
 	/**
 	 * Stops bootstrapping, then serving peers and requests, waiting for the
 	 * requests in flight and the messages peers posted, then stops the node,
-	 * and waits until its switch is done with every connection, so that the
-	 * storage can be closed after.
+	 * and waits until its switch is done with every message its connections
+	 * delivered and then with every connection, so that the storage can be
+	 * closed after.
 	 */
 	override async stop(): Promise<void> {
 		await this.#bootstrap?.stop();
@@ -437,6 +441,8 @@ export class LocalNode extends ClientNode {
 		this.#running = false;
 		await this.#connections.stopping();
 		await super.stop();
+		// Handling a message may dial peers, which the connections refuse only until they are closed.
+		await this.#messages.settled();
 		await this.#connections.closed();
 	}
 
