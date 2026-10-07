@@ -2,6 +2,7 @@ import http from 'node:http';
 import https from 'node:https';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import { P2PInternals } from '../upstream/internals.js';
 import { assertNever } from '../util/assert-never.js';
 import { NODE_VERSION } from '../version.js';
 
@@ -12,8 +13,25 @@ const BOOTSTRAP_ROUTE = '/node/bootstrap/votes';
 
 const SUCCESS_STATUS = 200;
 
-/** Bounds what a misbehaving peer can make the node hold for one page. */
-const MAX_PAGE_BYTES = 256 * 1024 * 1024;
+/**
+ * Bounds what a peer can make the node hold for one page of several
+ * staples. A full page of ordinary staples is a fraction of this; an answer
+ * beyond it makes the pass ask for half as many.
+ */
+export const MAX_PAGE_BYTES: number = 4 * 1024 * 1024;
+
+/**
+ * A page of one staple may hold the largest staple a peer accepts over P2P,
+ * written as JSON with its bytes beside it, which about quadruples it.
+ */
+export const MAX_SINGLE_STAPLE_PAGE_BYTES: number = 4 * P2PInternals.P2P_WEBSOCKET_MAX_PAYLOAD_BYTES;
+
+function maxPageBytes(limit: number): number {
+	if (limit === 1) {
+		return(MAX_SINGLE_STAPLE_PAGE_BYTES);
+	}
+	return(MAX_PAGE_BYTES);
+}
 
 /** What one page of a peer's staples asks for [Keeta TS] index.js:59166-59174. */
 export type PageRequest = {
@@ -163,7 +181,7 @@ export class PageFetcher {
 			timer.abort();
 		}, timeoutMilliseconds);
 		try {
-			return(staplesOf(request.endpoint, await this.#get(request.endpoint, url, AbortSignal.any([stopped, timer.signal]))));
+			return(staplesOf(request.endpoint, await this.#get(request.endpoint, url, maxPageBytes(request.limit), AbortSignal.any([stopped, timer.signal]))));
 		} catch (error: unknown) {
 			if (stopped.aborted) {
 				throw(new PageError(request.endpoint, { kind: 'stopped' }, { cause: error }));
@@ -182,7 +200,7 @@ export class PageFetcher {
 		this.#httpsAgent.destroy();
 	}
 
-	#get(endpoint: string, url: URL, signal: AbortSignal): Promise<Answer> {
+	#get(endpoint: string, url: URL, limitBytes: number, signal: AbortSignal): Promise<Answer> {
 		const options = { signal, headers: { accept: 'application/json', 'user-agent': `slop-node/${NODE_VERSION}` } };
 		return(new Promise<Answer>((resolve, reject): void => {
 			const answer = function(response: http.IncomingMessage): void {
@@ -190,8 +208,8 @@ export class PageFetcher {
 				let length = 0;
 				response.on('data', function(chunk: Buffer): void {
 					length += chunk.length;
-					if (length > MAX_PAGE_BYTES) {
-						response.destroy(new PageError(endpoint, { kind: 'too-large', limitBytes: MAX_PAGE_BYTES }));
+					if (length > limitBytes) {
+						response.destroy(new PageError(endpoint, { kind: 'too-large', limitBytes }));
 						return;
 					}
 					chunks.push(chunk);

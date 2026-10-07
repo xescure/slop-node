@@ -2,13 +2,16 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { BootstrapClient as DeclaredBootstrapClient, BootstrapConfig } from '@keetanetwork/keetanet-client/lib/bootstrap.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { KVInternals } from '../upstream/internals.js';
+import { assertNever } from '../util/assert-never.js';
+import { eachAtMost } from '../util/concurrency.js';
 import type { AssertNever } from '../util/assert-never.js';
 import type { ClassSurface } from '../util/class-surface.js';
 import { BootstrapCursors } from './bootstrap-cursors.js';
-import { PageFetcher } from './bootstrap-page.js';
+import { PageError, PageFetcher } from './bootstrap-page.js';
+import { bootstrapPeer } from './bootstrap-pass.js';
+import type { PassAnswer, PassRequest, PeerIO } from './bootstrap-pass.js';
 import { bootstrapSources } from './bootstrap-peers.js';
 import type { BootstrapNode } from './bootstrap-peers.js';
-import { BLOOM_CAPACITY, BOOTSTRAP_OVERLAP_MILLISECONDS, BootstrapWindow } from './bootstrap-window.js';
 
 export type { BootstrapConfig } from '@keetanetwork/keetanet-client/lib/bootstrap.js';
 
@@ -24,6 +27,9 @@ const DEFAULT_TIMEOUT_MILLISECONDS = 30_000;
  * [Keeta TS] index.js:69633, and what a page holds unless fewer are asked for.
  */
 const MAX_PAGE_LIMIT = 1000;
+
+/** How many peers an update reads at once; the others wait for one of them to finish its pass. */
+const MAX_CONCURRENT_PASSES = 4;
 
 type UpdateResult = { complete: boolean };
 
@@ -43,24 +49,18 @@ function pageLimit(limit: number): number {
 	return(limit);
 }
 
-/** Where a pass over a peer starts: the overlap before the moment last reached, or the beginning of its ledger. */
-function passStart(reached: Date | undefined): Date {
-	if (reached === undefined) {
-		return(new Date(0));
-	}
-	return(new Date(Math.max(0, reached.getTime() - BOOTSTRAP_OVERLAP_MILLISECONDS)));
-}
-
 /**
  * Catches the node up on the staples its peers hold, as declared by
  * upstream's typings (lib/bootstrap.d.ts), whose bundle has no
  * implementation.
  *
- * An update makes one pass over each peer at once: it pages through the
- * peer's staples from where the node last reached on that peer, adds each
- * staple to the ledger as a bootstrap, and is done with the peer once a page
- * comes back empty. A peer that fails is logged and tried again on the next
- * update, and holds up no other.
+ * An update makes one pass over each peer, a few peers at a time: it pages
+ * through the peer's staples from where the node last reached on that peer
+ * (src/node/bootstrap-pass.ts), adds each staple to the ledger as a
+ * bootstrap, and is done with the peer once a page comes back short. A pass
+ * is bounded in requests and time, and one that reaches its bound is
+ * continued on the next update; a peer that fails is logged and tried again
+ * on the next update. Neither holds up any other peer for longer.
  *
  * stats() counts the updates in a row that were complete: every peer was
  * drained, so the node held all its peers held when each pass ended. An
@@ -133,9 +133,9 @@ export class BootstrapClient {
 		return(run);
 	}
 
-	/** Updates now, and again that many milliseconds after each update ends, until stopped. */
+	/** Updates now, and again that many milliseconds after each update ends, whether or not it succeeded, until stopped. */
 	#updateEvery(period: number): void {
-		this.update().then(() => {
+		const scheduleNext = (): void => {
 			if (this.#stopping.signal.aborted) {
 				return;
 			}
@@ -143,8 +143,10 @@ export class BootstrapClient {
 				this.#timer = undefined;
 				this.#updateEvery(period);
 			}, period);
-		}, (error: unknown) => {
+		};
+		this.update().then(scheduleNext, (error: unknown) => {
 			this.#node.log.error(LOG_SOURCE, 'A scheduled bootstrap update failed:', error);
+			scheduleNext();
 		});
 	}
 
@@ -162,9 +164,9 @@ export class BootstrapClient {
 		}
 		const fetcher = new PageFetcher();
 		try {
-			const drained = await Promise.all(sources.map((endpoint) => {
+			const drained = await eachAtMost(sources, MAX_CONCURRENT_PASSES, (endpoint) => {
 				return(this.#drainLogged(endpoint, limit, fetcher));
-			}));
+			});
 			const complete = drained.every(Boolean) && !this.#stopping.signal.aborted;
 			this.#record(complete);
 			return({ complete });
@@ -184,47 +186,56 @@ export class BootstrapClient {
 
 	async #drainLogged(endpoint: string, limit: number, fetcher: PageFetcher): Promise<boolean> {
 		try {
-			await this.#drain(endpoint, limit, fetcher);
-			return(true);
+			return(await this.#drain(endpoint, limit, fetcher));
 		} catch (error: unknown) {
 			if (this.#stopping.signal.aborted) {
 				this.#node.log.debug(LOG_SOURCE, `Stopped bootstrapping from ${endpoint}`);
 			} else {
-								this.#node.log.warn(LOG_SOURCE, `Bootstrapping from ${endpoint} failed; it is tried again on the next update:`, error);
+				this.#node.log.warn(LOG_SOURCE, `Bootstrapping from ${endpoint} failed; it is tried again on the next update:`, error);
 			}
 			return(false);
 		}
 	}
 
-	/**
-	 * Pages through the peer's staples until a page comes back empty. The
-	 * cursor follows the window as it moves, so that an interrupted pass
-	 * resumes near where it stopped; once the peer is drained it records the
-	 * moment the pass began, since anything the peer applies later is applied
-	 * at a later moment, save for the late commits the overlap is for.
-	 */
-	async #drain(endpoint: string, limit: number, fetcher: PageFetcher): Promise<void> {
-		const began = new Date();
-		const start = passStart(await this.#cursors.read(endpoint));
-		const window = new BootstrapWindow(start, await this.#node.ledger.getVoteStaplesAfter(start, BLOOM_CAPACITY));
-		for (;;) {
-			const filter = window.filter();
-			let bloomFilter: string | undefined;
-			if (filter !== undefined) {
-				bloomFilter = lib.Utils.Bloom.serializeBloomFilter(filter);
+	/** One pass over the peer, which answers whether it drained the peer. */
+	async #drain(endpoint: string, limit: number, fetcher: PageFetcher): Promise<boolean> {
+		const io: PeerIO<VoteStaple> = {
+			page: (request) => {
+				return(this.#page(fetcher, endpoint, request));
+			},
+			held: (from, count) => {
+				return(this.#node.ledger.getVoteStaplesAfter(from, count));
+			},
+			add: (staple) => {
+				return(this.#add(staple));
+			},
+			readProgress: () => {
+				return(this.#cursors.read(endpoint));
+			},
+			writeProgress: (progress) => {
+				return(this.#cursors.write(endpoint, progress));
 			}
-			const page = await fetcher.page({ endpoint, start: window.start, limit, bloomFilter }, this.timeout, this.#stopping.signal);
-			if (page.length === 0) {
-				await this.#cursors.write(endpoint, began);
-				return;
+		};
+		const outcome = await bootstrapPeer(io, { limit });
+		switch (outcome.kind) {
+			case 'drained':
+				return(true);
+			case 'bounded':
+				this.#node.log.info(LOG_SOURCE, `Bootstrapping from ${endpoint} reached ${outcome.reached.toISOString()} within this update's bound; it continues on the next update`);
+				return(false);
+			default:
+				return(assertNever(outcome));
+		}
+	}
+
+	async #page(fetcher: PageFetcher, endpoint: string, request: PassRequest): Promise<PassAnswer<VoteStaple>> {
+		try {
+			return({ kind: 'page', staples: await fetcher.page({ endpoint, ...request }, this.timeout, this.#stopping.signal) });
+		} catch (error: unknown) {
+			if (error instanceof PageError && error.problem.kind === 'too-large') {
+				return({ kind: 'too-large' });
 			}
-			for (const staple of page) {
-				await this.#add(staple);
-			}
-			if (!window.advance(page)) {
-				throw(new Error(`${endpoint} sent again only staples it had sent from ${window.start.toISOString()}, so it does not leave out those the filter names`));
-			}
-			await this.#cursors.write(endpoint, window.start);
+			throw(error);
 		}
 	}
 

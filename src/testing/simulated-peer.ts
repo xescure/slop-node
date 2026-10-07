@@ -1,0 +1,238 @@
+import { createHash } from 'node:crypto';
+import * as KeetaNet from '@keetanetwork/keetanet-client';
+import type { BloomFilter } from '@keetanetwork/keetanet-client/lib/utils/bloom.js';
+import type { PassAnswer, PassRequest, PassStaple } from '../node/bootstrap-pass.js';
+import { advanceClock } from './network.js';
+
+const lib = KeetaNet.lib;
+
+/** About the size of a staple's hash input that matters to a filter: distinct bytes per staple. */
+const STAPLE_BYTES = 64;
+
+/** A staple as a simulated peer holds it: when the peer applied it, and when its votes say it was made. */
+export type SimulatedStaple = PassStaple & {
+	readonly id: number;
+	/** The moment the peer applied it, on the peer's clock. */
+	readonly moment: number;
+	/** The order the peer applied it in among staples of the same moment. */
+	readonly sequence: number;
+	timestamp(): Date;
+};
+
+function stapleBytes(id: number): ArrayBuffer {
+	const bytes = Buffer.alloc(STAPLE_BYTES);
+	for (let at = 0; at < STAPLE_BYTES; at += 32) {
+		createHash('sha256').update(`staple:${String(id)}:${String(at)}`).digest().copy(bytes, at);
+	}
+	return(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+}
+
+function simulatedStaple(id: number, moment: number, sequence: number, timestamp: number): SimulatedStaple {
+	const bytes = stapleBytes(id);
+	const name = `staple-${String(id)}`;
+	return({
+		id,
+		moment,
+		sequence,
+		blocksHash: { toString: function(): string {
+			return(name);
+		} },
+		toBytes: function(): ArrayBuffer {
+			return(bytes);
+		},
+		timestamp: function(): Date {
+			return(new Date(timestamp));
+		}
+	});
+}
+
+function compareApplied(left: SimulatedStaple, right: SimulatedStaple): number {
+	if (left.moment !== right.moment) {
+		return(left.moment - right.moment);
+	}
+	return(left.sequence - right.sequence);
+}
+
+/** Staples applied as the network makes them: so many a second, each timestamped by its voters' clocks. */
+export type LiveTraffic = {
+	readonly perSecond: number;
+	/** How far ahead of the real time the voters' clocks run for the staple made at that real time. */
+	readonly voterSkew: (madeAt: number) => number;
+};
+
+type LiveState = LiveTraffic & { readonly since: number; made: number };
+
+export type SimulatedPeerOptions = {
+	/** How far the peer's clock runs ahead of the node's, negative when behind. */
+	readonly clockOffset?: number;
+	/** How long the peer takes to answer a request, during which the clock moves on. */
+	readonly latency?: number;
+};
+
+/**
+ * A representative answering bootstrap pages as this node's API does: the
+ * staples applied at or after the start, in the order applied (the moment,
+ * then the sequence, as src/ledger/storage/memory/driver.ts getVotesAfter
+ * orders them), leaving out those the filter names before counting towards
+ * the limit [Keeta TS] index.js:69633-69702. The filter travels serialized
+ * and is read back with the client's own Bloom functions, as
+ * src/api/node.ts does.
+ */
+export class SimulatedPeer {
+	readonly #applied: SimulatedStaple[] = [];
+	readonly #clockOffset: number;
+	readonly #latency: number;
+	readonly #filters = new Map<string, BloomFilter>();
+	#nextID = 0;
+	#nextSequence = 0;
+	#live: LiveState | undefined;
+	#forcedFalsePositive: number | undefined;
+	#requests = 0;
+
+	constructor(options: SimulatedPeerOptions = {}) {
+		this.#clockOffset = options.clockOffset ?? 0;
+		this.#latency = options.latency ?? 25;
+	}
+
+	/** Every staple the peer has applied, in the order applied. */
+	get staples(): readonly SimulatedStaple[] {
+		return(this.#applied);
+	}
+
+	get requests(): number {
+		return(this.#requests);
+	}
+
+	/** The peer's clock. */
+	now(): number {
+		return(Date.now() + this.#clockOffset);
+	}
+
+	/** Applies a staple with the timestamp given, at the moment given or now on the peer's clock. */
+	apply(timestamp: number, moment: number = this.now()): SimulatedStaple {
+		const staple = simulatedStaple(this.#nextID++, moment, this.#nextSequence++, timestamp);
+		let at = this.#applied.length;
+		while (at > 0 && compareApplied(this.#applied[at - 1] ?? staple, staple) > 0) {
+			at--;
+		}
+		this.#applied.splice(at, 0, staple);
+		return(staple);
+	}
+
+	/** Applies staples as they are made from now on, as a representative that is live does, until stopped. */
+	goLive(traffic: LiveTraffic): void {
+		this.#live = { ...traffic, since: Date.now(), made: 0 };
+	}
+
+	stopLive(): void {
+		this.#catchUpLive();
+		this.#live = undefined;
+	}
+
+	/** Makes every filter name this staple as well, as a false positive would, until cleared. */
+	forceFalsePositive(staple: SimulatedStaple | undefined): void {
+		this.#forcedFalsePositive = staple?.id;
+	}
+
+	async page(request: PassRequest): Promise<PassAnswer<SimulatedStaple>> {
+		// Answering on a later turn of the event loop, as over a network, lets the test runner's own timers run.
+		await new Promise(setImmediate);
+		this.#requests++;
+		advanceClock(this.#latency);
+		this.#catchUpLive();
+		const filter = this.#filterOf(request.bloomFilter);
+		const start = request.start.getTime();
+		const staples: SimulatedStaple[] = [];
+		for (let at = this.#firstAtOrAfter(start); at < this.#applied.length && staples.length < request.limit; at++) {
+			const staple = this.#applied[at];
+			if (staple === undefined) {
+				break;
+			}
+			if (this.#named(filter, staple)) {
+				continue;
+			}
+			staples.push(staple);
+		}
+		return({ kind: 'page', staples });
+	}
+
+	#named(filter: BloomFilter | undefined, staple: SimulatedStaple): boolean {
+		if (filter === undefined) {
+			return(false);
+		}
+		return(staple.id === this.#forcedFalsePositive || filter.has(staple.toBytes()));
+	}
+
+	#filterOf(serialized: string | undefined): BloomFilter | undefined {
+		if (serialized === undefined) {
+			return(undefined);
+		}
+		let filter = this.#filters.get(serialized);
+		if (filter === undefined) {
+			filter = lib.Utils.Bloom.deserializeBloomFilter(serialized);
+			this.#filters.clear();
+			this.#filters.set(serialized, filter);
+		}
+		return(filter);
+	}
+
+	#firstAtOrAfter(moment: number): number {
+		let low = 0;
+		let high = this.#applied.length;
+		while (low < high) {
+			const middle = Math.floor((low + high) / 2);
+			if ((this.#applied[middle]?.moment ?? moment) < moment) {
+				low = middle + 1;
+			} else {
+				high = middle;
+			}
+		}
+		return(low);
+	}
+
+	/** Applies the staples made since the last request, each at the real time it was made. */
+	#catchUpLive(): void {
+		const live = this.#live;
+		if (live === undefined) {
+			return;
+		}
+		const due = Math.floor((Date.now() - live.since) * live.perSecond / 1000);
+		for (; live.made < due; live.made++) {
+			const madeAt = live.since + Math.floor(live.made * 1000 / live.perSecond);
+			this.apply(madeAt + live.voterSkew(madeAt), madeAt + this.#clockOffset);
+		}
+	}
+}
+
+/** What a simulated node holds: each staple added, in the order added, with the moment it added it. */
+export class SimulatedNode {
+	readonly #held = new Map<string, number>();
+	readonly #order: { readonly staple: PassStaple; readonly moment: number }[] = [];
+
+	holds(staple: PassStaple): boolean {
+		return(this.#held.has(staple.blocksHash.toString()));
+	}
+
+	get size(): number {
+		return(this.#held.size);
+	}
+
+	add(staple: PassStaple): Promise<void> {
+		const key = staple.blocksHash.toString();
+		if (!this.#held.has(key)) {
+			this.#held.set(key, Date.now());
+			this.#order.push({ staple, moment: Date.now() });
+		}
+		return(Promise.resolve());
+	}
+
+	/** The staples added at or after the moment, as many as asked for, in the order added. */
+	held(from: Date, count: number): Promise<readonly PassStaple[]> {
+		const after = this.#order.filter(function(entry): boolean {
+			return(entry.moment >= from.getTime());
+		});
+		return(Promise.resolve(after.slice(0, count).map(function(entry): PassStaple {
+			return(entry.staple);
+		})));
+	}
+}

@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { onTestFinished } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { BloomFilter } from '@keetanetwork/keetanet-client/lib/utils/bloom.js';
+import { MAX_PAGE_BYTES } from '../node/bootstrap-page.js';
 import { assertNever } from '../util/assert-never.js';
 
 /** Whether a recording peer passes the filter a request carries on, or drops it, as a representative that ignores it would. */
@@ -114,20 +115,33 @@ function forward(target: URL, request: http.IncomingMessage, filter: FilterHandl
 	}));
 }
 
+export type RecordingPeerOptions = {
+	readonly filter?: FilterHandling;
+	/** Pads every answer to a request for more staples than this past the size the node accepts for a page. */
+	readonly padAboveLimit?: number;
+};
+
+function padding(query: URLSearchParams, padAboveLimit: number | undefined): string {
+	if (padAboveLimit === undefined || Number(query.get('limit')) <= padAboveLimit) {
+		return('');
+	}
+	return(' '.repeat(MAX_PAGE_BYTES));
+}
+
 /**
  * A peer that passes every request on to the representative at the API
  * endpoint, which is served below "/api" as its own is, and records each
  * page of staples it answers.
  */
-export async function startRecordingPeer(apiURL: string, filter: FilterHandling = 'passed-on'): Promise<RecordingPeer> {
+export async function startRecordingPeer(apiURL: string, options: RecordingPeerOptions = {}): Promise<RecordingPeer> {
 	const target = new URL(apiURL);
 	const pages: RecordedPage[] = [];
 	const server = http.createServer(function(request, response): void {
-		forward(target, request, filter).then(function(answer): void {
+		forward(target, request, options.filter ?? 'passed-on').then(function(answer): void {
 			const query = new URL(request.url ?? '/', target).searchParams;
 			pages.push({ start: query.get('start'), limit: query.get('limit'), bloomFilter: bloomFilterOf(query), status: answer.status, served: servedStaples(answer.body) });
 			response.writeHead(answer.status, { 'content-type': answer.contentType ?? 'application/json' });
-			response.end(answer.body);
+			response.end(answer.body + padding(query, options.padAboveLimit));
 		}, function(error: unknown): void {
 			response.writeHead(502);
 			response.end(String(error));

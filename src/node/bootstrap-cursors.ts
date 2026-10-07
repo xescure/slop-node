@@ -1,14 +1,42 @@
 import type { KVStorageProvider } from '@keetanetwork/keetanet-client/lib/kv/index.js';
+import type { PeerProgress } from './bootstrap-pass.js';
 
 /**
  * The arena that holds, for each representative the node bootstraps from,
- * the moment it has caught up to on that representative, in milliseconds.
+ * how far it has caught up on that representative and when it re-scans it.
  * Each representative orders its staples by moments of its own, so a moment
  * reached on one says nothing about another.
  */
 export const BOOTSTRAP_CURSOR_ARENA = 'bootstrapCursors';
 
-/** Where the node has caught up to on each representative, keyed by its API endpoint. */
+/** A peer's progress as stored: moments in milliseconds. */
+type StoredProgress = {
+	readonly reached: number;
+	readonly deepScanFrom: number;
+	readonly completions: number;
+	readonly deepScanning: boolean;
+};
+
+function isWholeNumber(value: unknown): value is number {
+	return(typeof value === 'number' && Number.isSafeInteger(value) && value >= 0);
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+	return(typeof value === 'object' && value !== null && !Array.isArray(value));
+}
+
+function progressOf(value: unknown): PeerProgress | undefined {
+	if (!isRecord(value)) {
+		return(undefined);
+	}
+	const { reached, deepScanFrom, completions, deepScanning } = value;
+	if (!isWholeNumber(reached) || !isWholeNumber(deepScanFrom) || !isWholeNumber(completions) || typeof deepScanning !== 'boolean') {
+		return(undefined);
+	}
+	return({ reached: new Date(reached), deepScanFrom: new Date(deepScanFrom), completions, deepScanning });
+}
+
+/** How far the node has caught up on each representative, keyed by its API endpoint. */
 export class BootstrapCursors {
 	readonly #kv: KVStorageProvider;
 
@@ -16,17 +44,19 @@ export class BootstrapCursors {
 		this.#kv = kv;
 	}
 
-	/** A value the node did not write, from another version or by hand, counts as no cursor, so the peer is read from the beginning. */
-	async read(endpoint: string): Promise<Date | undefined> {
-		const value = await this.#kv.get(BOOTSTRAP_CURSOR_ARENA, endpoint);
-		if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
-			return(undefined);
-		}
-		return(new Date(value));
+	/** A value the node did not write, from another version or by hand, counts as none, so the peer is read from the beginning. */
+	async read(endpoint: string): Promise<PeerProgress | undefined> {
+		return(progressOf(await this.#kv.get(BOOTSTRAP_CURSOR_ARENA, endpoint)));
 	}
 
-	async write(endpoint: string, reached: Date): Promise<void> {
-		await this.#kv.set(BOOTSTRAP_CURSOR_ARENA, endpoint, reached.getTime());
+	async write(endpoint: string, progress: PeerProgress): Promise<void> {
+		const stored: StoredProgress = {
+			reached: progress.reached.getTime(),
+			deepScanFrom: progress.deepScanFrom.getTime(),
+			completions: progress.completions,
+			deepScanning: progress.deepScanning
+		};
+		await this.#kv.set(BOOTSTRAP_CURSOR_ARENA, endpoint, stored);
 	}
 
 	async clear(): Promise<void> {

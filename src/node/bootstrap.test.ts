@@ -4,6 +4,7 @@ import type { Account } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { BootstrapConfig } from '@keetanetwork/keetanet-client/lib/bootstrap.js';
 import type { KVStorageProvider } from '@keetanetwork/keetanet-client/lib/kv/index.js';
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
+import type { P2PPeer } from '@keetanetwork/keetanet-client/lib/p2p.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { GENESIS_MOMENT, ChainCursor, requireAt } from '../ledger/storage/suite/support.js';
 import { confirmedStaple, sendBlock } from '../testing/blocks.js';
@@ -18,9 +19,9 @@ import { STORAGES_UNDER_TEST, useSDKNodes } from '../testing/sdk.js';
 import { KVInternals } from '../upstream/internals.js';
 import type { ServingNode, StorageUnderTest } from '../testing/sdk.js';
 import { BootstrapClient } from './bootstrap.js';
-import { BOOTSTRAP_CURSOR_ARENA } from './bootstrap-cursors.js';
-import { bootstrapFrom } from './bootstrap-peers.js';
-import { BOOTSTRAP_OVERLAP_MILLISECONDS } from './bootstrap-window.js';
+import { BOOTSTRAP_CURSOR_ARENA, BootstrapCursors } from './bootstrap-cursors.js';
+import { bootstrapFrom, bootstrapSources } from './bootstrap-peers.js';
+import { BOOTSTRAP_MARGIN_MILLISECONDS } from './bootstrap-window.js';
 import type { LocalNode } from './local.js';
 
 const lib = KeetaNet.lib;
@@ -114,7 +115,7 @@ function warningsOf(node: Node): () => string[] {
 }
 
 describe('a bootstrap client', function() {
-	test('catches a node up on a peer page by page, from the beginning of its ledger', async function() {
+	test('catches a node up on a peer page by page, from the beginning of its ledger, asking again from there with what it was sent named', async function() {
 		const peer = await representative();
 		const recording = await startRecordingPeer(peer.apiURL);
 		const late = await joiner({ bootstrapFrom: [recording.apiURL] });
@@ -123,8 +124,12 @@ describe('a bootstrap client', function() {
 		expect(await clientOf(late.node).update(2)).toEqual({ complete: true });
 
 		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
-		expect(servedCounts(recording.pages)).toEqual([2, 2, 1, 0]);
-		expect(recording.pages[0]).toMatchObject({ start: EPOCH, limit: '2', bloomFilter: undefined, status: 200 });
+		// The short third page shows the peer had nothing more.
+		expect(servedCounts(recording.pages)).toEqual([2, 2, 1]);
+		expect(recording.pages.map(function(page): string | null {
+			return(page.start);
+		})).toEqual([EPOCH, EPOCH, EPOCH]);
+		expect(recording.pages[0]).toMatchObject({ limit: '2', bloomFilter: undefined, status: 200 });
 	});
 
 	test('catches a node up on several peers, each holding staples the others do not', async function() {
@@ -171,7 +176,7 @@ describe('a bootstrap client', function() {
 
 		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
 		const again = recording.pages.slice(before);
-		expect(again[0]?.start).toBe(new Date(reached.getTime() - BOOTSTRAP_OVERLAP_MILLISECONDS).toISOString());
+		expect(again[0]?.start).toBe(new Date(reached.getTime() - BOOTSTRAP_MARGIN_MILLISECONDS).toISOString());
 		// What the node held from before is named in the filter, so only the late staple comes.
 		expect(again.flatMap(function(page): readonly string[] {
 			return(page.served);
@@ -239,16 +244,18 @@ describe('a bootstrap client', function() {
 
 	test('gives up on a peer that sends again what the filter names, rather than page through it forever', async function() {
 		const peer = await representative();
-		const ignoring = await startRecordingPeer(peer.apiURL, 'dropped');
+		const ignoring = await startRecordingPeer(peer.apiURL, { filter: 'dropped' });
 		const late = await joiner({ bootstrapFrom: [ignoring.apiURL] });
 		await addAll(peer.node, await sendsFrom(peer.network, 0, 3));
 		const warnings = warningsOf(late.node);
 
 		expect(await clientOf(late.node).update(2)).toEqual({ complete: false });
 
-		// The second page moves the start no further but repeats what came before it moved; the third repeats what came since.
-		expect(servedCounts(ignoring.pages)).toEqual([2, 2, 2]);
-		expect(warnings()).toEqual([expect.stringContaining(`${ignoring.apiURL} sent again only staples it had sent from`)]);
+		// The second page repeats the first, which its filter named.
+		expect(servedCounts(ignoring.pages)).toEqual([2, 2]);
+		expect(warnings()).toHaveLength(1);
+		expect(warnings()[0]).toContain(`Bootstrapping from ${ignoring.apiURL} failed`);
+		expect(warnings()[0]).toContain('which the filter named');
 	});
 
 	test('gives up on a request a peer does not answer in time, until the next update', async function() {
@@ -317,6 +324,38 @@ describe('a bootstrap client', function() {
 		expect(recording.pages[before]?.start).toBe(EPOCH);
 	});
 
+	test('asks for half as many staples whenever a page is larger than it accepts', async function() {
+		const peer = await representative();
+		const padded = await startRecordingPeer(peer.apiURL, { padAboveLimit: 2 });
+		const late = await joiner({ bootstrapFrom: [padded.apiURL] });
+		await addAll(peer.node, await sendsFrom(peer.network, 0, 4));
+
+		expect(await clientOf(late.node).update(8)).toEqual({ complete: true });
+
+		expect(padded.pages.map(function(page): string | null {
+			return(page.limit);
+		})).toEqual(['8', '4', '2', '2', '2']);
+		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
+	});
+
+	test('keeps updating on its period after an update fails', async function() {
+		const late = await joiner();
+		const errors = vi.spyOn(late.node.log, 'error');
+		const update = vi.spyOn(BootstrapClient.prototype, 'update');
+		update.mockRejectedValueOnce(new Error('the update failed'));
+		const retried = new Promise<void>(function(resolve) {
+			update.mockImplementationOnce(function() {
+				resolve();
+				return(Promise.resolve({ complete: true }));
+			});
+		});
+
+		clientOf(late.node, { period: 1 });
+		await retried;
+
+		expect(errors).toHaveBeenCalledWith('BOOTSTRAP', 'A scheduled bootstrap update failed:', new Error('the update failed'));
+	});
+
 	test('refuses a page larger than a representative sends', async function() {
 		const late = await joiner();
 		await expect(clientOf(late.node).update(1001)).rejects.toThrow(RangeError);
@@ -349,11 +388,10 @@ describe('a bootstrap client', function() {
 		const client = new BootstrapClient(late.node, { period: 60_000 });
 		// Queued behind the update the client ran as it was built, after which it waits for the next.
 		await client.update();
-		// Genesis moves the first update on to its timestamp less the overlap, and the second starts from the first's start less the overlap; the clock stands still.
-		const overlapped = new Date(Date.now() - BOOTSTRAP_OVERLAP_MILLISECONDS).toISOString();
+		// The first update drains the peer with one short page, and the second starts the margin before the first began; the clock stands still.
 		expect(recording.pages.map(function(page): string | null {
 			return(page.start);
-		})).toEqual([EPOCH, overlapped, overlapped]);
+		})).toEqual([EPOCH, new Date(Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS).toISOString()]);
 
 		await client.stop();
 
@@ -393,6 +431,34 @@ describe('a node that bootstraps', function() {
 		await done;
 
 		expect(told.sort()).toEqual(expected);
+	});
+
+	test('updates on the default period when its configuration leaves the period undefined', async function() {
+		const peer = await representative();
+		let caughtUp: (() => void) | undefined;
+		const done = new Promise<void>(function(resolve) {
+			caughtUp = resolve;
+		});
+		const bootstrap: BootstrapConfig = { callback: function(): Promise<void> {
+			caughtUp?.();
+			return(Promise.resolve());
+		} };
+		// As a caller in JavaScript may write it, which the typings forbid.
+		Reflect.set(bootstrap, 'period', undefined);
+
+		const late = await nodes.start({ representativeWeights: WEIGHTS, representative: 1, genesis: 'absent', bootstrapFrom: [peer.apiURL], bootstrap });
+
+		await done;
+		expect(BootstrapClient.isInstance(late.node.bootstrap)).toBe(true);
+	});
+
+	test('bootstraps from the representatives its switch knows only when they hold voting weight on its ledger', async function() {
+		const running = await representative();
+		const weighted = verifiedPeer(requireAt(running.network.representatives, 1), 1);
+		const stranger = verifiedPeer(lib.Account.fromSeed('0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0', 0), 2);
+		vi.spyOn(running.node.switch, 'peers').mockResolvedValue([weighted, stranger]);
+
+		expect(await bootstrapSources(running.node)).toEqual([apiOf(1)]);
 	});
 
 	test('stops bootstrapping before it stops its switch', async function() {
@@ -459,18 +525,31 @@ describe('a node configured from its environment', function() {
 		const restarted = await sdkNodes.start(environment);
 		await caughtUp(restarted);
 
-		expect(reached).toBe(GENESIS_MOMENT.getTime() + 3000);
+		expect(reached).toBe(GENESIS_MOMENT.getTime() + 3000 - BOOTSTRAP_MARGIN_MILLISECONDS);
 		const afterRestart = recording.pages.slice(before);
-		expect(afterRestart[0]?.start).toBe(new Date(reached - BOOTSTRAP_OVERLAP_MILLISECONDS).toISOString());
+		expect(afterRestart[0]?.start).toBe(new Date(reached).toISOString());
 		expect(servedCounts(afterRestart)).toEqual([0, 0]);
 		expect(await heldBlocksHashes(restarted.node)).toEqual(await heldBlocksHashes(peer.node));
 	});
 });
 
+/** Where a representative that is never dialed would serve, told apart by the port. */
+function apiOf(port: number): string {
+	return(`http://127.0.0.1:${String(port)}/api`);
+}
+
+/** A representative as the switch lists it once verified; choosing whom to bootstrap from reads no signature. */
+function verifiedPeer(key: Account, port: number): P2PPeer {
+	return({ kind: lib.Node.Kind.REPRESENTATIVE, key, endpoints: { p2p: `ws://127.0.0.1:${String(port)}/p2p`, api: apiOf(port) }, preferUpdates: 'websocket', signature: new ArrayBuffer(64) });
+}
+
 async function cursorOf(kv: KVStorageProvider | null | undefined, endpoint: string): Promise<number> {
-	const value = await kv?.get(BOOTSTRAP_CURSOR_ARENA, endpoint);
-	if (typeof value !== 'number') {
+	if (kv === null || kv === undefined) {
+		throw(new Error('the node keeps no store'));
+	}
+	const progress = await new BootstrapCursors(kv).read(endpoint);
+	if (progress === undefined) {
 		throw(new Error(`no cursor is kept for ${endpoint}`));
 	}
-	return(value);
+	return(progress.reached.getTime());
 }

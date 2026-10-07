@@ -384,7 +384,7 @@ export class LocalNode extends ClientNode {
 			case 'bootstrap-only':
 			case 'read-write':
 			case 'no-voting':
-				return(new BootstrapClient(this, { period: DEFAULT_BOOTSTRAP_PERIOD_MILLISECONDS, ...this.config.bootstrap }));
+				return(new BootstrapClient(this, { ...this.config.bootstrap, period: this.config.bootstrap?.period ?? DEFAULT_BOOTSTRAP_PERIOD_MILLISECONDS }));
 			default:
 				return(assertNever(mode));
 		}

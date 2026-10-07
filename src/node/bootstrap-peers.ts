@@ -45,18 +45,35 @@ function switchListsPeers(config: NodeConfig): boolean {
 }
 
 /**
+ * The representatives among the peers that hold voting weight on the node's
+ * own ledger. A representative that merely greeted the node chose its own
+ * endpoints, so polling it would let anyone with a key point the node's
+ * requests anywhere; one the network gave weight to is one the node already
+ * trusts to vote.
+ */
+async function weightedRepresentatives(node: BootstrapNode, peers: readonly P2PPeer[]): Promise<P2PPeer[]> {
+	const weighted: P2PPeer[] = [];
+	for (const peer of peers) {
+		if (peer.kind === lib.Node.Kind.REPRESENTATIVE && await node.ledger.votingPower(peer.key) > 0n) {
+			weighted.push(peer);
+		}
+	}
+	return(weighted);
+}
+
+/**
  * The API endpoints of the representatives the node bootstraps from, each
  * once: those it was given, its manual peers, which its operator chose
  * whether or not their advertisements are signed, and the representatives
- * its switch has verified, even those it has not heard from lately, since a
- * node that was offline is the one with most to catch up on. A peer's own
- * advertisement is trusted no further than it is for P2P, and the staples it
- * sends are checked by the ledger like any other.
+ * its switch has verified that hold voting weight on its ledger, even those
+ * it has not heard from lately, since a node that was offline is the one
+ * with most to catch up on. The staples a peer sends are checked by the
+ * ledger like any other.
  */
 export async function bootstrapSources(node: BootstrapNode): Promise<string[]> {
 	let known: P2PPeer[] = [];
 	if (node.switch !== undefined && switchListsPeers(node.config)) {
-		known = await node.switch.peers({ includeStale: true });
+		known = await weightedRepresentatives(node, await node.switch.peers({ includeStale: true }));
 	}
 	const endpoints = [
 		...bootstrapEndpointsOf(node.config),
