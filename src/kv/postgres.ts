@@ -15,7 +15,7 @@ const lib = KeetaNet.lib;
 const BUFFER_KEY_PREFIX = '@buffer:';
 
 /*
- * A write that sets an expiry first removes at most this many expired entries
+ * A write that sets an expiry then removes at most this many expired entries
  * of its arena. Each such write adds at most one entry that can expire, so
  * expired rows never pile up, and no process has to sweep the table.
  */
@@ -166,25 +166,34 @@ export class PostgresKVStorage implements KVStorageProviderAPI {
 			return;
 		}
 		if (value === null) {
-			if (exclusive && await this.#hasLiveEntry(arena, key, moment)) {
+			// An expired entry is already absent, so an exclusive create of null
+			// only checks; deleting afterwards could remove an entry created since.
+			if (!exclusive) {
+				await this.#run(deleteEntry, [arena, key]);
+			} else if (await this.#hasLiveEntry(arena, key, moment)) {
 				throw(this.#existingKeyError(arena, key));
 			}
-			await this.#run(deleteEntry, [arena, key]);
 			return;
 		}
 		const text = encodeValue(value);
 		const expiry = expiryOf(options?.ttl);
+		/*
+		 * The write is the only statement that waits for a lock, and it runs
+		 * first, so the transaction holds no lock while it waits. The purge
+		 * after it skips rows other transactions hold, so it never waits, and
+		 * the two cannot deadlock with another transaction.
+		 */
 		await this.#transaction(async (client): Promise<void> => {
+			if (exclusive) {
+				const created = await query(client, createEntry, [arena, key, text, expiry, moment]);
+				if (created.length === 0) {
+					throw(this.#existingKeyError(arena, key));
+				}
+			} else {
+				await query(client, putEntry, [arena, key, text, expiry]);
+			}
 			if (expiry !== null) {
 				await query(client, purgeExpiredEntries, [arena, moment, EXPIRED_ENTRIES_REMOVED_PER_WRITE]);
-			}
-			if (!exclusive) {
-				await query(client, putEntry, [arena, key, text, expiry]);
-				return;
-			}
-			const created = await query(client, createEntry, [arena, key, text, expiry, moment]);
-			if (created.length === 0) {
-				throw(this.#existingKeyError(arena, key));
 			}
 		});
 	}

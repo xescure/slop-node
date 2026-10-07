@@ -87,7 +87,7 @@ export function defineEntryCases(provider: KVProviderUnderTest): void {
 		test('of concurrent exclusive creates of one key, exactly one succeeds', async function() {
 			const store = await openStore();
 
-			const outcomes = await Promise.allSettled(createConcurrently([store, store]));
+			const outcomes = await raceExclusiveCreates([store]);
 
 			expectOneCreated(outcomes, provider);
 			expect(await store.get('seenMessageIDs', 'message-1')).toEqual(expect.any(Number));
@@ -102,7 +102,7 @@ export function defineEntryCases(provider: KVProviderUnderTest): void {
 					const store = await openStore();
 					const sibling = await sharing.openSibling(store);
 
-					const outcomes = await Promise.allSettled(createConcurrently([store, sibling, store, sibling]));
+					const outcomes = await raceExclusiveCreates([store, sibling]);
 
 					expectOneCreated(outcomes, provider);
 				});
@@ -113,10 +113,30 @@ export function defineEntryCases(provider: KVProviderUnderTest): void {
 	});
 }
 
-const createConcurrently = function(stores: readonly KVStorageProviderAPI[]): Promise<void>[] {
-	return(stores.map(function(store, index) {
-		return(store.set('seenMessageIDs', 'message-1', index, { exclusiveCreate: true, ttl: 60000 }));
+// More creates per store than a pool holds connections, so every connection takes part.
+const CREATES_PER_STORE = 16;
+
+const timesPerStore = function<Result>(stores: readonly KVStorageProviderAPI[], act: (store: KVStorageProviderAPI, index: number) => Promise<Result>): Promise<Result>[] {
+	return(stores.flatMap(function(store, storeIndex) {
+		return(Array.from({ length: CREATES_PER_STORE }, function(_ignored, index) {
+			return(act(store, (storeIndex * CREATES_PER_STORE) + index));
+		}));
 	}));
+};
+
+/*
+ * Opening a connection takes longer than a statement, so creates that each
+ * opened one would reach the store one after another. With every pool
+ * already holding its connections, the creates meet: a store that checked
+ * for the key and then wrote it would let several of them through.
+ */
+const raceExclusiveCreates = async function(stores: readonly KVStorageProviderAPI[]): Promise<PromiseSettledResult<void>[]> {
+	await Promise.all(timesPerStore(stores, function(store) {
+		return(store.get('seenMessageIDs', 'warm-up'));
+	}));
+	return(await Promise.allSettled(timesPerStore(stores, function(store, index) {
+		return(store.set('seenMessageIDs', 'message-1', index, { exclusiveCreate: true, ttl: 60000 }));
+	})));
 };
 
 const expectOneCreated = function(outcomes: readonly PromiseSettledResult<void>[], provider: KVProviderUnderTest): void {

@@ -49,6 +49,37 @@ const rowCount = async function(pool: pg.Pool, table: 'kv_entries' | 'kv_buffers
 	return(result.rows[0]?.count ?? -1);
 };
 
+/** Sessions of this database waiting for a lock another transaction holds. */
+const lockWaiters = async function(pool: pg.Pool): Promise<number> {
+	const result = await pool.query<{ count: number }>('SELECT count(*)::integer AS count FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = \'Lock\'');
+	return(result.rows[0]?.count ?? -1);
+};
+
+/** Runs the action, once, after the named statement first completes on a connection of the pool. */
+const afterStatement = function(pool: pg.Pool, name: string, action: () => Promise<void>): void {
+	const wrapped = new WeakSet<pg.PoolClient>();
+	let pending = true;
+	pool.on('acquire', function(client) {
+		if (wrapped.has(client)) {
+			return;
+		}
+		wrapped.add(client);
+		const query: unknown = Reflect.get(client, 'query');
+		if (typeof query !== 'function') {
+			throw(new Error('the client has no query method'));
+		}
+		Reflect.set(client, 'query', async function(...input: unknown[]): Promise<unknown> {
+			const result: unknown = await Reflect.apply(query, client, input);
+			const [config] = input;
+			if (pending && typeof config === 'object' && config !== null && Reflect.get(config, 'name') === name) {
+				pending = false;
+				await action();
+			}
+			return(result);
+		});
+	});
+};
+
 describe('the Postgres key-value store', function() {
 	afterEach(function() {
 		vi.useRealTimers();
@@ -121,6 +152,50 @@ describe('the Postgres key-value store', function() {
 		expect(await rowCount(pool, 'kv_entries')).toBe(5);
 		expect(await store.list('seenMessageIDs')).toEqual(['lasting', 'new-1', 'new-2', 'new-3']);
 		expect(await store.list('knownPeers')).toEqual([]);
+	});
+
+	test('a write with an expiry waiting for a key holds no lock another transaction waits for', async function() {
+		freezeClock(START_MOMENT);
+		const database = await freshDatabase('migrated');
+		const store = ownedStoreOn(database);
+		const pool = database.pool();
+		await store.set('seenMessageIDs', 'expired', 1, { ttl: TTL });
+		await store.set('seenMessageIDs', 'held', 1);
+		advanceClock(TTL + 1);
+		const holder = await pool.connect();
+		onTestFinished(function() {
+			holder.release(true);
+		});
+		// Detection runs as soon as the holder waits, so a deadlock fails the holder at once.
+		await holder.query('SET deadlock_timeout = 1');
+		await holder.query('BEGIN');
+		await holder.query('UPDATE kv_entries SET value = \'2\' WHERE arena = \'seenMessageIDs\' AND key = \'held\'');
+
+		const writing = store.set('seenMessageIDs', 'held', 3, { ttl: TTL });
+		await expect.poll(function() {
+			return(lockWaiters(pool));
+		}).toBe(1);
+		await holder.query('DELETE FROM kv_entries WHERE arena = \'seenMessageIDs\' AND key = \'expired\'');
+		await holder.query('COMMIT');
+		await writing;
+
+		expect(await store.get('seenMessageIDs', 'held')).toBe(3);
+	});
+
+	test('an exclusive create of null never removes an entry created after its check', async function() {
+		const database = await freshDatabase('migrated');
+		const pool = database.pool();
+		const store = injectedStoreOn(pool);
+		const rival = database.pool();
+		await store.list('seenMessageIDs');
+		// Another process creates the key as soon as the store has found it absent.
+		afterStatement(pool, 'kv_live_entry_count', async function() {
+			await rival.query('INSERT INTO kv_entries (arena, key, value) VALUES (\'seenMessageIDs\', \'message-1\', \'1\')');
+		});
+
+		await store.set('seenMessageIDs', 'message-1', null, { exclusiveCreate: true });
+
+		expect(await store.get('seenMessageIDs', 'message-1')).toBe(1);
 	});
 
 	test('concurrent increments sum exactly even where the database defaults to SERIALIZABLE', async function() {
