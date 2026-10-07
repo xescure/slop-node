@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Captures the head of the Keeta mainnet vote-staple history.
+
+Usage: capture-mainnet-head <output>
+
+Pages the public bootstrap endpoint of one representative from the epoch and
+writes each distinct staple's "$binary" (the base64 of its zlib-compressed
+DER) on its own line, gzip-compressed, to <output>. This is how
+conformance/mainnet/head.jsonl.gz was made; conformance/MAINNET.md describes
+the method and the format.
+
+Only HTTP GET requests are made: the capturing machine must never announce
+itself to the network, so nothing is published and no peer message is sent.
+Nothing here runs in the tests, and it needs only the standard library.
+"""
+
+import datetime
+import gzip
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+PROGRAM = "capture-mainnet-head"
+BASE_URL = "https://rep1.main.network.api.keeta.com/api/node/bootstrap/votes"
+USER_AGENT = "slop-node-capture/1"
+EPOCH = "1970-01-01T00:00:00.000Z"
+PAGE_LIMIT = 1000
+TARGET_STAPLES = 2000
+# Staples at a page boundary can share a validityFrom with ones not yet
+# returned, so the next page starts a little earlier and deduplication absorbs
+# the repeats.
+CURSOR_OVERLAP = datetime.timedelta(minutes=5)
+TIMEOUT_SECONDS = 60
+
+
+def fail(message):
+	print(f"{PROGRAM}: {message}", file=sys.stderr)
+	sys.exit(1)
+
+
+def parse_moment(text):
+	return datetime.datetime.strptime(text, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=datetime.timezone.utc)
+
+
+def format_moment(moment):
+	return moment.strftime("%Y-%m-%dT%H:%M:%S.") + f"{moment.microsecond // 1000:03d}Z"
+
+
+def fetch_page(cursor):
+	query = urllib.parse.urlencode({"start": cursor, "limit": PAGE_LIMIT})
+	request = urllib.request.Request(f"{BASE_URL}?{query}", headers={"User-Agent": USER_AGENT}, method="GET")
+	try:
+		with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+			return json.load(response)["voteStaples"]
+	except (urllib.error.URLError, OSError, ValueError, KeyError) as error:
+		fail(f"cannot read the page at {cursor}: {error}")
+
+
+def capture():
+	cursor = EPOCH
+	seen = set()
+	staples = []
+	while len(staples) < TARGET_STAPLES:
+		latest = None
+		for staple in fetch_page(cursor):
+			binary = staple["$binary"]
+			if binary not in seen:
+				seen.add(binary)
+				staples.append(binary)
+			for vote in staple["votes"]:
+				moment = parse_moment(vote["validityFrom"])
+				if latest is None or moment > latest:
+					latest = moment
+		if latest is None:
+			fail(f"the page at {cursor} was empty after {len(staples)} staples")
+		next_cursor = format_moment(latest - CURSOR_OVERLAP)
+		# A cursor that cannot advance would read the same page forever.
+		if parse_moment(next_cursor) <= parse_moment(cursor):
+			fail(f"the cursor is stuck at {cursor} after {len(staples)} staples")
+		cursor = next_cursor
+		print(f"{len(staples)} staples, next cursor {cursor}", file=sys.stderr)
+	return staples
+
+
+def write(output, staples):
+	# Beside the output, so a failed capture leaves no partial file and the
+	# final rename stays on one filesystem. A zero mtime keeps the capture
+	# time out of the gzip header.
+	partial = f"{output}.partial"
+	with open(partial, "wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as out:
+		for binary in staples:
+			out.write(binary.encode("ascii") + b"\n")
+	os.replace(partial, output)
+
+
+def main():
+	if len(sys.argv) != 2:
+		print(f"usage: {PROGRAM} <output>", file=sys.stderr)
+		sys.exit(2)
+	write(sys.argv[1], capture())
+
+
+if __name__ == "__main__":
+	main()
