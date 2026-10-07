@@ -578,7 +578,7 @@ describe('a request body', function() {
 		expectDocumented('POST', path, answer);
 	});
 
-	test('of a peer-to-peer message is not accepted yet', async function() {
+	test('of a peer-to-peer message the switch cannot read is not accepted, whatever other fields it has', async function() {
 		const node = await nodes.start();
 		const greeting = await node.node.switch.getOutgoingGreetingInfo();
 		const answer = await postJSON(node, '/p2p/message', { message: '{}', greeting, sentBy: 'a newer client' });

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import { KVInternals, LedgerInternals, StatsPending } from './internals.js';
+import { KVInternals, LedgerInternals, P2PInternals, StatsPending } from './internals.js';
 
 const Account = KeetaNet.lib.Account;
 
@@ -84,5 +84,15 @@ describe('KVInternals', function() {
 
 		expect(await store.incr('stats', 'probe', 2)).toBe(5n);
 		expect(await store.get('stats', 'probe')).toBe(5);
+	});
+});
+
+describe('P2PInternals', function() {
+	test('exposes the switch\'s connection classes, peer parser, frame bound and WebSocket server', function() {
+		expect(typeof P2PInternals.P2PWebSocket.connectToSwitch).toBe('function');
+		expect(typeof P2PInternals.HTTPConnection.isInstance).toBe('function');
+		expect(P2PInternals.P2PPeerFromJSO({ kind: KeetaNet.lib.Node.Kind.PARTICIPANT })).toEqual({ kind: KeetaNet.lib.Node.Kind.PARTICIPANT, id: '' });
+		expect(P2PInternals.P2P_WEBSOCKET_MAX_PAYLOAD_BYTES).toBe(16 * 1024 * 1024);
+		expect(P2PInternals.WebSocketServer.name).toBe('WebSocketServer');
 	});
 });

@@ -7,12 +7,13 @@ import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { LocalNode as DeclaredLocalNode, LocalNodeConfig } from '@keetanetwork/keetanet-client/lib/node/local.js';
 import { answerError, ERROR_STATUS, newErrorID } from '../api/errors.js';
 import type { ErrorBody } from '../api/errors.js';
-import { API_ROUTES, invokeRoute } from '../api/index.js';
+import { API_ROUTES, invokeRoute, settleDeliveries } from '../api/index.js';
 import type { APIRequest, Route } from '../api/index.js';
 import { assertNever } from '../util/assert-never.js';
 import type { AssertNever } from '../util/assert-never.js';
 import type { ClassSurface } from '../util/class-surface.js';
 import { LocalNodeError } from './errors.js';
+import { P2P_PATH, PeerServer } from './peers.js';
 import { close, listen } from './server.js';
 import type { Listening, ListenTarget } from './server.js';
 
@@ -27,9 +28,6 @@ type RunOptions = Parameters<DeclaredLocalNode['run']>[0];
 
 /** Where the API is served when the node advertises no endpoint of its own. */
 const DEFAULT_API_PREFIX = '/api';
-
-/** Where peers reach the node's peer-to-peer WebSocket, on the API's own server. */
-const P2P_PATH = '/p2p';
 
 const LOG_SOURCE = 'API';
 
@@ -197,6 +195,7 @@ export class LocalNode extends ClientNode {
 	readonly #app: Express = express();
 	#mountedPrefix: string | undefined;
 	#listening: Listening | undefined;
+	#peers: PeerServer | undefined;
 	#running = false;
 
 	constructor(config: LocalNodeConfig) {
@@ -266,10 +265,21 @@ export class LocalNode extends ClientNode {
 		} catch (error) {
 			answer = this.#failure(error);
 		}
-		if (this.config.nodeOptions?.noSyncAfterEachRoute !== true) {
+		if (this.#syncsBeforeAnswering(route)) {
 			await this.#syncAfter(node);
 		}
 		this.#send(response, answer);
+	}
+
+	#syncsBeforeAnswering(route: Route): boolean {
+		switch (route.sync) {
+			case 'before-answer':
+				return(this.config.nodeOptions?.noSyncAfterEachRoute !== true);
+			case 'none':
+				return(false);
+			default:
+				return(assertNever(route.sync));
+		}
 	}
 
 	/** The request's own work is done by now, so a failure to sync is recorded without changing its answer. */
@@ -306,12 +316,12 @@ export class LocalNode extends ClientNode {
 	}
 
 	/**
-	 * Mounts the routes, listens, and then advertises where it listens if no
-	 * endpoints are configured, so that the node describes itself to peers
-	 * correctly. The peer-to-peer server and the bootstrap client are not
-	 * started yet.
+	 * Mounts the routes, listens, advertises where it listens if no endpoints
+	 * are configured, so that the node describes itself to peers correctly,
+	 * and then serves peers on "/p2p" unless told not to. The bootstrap client
+	 * is not started yet.
 	 */
-	override async run(_ignoredOptions?: RunOptions): Promise<void> {
+	override async run(options?: RunOptions): Promise<void> {
 		if (this.#running) {
 			throw(new LocalNodeError({ kind: 'already-running' }));
 		}
@@ -328,6 +338,9 @@ export class LocalNode extends ClientNode {
 			if (target !== undefined) {
 				this.#listening = await listen(this.#app, target);
 				this.#advertise(target, this.#listening.address);
+				if (options?.startWebSocketServer !== false) {
+					this.#peers = new PeerServer(this.#listening.server, this.switch, this.log);
+				}
 			}
 		} catch (error) {
 			this.#running = false;
@@ -360,13 +373,22 @@ export class LocalNode extends ClientNode {
 		});
 	}
 
-	/** Stops serving, waiting for the requests in flight, and then stops the node. */
+	/**
+	 * Stops serving peers and requests, waiting for the requests in flight
+	 * and the messages peers posted, and then stops the node.
+	 */
 	override async stop(): Promise<void> {
+		const peers = this.#peers;
+		this.#peers = undefined;
+		if (peers !== undefined) {
+			await peers.close();
+		}
 		const listening = this.#listening;
 		this.#listening = undefined;
 		if (listening !== undefined) {
 			await close(listening.server);
 		}
+		await settleDeliveries(this.switch);
 		this.#running = false;
 		await super.stop();
 	}

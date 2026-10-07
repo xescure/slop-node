@@ -1,0 +1,61 @@
+Expose the peer-to-peer connection classes on the lib default export
+
+Why: a node serving peers has to attach each inbound WebSocket and each
+message posted over HTTP to the switch with the switch's own connection
+classes, checked by the switch's own peer parser, and has to accept the
+WebSocket with the same "ws" server, and the same frame bound, that the
+switch's dialer uses, so none of them may be ported.
+Upstream status: the package exports only the switch (lib.P2P). Module 7074
+(p2p) is already imported by the lib default export (module 8568), and its
+default import is the module itself, since the module is an ES module, so its
+P2PWebSocket, P2PHttpConnection, P2PPeerFromJSO and
+P2P_WEBSOCKET_MAX_PAYLOAD_BYTES are reached through that import. The bundled
+"ws" 8.21.3, module 7699, is imported and its WebSocketServer exposed. All
+are typed in client/index.d.ts as lib/p2p.d.ts declares them, and the server
+as lib/p2p.d.ts types the socket, through "ws". P2PHttpConnection is exposed
+as HTTPConnection, since the code that reads it capitalizes initialisms.
+Removal condition: upstream exports these names, then delete this patch and
+import them from the public entry points.
+
+Applies with "patch -p1" from the package root, after 0001 and 0002.
+
+--- a/client/index.js
++++ b/client/index.js
+@@ -66788,6 +66788,7 @@
+ const common_1 = __webpack_require__(5663);
+ const effects_1 = __webpack_require__(7346);
+ const kv_memory_1 = __webpack_require__(1557);
++const ws_1 = __webpack_require__(7699);
+ exports["default"] = {
+     /**
+      * The `Account` module provides functionality for managing key pairs
+@@ -66810,6 +66811,13 @@
+     Log: log_1.default,
+     Node: node_1.default,
+     P2P: p2p_1.default,
++    P2PInternals: {
++        P2PWebSocket: p2p_1.P2PWebSocket,
++        HTTPConnection: p2p_1.P2PHttpConnection,
++        P2PPeerFromJSO: p2p_1.P2PPeerFromJSO,
++        P2P_WEBSOCKET_MAX_PAYLOAD_BYTES: p2p_1.P2P_WEBSOCKET_MAX_PAYLOAD_BYTES,
++        WebSocketServer: ws_1.WebSocketServer
++    },
+     Permissions: permissions_1.Permissions,
+     Stats: stats_1.default,
+     Vote: vote_1.default,
+--- a/client/index.d.ts
++++ b/client/index.d.ts
+@@ -1449,6 +1449,13 @@
+     Log: typeof import("../lib/log").default;
+     Node: typeof import("../lib/node").Node;
+     P2P: typeof import("../lib/p2p").P2PSwitch;
++    P2PInternals: {
++        P2PWebSocket: typeof import("../lib/p2p").P2PWebSocket;
++        HTTPConnection: typeof import("../lib/p2p").P2PHttpConnection;
++        P2PPeerFromJSO: typeof import("../lib/p2p").P2PPeerFromJSO;
++        P2P_WEBSOCKET_MAX_PAYLOAD_BYTES: typeof import("../lib/p2p").P2P_WEBSOCKET_MAX_PAYLOAD_BYTES;
++        WebSocketServer: typeof import("ws").WebSocketServer;
++    };
+     Permissions: typeof import("../lib/permissions").Permissions;
+     Stats: typeof import("../lib/stats").Stats;
+     Vote: typeof import("../lib/vote").Vote;

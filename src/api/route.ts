@@ -30,6 +30,15 @@ export type ParameterValues<Path extends string> =
 export type RouteMethod = 'GET' | 'POST';
 
 /**
+ * Whether the node a request ran on is synced before the request is
+ * answered. A route that peers post to is not: syncing waits for the node's
+ * pending sends to peers [Keeta TS] index.js:71377-71383, 72677-72683, among
+ * them its own posts to the peer that is waiting for this answer, so two
+ * nodes posting to each other would each wait for the other.
+ */
+export type RouteSync = 'before-answer' | 'none';
+
+/**
  * A route as the table dispatches it. GET handlers get the path parameters in
  * path order, and POST handlers the body first (api/index.d.ts, rootTree).
  */
@@ -38,12 +47,14 @@ export type Route =
 		readonly method: 'GET';
 		readonly path: RoutePath;
 		readonly parameterNames: readonly string[];
+		readonly sync: RouteSync;
 		readonly handler: (request: APIRequest, parameters: readonly string[]) => Promise<unknown>;
 	}
 	| {
 		readonly method: 'POST';
 		readonly path: RoutePath;
 		readonly parameterNames: readonly string[];
+		readonly sync: RouteSync;
 		readonly handler: (request: APIRequest, payload: unknown, parameters: readonly string[]) => Promise<unknown>;
 	};
 
@@ -76,6 +87,7 @@ export function defineGET<const Path extends RoutePath>(path: Path, handler: (re
 		method: 'GET',
 		path,
 		parameterNames: parameterNamesOf(path),
+		sync: 'before-answer',
 		handler: function(request, parameters) {
 			return(handler(request, ...valuesFor(path, parameters)));
 		}
@@ -83,11 +95,12 @@ export function defineGET<const Path extends RoutePath>(path: Path, handler: (re
 }
 
 /** A POST route, its handler typed by the parameters its path names. */
-export function definePOST<const Path extends RoutePath>(path: Path, handler: (request: APIRequest, payload: unknown, ...parameters: ParameterValues<Path>) => Promise<unknown>): Route {
+export function definePOST<const Path extends RoutePath>(path: Path, handler: (request: APIRequest, payload: unknown, ...parameters: ParameterValues<Path>) => Promise<unknown>, sync: RouteSync = 'before-answer'): Route {
 	return({
 		method: 'POST',
 		path,
 		parameterNames: parameterNamesOf(path),
+		sync,
 		handler: function(request, payload, parameters) {
 			return(handler(request, payload, ...valuesFor(path, parameters)));
 		}

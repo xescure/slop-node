@@ -1,7 +1,8 @@
 import { afterEach, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { LogEntry, LogTarget } from '@keetanetwork/keetanet-client/lib/log/common.js';
-import type { LocalNodeConfig } from '@keetanetwork/keetanet-client/lib/node/local.js';
+import type { NodeConfig } from '@keetanetwork/keetanet-client/lib/node/index.js';
+import type { LocalNode as DeclaredLocalNode, LocalNodeConfig } from '@keetanetwork/keetanet-client/lib/node/local.js';
 import type { LedgerStorageDriverBase } from '../ledger/storage/base.js';
 import { driverUnderTestNamed } from '../ledger/storage/suite/drivers.js';
 import { GENESIS_MOMENT, requireAt } from '../ledger/storage/suite/support.js';
@@ -16,6 +17,10 @@ const LOOPBACK = '127.0.0.1';
 
 export type LocalNodeOptions = {
 	readonly driver?: DriverUnderTest;
+	/** Which representative of the network the node votes as; nodes of one test share the network. */
+	readonly representative?: number;
+	readonly p2p?: NodeConfig['p2p'];
+	readonly run?: Parameters<DeclaredLocalNode['run']>[0];
 	readonly nodeOptions?: LocalNodeConfig['nodeOptions'];
 	readonly endpoints?: LocalNodeConfig['endpoints'];
 	readonly fee?: TestFeePolicy;
@@ -37,7 +42,7 @@ export type RunningLocalNode = CreatedLocalNode & {
 };
 
 export type LocalNodes = {
-	/** Representative 0 of the network; the clock is frozen at genesis. */
+	/** A representative of the network, 0 unless chosen; the clock is frozen at genesis. */
 	readonly create: (options?: LocalNodeOptions) => Promise<CreatedLocalNode>;
 	/** The same node, listening on a port of the loopback interface. */
 	readonly start: (options?: LocalNodeOptions) => Promise<RunningLocalNode>;
@@ -91,12 +96,15 @@ export function useLocalNodes(): LocalNodes {
 			ledgerOptions.fee = options.fee;
 		}
 		const config: LocalNodeConfig = {
-			...network.nodeConfig(storage, requireAt(network.representatives, 0), ledgerOptions),
+			...network.nodeConfig(storage, requireAt(network.representatives, options.representative ?? 0), ledgerOptions),
 			log,
 			nodeOptions: { listenIP: LOOPBACK, listenPort: 0, ...options.nodeOptions }
 		};
 		if (options.endpoints !== undefined) {
 			config.endpoints = { ...options.endpoints };
+		}
+		if (options.p2p !== undefined) {
+			config.p2p = options.p2p;
 		}
 		const node = new LocalNode(config);
 		made.push({ node, driver, storage });
@@ -106,7 +114,7 @@ export function useLocalNodes(): LocalNodes {
 
 	async function start(options: LocalNodeOptions = {}): Promise<RunningLocalNode> {
 		const created = await create(options);
-		await created.node.run();
+		await created.node.run(options.run);
 		return({ ...created, apiURL: apiURLOf(created.node) });
 	}
 

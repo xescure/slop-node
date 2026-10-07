@@ -7,7 +7,8 @@ import type { Route } from './route.js';
 import { voteRoutes } from './vote.js';
 
 export { defineGET, definePOST, invokeRoute, routeTable } from './route.js';
-export type { APIRequest, ParameterValues, Route, RouteMethod, RoutePath } from './route.js';
+export type { APIRequest, ParameterValues, Route, RouteMethod, RoutePath, RouteSync } from './route.js';
+export { settleDeliveries } from './p2p.js';
 
 /** Every route the node serves below its API prefix, one group per module, in the order the router tries them. */
 export const API_ROUTES: readonly Route[] = routeTable([voteRoutes, nodeRoutes, ledgerRoutes, accountRoutes, p2pRoutes]);

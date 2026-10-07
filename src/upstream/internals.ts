@@ -1,8 +1,10 @@
+import type http from 'node:http';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { LedgerStorageBase, computeLedgerEffect, addTimeStatistic } from '@keetanetwork/keetanet-client/lib/ledger/common.js';
 import type { computeEffectOfBlocks } from '@keetanetwork/keetanet-client/lib/ledger/effects.js';
 import type { KVStorageProviderMemory } from '@keetanetwork/keetanet-client/lib/kv/kv_memory.js';
 import type { IdempotentKey } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
+import type { P2PHttpConnection as HTTPConnectionClass, P2PPeerFromJSO, P2PWebSocket } from '@keetanetwork/keetanet-client/lib/p2p.js';
 import type { StatsPending as StatsPendingClass } from '@keetanetwork/keetanet-client/lib/stats.js';
 
 export type LedgerInternalsAPI = {
@@ -52,6 +54,73 @@ if (missingKV.length > 0) {
 }
 
 export const KVInternals: KVInternalsAPI = KeetaNet.lib.KVInternals;
+
+/** The parts of a socket of the bundled "ws" server that the node uses. */
+export type BundledWebSocket = {
+	once(event: 'close', listener: () => void): unknown;
+	terminate(): void;
+};
+
+export type BundledWebSocketServerOptions = {
+	readonly server: http.Server;
+	readonly path: string;
+	readonly maxPayload: number;
+};
+
+/** The parts of the bundled "ws" 8 WebSocketServer that the node uses. */
+export type BundledWebSocketServer = {
+	readonly clients: ReadonlySet<BundledWebSocket>;
+	on(event: 'connection', listener: (socket: BundledWebSocket, request: http.IncomingMessage) => void): unknown;
+	on(event: 'error', listener: (error: Error) => void): unknown;
+	close(callback: (error?: Error) => void): void;
+};
+
+export type BundledWebSocketServerConstructor = new (options: BundledWebSocketServerOptions) => BundledWebSocketServer;
+
+export type P2PInternalsAPI = {
+	readonly P2PWebSocket: typeof P2PWebSocket;
+	readonly HTTPConnection: typeof HTTPConnectionClass;
+	readonly P2PPeerFromJSO: typeof P2PPeerFromJSO;
+	readonly P2P_WEBSOCKET_MAX_PAYLOAD_BYTES: number;
+	readonly WebSocketServer: BundledWebSocketServerConstructor;
+};
+
+const requiredP2PInternals = {
+	P2PWebSocket: true,
+	HTTPConnection: true,
+	P2PPeerFromJSO: true,
+	P2P_WEBSOCKET_MAX_PAYLOAD_BYTES: true,
+	WebSocketServer: true
+} satisfies Record<keyof P2PInternalsAPI, true>;
+
+// The published package exports only the switch; patches/ adds its connection classes and the "ws" it bundles to lib.
+const exposedP2P: object | undefined = KeetaNet.lib.P2PInternals;
+const missingP2P = findMissingInternals(exposedP2P, requiredP2PInternals);
+if (missingP2P.length > 0) {
+	throw(new Error(`upstream peer-to-peer internals are not exposed: ${missingP2P.join(', ')}`));
+}
+
+/*
+ * The client's typings name the server through "ws", whose types the package
+ * does not ship, so it is checked to be the server class before it is given
+ * the type of the parts the node uses.
+ */
+function isWebSocketServerConstructor(candidate: unknown): candidate is BundledWebSocketServerConstructor {
+	return(typeof candidate === 'function' && candidate.name === 'WebSocketServer');
+}
+
+const exposedWebSocketServer: unknown = KeetaNet.lib.P2PInternals.WebSocketServer;
+if (!isWebSocketServerConstructor(exposedWebSocketServer)) {
+	throw(new Error('the exposed WebSocketServer is not the bundled "ws" server'));
+}
+
+export const P2PInternals: P2PInternalsAPI = {
+	P2PWebSocket: KeetaNet.lib.P2PInternals.P2PWebSocket,
+	HTTPConnection: KeetaNet.lib.P2PInternals.HTTPConnection,
+	P2PPeerFromJSO: KeetaNet.lib.P2PInternals.P2PPeerFromJSO,
+	P2P_WEBSOCKET_MAX_PAYLOAD_BYTES: KeetaNet.lib.P2PInternals.P2P_WEBSOCKET_MAX_PAYLOAD_BYTES,
+	WebSocketServer: exposedWebSocketServer
+};
 
 function isStatsPendingConstructor(candidate: unknown): candidate is typeof StatsPendingClass {
 	return(typeof candidate === 'function' && candidate.name === 'StatsPending' && KeetaNet.lib.Stats.prototype instanceof candidate);

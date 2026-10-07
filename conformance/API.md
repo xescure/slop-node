@@ -144,6 +144,14 @@ No captured response or fixture disagrees with the typings. Where the typings gi
 - **History entries.** `$id` is the hash of the staple's blocks in uppercase hexadecimal, and `$timestamp` an ISO 8601 date (api/node.d.ts, GetAccountHistoryResponse). `$timestamp` is not the staple's own timestamp, the average of its votes' validity [Keeta TS] index.js:81061-81087.
 - **Statistics.** `ledger.moment` of `GET /api/node/stats` is an ISO 8601 date (lib/ledger/types.d.ts, LedgerStatistics).
 
+## Peer-to-peer messages over HTTP
+
+The package publishes the side that posts a peer-to-peer message, not the handler that receives it: `api/p2p.d.ts` declares only the handler's arguments and result. A representative that prefers updates over HTTP is sent each message as `POST /api/p2p/message`, with the message as JSON text and the sender's own advertisement as `greeting`, and the sender ignores the answer [Keeta TS] index.js:72195-72218. The node's handler is derived from that and from the switch the package publishes:
+
+- The greeting must be a representative's advertisement that its signature covers, as the switch's peer parser checks [Keeta TS] index.js:71828-71867, 71911-71986, and the message one the switch reads [Keeta TS] index.js:72751-72783. Otherwise the answer is `{"success": false}`, and nothing reaches the switch.
+- Otherwise the answer is `{"success": true}`, and the message then reaches the switch on an HTTP connection to the sender: first the greeting, as a `greeting` message, which the switch handles on an HTTP connection even from a peer it knows [Keeta TS] index.js:72851-72866, and then the message. The greeting's message ID is the SHA3-256 of its JSON text. The switch drops a message whose ID it has seen within its `seenMessageTTL` [Keeta TS] index.js:72830-72843, so it handles a sender's greeting once in that period rather than with every message; handling a greeting sends the sender every peer the node knows [Keeta TS] index.js:73466-73479, 73592, which two nodes that both post over HTTP would otherwise answer each other with without end.
+- The switch handles the message after the answer, as it handles a message on a WebSocket without the sender waiting [Keeta TS] index.js:72362-72369, and the node is not synced before answering: syncing waits for the node's own pending posts to peers [Keeta TS] index.js:71377-71383, 72677-72683, which may be waiting for the sender's answer, so two nodes posting to each other would each wait for the other.
+
 ## Development networks
 
 A node whose network is `local` keeps the ledger of network 0, which the client validates without a configuration of its own [Keeta TS] index.js:61346-61352. The client still takes a network alias for it, and the node gives it `test`.
