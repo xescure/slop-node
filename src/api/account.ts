@@ -178,6 +178,9 @@ function getAccountChain(request: APIRequest, text: string): Promise<ChainPage> 
 				break;
 			}
 			if (blocks.length === limit) {
+				if (end !== undefined && block.previous.compare(end)) {
+					break;
+				}
 				return({ account: accountText, blocks, nextKey: block.previous });
 			}
 		}

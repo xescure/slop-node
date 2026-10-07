@@ -117,14 +117,19 @@ async function publishVoteStaple(request: APIRequest, body: unknown): Promise<De
 /** A page of a bootstrap holds 1000 staples, the ledger's own default, unless the request asks for fewer [Keeta TS] index.js:69633. */
 const BOOTSTRAP_LIMIT: LimitBounds = { defaultLimit: 1000, maximum: 1000 };
 
-/** The moment a bootstrap page starts from, as the client writes a date [Keeta TS] index.js:59166-59168. */
+/**
+ * The moment a bootstrap page starts from, as the client writes a date
+ * [Keeta TS] index.js:59166-59168. A representative fails on one it cannot
+ * read as an internal error rather than refusing it, so this throws a plain
+ * error.
+ */
 function parseBootstrapStart(text: string | undefined): Date {
 	if (text === undefined) {
 		throw(apiError('API_START_MISSING', '"start" parameter must be supplied'));
 	}
 	const start = new Date(text);
 	if (Number.isNaN(start.getTime())) {
-		throw(apiError('API_INVALID_START', `Invalid start: ${text}`));
+		throw(new Error(`Invalid start: ${text}`));
 	}
 	return(start);
 }

@@ -154,6 +154,22 @@ describe('history', function() {
 		expect(await asked('?limit=1000')).toBe(201);
 	});
 
+	test.each([
+		{ limit: '1.5', entries: 1 },
+		{ limit: '1e3', entries: 1 },
+		{ limit: '2.9', entries: 2 }
+	])('limit=$limit asks for its integer prefix, $entries, as parseInt reads it', async function({ limit, entries }) {
+		const node = await populated();
+		const pageSizes = vi.spyOn(lib.Ledger.prototype, 'getHistory');
+		const answer = await request(node, `/node/ledger/history?limit=${limit}`);
+
+		expect(answer.status).toBe(200);
+		expect(list(answer.body, 'history')).toHaveLength(entries);
+		expect(pageSizes.mock.calls[0]?.[2]).toBe(entries + 1);
+		expect(text(answer.body, 'nextKey')).toBe(ids(answer.body)[entries - 1]);
+		expectDocumented('GET', '/node/ledger/history', answer);
+	});
+
 	test('an entry\'s time is this node\'s own vote for the staple, as the staple\'s timestamp prefers it', async function() {
 		const node = await nodes.start({ representativeWeights: [500n, 500n] });
 		const [representative, other] = node.network.representatives;
@@ -178,8 +194,7 @@ describe('history', function() {
 		{ limit: 'abc', code: 'API_LIMIT_NOT_NUMBER', message: 'Limit must be a number' },
 		{ limit: '', code: 'API_LIMIT_NOT_NUMBER', message: 'Limit must be a number' },
 		{ limit: '0', code: 'API_LIMIT_NOT_GREATER_THAN_ZERO', message: 'Limit must be greater than 0' },
-		{ limit: '-3', code: 'API_LIMIT_NOT_GREATER_THAN_ZERO', message: 'Limit must be greater than 0' },
-		{ limit: '1.5', code: 'API_INVALID_LIMIT', message: 'Invalid limit: 1.5' }
+		{ limit: '-3', code: 'API_LIMIT_NOT_GREATER_THAN_ZERO', message: 'Limit must be greater than 0' }
 	])('limit=$limit is refused with $code', async function({ limit, code, message }) {
 		const node = await nodes.start();
 		const answer = await request(node, `/node/ledger/history?limit=${limit}`);
@@ -212,6 +227,32 @@ describe('the chain', function() {
 
 		expect(blockHashes(answer.body)).toEqual(whole.slice(1, 3));
 		expect(field(answer.body, 'nextKey')).toBeNull();
+	});
+
+	test('a full page that stops right above end has no next page', async function() {
+		const node = await populated();
+		const user = keyOf(node.user);
+		const whole = blockHashes((await request(node, `/node/ledger/account/${user}/chain`)).body);
+		const answer = await request(node, `/node/ledger/account/${user}/chain?limit=2&end=${whole[2] ?? ''}`);
+
+		expect(blockHashes(answer.body)).toEqual(whole.slice(0, 2));
+		expect(field(answer.body, 'nextKey')).toBeNull();
+
+		const shorter = await request(node, `/node/ledger/account/${user}/chain?limit=1&end=${whole[2] ?? ''}`);
+		expect(blockHashes(shorter.body)).toEqual(whole.slice(0, 1));
+		expect(field(shorter.body, 'nextKey')).toBe(whole[1]);
+	});
+
+	test.each([
+		{ limit: '1.5', blocks: 1 },
+		{ limit: '1e3', blocks: 1 }
+	])('limit=$limit holds $blocks block of the chain', async function({ limit, blocks }) {
+		const node = await populated();
+		const user = keyOf(node.user);
+		const answer = await request(node, `/node/ledger/account/${user}/chain?limit=${limit}`);
+
+		expect(answer.status).toBe(200);
+		expect(blockHashes(answer.body)).toHaveLength(blocks);
 	});
 
 	test('a start that is no block of the account starts no page', async function() {
@@ -295,6 +336,15 @@ describe('requests a representative answers without a failure', function() {
 		expectDocumented('GET', '/node/ledger/representatives', answer);
 	});
 
+	test.each(['1.5', '1e3'])('a bootstrap limit of %s holds one staple', async function(limit) {
+		const node = await populated();
+		const answer = await request(node, `/node/bootstrap/votes?start=1970-01-01T00%3A00%3A00.000Z&limit=${limit}`);
+
+		expect(answer.status).toBe(200);
+		expect(list(answer.body, 'voteStaples')).toHaveLength(1);
+		expectDocumented('GET', '/node/bootstrap/votes', answer);
+	});
+
 	test('a bootstrap page leaves out the staples the bloom filter holds', async function() {
 		const node = await populated();
 		const everything = list((await request(node, '/node/bootstrap/votes?start=1970-01-01T00%3A00%3A00.000Z')).body, 'voteStaples');
@@ -319,7 +369,6 @@ describe('requests a representative answers without a failure', function() {
 describe('requests a representative refuses', function() {
 	test.each([
 		{ path: '/node/bootstrap/votes', code: 'API_START_MISSING', message: '"start" parameter must be supplied' },
-		{ path: '/node/bootstrap/votes?start=yesterday', code: 'API_INVALID_START', message: 'Invalid start: yesterday' },
 		{ path: '/vote/E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855?side=both', code: 'API_INVALID_SIDE', message: 'Invalid side: both' },
 		{ path: '/node/ledger/block/E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855?side=', code: 'API_INVALID_SIDE', message: 'Invalid side: ' }
 	])('$path is refused with $code', async function({ path, code, message }) {
@@ -330,6 +379,7 @@ describe('requests a representative refuses', function() {
 	});
 
 	test.each([
+		'/node/bootstrap/votes?start=yesterday',
 		'/node/ledger/block/not-a-hash',
 		'/vote/not-a-hash',
 		'/node/ledger/account/keeta_not-an-account/balance',

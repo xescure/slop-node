@@ -36,23 +36,23 @@ export type LimitBounds = {
 
 /**
  * The limit a request asks for, within the bounds: absent, the default; above
- * the maximum, the maximum. A value that is no number, or not above zero, is
- * refused with the codes and messages a representative answers with.
+ * the maximum, the maximum. Only the integer prefix counts, as parseInt reads
+ * it: a representative answers limit=1.5 with one entry, and limit=1e3 asks
+ * for one. A value without such a prefix, or not above zero, is refused with
+ * the codes and messages a representative answers with.
+ * [node-lite] adapted from parseLimit.
  */
 export function parseLimit(query: APIRequest['query'], bounds: LimitBounds): number {
 	const text = query['limit'];
 	if (text === undefined) {
 		return(bounds.defaultLimit);
 	}
-	const limit = Number(text);
-	if (text.trim() === '' || Number.isNaN(limit)) {
+	const limit = parseInt(text, 10);
+	if (Number.isNaN(limit)) {
 		throw(apiError('API_LIMIT_NOT_NUMBER', 'Limit must be a number'));
 	}
 	if (limit <= 0) {
 		throw(apiError('API_LIMIT_NOT_GREATER_THAN_ZERO', 'Limit must be greater than 0'));
-	}
-	if (!Number.isInteger(limit)) {
-		throw(apiError('API_INVALID_LIMIT', `Invalid limit: ${text}`));
 	}
 	return(Math.min(limit, bounds.maximum));
 }
@@ -63,6 +63,7 @@ const LEDGER_STORAGES: readonly LedgerStorage[] = ['main', 'side'];
  * Which ledger to read: the main ledger unless the request names the side
  * ledger [Keeta TS] index.js:67868-67873, 58778-58789; any other side is
  * refused as a representative refuses it.
+ * [node-lite] adapted from ledgerSelector.
  */
 export function parseLedgerStorage(query: APIRequest['query']): LedgerStorage {
 	const text = query['side'];
@@ -92,7 +93,10 @@ export function parseToken(text: string): TokenAddress {
 	return(lib.Account.fromPublicKeyString(text).assertKeyType(lib.Account.AccountKeyAlgorithm.TOKEN));
 }
 
-/** Accounts separated by commas, as the client joins them [Keeta TS] index.js:59958-59960. */
+/**
+ * Accounts separated by commas, as the client joins them [Keeta TS] index.js:59958-59960.
+ * [node-lite] adapted from parseAccounts.
+ */
 export function parseAccountList(text: string): GenericAccount[] {
 	return(text.split(',').map(parseAccount));
 }
