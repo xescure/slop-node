@@ -139,11 +139,11 @@ The file equals `mainnet/head.state.jsonl` without its `idempotent` records, byt
 The replay shows three things about the head file:
 
 - **Following.** Every staple applies and none stays deferred. A ledger on the in-memory driver and one on the Postgres driver end in byte-identical state, and that state, the ledger checksum included, equals `mainnet/head.state.jsonl`.
-- **Voting.** The 0.18.7 ledger votes for every staple except 466, and each of those has one named reason (section 6). The 465 of `self-requirement-return` are refused because of the change between 0.18.4 and 0.18.7 that section 6.1 cites; the genesis staple is refused by a ledger of either version, because no representative voted on it (section 6.3).
+- **Voting.** The 0.18.7 ledger votes for every staple except 466, and each of those has one named reason (section 6). The 465 of `self-requirement-return` are refused because of the change between 0.18.4 and 0.18.7 that section 6.1 cites; the genesis staple is refused by a ledger of either version, and on mainnet no representative was asked to vote on it, since its only vote is the initial trusted account's (section 6.3).
 - **A second implementation.** The independent implementation of section 8 reaches the same state for every record kind except `idempotent`, which it does not store.
 
 It does not show:
 
 - **Agreement with a live node.** No state of the replay was compared with what a mainnet representative serves.
 - **Agreement with the network's checksum.** The checksum was not checked against the network, and it cannot be: it is the XOR over the blocks of the head file, a prefix of the chain, while a representative serves the checksum of its own ledger, which holds the whole chain (`STATE-DUMP.md` section 3.5).
-- **Anything after the head,** except the 90 edge cases of section 7. Their outcomes are pinned, but 89 of them are deferred, so the state they reach on a ledger that holds the history between is not compared.
+- **Anything after the head,** except the 90 edge cases of section 7. Their outcomes are pinned, but 89 of them are deferred, so the state they reach on a ledger that also holds the history between the head and them is not compared.
