@@ -2,12 +2,13 @@ import { inspect } from 'node:util';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { assertNever } from '../util/assert-never.js';
 import { NODE_VERSION } from '../version.js';
-import { ConfigError, GENESIS_VARIABLES, getConfigFromEnv, localNodeConfig, MAX_FEE_SEED_ACCOUNTS, NODE_VARIABLES, TRUSTED_ACCOUNT_VARIABLE } from './config.js';
+import { ConfigError, formatManualPeer, GENESIS_VARIABLES, getConfigFromEnv, localNodeConfig, MANUAL_PEER_FORM, manualPeerOf, MAX_FEE_SEED_ACCOUNTS, NODE_VARIABLES, TRUSTED_ACCOUNT_VARIABLE } from './config.js';
 import type { ConfigVariable, Environment, EnvironmentConfig, LogSettings, NetworkSelection } from './config.js';
 import { LocalNodeError } from './errors.js';
 import { describeOperationalFailure, operationalFailureOf } from './failure.js';
 import { addGenesis, GenesisError, getGenesisConfigFromEnv } from './genesis.js';
 import { LocalNode } from './local.js';
+import { P2P_PATH } from './peers.js';
 import { closeStorage, nodeResourcesOf, openStorage } from './storage.js';
 import type { OpenedStorage } from './storage.js';
 
@@ -48,10 +49,14 @@ const VARIABLE_HELP: Readonly<Record<ConfigVariable, string>> = {
 	KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX: `the last index of the fee accounts; the range holds at most ${String(MAX_FEE_SEED_ACCOUNTS)}`,
 	KEETANET_LOCAL_NODE_FEE_ACCOUNTS: 'or: the public keys fees are paid to, separated by commas (the representative)',
 	KEETANET_LOCAL_NODE_FEE_TOKEN: 'the public key of the token fees are paid in (the base token)',
-	KEETANET_LOCAL_NODE_NETWORK: 'local, dev, staging, test, main, or a network ID (local); test and main only read-only or bootstrap-only',
+	KEETANET_LOCAL_NODE_NETWORK: 'local, dev, staging, test, main, or a network ID (local); test and main only read-only or bootstrap-only, and with peers dev and staging too',
 	KEETANET_LOCAL_NODE_POSTGRES_URL: 'keep the ledger in this Postgres database (in memory, lost on stop)',
-	KEETANET_LOCAL_NODE_LISTEN_IP: 'the address to serve on (127.0.0.1)',
+	KEETANET_LOCAL_NODE_LISTEN_IP: 'the address to serve on (127.0.0.1); 0.0.0.0 or :: needs both endpoints below',
 	KEETANET_LOCAL_NODE_LISTEN_PORT: 'the port to serve on (0: any free port)',
+	KEETANET_LOCAL_NODE_ENDPOINT_API: 'the http:// or https:// URL clients and peers reach the API at (where it listens, below /api)',
+	KEETANET_LOCAL_NODE_ENDPOINT_P2P: `the ws:// or wss:// URL peers reach it at, with the path ${P2P_PATH} (where it listens)`,
+	KEETANET_LOCAL_NODE_PREFER_UPDATES: 'http or websocket: how peers send it staples (websocket)',
+	KEETANET_LOCAL_NODE_MANUAL_PEERS: `the peers it dials, separated by commas, each ${MANUAL_PEER_FORM}, as a node prints on its "peer:" line (none; auto is not supported)`,
 	KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE: 'true lets the node vote for TOKEN_ADMIN_MODIFY_BALANCE (false)',
 	KEETANET_GENESIS_TRUSTED_SEED: 'the seed of the trusted account (required)',
 	KEETANET_GENESIS_TRUSTED_SEED_INDEX: 'the index of its key under the seed (0)',
@@ -143,15 +148,26 @@ function describeNetwork(selection: NetworkSelection): string {
 	}
 }
 
+/** How other nodes name this one in KEETANET_LOCAL_NODE_MANUAL_PEERS: its advertisement, signed as it greets peers. */
+async function ownPeer(node: LocalNode): Promise<string> {
+	const peer = manualPeerOf(await node.switch.getOutgoingGreetingInfo());
+	if (peer === undefined) {
+		throw(new Error('the node does not advertise itself as a representative'));
+	}
+	return(formatManualPeer(peer));
+}
+
 /** Nothing secret: the connection string may hold a password. */
-function startupSummary(config: EnvironmentConfig, storage: OpenedStorage, node: LocalNode): string {
+async function startupSummary(config: EnvironmentConfig, storage: OpenedStorage, node: LocalNode): Promise<string> {
 	return([
 		`slop-node ${NODE_VERSION}\n`,
 		`representative: ${config.representative.publicKeyString.get()}\n`,
 		`network: ${describeNetwork(config.network)}\n`,
 		`ledger write mode: ${config.ledgerWriteMode}\n`,
 		`storage: ${storage.kind}\n`,
-		`api: ${node.config.endpoints?.api ?? 'not served'}\n`
+		`manual peers: ${String(config.manualPeers.length)}\n`,
+		`api: ${node.config.endpoints?.api ?? 'not served'}\n`,
+		`peer: ${await ownPeer(node)}\n`
 	].join(''));
 }
 
@@ -173,7 +189,7 @@ async function run(config: EnvironmentConfig, output: Output): Promise<void> {
 			await node.ledger.getHeadBlock(node.networkAddress, 'main');
 			log.startAutoSync();
 			await node.run();
-			output.out(startupSummary(config, storage, node));
+			output.out(await startupSummary(config, storage, node));
 			const signal = await stopping.received;
 			output.out(`stopping on ${signal}\n`);
 		} finally {

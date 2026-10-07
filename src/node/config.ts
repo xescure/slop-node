@@ -5,10 +5,14 @@ import type { Account, GenericAccount, TokenAddress } from '@keetanetwork/keetan
 import type { LedgerConfig } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { LogTargetLevel } from '@keetanetwork/keetanet-client/lib/log/index.js';
 import type { LocalNodeConfig } from '@keetanetwork/keetanet-client/lib/node/local.js';
+import type { P2PPeerRep, P2PUpdateOptions } from '@keetanetwork/keetanet-client/lib/p2p.js';
+import type { JSONSerializableObject } from '@keetanetwork/keetanet-client/lib/utils/conversion.js';
+import { P2PInternals } from '../upstream/internals.js';
 import { assertNever } from '../util/assert-never.js';
 import type { AssertNever } from '../util/assert-never.js';
 import { computeFeeFromBlocksFor, parseFeeSchedule } from './fees.js';
 import type { FeeAccount, FeePolicy } from './fees.js';
+import { P2P_PATH } from './peers.js';
 
 const lib = KeetaNet.lib;
 const NetworkConfig = KeetaNet.Client.Config;
@@ -41,6 +45,10 @@ export const NODE_VARIABLES = [
 	'KEETANET_LOCAL_NODE_POSTGRES_URL',
 	'KEETANET_LOCAL_NODE_LISTEN_IP',
 	'KEETANET_LOCAL_NODE_LISTEN_PORT',
+	'KEETANET_LOCAL_NODE_ENDPOINT_API',
+	'KEETANET_LOCAL_NODE_ENDPOINT_P2P',
+	'KEETANET_LOCAL_NODE_PREFER_UPDATES',
+	'KEETANET_LOCAL_NODE_MANUAL_PEERS',
 	'KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE'
 ] as const;
 
@@ -85,6 +93,24 @@ export const PUBLIC_NETWORKS: readonly PublicNetwork[] = ['main', 'test'];
 export type FollowingWriteMode = Extract<LedgerWriteMode, 'read-only' | 'bootstrap-only'>;
 export const FOLLOWING_WRITE_MODES: readonly FollowingWriteMode[] = ['read-only', 'bootstrap-only'];
 
+/**
+ * The variables that name peers. A node with peers on one of Keeta's
+ * networks takes part in it, so there too it may only follow the ledger.
+ */
+export type PeerVariable = Extract<ConfigVariable, 'KEETANET_LOCAL_NODE_MANUAL_PEERS'>;
+export const PEER_VARIABLES: readonly PeerVariable[] = ['KEETANET_LOCAL_NODE_MANUAL_PEERS'];
+
+const UPDATE_PREFERENCES = ['http', 'websocket'] as const satisfies readonly P2PUpdateOptions[];
+
+/** Fails to compile when upstream adds a way of receiving updates that the list above does not offer. */
+type _EveryUpdatePreferenceListed = AssertNever<Exclude<P2PUpdateOptions, typeof UPDATE_PREFERENCES[number]>>;
+
+/** A representative the node dials to join the network: its own signed advertisement, or the same unsigned. */
+export type ManualPeer = P2PPeerRep;
+
+/** How a manual peer is written; a node prints its own this way. */
+export const MANUAL_PEER_FORM = '<keeta_ account>@<api URL>|<p2p URL>[|http or websocket[|signature]]';
+
 const LOG_LEVELS = ['ALL', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'NONE'] as const satisfies readonly LogTargetLevel[];
 
 /** Fails to compile when upstream adds a log level that the list above does not offer. */
@@ -102,6 +128,12 @@ export type ConfigProblem =
 	| { readonly kind: 'fee-recipient-without-fee'; readonly variable: ConfigVariable }
 	| { readonly kind: 'too-many-fee-accounts'; readonly count: number; readonly maximum: number }
 	| { readonly kind: 'writable-on-public-network'; readonly network: PublicNetwork; readonly ledgerWriteMode: LedgerWriteMode }
+	| { readonly kind: 'peers-on-keeta-network'; readonly network: Networks; readonly ledgerWriteMode: LedgerWriteMode; readonly variable: PeerVariable }
+	| { readonly kind: 'automatic-peers' }
+	| { readonly kind: 'peer-signature-invalid'; readonly key: string }
+	| { readonly kind: 'duplicate-peer'; readonly key: string }
+	| { readonly kind: 'peer-is-self'; readonly key: string }
+	| { readonly kind: 'endpoints-required'; readonly listenIP: string; readonly missing: readonly ConfigVariable[] }
 	| { readonly kind: 'genesis-on-public-network'; readonly network: PublicNetwork }
 	| { readonly kind: 'genesis-in-memory' }
 	| { readonly kind: 'trusted-seed-mismatch'; readonly derived: string; readonly trusted: string };
@@ -129,6 +161,18 @@ function describeProblem(problem: ConfigProblem): string {
 			return(`KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX and KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX name ${String(problem.count)} fee accounts, but at most ${String(problem.maximum)} are derived`);
 		case 'writable-on-public-network':
 			return(`the ${problem.network} network is public, so the node may only follow it: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to ${FOLLOWING_WRITE_MODES.join(' or ')} (it is ${problem.ledgerWriteMode})`);
+		case 'peers-on-keeta-network':
+			return(`the ${problem.network} network is Keeta's, so a node with peers on it may only follow it: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to ${FOLLOWING_WRITE_MODES.join(' or ')} (it is ${problem.ledgerWriteMode}), or leave ${problem.variable} unset`);
+		case 'automatic-peers':
+			return(`KEETANET_LOCAL_NODE_MANUAL_PEERS=auto is not supported: this node finds no peers by itself, so list each as ${MANUAL_PEER_FORM}`);
+		case 'peer-signature-invalid':
+			return(`KEETANET_LOCAL_NODE_MANUAL_PEERS gives ${problem.key} a signature that does not cover the key, endpoints and preference written with it`);
+		case 'duplicate-peer':
+			return(`KEETANET_LOCAL_NODE_MANUAL_PEERS names ${problem.key} more than once`);
+		case 'peer-is-self':
+			return(`KEETANET_LOCAL_NODE_MANUAL_PEERS names ${problem.key}, which is this node`);
+		case 'endpoints-required':
+			return(`the node listens on every interface (${problem.listenIP}), so it cannot tell peers where to reach it: set ${problem.missing.join(' and ')}`);
 		case 'genesis-on-public-network':
 			return(`the ${problem.network} network is public and already has its genesis`);
 		case 'genesis-in-memory':
@@ -174,6 +218,12 @@ export type ListenAddress = {
 	readonly port: number;
 };
 
+/** Where peers and clients reach the node; the node advertises where it listens for any left unset. */
+export type AdvertisedEndpoints = {
+	readonly api: string | undefined;
+	readonly p2p: string | undefined;
+};
+
 /** A node as the environment describes it. */
 export type EnvironmentConfig = {
 	readonly network: NetworkSelection;
@@ -185,6 +235,10 @@ export type EnvironmentConfig = {
 	readonly log: LogSettings;
 	readonly storage: StorageChoice;
 	readonly listen: ListenAddress;
+	readonly endpoints: AdvertisedEndpoints;
+	/** How the node asks its peers to send it staples. */
+	readonly preferUpdates: P2PUpdateOptions;
+	readonly manualPeers: readonly ManualPeer[];
 	readonly fee: FeePolicy;
 	/** Off by default, as upstream has it [Keeta TS] index.js:68983. */
 	readonly enableTokenAdminModifyBalance: boolean;
@@ -193,6 +247,8 @@ export type EnvironmentConfig = {
 const DEFAULT_LOG_LEVEL: LogTargetLevel = 'INFO';
 const DEFAULT_LEDGER_WRITE_MODE: LedgerWriteMode = 'read-write';
 const DEFAULT_LISTEN: ListenAddress = { ip: '127.0.0.1', port: 0 };
+/** Upstream's switch republishes over the WebSocket unless told otherwise [Keeta TS] index.js:71801. */
+const DEFAULT_PREFER_UPDATES: P2PUpdateOptions = 'websocket';
 
 /*
  * Upstream gives network 0 no alias of its own, while a node needs one; the
@@ -222,6 +278,13 @@ export const MAX_FEE_SEED_ACCOUNTS = 1024;
 const MAX_PORT = 65535;
 
 const POSTGRES_PROTOCOLS: ReadonlySet<string> = new Set(['postgres:', 'postgresql:']);
+const API_PROTOCOLS: ReadonlySet<string> = new Set(['http:', 'https:']);
+const P2P_PROTOCOLS: ReadonlySet<string> = new Set(['ws:', 'wss:']);
+
+/** The forms "every interface" takes once an address is written as a URL host. */
+const UNSPECIFIED_HOSTS: ReadonlySet<string> = new Set(['0.0.0.0', '[::]']);
+
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /** A secret value is left out of the error, and so is the cause, which may quote it. */
 function invalid(variable: ConfigVariable, expected: string, value: string, options?: ErrorOptions): ConfigError {
@@ -460,6 +523,152 @@ function parseListenPort(text: string): number {
 	return(Number(text));
 }
 
+function isUnspecifiedAddress(ip: string): boolean {
+	let host = ip;
+	if (isIP(ip) === 6) {
+		host = `[${ip}]`;
+	}
+	return(UNSPECIFIED_HOSTS.has(new URL(`http://${host}/`).hostname));
+}
+
+function urlOf(text: string, protocols: ReadonlySet<string>): URL | undefined {
+	let url: URL;
+	try {
+		url = new URL(text);
+	} catch {
+		return(undefined);
+	}
+	if (!protocols.has(url.protocol)) {
+		return(undefined);
+	}
+	return(url);
+}
+
+/**
+ * The client requests each route at the endpoint followed by the route's
+ * path [Keeta TS] index.js:59584-59585, which a query or fragment would cut
+ * off.
+ */
+function parseAPIEndpoint(text: string): string {
+	const url = urlOf(text, API_PROTOCOLS);
+	if (url === undefined || url.search !== '' || url.hash !== '') {
+		throw(invalid('KEETANET_LOCAL_NODE_ENDPOINT_API', 'an http:// or https:// URL without a query or fragment', text));
+	}
+	return(text);
+}
+
+/** The node serves peers at one path of the API's own server, so the advertised endpoint must lead there. */
+function parseP2PEndpoint(text: string): string {
+	const url = urlOf(text, P2P_PROTOCOLS);
+	if (url === undefined || url.pathname !== P2P_PATH || url.search !== '' || url.hash !== '') {
+		throw(invalid('KEETANET_LOCAL_NODE_ENDPOINT_P2P', `a ws:// or wss:// URL whose path is ${P2P_PATH}, where the node serves peers`, text));
+	}
+	return(text);
+}
+
+function findUpdatePreference(text: string): P2PUpdateOptions | undefined {
+	return(UPDATE_PREFERENCES.find(function(candidate): boolean {
+		return(candidate === text);
+	}));
+}
+
+function parsePreferUpdates(text: string): P2PUpdateOptions {
+	const variable = 'KEETANET_LOCAL_NODE_PREFER_UPDATES';
+	const preference = findUpdatePreference(text);
+	if (preference === undefined) {
+		throw(invalid(variable, UPDATE_PREFERENCES.join(' or '), text));
+	}
+	return(preference);
+}
+
+const AUTOMATIC_PEERS = 'auto';
+
+/** The fields after the key, which are the endpoints, then optionally the preference and the signature. */
+const MIN_PEER_FIELDS = 2;
+const MAX_PEER_FIELDS = 4;
+
+/**
+ * A peer in the form of upstream's peer record [Keeta TS] index.js:71911-71987.
+ * A signature must be the peer's own over what is written with it, as the
+ * switch checks one [Keeta TS] index.js:71828-71867; without one the record
+ * carries none, which upstream's typings allow (lib/p2p.d.ts P2PPeerRep).
+ */
+function parseManualPeer(entry: string): ManualPeer {
+	const variable = 'KEETANET_LOCAL_NODE_MANUAL_PEERS';
+	const at = entry.indexOf('@');
+	const fields = entry.slice(at + 1).split('|');
+	if (at < 0 || fields.length < MIN_PEER_FIELDS || fields.length > MAX_PEER_FIELDS) {
+		throw(invalid(variable, MANUAL_PEER_FORM, entry));
+	}
+	const key = parseAccountKey(variable, entry.slice(0, at));
+	const [api = '', p2p = '', preferenceText = DEFAULT_PREFER_UPDATES, signature] = fields;
+	const preferUpdates = findUpdatePreference(preferenceText);
+	if (urlOf(api, API_PROTOCOLS) === undefined || urlOf(p2p, P2P_PROTOCOLS) === undefined || preferUpdates === undefined) {
+		throw(invalid(variable, MANUAL_PEER_FORM, entry));
+	}
+	const unsigned = { kind: lib.Node.Kind.REPRESENTATIVE, key, endpoints: { api, p2p }, preferUpdates } as const;
+	if (signature === undefined) {
+		return({ ...unsigned, certificate: null });
+	}
+	if (!BASE64.test(signature)) {
+		throw(invalid(variable, `${MANUAL_PEER_FORM}, the signature in base64`, entry));
+	}
+	const verified = manualPeerOf({ ...unsigned, key: key.publicKeyString.get(), signature });
+	if (verified === undefined) {
+		throw(new ConfigError({ kind: 'peer-signature-invalid', key: key.publicKeyString.get() }));
+	}
+	return(verified);
+}
+
+/** Entries are separated by commas; space around them and empty ones are ignored, as in the list of fee accounts. */
+function parseManualPeers(text: string, representative: Account): ManualPeer[] {
+	const variable = 'KEETANET_LOCAL_NODE_MANUAL_PEERS';
+	const entries = text.split(',').map(function(entry): string {
+		return(entry.trim());
+	}).filter(function(entry): boolean {
+		return(entry !== '');
+	});
+	if (entries.some(function(entry): boolean {
+		return(entry.toLowerCase() === AUTOMATIC_PEERS);
+	})) {
+		throw(new ConfigError({ kind: 'automatic-peers' }));
+	}
+	if (entries.length === 0) {
+		throw(invalid(variable, `a comma-separated list of ${MANUAL_PEER_FORM}`, text));
+	}
+	const peers = entries.map(parseManualPeer);
+	const seen = new Set<string>();
+	for (const peer of peers) {
+		const key = peer.key.publicKeyString.get();
+		if (peer.key.comparePublicKey(representative)) {
+			throw(new ConfigError({ kind: 'peer-is-self', key }));
+		}
+		if (seen.has(key)) {
+			throw(new ConfigError({ kind: 'duplicate-peer', key }));
+		}
+		seen.add(key);
+	}
+	return(peers);
+}
+
+/** A representative's advertisement, as its switch greets peers with it, if its signature holds. */
+export function manualPeerOf(advertisement: JSONSerializableObject): ManualPeer | undefined {
+	const peer = P2PInternals.P2PPeerFromJSO(advertisement);
+	if (peer === null || peer.kind !== lib.Node.Kind.REPRESENTATIVE) {
+		return(undefined);
+	}
+	return(peer);
+}
+
+/** The peer written as the setting reads it, with the preference always given so that a signature can follow. */
+export function formatManualPeer(peer: ManualPeer): string {
+	const fields = [peer.endpoints.api, peer.endpoints.p2p, peer.preferUpdates];
+	if ('signature' in peer) {
+		fields.push(Buffer.from(peer.signature).toString('base64'));
+	}
+	return(`${peer.key.publicKeyString.get()}@${fields.join('|')}`);
+}
+
 function parseBoolean(variable: ConfigVariable, text: string): boolean {
 	switch (text) {
 		case 'true':
@@ -568,6 +777,45 @@ function readFeePolicy(reader: EnvironmentReader): FeePolicy {
 }
 
 /**
+ * Peers carry the node's staples into the network and its peers' staples into
+ * the node, so on any network of Keeta's a node with peers may only follow.
+ * Network 0 is this node's own.
+ */
+function refusePeersOnKeetaNetwork(reader: EnvironmentReader, network: NetworkSelection, ledgerWriteMode: LedgerWriteMode): void {
+	if (network.kind === 'local' || isFollowingWriteMode(ledgerWriteMode)) {
+		return;
+	}
+	const variable = PEER_VARIABLES.find(function(candidate): boolean {
+		return(reader.isSet(candidate));
+	});
+	if (variable !== undefined) {
+		throw(new ConfigError({ kind: 'peers-on-keeta-network', network: network.alias, ledgerWriteMode, variable }));
+	}
+}
+
+/** A node on every interface cannot derive an address peers can reach, so both endpoints must be given. */
+function readEndpoints(reader: EnvironmentReader, listen: ListenAddress): AdvertisedEndpoints {
+	const endpoints: AdvertisedEndpoints = {
+		api: reader.read<string | undefined>('KEETANET_LOCAL_NODE_ENDPOINT_API', parseAPIEndpoint, undefined),
+		p2p: reader.read<string | undefined>('KEETANET_LOCAL_NODE_ENDPOINT_P2P', parseP2PEndpoint, undefined)
+	};
+	if (!isUnspecifiedAddress(listen.ip)) {
+		return(endpoints);
+	}
+	const missing: ConfigVariable[] = [];
+	if (endpoints.api === undefined) {
+		missing.push('KEETANET_LOCAL_NODE_ENDPOINT_API');
+	}
+	if (endpoints.p2p === undefined) {
+		missing.push('KEETANET_LOCAL_NODE_ENDPOINT_P2P');
+	}
+	if (missing.length > 0) {
+		throw(new ConfigError({ kind: 'endpoints-required', listenIP: listen.ip, missing }));
+	}
+	return(endpoints);
+}
+
+/**
  * The node the environment describes. A representative on a public network
  * is refused unless it only follows the ledger there, so that it can never
  * vote or accept a publish on it.
@@ -585,10 +833,16 @@ export function getConfigFromEnv(environment: Environment): EnvironmentConfig {
 	if (publicNetwork !== undefined && !isFollowingWriteMode(ledgerWriteMode)) {
 		throw(new ConfigError({ kind: 'writable-on-public-network', network: publicNetwork, ledgerWriteMode }));
 	}
+	refusePeersOnKeetaNetwork(reader, network, ledgerWriteMode);
 
+	const representative = readSeedAccount(reader, 'KEETANET_LOCAL_NODE_SEED', 'KEETANET_LOCAL_NODE_SEED_INDEX');
+	const listen: ListenAddress = {
+		ip: reader.read('KEETANET_LOCAL_NODE_LISTEN_IP', parseListenIP, DEFAULT_LISTEN.ip),
+		port: reader.read('KEETANET_LOCAL_NODE_LISTEN_PORT', parseListenPort, DEFAULT_LISTEN.port)
+	};
 	return({
 		network,
-		representative: readSeedAccount(reader, 'KEETANET_LOCAL_NODE_SEED', 'KEETANET_LOCAL_NODE_SEED_INDEX'),
+		representative,
 		initialTrustedAccount: readTrustedAccount(reader, network),
 		ledgerWriteMode,
 		log: {
@@ -596,10 +850,12 @@ export function getConfigFromEnv(environment: Environment): EnvironmentConfig {
 			filter: reader.read<RegExp | undefined>('KEETANET_LOCAL_NODE_LOG_FILTER', parseLogFilter, undefined)
 		},
 		storage: reader.read('KEETANET_LOCAL_NODE_POSTGRES_URL', parsePostgresURL, { kind: 'memory' }),
-		listen: {
-			ip: reader.read('KEETANET_LOCAL_NODE_LISTEN_IP', parseListenIP, DEFAULT_LISTEN.ip),
-			port: reader.read('KEETANET_LOCAL_NODE_LISTEN_PORT', parseListenPort, DEFAULT_LISTEN.port)
-		},
+		listen,
+		endpoints: readEndpoints(reader, listen),
+		preferUpdates: reader.read('KEETANET_LOCAL_NODE_PREFER_UPDATES', parsePreferUpdates, DEFAULT_PREFER_UPDATES),
+		manualPeers: reader.read('KEETANET_LOCAL_NODE_MANUAL_PEERS', function(text: string): ManualPeer[] {
+			return(parseManualPeers(text, representative));
+		}, []),
 		fee: readFeePolicy(reader),
 		enableTokenAdminModifyBalance: reader.read('KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE', function(text: string): boolean {
 			return(parseBoolean('KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE', text));
@@ -626,6 +882,33 @@ function networkAliasOf(selection: NetworkSelection): Networks {
 	}
 }
 
+/** The switch greets peers with "http" when it republishes over HTTP [Keeta TS] index.js:73527. */
+function usesHTTPRepublish(preference: P2PUpdateOptions): boolean {
+	switch (preference) {
+		case 'http':
+			return(true);
+		case 'websocket':
+			return(false);
+		default:
+			return(assertNever(preference));
+	}
+}
+
+/** Only the endpoints given, so that the node fills in the others from where it listens. */
+function configuredEndpoints(endpoints: AdvertisedEndpoints): LocalNodeConfig['endpoints'] {
+	const retval: NonNullable<LocalNodeConfig['endpoints']> = {};
+	if (endpoints.api !== undefined) {
+		retval.api = endpoints.api;
+	}
+	if (endpoints.p2p !== undefined) {
+		retval.p2p = endpoints.p2p;
+	}
+	if (retval.api === undefined && retval.p2p === undefined) {
+		return(undefined);
+	}
+	return(retval);
+}
+
 /** The representative the configuration describes, on the storage given. */
 export function localNodeConfig(config: EnvironmentConfig, resources: NodeResources): LocalNodeConfig {
 	const { storageDriver, kv, log } = resources;
@@ -643,10 +926,16 @@ export function localNodeConfig(config: EnvironmentConfig, resources: NodeResour
 			operations: { enableTokenAdminModifyBalance: config.enableTokenAdminModifyBalance }
 		},
 		stats: { kv },
-		nodeOptions: { listenIP: config.listen.ip, listenPort: config.listen.port }
+		p2p: { useHTTPRepublish: usesHTTPRepublish(config.preferUpdates) },
+		nodeOptions: { listenIP: config.listen.ip, listenPort: config.listen.port },
+		manualPeers: [...config.manualPeers]
 	};
 	if (kv !== null) {
-		retval.p2p = { kv };
+		retval.p2p = { ...retval.p2p, kv };
+	}
+	const endpoints = configuredEndpoints(config.endpoints);
+	if (endpoints !== undefined) {
+		retval.endpoints = endpoints;
 	}
 	return(retval);
 }

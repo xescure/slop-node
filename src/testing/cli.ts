@@ -81,3 +81,5 @@ export function startCLI(args: readonly string[], environment: Environment): CLI
 /** The line of the startup summary that names where the API is served. */
 export const API_LINE: RegExp = /^api: (\S+)$/m;
 
+/** The line of the startup summary that names the node as another names it in KEETANET_LOCAL_NODE_MANUAL_PEERS. */
+export const PEER_LINE: RegExp = /^peer: (\S+)$/m;

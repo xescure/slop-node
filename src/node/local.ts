@@ -12,6 +12,7 @@ import type { APIRequest, Route } from '../api/index.js';
 import { assertNever } from '../util/assert-never.js';
 import type { AssertNever } from '../util/assert-never.js';
 import type { ClassSurface } from '../util/class-surface.js';
+import { SwitchConnections } from './connections.js';
 import { LocalNodeError } from './errors.js';
 import { P2P_PATH, PeerServer } from './peers.js';
 import { close, listen } from './server.js';
@@ -176,6 +177,18 @@ function needsAdvertising(config: LocalNodeConfig): boolean {
 	return(config.endpoints?.api === undefined || config.endpoints.p2p === undefined);
 }
 
+/**
+ * The switch dials each manual peer as it is added [Keeta TS] index.js:72623-72658,
+ * which Node does as it is constructed [Keeta TS] index.js:71352-71358, and greets
+ * it with the node's endpoints [Keeta TS] index.js:73496-73513, which a node
+ * that advertises where it listens does not know yet; the peers are added once
+ * it runs.
+ */
+function withoutManualPeers(config: LocalNodeConfig): LocalNodeConfig {
+	const { manualPeers: _addedOnRun, ...retval } = config;
+	return(retval);
+}
+
 function hostInURL(host: string): string {
 	if (host.includes(':')) {
 		return(`[${host}]`);
@@ -196,11 +209,13 @@ export class LocalNode extends ClientNode {
 	#mountedPrefix: string | undefined;
 	#listening: Listening | undefined;
 	#peers: PeerServer | undefined;
+	readonly #connections: SwitchConnections;
 	#running = false;
 
 	constructor(config: LocalNodeConfig) {
-		super(config);
+		super(withoutManualPeers(config));
 		this.config = config;
+		this.#connections = new SwitchConnections(this.switch);
 		// Outside production Express answers a failure that escapes every handler with its stack.
 		this.#app.set('env', 'production');
 	}
@@ -318,8 +333,8 @@ export class LocalNode extends ClientNode {
 	/**
 	 * Mounts the routes, listens, advertises where it listens if no endpoints
 	 * are configured, so that the node describes itself to peers correctly,
-	 * and then serves peers on "/p2p" unless told not to. The bootstrap client
-	 * is not started yet.
+	 * then serves peers on "/p2p" unless told not to, and dials its manual
+	 * peers. The bootstrap client is not started yet.
 	 */
 	override async run(options?: RunOptions): Promise<void> {
 		if (this.#running) {
@@ -341,6 +356,9 @@ export class LocalNode extends ClientNode {
 				if (options?.startWebSocketServer !== false) {
 					this.#peers = new PeerServer(this.#listening.server, this.switch, this.log);
 				}
+			}
+			for (const peer of this.config.manualPeers ?? []) {
+				this.switch.addManualPeer(peer);
 			}
 		} catch (error) {
 			this.#running = false;
@@ -375,7 +393,9 @@ export class LocalNode extends ClientNode {
 
 	/**
 	 * Stops serving peers and requests, waiting for the requests in flight
-	 * and the messages peers posted, and then stops the node.
+	 * and the messages peers posted, then stops the node, and waits until its
+	 * switch is done with the connections it closed, so that the storage can
+	 * be closed after.
 	 */
 	override async stop(): Promise<void> {
 		const peers = this.#peers;
@@ -391,6 +411,7 @@ export class LocalNode extends ClientNode {
 		await settleDeliveries(this.switch);
 		this.#running = false;
 		await super.stop();
+		await this.#connections.closed();
 	}
 
 	/** Bootstrapping from peers is not offered yet. */

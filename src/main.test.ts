@@ -3,9 +3,12 @@ import type { Server } from 'node:net';
 import { describe, expect, inject, onTestFinished, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Environment } from './node/config.js';
-import { API_LINE, startCLI } from './testing/cli.js';
+import { API_LINE, PEER_LINE, startCLI } from './testing/cli.js';
+import { endpointOf, RECEIVER, STORAGES_UNDER_TEST, SUPPLY, TRUSTED_SIGNER, useSDKNodes } from './testing/sdk.js';
+import type { StorageUnderTest } from './testing/sdk.js';
 import { createDatabase } from './testing/postgres.js';
 import { deriveTestKeys, TEST_NETWORK_SEEDS } from './testing/network.js';
+import { assertNever } from './util/assert-never.js';
 import { NODE_VERSION } from './version.js';
 
 const lib = KeetaNet.lib;
@@ -69,6 +72,61 @@ describe('slop-node run', function() {
 		const cli = startCLI(['run'], { ...NODE, KEETANET_LOCAL_NODE_LISTEN_PORT: 'eighty' });
 		expect(await cli.exited).toEqual({ code: 1, signal: null });
 		expect(cli.stderr()).toContain('KEETANET_LOCAL_NODE_LISTEN_PORT');
+	});
+});
+
+/** Lines the switch logs, and nothing else, so that a test can wait for what it does. */
+const SWITCH_LOG: Environment = { KEETANET_LOCAL_NODE_LOG_LEVEL: 'DEBUG', KEETANET_LOCAL_NODE_LOG_FILTER: '^P2P$' };
+
+describe('slop-node run with peers', function() {
+	const nodes = useSDKNodes();
+
+	async function storageEnvironment(storage: StorageUnderTest): Promise<Environment> {
+		switch (storage) {
+			case 'memory':
+				return({});
+			case 'postgres':
+				return({ KEETANET_LOCAL_NODE_POSTGRES_URL: (await nodes.database()).connectionString });
+			default:
+				return(assertNever(storage));
+		}
+	}
+
+	test.each(STORAGES_UNDER_TEST)('peers two nodes configured by their environment alone, on %s, so that a staple published to one applies on the other', async function(storage) {
+		const first = startCLI(['run'], { ...NODE, ...await storageEnvironment(storage) });
+		const [, firstAPI = ''] = await first.printed(API_LINE);
+		const [, firstPeer = ''] = await first.printed(PEER_LINE);
+		const firstKey = lib.Account.fromSeed(TEST_NETWORK_SEEDS.representative, 0).publicKeyString.get();
+		expect(firstPeer.startsWith(`${firstKey}@${firstAPI}|`)).toBe(true);
+
+		const secondRepresentative = lib.Account.fromSeed(TEST_NETWORK_SEEDS.representative, 1);
+		const second = startCLI(['run'], { ...NODE, ...await storageEnvironment(storage), ...SWITCH_LOG, KEETANET_LOCAL_NODE_SEED_INDEX: '1', KEETANET_LOCAL_NODE_MANUAL_PEERS: firstPeer });
+		const [, secondAPI = ''] = await second.printed(API_LINE);
+		expect(second.stdout()).toContain('manual peers: 1\n');
+		// The switch records the peer it dialed once the peer has greeted it [Keeta TS] index.js:73642-73645.
+		await second.printed(new RegExp(`Added knownPeer: ${firstKey}$`, 'm'));
+
+		const holder = nodes.userClient(endpointOf(firstAPI, lib.Account.fromSeed(TEST_NETWORK_SEEDS.representative, 0)), TRUSTED_SIGNER);
+		expect((await holder.initializeNetwork({ addSupplyAmount: SUPPLY })).publish).toBe(true);
+		const sent = await holder.send(RECEIVER, 100n, holder.baseToken);
+		if (sent.from !== 'direct') {
+			throw(new Error('the client published through a publish aid'));
+		}
+		// A node passes a staple on to its own peers once it has added it [Keeta TS] index.js:71409-71435, 71460-71463, 73009-73010.
+		await second.printed(new RegExp(`\\[${sent.voteStaple.blocksHash.toString()}\\] Sending message add`));
+		const observer = nodes.userClient(endpointOf(secondAPI, secondRepresentative), null);
+		expect(await observer.client.getBalance(RECEIVER, holder.baseToken)).toBe(100n);
+
+		second.signal('SIGTERM');
+		first.signal('SIGTERM');
+		expect(await second.exited).toEqual({ code: 0, signal: null });
+		expect(await first.exited).toEqual({ code: 0, signal: null });
+	});
+
+	test('refuses peers named automatically', async function() {
+		const cli = startCLI(['run'], { ...NODE, KEETANET_LOCAL_NODE_MANUAL_PEERS: 'auto' });
+		expect(await cli.exited).toEqual({ code: 1, signal: null });
+		expect(cli.stderr()).toBe('slop-node: KEETANET_LOCAL_NODE_MANUAL_PEERS=auto is not supported: this node finds no peers by itself, so list each as <keeta_ account>@<api URL>|<p2p URL>[|http or websocket[|signature]]\n');
 	});
 });
 
