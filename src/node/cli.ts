@@ -5,6 +5,7 @@ import { NODE_VERSION } from '../version.js';
 import { ConfigError, GENESIS_VARIABLES, getConfigFromEnv, localNodeConfig, MAX_FEE_SEED_ACCOUNTS, NODE_VARIABLES, TRUSTED_ACCOUNT_VARIABLE } from './config.js';
 import type { ConfigVariable, Environment, EnvironmentConfig, LogSettings, NetworkSelection } from './config.js';
 import { LocalNodeError } from './errors.js';
+import { describeOperationalFailure, operationalFailureOf } from './failure.js';
 import { addGenesis, GenesisError, getGenesisConfigFromEnv } from './genesis.js';
 import { LocalNode } from './local.js';
 import { closeStorage, nodeResourcesOf, openStorage } from './storage.js';
@@ -210,12 +211,35 @@ async function genesis(config: EnvironmentConfig, environment: Environment, outp
 	}
 }
 
-/** The refusals this node words itself are shown as they are; anything else in full, for its stack. */
-function describeFailure(error: unknown): string {
+/** The log levels that ask for the details of a failure. */
+const DETAILED_LOG_LEVELS: ReadonlySet<string> = new Set(['DEBUG', 'ALL']);
+
+/** The refusals this node words itself and the failures of its surroundings that an operator can fix, in one line. */
+function knownFailureLine(error: unknown, environment: Environment): string | undefined {
 	if (error instanceof ConfigError || error instanceof GenesisError || error instanceof LocalNodeError) {
 		return(error.message);
 	}
-	return(inspect(error));
+	const operational = operationalFailureOf(error);
+	if (operational === undefined) {
+		return(undefined);
+	}
+	return(describeOperationalFailure(operational, environment));
+}
+
+/**
+ * A known failure is one line, followed by its stack only at a log level of
+ * DEBUG or below. Anything else is a bug, and is shown in full, for its stack.
+ */
+function failureOutput(error: unknown, environment: Environment): string {
+	const line = knownFailureLine(error, environment);
+	if (line === undefined) {
+		return(`slop-node: ${inspect(error)}\n`);
+	}
+	const level = environment['KEETANET_LOCAL_NODE_LOG_LEVEL']?.toUpperCase();
+	if (level !== undefined && DETAILED_LOG_LEVELS.has(level)) {
+		return(`slop-node: ${line}\n${inspect(error)}\n`);
+	}
+	return(`slop-node: ${line}\n`);
 }
 
 async function runCommand(command: Command, environment: Environment, output: Output): Promise<void> {
@@ -245,7 +269,7 @@ export async function main(argv: readonly string[], environment: Environment, ou
 		await runCommand(command, environment, output);
 		return(0);
 	} catch (error: unknown) {
-		output.error(`slop-node: ${describeFailure(error)}\n`);
+		output.error(failureOutput(error, environment));
 		return(1);
 	}
 }

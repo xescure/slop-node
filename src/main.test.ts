@@ -1,3 +1,5 @@
+import { createServer } from 'node:net';
+import type { Server } from 'node:net';
 import { describe, expect, inject, onTestFinished, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Environment } from './node/config.js';
@@ -67,6 +69,94 @@ describe('slop-node run', function() {
 		const cli = startCLI(['run'], { ...NODE, KEETANET_LOCAL_NODE_LISTEN_PORT: 'eighty' });
 		expect(await cli.exited).toEqual({ code: 1, signal: null });
 		expect(cli.stderr()).toContain('KEETANET_LOCAL_NODE_LISTEN_PORT');
+	});
+});
+
+/** A port nothing listens on: one the system just handed out and took back. */
+async function closedPort(): Promise<number> {
+	const server = createServer();
+	await new Promise<void>(function(resolve) {
+		server.listen(0, '127.0.0.1', resolve);
+	});
+	const address = server.address();
+	await new Promise<void>(function(resolve) {
+		server.close(function() {
+			resolve();
+		});
+	});
+	if (address === null || typeof address === 'string') {
+		throw(new Error('the test server has no port'));
+	}
+	return(address.port);
+}
+
+/** A port held by a listener until the test ends. */
+async function heldPort(): Promise<number> {
+	const server: Server = createServer();
+	await new Promise<void>(function(resolve) {
+		server.listen(0, '127.0.0.1', resolve);
+	});
+	onTestFinished(function() {
+		return(new Promise<void>(function(resolve) {
+			server.close(function() {
+				resolve();
+			});
+		}));
+	});
+	const address = server.address();
+	if (address === null || typeof address === 'string') {
+		throw(new Error('the test server has no port'));
+	}
+	return(address.port);
+}
+
+/** A line of a stack. */
+const STACK_FRAME = /^\s+at /m;
+
+describe('slop-node when its surroundings fail', function() {
+	test.each(['run', 'genesis'])('%s names a Postgres it cannot reach in one line, without the password', async function(command) {
+		const port = await closedPort();
+		const environment: Environment = {
+			...NODE,
+			...GENESIS,
+			KEETANET_LOCAL_NODE_POSTGRES_URL: `postgresql://slop:hunter2@127.0.0.1:${String(port)}/ledger`
+		};
+		const cli = startCLI([command], environment);
+		expect(await cli.exited).toEqual({ code: 1, signal: null });
+		expect(cli.stderr()).toBe(`slop-node: cannot reach Postgres at 127.0.0.1:${String(port)}\n`);
+	});
+
+	test('names a port that is in use in one line', async function() {
+		const port = await heldPort();
+		const cli = startCLI(['run'], { ...NODE, KEETANET_LOCAL_NODE_LISTEN_PORT: String(port) });
+		expect(await cli.exited).toEqual({ code: 1, signal: null });
+		expect(cli.stderr()).toContain(`slop-node: port ${String(port)} in use\n`);
+		expect(cli.stderr()).not.toMatch(STACK_FRAME);
+	});
+
+	test('gives the migration\'s own message when the database was migrated by a newer node', async function() {
+		const database = await createDatabase(inject('postgresCluster'), inject('postgresLedgerTemplate'));
+		onTestFinished(function() {
+			return(database.drop());
+		});
+		await database.pool().query('INSERT INTO schema_version (version, sha256, applied_at) VALUES (99, decode(repeat(\'00\', 32), \'hex\'), now())');
+		const cli = startCLI(['run'], { ...NODE, KEETANET_LOCAL_NODE_POSTGRES_URL: database.connectionString });
+		expect(await cli.exited).toEqual({ code: 1, signal: null });
+		expect(cli.stderr()).toMatch(/^slop-node: the database is at schema version 99, newer than the newest this build knows, \d+\n$/);
+	});
+
+	test.each(['DEBUG', 'debug', 'ALL'])('adds the stack to that line at the log level %s', async function(level) {
+		const port = await heldPort();
+		const cli = startCLI(['run'], { ...NODE, KEETANET_LOCAL_NODE_LISTEN_PORT: String(port), KEETANET_LOCAL_NODE_LOG_LEVEL: level });
+		expect(await cli.exited).toEqual({ code: 1, signal: null });
+		expect(cli.stderr()).toContain(`slop-node: port ${String(port)} in use\n`);
+		expect(cli.stderr()).toMatch(STACK_FRAME);
+	});
+
+	test('keeps a configuration refusal to one line', async function() {
+		const cli = startCLI(['run'], { ...NODE, KEETANET_LOCAL_NODE_LISTEN_PORT: 'eighty', KEETANET_LOCAL_NODE_LOG_LEVEL: 'INFO' });
+		expect(await cli.exited).toEqual({ code: 1, signal: null });
+		expect(cli.stderr().trimEnd().split('\n')).toHaveLength(1);
 	});
 });
 
