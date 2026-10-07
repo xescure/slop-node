@@ -57,6 +57,7 @@ import {
 	markInvolved,
 	mergeAccountInfo,
 	nonZeroBalances,
+	ownersOf,
 	raiseHeads,
 	removeCertificate,
 	representativeOf,
@@ -984,17 +985,14 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * [Keeta TS] index.js:70046-70078
 	 */
 	async listOwners(transaction: PostgresTransaction, identifier: IdentifierAddress, target?: GenericAccount): Promise<GenericAccount[]> {
-		const owners = new Map<string, GenericAccount>();
-		for (const row of await transaction.run(aclsOfEntity, [publicKeyOf(identifier), false])) {
-			if (target !== undefined && row.target !== publicKeyOf(target)) {
-				continue;
-			}
-			if (!permissionsOf(row.base_permissions, row.external_permissions).has(['OWNER'])) {
-				continue;
-			}
-			owners.set(row.principal, lib.Account.fromPublicKeyString(row.principal));
+		let targetKey: string | null = null;
+		if (target !== undefined) {
+			targetKey = publicKeyOf(target);
 		}
-		return(Array.from(owners.values()));
+		const rows = await transaction.run(ownersOf, [publicKeyOf(identifier), targetKey]);
+		return(rows.map(function(row) {
+			return(lib.Account.fromPublicKeyString(row.principal));
+		}));
 	}
 
 	/*

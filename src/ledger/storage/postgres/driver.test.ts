@@ -451,6 +451,50 @@ describe('the Postgres driver', function() {
 		}
 	});
 
+	test('owners are the distinct account principals whose base set holds OWNER, by target when one is given', async function() {
+		const database = await ledgerDatabase();
+		const storage = ownedStorageOn(database);
+		freezeClock(GENESIS_MOMENT);
+		const network = await createTestNetwork({ representativeWeights: DEFAULT_WEIGHTS });
+		const [owner, admin, certified] = network.users;
+		const [first, second] = network.representatives;
+		if (owner === undefined || admin === undefined || certified === undefined || first === undefined || second === undefined) {
+			throw(new Error('three users and two representatives expected'));
+		}
+		const identifier = network.baseToken;
+		const pool = database.pool();
+		await pool.query('INSERT INTO accounts (public_key, key_type) SELECT unnest($1::text[]), 0', [[identifier, owner, admin, certified, first, second].map(function(account) {
+			return(account.publicKeyString.get());
+		})]);
+		const grant = async function(principal: typeof owner, target: typeof owner, base: bigint, certificate: Buffer | null): Promise<void> {
+			await pool.query(`INSERT INTO acls (principal_id, certificate, entity_id, target_id, base_permissions, external_permissions)
+				SELECT principal.id, $2, entity.id, target.id, $5, 0 FROM accounts principal, accounts entity, accounts target
+				WHERE principal.public_key = $1 AND entity.public_key = $3 AND target.public_key = $4`, [principal.publicKeyString.get(), certificate, identifier.publicKeyString.get(), target.publicKeyString.get(), String(base)]);
+		};
+		const ownerSet = new lib.Permissions(['OWNER']).base.bigint;
+		await grant(owner, first, ownerSet, null);
+		await grant(owner, second, ownerSet, null);
+		await grant(admin, first, new lib.Permissions(['ADMIN']).base.bigint, null);
+		await grant(certified, first, ownerSet, Buffer.alloc(32, 0x5a));
+
+		const owners = await readOn(storage, async function(transaction) {
+			return({
+				any: await storage.listOwners(transaction, identifier),
+				first: await storage.listOwners(transaction, identifier, first),
+				admin: await storage.listOwners(transaction, identifier, admin)
+			});
+		});
+
+		const keysOf = function(accounts: readonly { publicKeyString: { get(): string } }[]): string[] {
+			return(accounts.map(function(account) {
+				return(account.publicKeyString.get());
+			}));
+		};
+		expect(keysOf(owners.any)).toEqual([owner.publicKeyString.get()]);
+		expect(keysOf(owners.first)).toEqual([owner.publicKeyString.get()]);
+		expect(owners.admin).toEqual([]);
+	});
+
 	test('a stored vote whose permanence disagrees with its bytes is an integrity error', async function() {
 		const database = await ledgerDatabase();
 		const { storage, network } = await genesisOn(database);

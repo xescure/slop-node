@@ -11,7 +11,7 @@ CREATE TABLE kv_entries (
 	arena text COLLATE "C" NOT NULL,
 	key text COLLATE "C" NOT NULL,
 	value json NOT NULL,
-	expires_at timestamptz,
+	expires_at timestamptz_ms,
 	PRIMARY KEY (arena, key)
 );
 

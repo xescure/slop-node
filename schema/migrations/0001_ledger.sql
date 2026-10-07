@@ -1,11 +1,17 @@
 -- Schema version 1: the ledger store of one node.
 --
 -- Every moment is supplied by the node (a transaction moment or a vote's
--- validity) and stored as timestamptz; nothing here reads the database clock.
+-- validity) and stored as timestamptz_ms; nothing here reads the database
+-- clock.
 -- Rows that can exist on both the main and the side ledger carry the ledger
 -- they are on.
 
 CREATE TYPE ledger_name AS ENUM ('main', 'side');
+
+-- Every moment is a JavaScript Date, a whole number of milliseconds. A finer
+-- moment would be lost from any key built from it: a catch-up page key that
+-- dropped the fraction would resume before the staple it ended on.
+CREATE DOMAIN timestamptz_ms AS timestamptz CHECK (VALUE = date_trunc('milliseconds', VALUE));
 
 -- Block hashes, staple hashes (blocksHash), idempotent keys and certificate
 -- hashes are all 32 bytes [Keeta TS] index.js:63184, 68942, 77422.
@@ -41,8 +47,8 @@ CREATE TABLE accounts (
 -- staple_time is the history key; moment and sequence are the catch-up key.
 CREATE TABLE staples (
 	blocks_hash hash32 PRIMARY KEY,
-	staple_time timestamptz NOT NULL,
-	moment timestamptz NOT NULL,
+	staple_time timestamptz_ms NOT NULL,
+	moment timestamptz_ms NOT NULL,
 	sequence bigint GENERATED ALWAYS AS IDENTITY UNIQUE
 );
 
@@ -94,8 +100,8 @@ CREATE TABLE votes (
 	uid text NOT NULL,
 	blocks_hash hash32 NOT NULL,
 	issuer_id bigint NOT NULL REFERENCES accounts (id),
-	validity_from timestamptz NOT NULL,
-	validity_to timestamptz NOT NULL,
+	validity_from timestamptz_ms NOT NULL,
+	validity_to timestamptz_ms NOT NULL,
 	permanent boolean NOT NULL,
 	bytes bytea NOT NULL
 );
@@ -103,7 +109,6 @@ CREATE TABLE votes (
 CREATE UNIQUE INDEX votes_main ON votes (blocks_hash, uid) WHERE ledger = 'main';
 CREATE UNIQUE INDEX votes_side ON votes (uid) WHERE ledger = 'side';
 CREATE INDEX votes_side_staple ON votes (blocks_hash) WHERE ledger = 'side';
-CREATE INDEX votes_side_expiry ON votes (validity_to) WHERE ledger = 'side' AND NOT permanent;
 
 -- The blocks a side vote covers, in vote order. They outlive the side copies
 -- of those blocks: a vote stays readable as a staple after its blocks move to
@@ -192,7 +197,7 @@ CREATE TABLE certificates (
 CREATE TABLE history (
 	account_id bigint NOT NULL REFERENCES accounts (id),
 	blocks_hash hash32 NOT NULL REFERENCES staples (blocks_hash),
-	staple_time timestamptz NOT NULL,
+	staple_time timestamptz_ms NOT NULL,
 	PRIMARY KEY (account_id, blocks_hash)
 );
 
@@ -205,7 +210,7 @@ CREATE INDEX history_order ON history (account_id, staple_time DESC, blocks_hash
 CREATE TABLE deferred_staples (
 	blocks_hash hash32 PRIMARY KEY,
 	bytes bytea NOT NULL,
-	latest_vote_from timestamptz NOT NULL
+	latest_vote_from timestamptz_ms NOT NULL
 );
 
 CREATE TABLE deferred_waits (
@@ -223,5 +228,3 @@ CREATE TABLE deferred_blocks (
 	previous hash32 NOT NULL,
 	PRIMARY KEY (blocks_hash, previous)
 );
-
-CREATE INDEX deferred_blocks_previous ON deferred_blocks (previous);

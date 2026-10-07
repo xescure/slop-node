@@ -397,7 +397,7 @@ listOwners: (transaction: any, identifier: IdentifierAddress, target?: GenericAc
 - **Selector.** Main only.
 - **Ordering.** Unspecified.
 - **Tested by** `confirmed.ts: "token creation, supply and token-account balances"`, which covers no target, the entity as target, and another target.
-- **Postgres.** The rows `listACLsByEntity` reads for account principals (`certificate IS NULL`), filtered in the process by `target` and by the `OWNER` flag, and made distinct by principal.
+- **Postgres.** One statement over the `acls` rows of the identifier's ID (`acls_entity`) with an account principal (`certificate IS NULL`), the given target's ID when there is one, and the `OWNER` bit set in `base_permissions` (section 6.5), returning each principal's public key once. A decoded set that holds `OWNER` also holds `ACCESS`, so the bit alone decides `has(['OWNER'])` [Keeta TS] index.js:74031-74045, 74151-74163. Tested by `src/ledger/storage/postgres/driver.test.ts: "owners are the distinct account principals whose base set holds OWNER, by target when one is given"`, which also covers distinctness.
 
 ### `listACLsByPrincipal`
 
@@ -780,6 +780,7 @@ gc: (transaction: any, timeLimitMS?: number) => Promise<boolean>;
 ```
 
 - **Semantics.** Upstream's loop, inherited unchanged. It calls `gcBatch` until a batch reports that no work remains, in which case it returns `false`, or until `timeLimitMS` (default 280000 ms) has elapsed, in which case it returns the last batch's answer [Keeta TS] index.js:67852-67862. The base implements `gcBatch` as D20 states. The whole loop runs in one transaction [Keeta TS] index.js:70517-70521. Correctness never depends on gc having run.
+- **Time limit.** A caller should pass a small `timeLimitMS`, a few seconds, and call `gc` again while it returns `true`. With the default, one call can hold one read-write transaction open for up to 280 s. On a driver with real concurrency that transaction conflicts with every vote and add that touches what it collects, and a serialization failure late in it rolls back all of its batches, which `Ledger.run` may not retry once its 5 s budget has passed [Keeta TS] index.js:70294-70389. A small limit keeps each transaction to a few batches, and the work done before a failure committed.
 - **Tested by** every case in `gc.ts`.
 - **Postgres.** Inherited loop, over the batch primitives of section 4.2.
 
@@ -1360,6 +1361,7 @@ The Postgres driver keeps the ledger, and the Postgres key-value store the node'
 
 - Every moment the schema stores comes from the caller: the transaction moment, a vote's validity, a staple's time, or, for `schema_version.applied_at`, the clock of the process that migrates. Each is stored as `timestamptz`, which holds a JavaScript millisecond time exactly and reaches far beyond the year 3027 that a permanent vote's validity reaches.
 - No statement reads the database clock: not `now()`, `CURRENT_TIMESTAMP`, `CURRENT_TIME`, `CURRENT_DATE`, `LOCALTIMESTAMP`, `LOCALTIME`, `clock_timestamp()`, `statement_timestamp()`, `transaction_timestamp()`, `timeofday()` or `age()`, nor the inputs `'now'`, `'today'`, `'tomorrow'` and `'yesterday'` in any quoting. The database's clock is not the node's, and a moment taken from it would make one transaction's expiry decisions disagree with the moment `Ledger` fixed for the attempt.
+- **Whole milliseconds.** Every `timestamptz` column the migrations create has the domain `timestamptz_ms`, which refuses a moment that is not a whole number of milliseconds: `CHECK (VALUE = date_trunc('milliseconds', VALUE))`. Every moment the node writes is a JavaScript `Date`, which is whole milliseconds; another implementation must truncate, or refuse, a finer moment before writing it. The rule protects the keys built from moments: the catch-up page key carries the moment in milliseconds (`src/ledger/storage/paging.ts`), so a stored moment with a fraction would compare after the key of its own page, and the next page would return the same staple again, forever. `schema_version.applied_at`, which no key reads, is a plain `timestamptz`. Tested by `src/ledger/storage/postgres/schema.test.ts`.
 - Moments need not increase. A transaction that began earlier can commit later (section 3.5), and the node's clock can step back. Order keys therefore break ties with the node-local `sequence`, never with "the latest moment".
 
 Tested by `src/ledger/storage/sql-clock.test.ts: "no SQL uses the database clock"`, which scans every file in `schema/migrations/`, `src/ledger/storage/postgres/` and `src/kv/` and refuses escape strings there, since they can spell any of these, and `src/ledger/storage/sql-clock.test.ts: "the scan recognizes every form of the database clock"`. The vote case C7 (`conformance/vote-cases/clock.json`), replayed on Postgres, stores a permanent vote valid until 3027.

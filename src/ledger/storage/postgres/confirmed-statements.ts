@@ -81,6 +81,26 @@ export const aclsOfEntity: Statement<[string, boolean | null], ACLColumns> = sta
 		AND ($2::boolean IS NULL OR (acls.certificate IS NOT NULL) = $2::boolean)
 	ORDER BY principal.public_key, acls.certificate NULLS FIRST, target.public_key`);
 
+/*
+ * Bit 1 of a base set is OWNER, read in two's complement as upstream's bit
+ * field reads a bigint [Keeta TS] index.js:73716-73718, 76569-76571. A decoded
+ * set holding OWNER also holds ACCESS, so has(['OWNER']) is that bit alone
+ * [Keeta TS] index.js:74031-74045, 74151-74163. Dividing by two with floor
+ * shifts a negative set as well, and the truncating remainder of an odd
+ * quotient is 1 or -1, never 0.
+ */
+export const ownersOf: Statement<[string, string | null], { principal: string }> = statement('owners_of', `
+	SELECT DISTINCT principal.public_key AS principal
+	FROM acls
+	JOIN accounts principal ON principal.id = acls.principal_id
+	JOIN accounts entity ON entity.id = acls.entity_id
+	JOIN accounts target ON target.id = acls.target_id
+	WHERE entity.public_key = $1
+		AND acls.certificate IS NULL
+		AND ($2::text IS NULL OR target.public_key = $2::text)
+		AND mod(floor(acls.base_permissions / 2), 2) <> 0
+	ORDER BY principal.public_key`);
+
 export type CertificateColumns = {
 	readonly certificate: Buffer;
 	readonly intermediates: Buffer | null;
