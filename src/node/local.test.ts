@@ -1,5 +1,6 @@
 import { createServer } from 'node:net';
 import { readFileSync } from 'node:fs';
+import { inspect } from 'node:util';
 import { describe, expect, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
@@ -182,6 +183,28 @@ describe('a failed request', function() {
 		expect(recorded).toHaveLength(1);
 		expect(recorded[0]?.level).toBe('ERROR');
 		expect(recorded[0]?.args).toContain(error);
+	});
+});
+
+describe('a request body that is no JSON', function() {
+	test.each([
+		'{"password": "hunter2',
+		'hunter2 is no JSON',
+		'"hunter2"x'
+	])('is logged by its length and the parse error, never by its text (%j)', async function(body) {
+		const running = await nodes.start();
+		const answer = await request(running, '/vote', { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+		expect(answer.status).toBe(500);
+		expect(answer.text).not.toContain('hunter2');
+		// A body the parser refuses never reaches a route, which would sync the log after the request.
+		await running.node.log.sync();
+		const recorded = running.logs.filter(function(entry): boolean {
+			return(entry.level === 'ERROR');
+		});
+		expect(recorded).toHaveLength(1);
+		const written = inspect(recorded, { depth: 8 });
+		expect(written).not.toContain('hunter2');
+		expect(written).toContain(`a request body of ${String(body.length)} characters is no JSON`);
 	});
 });
 

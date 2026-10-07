@@ -70,6 +70,21 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
  * with brackets carries no further meaning to any route.
  * [node-lite] adapted from queryStrings.
  */
+const BODY_PARSE_FAILED = 'entity.parse.failed';
+
+/**
+ * The body is attached to the error body-parser raises for text that is no
+ * JSON, and V8's message may quote the start of it, so neither is logged: the
+ * log records how long the body was and what the parser expected.
+ */
+function bodyParseFailure(error: unknown): Error | undefined {
+	if (!(error instanceof Error) || !('type' in error) || error.type !== BODY_PARSE_FAILED || !('body' in error) || typeof error.body !== 'string') {
+		return(undefined);
+	}
+	const expectation = error.message.replace(/(?:, )?".*" is not valid JSON/s, 'the body is not valid JSON');
+	return(new SyntaxError(`a request body of ${String(error.body.length)} characters is no JSON: ${expectation}`));
+}
+
 function queryStrings(query: unknown): Readonly<Record<string, string>> {
 	const strings: Record<string, string> = {};
 	if (!isRecord(query)) {
@@ -210,7 +225,7 @@ export class LocalNode extends ClientNode {
 		}
 		// A body the parser refuses fails before any route runs.
 		router.use((error: unknown, _ignoredRequest: ExpressRequest, response: ExpressResponse, _ignoredNext: NextFunction): void => {
-			this.#send(response, this.#failure(error));
+			this.#send(response, this.#failure(bodyParseFailure(error) ?? error));
 		});
 		this.#app.use(normalized, router);
 		this.#mountedPrefix = normalized;
