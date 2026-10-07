@@ -40,11 +40,13 @@ A replay that decodes and verifies every staple, as Keeta's `Vote.Staple` does, 
 2. Each staple is kept the first time its `$binary` is seen, so the output has no duplicates.
 3. The next request starts 5 minutes before the latest `validityFrom` of any vote in the page. The bootstrap endpoint pages by vote moment, so staples at a page boundary can share a moment with ones not yet returned, and a cursor that began exactly at the latest moment would skip them. The overlap makes the next page repeat some staples, and the deduplication in step 2 absorbs the repeats. The client documents the same situation: a `moment` that overlaps the last page, a bloom filter for excluding staples already sent, and an empty page as the end [Keeta TS] index.js:59139-59164. The capture deduplicates on its side and sends no filter.
 4. Capture stops when at least 2,000 distinct staples are held. Pages are whole, so the count passes the target: this capture ended at 2,037.
-5. The output is gzip with a zero modification time, so its header does not carry the time of the capture.
+5. The output is gzip with a zero modification time and an empty file name, so its header carries neither the time of the capture nor a local path.
 
 A page that is empty before the target, or a cursor that does not advance, ends the capture with an error instead of looping or writing a short file.
 
 The file records one capture. A later capture can differ in the order and in the count of its staples, because it stops at the first page that reaches the target and the order within a page is the endpoint's. Its staples are still staples of the same chain.
+
+The committed head file's gzip header names a file, `mainnet_head.jsonl.gz.tmp`, where the utility writes none, so a capture differs from it in the header even when it holds the same staples in the same order. The sha256 of section 1 identifies the committed file only.
 
 ## 4. Format
 

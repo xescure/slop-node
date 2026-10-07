@@ -5,9 +5,11 @@ Usage: capture-mainnet-head <output>
 
 Pages the public bootstrap endpoint of one representative from the epoch and
 writes each distinct staple's "$binary" (the base64 of its zlib-compressed
-DER) on its own line, gzip-compressed, to <output>. This is how
-conformance/mainnet/head.jsonl.gz was made; conformance/MAINNET.md describes
-the method and the format.
+DER) on its own line, gzip-compressed, to <output>.
+conformance/mainnet/head.jsonl.gz was captured with this method, which
+conformance/MAINNET.md describes with the format. A re-run does not reproduce
+that file byte for byte: its gzip header differs, and so can the order and the
+count of its staples.
 
 Only HTTP GET requests are made: the capturing machine must never announce
 itself to the network, so nothing is published and no peer message is sent.
@@ -87,10 +89,11 @@ def capture():
 
 def write(output, staples):
 	# Beside the output, so a failed capture leaves no partial file and the
-	# final rename stays on one filesystem. A zero mtime keeps the capture
-	# time out of the gzip header.
+	# final rename stays on one filesystem. A zero mtime and an empty file name
+	# keep the capture time and the local path out of the gzip header, which
+	# would otherwise name the partial file.
 	partial = f"{output}.partial"
-	with open(partial, "wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as out:
+	with open(partial, "wb") as raw, gzip.GzipFile(filename="", fileobj=raw, mode="wb", mtime=0) as out:
 		for binary in staples:
 			out.write(binary.encode("ascii") + b"\n")
 	os.replace(partial, output)
