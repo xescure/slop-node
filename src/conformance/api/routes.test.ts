@@ -5,7 +5,7 @@ import { documentRoutes, routesOfTypings } from './routes.js';
 import type { Route } from './routes.js';
 
 const TYPINGS_FILE = createRequire(import.meta.url).resolve('@keetanetwork/keetanet-client/api/index.d.ts');
-const DOCUMENT_FILE = new URL('../../api/openapi.json', import.meta.url);
+const DOCUMENT_FILE = new URL('../../../api/openapi.json', import.meta.url);
 
 function spelled(routes: readonly Route[]): readonly string[] {
 	return(routes.map(function({ method, path }): string {

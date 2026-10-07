@@ -4,7 +4,6 @@
 		"src/**/*.test.ts",
 		"src/testing/**",
 		"src/conformance/**",
-		"src/api/**",
 		"src/**/suite/**"
 	]
 }

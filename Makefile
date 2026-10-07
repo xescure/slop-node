@@ -87,9 +87,9 @@ node_modules: node_modules/.patched
 # removing dist removes it too; without the stamp the directory may be partial,
 # which an incremental build would not notice, so it starts from scratch. The
 # prerequisites are the sources tsconfig.build.json compiles: it leaves out the
-# tests, src/testing, src/conformance, src/api and the storage suites, and
-# nothing it compiles imports them.
-dist/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts' -not -path 'src/testing/*' -not -path 'src/conformance/*' -not -path 'src/api/*' -not -path '*/suite/*') tsconfig.json tsconfig.build.json node_modules/.patched
+# tests, src/testing, src/conformance and the storage suites, and nothing it
+# compiles imports them.
+dist/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts' -not -path 'src/testing/*' -not -path 'src/conformance/*' -not -path '*/suite/*') tsconfig.json tsconfig.build.json node_modules/.patched
 	@[ -e dist/.done ] || rm -f dist/.tsbuildinfo
 	npm run tsc -- -p tsconfig.build.json
 	@touch dist/.done
