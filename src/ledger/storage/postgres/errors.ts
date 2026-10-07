@@ -1,6 +1,6 @@
 import type { KeetaNetLedgerError } from '@keetanetwork/keetanet-client/lib/error/ledger.js';
 import pg from 'pg';
-import { createLedgerError, describeError } from '../errors.js';
+import { createLedgerError } from '../errors.js';
 
 /** An error a query raised, as Ledger.run should see it. */
 export type MappedDatabaseError =
@@ -51,8 +51,15 @@ const isSessionLoss = function(error: unknown): boolean {
 	}));
 };
 
-const conflictWith = function(error: unknown, reason: string): MappedDatabaseError {
-	const conflict = createLedgerError('LEDGER_TRANSACTION_ABORTED', `${reason}: ${describeError(error)}`, { retry: true });
+/**
+ * Ledger.run rethrows the last conflict once its retries run out, and the API
+ * answers a ledger error as a refusal with its message. The database's text
+ * names hosts, tables and constraints, so it stays in the cause.
+ */
+export const CONFLICT_MESSAGE = 'The transaction was aborted before it committed';
+
+const conflictWith = function(error: unknown): MappedDatabaseError {
+	const conflict = createLedgerError('LEDGER_TRANSACTION_ABORTED', CONFLICT_MESSAGE, { retry: true });
 	conflict.cause = error;
 	return({ kind: 'conflict', error: conflict });
 };
@@ -69,19 +76,19 @@ const conflictWith = function(error: unknown, reason: string): MappedDatabaseErr
  */
 export function mapDatabaseError(error: unknown, statement: FailedStatement): MappedDatabaseError {
 	if (statement.kind === 'before-commit' && (statement.connectionLost || isSessionLoss(error))) {
-		return(conflictWith(error, 'connection lost before commit'));
+		return(conflictWith(error));
 	}
 	if (!(error instanceof pg.DatabaseError)) {
 		return({ kind: 'other', error });
 	}
 	switch (error.code) {
 		case SERIALIZATION_FAILURE:
-			return(conflictWith(error, 'serialization failure with a concurrent transaction'));
+			return(conflictWith(error));
 		case DEADLOCK_DETECTED:
-			return(conflictWith(error, 'deadlock with a concurrent transaction'));
+			return(conflictWith(error));
 		case UNIQUE_VIOLATION:
 			if (isRacedConstraint(error.constraint)) {
-				return(conflictWith(error, `concurrent insert violating ${error.constraint}`));
+				return(conflictWith(error));
 			}
 			return({ kind: 'other', error });
 		default:

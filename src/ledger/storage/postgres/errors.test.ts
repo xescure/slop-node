@@ -3,7 +3,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import pg from 'pg';
 import { createDatabase } from '../../../testing/postgres.js';
 import { PostgresLedgerStorage } from './driver.js';
-import { mapDatabaseError } from './errors.js';
+import { CONFLICT_MESSAGE, mapDatabaseError } from './errors.js';
 import type { FailedStatement } from './errors.js';
 
 const lib = KeetaNet.lib;
@@ -67,6 +67,11 @@ const expectRetryable = function(error: unknown, statement: FailedStatement = BE
 	expect(lib.Error.isInstance(mapped.error)).toBe(true);
 	expect(mapped.error).toMatchObject({ type: 'LEDGER', code: 'LEDGER_TRANSACTION_ABORTED', shouldRetry: true });
 	expect(mapped.error).toHaveProperty('cause', error);
+	// Ledger.run rethrows the last conflict once its retries run out, and the API answers it as a refusal.
+	expect(mapped.error).toHaveProperty('message', CONFLICT_MESSAGE);
+	if (error instanceof Error) {
+		expect(CONFLICT_MESSAGE).not.toContain(error.message);
+	}
 };
 
 const expectUnchanged = function(error: unknown, statement: FailedStatement = BEFORE_COMMIT): void {
