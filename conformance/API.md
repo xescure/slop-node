@@ -143,3 +143,9 @@ No captured response or fixture disagrees with the typings. Where the typings gi
 
 - **History entries.** `$id` is the hash of the staple's blocks in uppercase hexadecimal, and `$timestamp` an ISO 8601 date (api/node.d.ts, GetAccountHistoryResponse). `$timestamp` is not the staple's own timestamp, the average of its votes' validity [Keeta TS] index.js:81061-81087.
 - **Statistics.** `ledger.moment` of `GET /api/node/stats` is an ISO 8601 date (lib/ledger/types.d.ts, LedgerStatistics).
+
+## Development networks
+
+A node whose network is `local` keeps the ledger of network 0, which the client validates without a configuration of its own [Keeta TS] index.js:61346-61352. The client still takes a network alias for it, and the node gives it `test`.
+
+The client's `UserClient.history()` computes the effects of each staple it lists with the initial trusted account of the alias's default configuration, here the testnet's [Keeta TS] index.js:60768. The effect computation lets that account sign the opening blocks of the network address and of the base token without the permissions they would otherwise need [Keeta TS] index.js:68650-68660. On a development network the trusted account is the one the node was configured with, so the genesis staple, whose blocks the configured account signed, is computed as if its signer had no such exemption. Only that entry is affected, since the exemption covers opening blocks only. The API's responses carry no effects.
