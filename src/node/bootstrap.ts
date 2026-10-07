@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { BootstrapClient as DeclaredBootstrapClient, BootstrapConfig } from '@keetanetwork/keetanet-client/lib/bootstrap.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
@@ -8,8 +9,8 @@ import type { AssertNever } from '../util/assert-never.js';
 import type { ClassSurface } from '../util/class-surface.js';
 import { BootstrapCursors } from './bootstrap-cursors.js';
 import { PageError, PageFetcher } from './bootstrap-page.js';
-import { bootstrapPeer } from './bootstrap-pass.js';
-import type { PassAnswer, PassRequest, PeerIO } from './bootstrap-pass.js';
+import { DEEP_SCAN_PERIOD_MILLISECONDS, bootstrapPeer } from './bootstrap-pass.js';
+import type { Added, PassAnswer, PassRequest, PeerIO } from './bootstrap-pass.js';
 import { bootstrapSources } from './bootstrap-peers.js';
 import type { BootstrapNode } from './bootstrap-peers.js';
 
@@ -42,6 +43,11 @@ function positiveMilliseconds(name: string, value: number): number {
 	return(value);
 }
 
+/** When in each period the deep re-scans of the peer fall, the same for it on every node, and spread across peers. */
+function staggerOf(endpoint: string): number {
+	return(createHash('sha256').update(endpoint).digest().readUInt32BE(0) % DEEP_SCAN_PERIOD_MILLISECONDS);
+}
+
 function pageLimit(limit: number): number {
 	if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_PAGE_LIMIT) {
 		throw(new RangeError(`a bootstrap page holds from 1 to ${String(MAX_PAGE_LIMIT)} staples (${String(limit)} were asked for)`));
@@ -57,15 +63,17 @@ function pageLimit(limit: number): number {
  * An update makes one pass over each peer, a few peers at a time: it pages
  * through the peer's staples from where the node last reached on that peer
  * (src/node/bootstrap-pass.ts), adds each staple to the ledger as a
- * bootstrap, and is done with the peer once a page comes back short. A pass
- * is bounded in requests and time, and one that reaches its bound is
- * continued on the next update; a peer that fails is logged and tried again
- * on the next update. Neither holds up any other peer for longer.
+ * bootstrap, and is done with the peer once it is shown to hold every staple
+ * the peer had applied when the pass began. A deep re-scan of the peer, when
+ * one is under way, runs alongside. A pass is bounded in requests and time,
+ * and one that reaches its bound is continued on the next update; a peer
+ * that fails is logged and tried again on the next update. Neither holds up
+ * any other peer for longer.
  *
- * stats() counts the updates in a row that were complete: every peer was
- * drained, so the node held all its peers held when each pass ended. An
- * incomplete update sets the count back to 0, so a count above 0 says the
- * node is caught up.
+ * stats() counts the updates in a row that were complete: every peer's pass
+ * completed, so the node held all its peers had applied when each pass
+ * began. An incomplete update sets the count back to 0, so a count above 0
+ * says the node is caught up.
  */
 export class BootstrapClient {
 	static isInstance: (obj: unknown, strict?: boolean) => obj is BootstrapClient = lib.Utils.Helper.checkableGenerator(BootstrapClient);
@@ -164,10 +172,10 @@ export class BootstrapClient {
 		}
 		const fetcher = new PageFetcher();
 		try {
-			const drained = await eachAtMost(sources, MAX_CONCURRENT_PASSES, (endpoint) => {
-				return(this.#drainLogged(endpoint, limit, fetcher));
+			const caughtUp = await eachAtMost(sources, MAX_CONCURRENT_PASSES, (endpoint) => {
+				return(this.#catchUpLogged(endpoint, limit, fetcher));
 			});
-			const complete = drained.every(Boolean) && !this.#stopping.signal.aborted;
+			const complete = caughtUp.every(Boolean) && !this.#stopping.signal.aborted;
 			this.#record(complete);
 			return({ complete });
 		} finally {
@@ -184,9 +192,9 @@ export class BootstrapClient {
 		}
 	}
 
-	async #drainLogged(endpoint: string, limit: number, fetcher: PageFetcher): Promise<boolean> {
+	async #catchUpLogged(endpoint: string, limit: number, fetcher: PageFetcher): Promise<boolean> {
 		try {
-			return(await this.#drain(endpoint, limit, fetcher));
+			return(await this.#catchUp(endpoint, limit, fetcher));
 		} catch (error: unknown) {
 			if (this.#stopping.signal.aborted) {
 				this.#node.log.debug(LOG_SOURCE, `Stopped bootstrapping from ${endpoint}`);
@@ -197,8 +205,8 @@ export class BootstrapClient {
 		}
 	}
 
-	/** One pass over the peer, which answers whether it drained the peer. */
-	async #drain(endpoint: string, limit: number, fetcher: PageFetcher): Promise<boolean> {
+	/** The update's passes over the peer, which answer whether the node caught up on it. */
+	async #catchUp(endpoint: string, limit: number, fetcher: PageFetcher): Promise<boolean> {
 		const io: PeerIO<VoteStaple> = {
 			page: (request) => {
 				return(this.#page(fetcher, endpoint, request));
@@ -216,9 +224,10 @@ export class BootstrapClient {
 				return(this.#cursors.write(endpoint, progress));
 			}
 		};
-		const outcome = await bootstrapPeer(io, { limit });
+		const { live: outcome } = await bootstrapPeer(io, { limit, stagger: staggerOf(endpoint) });
 		switch (outcome.kind) {
 			case 'drained':
+			case 'caught-up':
 				return(true);
 			case 'bounded':
 				this.#node.log.info(LOG_SOURCE, `Bootstrapping from ${endpoint} reached ${outcome.reached.toISOString()} within this update's bound; it continues on the next update`);
@@ -245,29 +254,33 @@ export class BootstrapClient {
 	}
 
 	/**
-	 * The ledger refuses a staple it holds already, as a block that exists
-	 * [Keeta TS] index.js:67683-67687, or, for genesis, as votes without
-	 * weight once genesis has assigned it [Keeta TS] index.js:69398-69401; a
-	 * refused staple that is held, whether from before or because another
-	 * peer's pass or a P2P message added it meanwhile, is skipped instead.
-	 * The filter keeps most of those away, so the ledger is asked only after
-	 * a refusal. One that fills a gap may release staples deferred until
+	 * The ledger refuses a staple whose blocks it holds already, as a block
+	 * that exists [Keeta TS] index.js:67683-67687, or, for genesis, as votes
+	 * without weight once genesis has assigned it
+	 * [Keeta TS] index.js:69398-69401, whatever votes the staple carries. So
+	 * a staple whose blocks are held is skipped before it is added, and so is
+	 * one refused because another peer's pass or a P2P message added it
+	 * meanwhile. One that fills a gap may release staples deferred until
 	 * then, and the callback hears of each staple added
 	 * [Keeta TS] index.js:69361-69420.
 	 */
-	async #add(staple: VoteStaple): Promise<void> {
+	async #add(staple: VoteStaple): Promise<Added> {
+		if (await this.#holds(staple)) {
+			return('held');
+		}
 		let added: VoteStaple[];
 		try {
 			added = await this.#node.ledger.add(staple, 'bootstrap');
 		} catch (error: unknown) {
 			if (await this.#holds(staple)) {
-				return;
+				return('held');
 			}
 			throw(error);
 		}
 		for (const each of added) {
 			await this.#tell(each);
 		}
+		return('added');
 	}
 
 	async #tell(staple: VoteStaple): Promise<void> {

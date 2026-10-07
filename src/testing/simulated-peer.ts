@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { BloomFilter } from '@keetanetwork/keetanet-client/lib/utils/bloom.js';
-import type { PassAnswer, PassRequest, PassStaple } from '../node/bootstrap-pass.js';
+import type { Added, PassAnswer, PassRequest, PassStaple } from '../node/bootstrap-pass.js';
 import { advanceClock } from './network.js';
 
 const lib = KeetaNet.lib;
@@ -19,16 +19,17 @@ export type SimulatedStaple = PassStaple & {
 	timestamp(): Date;
 };
 
-function stapleBytes(id: number): ArrayBuffer {
+/** The bytes of a staple: those of its blocks and of the votes on them, which another vote set on the same blocks changes. */
+function stapleBytes(id: number, votes: number): ArrayBuffer {
 	const bytes = Buffer.alloc(STAPLE_BYTES);
 	for (let at = 0; at < STAPLE_BYTES; at += 32) {
-		createHash('sha256').update(`staple:${String(id)}:${String(at)}`).digest().copy(bytes, at);
+		createHash('sha256').update(`staple:${String(id)}:${String(votes)}:${String(at)}`).digest().copy(bytes, at);
 	}
 	return(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
 }
 
-function simulatedStaple(id: number, moment: number, sequence: number, timestamp: number): SimulatedStaple {
-	const bytes = stapleBytes(id);
+function simulatedStaple(id: number, moment: number, sequence: number, timestamp: number, votes = 0): SimulatedStaple {
+	const bytes = stapleBytes(id, votes);
 	const name = `staple-${String(id)}`;
 	return({
 		id,
@@ -67,6 +68,12 @@ export type SimulatedPeerOptions = {
 	readonly clockOffset?: number;
 	/** How long the peer takes to answer a request, during which the clock moves on. */
 	readonly latency?: number;
+	/**
+	 * The most staples the peer puts in a page, whatever the limit: one that
+	 * caps the limit, or one whose time for a request runs out once it holds
+	 * that many [Keeta TS] index.js:69641-69647.
+	 */
+	readonly answersAtMost?: number;
 };
 
 /**
@@ -82,6 +89,7 @@ export class SimulatedPeer {
 	readonly #applied: SimulatedStaple[] = [];
 	readonly #clockOffset: number;
 	readonly #latency: number;
+	readonly #answersAtMost: number;
 	readonly #filters = new Map<string, BloomFilter>();
 	#nextID = 0;
 	#nextSequence = 0;
@@ -92,6 +100,7 @@ export class SimulatedPeer {
 	constructor(options: SimulatedPeerOptions = {}) {
 		this.#clockOffset = options.clockOffset ?? 0;
 		this.#latency = options.latency ?? 25;
+		this.#answersAtMost = options.answersAtMost ?? Number.POSITIVE_INFINITY;
 	}
 
 	/** Every staple the peer has applied, in the order applied. */
@@ -119,6 +128,11 @@ export class SimulatedPeer {
 		return(staple);
 	}
 
+	/** The same blocks as the staple, with another set of votes on them, as another representative may hold them. */
+	otherVotesOn(staple: SimulatedStaple): SimulatedStaple {
+		return(simulatedStaple(staple.id, staple.moment, staple.sequence, staple.timestamp().getTime(), 1));
+	}
+
 	/** Applies staples as they are made from now on, as a representative that is live does, until stopped. */
 	goLive(traffic: LiveTraffic): void {
 		this.#live = { ...traffic, since: Date.now(), made: 0 };
@@ -143,7 +157,8 @@ export class SimulatedPeer {
 		const filter = this.#filterOf(request.bloomFilter);
 		const start = request.start.getTime();
 		const staples: SimulatedStaple[] = [];
-		for (let at = this.#firstAtOrAfter(start); at < this.#applied.length && staples.length < request.limit; at++) {
+		const limit = Math.min(request.limit, this.#answersAtMost);
+		for (let at = this.#firstAtOrAfter(start); at < this.#applied.length && staples.length < limit; at++) {
 			const staple = this.#applied[at];
 			if (staple === undefined) {
 				break;
@@ -204,10 +219,15 @@ export class SimulatedPeer {
 	}
 }
 
-/** What a simulated node holds: each staple added, in the order added, with the moment it added it. */
+/**
+ * What a simulated node holds: each staple added, in the order added, with
+ * the moment it added it. As a ledger does, it holds one staple per set of
+ * blocks, and adds none whose blocks it holds.
+ */
 export class SimulatedNode {
 	readonly #held = new Map<string, number>();
 	readonly #order: { readonly staple: PassStaple; readonly moment: number }[] = [];
+	#resent = 0;
 
 	holds(staple: PassStaple): boolean {
 		return(this.#held.has(staple.blocksHash.toString()));
@@ -217,21 +237,35 @@ export class SimulatedNode {
 		return(this.#held.size);
 	}
 
-	add(staple: PassStaple): Promise<void> {
+	/** The staples offered to add whose blocks were held already: what peers sent again. */
+	get resent(): number {
+		return(this.#resent);
+	}
+
+	add(staple: PassStaple): Promise<Added> {
 		const key = staple.blocksHash.toString();
-		if (!this.#held.has(key)) {
-			this.#held.set(key, Date.now());
-			this.#order.push({ staple, moment: Date.now() });
+		if (this.#held.has(key)) {
+			this.#resent++;
+			return(Promise.resolve('held'));
 		}
-		return(Promise.resolve());
+		this.#held.set(key, Date.now());
+		this.#order.push({ staple, moment: Date.now() });
+		return(Promise.resolve('added'));
 	}
 
 	/** The staples added at or after the moment, as many as asked for, in the order added. */
 	held(from: Date, count: number): Promise<readonly PassStaple[]> {
-		const after = this.#order.filter(function(entry): boolean {
-			return(entry.moment >= from.getTime());
-		});
-		return(Promise.resolve(after.slice(0, count).map(function(entry): PassStaple {
+		let low = 0;
+		let high = this.#order.length;
+		while (low < high) {
+			const middle = Math.floor((low + high) / 2);
+			if ((this.#order[middle]?.moment ?? from.getTime()) < from.getTime()) {
+				low = middle + 1;
+			} else {
+				high = middle;
+			}
+		}
+		return(Promise.resolve(this.#order.slice(low, low + count).map(function(entry): PassStaple {
 			return(entry.staple);
 		})));
 	}

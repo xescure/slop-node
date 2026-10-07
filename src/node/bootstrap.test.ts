@@ -124,11 +124,11 @@ describe('a bootstrap client', function() {
 		expect(await clientOf(late.node).update(2)).toEqual({ complete: true });
 
 		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
-		// The short third page shows the peer had nothing more.
-		expect(servedCounts(recording.pages)).toEqual([2, 2, 1]);
+		// Only the empty fourth page shows the peer had nothing more: a peer may answer short pages while it holds more.
+		expect(servedCounts(recording.pages)).toEqual([2, 2, 1, 0]);
 		expect(recording.pages.map(function(page): string | null {
 			return(page.start);
-		})).toEqual([EPOCH, EPOCH, EPOCH]);
+		})).toEqual([EPOCH, EPOCH, EPOCH, EPOCH]);
 		expect(recording.pages[0]).toMatchObject({ limit: '2', bloomFilter: undefined, status: 200 });
 	});
 
@@ -198,6 +198,29 @@ describe('a bootstrap client', function() {
 		expect([peer.network.genesis, ...staples].map(function(staple): boolean | undefined {
 			return(filter?.has(staple.toBytes()));
 		})).toEqual([true, true, true, true]);
+	});
+
+	test('skips, without adding it, a staple on blocks the node holds with other votes, and names those votes from then on', async function() {
+		const peer = await representative();
+		const recording = await startRecordingPeer(peer.apiURL);
+		const holder = await joiner({ genesis: 'held', bootstrapFrom: [recording.apiURL] });
+		const [first, second] = await sendsFrom(peer.network, 0, 2);
+		if (first === undefined || second === undefined) {
+			throw(new Error('no staples were made'));
+		}
+		await addAll(peer.node, [first, second]);
+		const otherVotes = await confirmedStaple(first.blocks, peer.network.representatives, { voteDelays: [1, 1] });
+		await holder.node.ledger.add(otherVotes);
+		const add = vi.spyOn(holder.node.ledger, 'add');
+
+		expect(await clientOf(holder.node).update()).toEqual({ complete: true });
+
+		expect(Buffer.from(otherVotes.toBytes()).equals(Buffer.from(first.toBytes()))).toBe(false);
+		expect(await heldBlocksHashes(holder.node)).toEqual(await heldBlocksHashes(peer.node));
+		expect(servedCounts(recording.pages)).toEqual([2, 0]);
+		expect(add.mock.calls.map(function([staple]): string {
+			return(staple.blocksHash.toString());
+		})).toEqual([second.blocksHash.toString()]);
 	});
 
 	test('downloads nothing again on a later update, though it asks again over the overlap', async function() {
@@ -334,7 +357,7 @@ describe('a bootstrap client', function() {
 
 		expect(padded.pages.map(function(page): string | null {
 			return(page.limit);
-		})).toEqual(['8', '4', '2', '2', '2']);
+		})).toEqual(['8', '4', '2', '2', '2', '2']);
 		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
 	});
 
@@ -388,10 +411,10 @@ describe('a bootstrap client', function() {
 		const client = new BootstrapClient(late.node, { period: 60_000 });
 		// Queued behind the update the client ran as it was built, after which it waits for the next.
 		await client.update();
-		// The first update drains the peer with one short page, and the second starts the margin before the first began; the clock stands still.
+		// The first update drains the peer with a page holding genesis and an empty one, and the second starts the margin before the first began; the clock stands still.
 		expect(recording.pages.map(function(page): string | null {
 			return(page.start);
-		})).toEqual([EPOCH, new Date(Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS).toISOString()]);
+		})).toEqual([EPOCH, EPOCH, new Date(Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS).toISOString()]);
 
 		await client.stop();
 

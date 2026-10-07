@@ -1,5 +1,5 @@
 import type { KVStorageProvider } from '@keetanetwork/keetanet-client/lib/kv/index.js';
-import type { PeerProgress } from './bootstrap-pass.js';
+import type { DeepScan, PeerProgress } from './bootstrap-pass.js';
 
 /**
  * The arena that holds, for each representative the node bootstraps from,
@@ -12,9 +12,10 @@ export const BOOTSTRAP_CURSOR_ARENA = 'bootstrapCursors';
 /** A peer's progress as stored: moments in milliseconds. */
 type StoredProgress = {
 	readonly reached: number;
+	readonly caughtUp: boolean;
 	readonly deepScanFrom: number;
-	readonly completions: number;
-	readonly deepScanning: boolean;
+	readonly nextDeepScan: number;
+	readonly deepScan: { readonly reached: number; readonly horizon: number } | null;
 };
 
 function isWholeNumber(value: unknown): value is number {
@@ -25,15 +26,34 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 	return(typeof value === 'object' && value !== null && !Array.isArray(value));
 }
 
+/** The deep re-scan under way as stored, nothing when none is, or false when the value is not one. */
+function deepScanOf(value: unknown): DeepScan | undefined | false {
+	if (value === null) {
+		return(undefined);
+	}
+	if (!isRecord(value) || !isWholeNumber(value['reached']) || !isWholeNumber(value['horizon'])) {
+		return(false);
+	}
+	return({ reached: new Date(value['reached']), horizon: new Date(value['horizon']) });
+}
+
 function progressOf(value: unknown): PeerProgress | undefined {
 	if (!isRecord(value)) {
 		return(undefined);
 	}
-	const { reached, deepScanFrom, completions, deepScanning } = value;
-	if (!isWholeNumber(reached) || !isWholeNumber(deepScanFrom) || !isWholeNumber(completions) || typeof deepScanning !== 'boolean') {
+	const { reached, caughtUp, deepScanFrom, nextDeepScan } = value;
+	const deepScan = deepScanOf(value['deepScan']);
+	if (!isWholeNumber(reached) || typeof caughtUp !== 'boolean' || !isWholeNumber(deepScanFrom) || !isWholeNumber(nextDeepScan) || deepScan === false) {
 		return(undefined);
 	}
-	return({ reached: new Date(reached), deepScanFrom: new Date(deepScanFrom), completions, deepScanning });
+	return({ reached: new Date(reached), caughtUp, deepScanFrom: new Date(deepScanFrom), nextDeepScan: new Date(nextDeepScan), deepScan });
+}
+
+function storedDeepScan(deepScan: DeepScan | undefined): StoredProgress['deepScan'] {
+	if (deepScan === undefined) {
+		return(null);
+	}
+	return({ reached: deepScan.reached.getTime(), horizon: deepScan.horizon.getTime() });
 }
 
 /** How far the node has caught up on each representative, keyed by its API endpoint. */
@@ -52,9 +72,10 @@ export class BootstrapCursors {
 	async write(endpoint: string, progress: PeerProgress): Promise<void> {
 		const stored: StoredProgress = {
 			reached: progress.reached.getTime(),
+			caughtUp: progress.caughtUp,
 			deepScanFrom: progress.deepScanFrom.getTime(),
-			completions: progress.completions,
-			deepScanning: progress.deepScanning
+			nextDeepScan: progress.nextDeepScan.getTime(),
+			deepScan: storedDeepScan(progress.deepScan)
 		};
 		await this.#kv.set(BOOTSTRAP_CURSOR_ARENA, endpoint, stored);
 	}

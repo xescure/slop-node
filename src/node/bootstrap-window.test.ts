@@ -3,7 +3,7 @@ import { describe, expect, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { BloomFilter } from '@keetanetwork/keetanet-client/lib/utils/bloom.js';
 import { pageURL } from './bootstrap-page.js';
-import { BLOOM_CAPACITY, NamedStaples } from './bootstrap-window.js';
+import { ACCEPTED_ERROR_RATE, BLOOM_CAPACITY, BLOOM_ERROR_RATE, MAX_NAMED, NamedStaples } from './bootstrap-window.js';
 import type { NamedStaple } from './bootstrap-window.js';
 
 const lib = KeetaNet.lib;
@@ -14,11 +14,11 @@ const CLIENT_URL_LIMIT = 8192;
 /** About the size of a staple of one send with two votes. */
 const STAPLE_BYTES = 600;
 
-/** A staple of fixed, distinct bytes. */
-function stapleNamed(name: string): NamedStaple {
+/** A staple of fixed, distinct bytes, on the blocks named, with the votes named. */
+function stapleNamed(name: string, votes = ''): NamedStaple {
 	const bytes = Buffer.alloc(STAPLE_BYTES);
 	for (let at = 0; at < STAPLE_BYTES; at += 32) {
-		createHash('sha256').update(`${name}:${String(at)}`).digest().copy(bytes, at);
+		createHash('sha256').update(`${name}:${votes}:${String(at)}`).digest().copy(bytes, at);
 	}
 	return({
 		blocksHash: { toString: function(): string {
@@ -37,7 +37,7 @@ function staplesNamed(prefix: string, count: number): NamedStaple[] {
 }
 
 function filterOf(named: NamedStaples, seed = 1): BloomFilter {
-	const serialized = named.serialize(seed);
+	const serialized = named.filter(seed).serialized;
 	if (serialized === undefined) {
 		throw(new Error('nothing is named'));
 	}
@@ -54,7 +54,7 @@ function inFilter(named: NamedStaples, staples: readonly NamedStaple[]): boolean
 describe('the staples a filter names', function() {
 	test('make no filter while none is named, and name what the node held and what the peer sent', function() {
 		const named = new NamedStaples();
-		expect(named.serialize(1)).toBeUndefined();
+		expect(named.filter(1)).toEqual({ serialized: undefined, errorRate: 0 });
 		const held = stapleNamed('held');
 		const sent = stapleNamed('sent');
 		named.hold([held]);
@@ -64,28 +64,63 @@ describe('the staples a filter names', function() {
 		expect(named.size).toBe(2);
 	});
 
-	test('make a filter of one size however many are named, so that its false positive rate is never above the target', function() {
+	test('make a filter of one size however many are named, so that its false positive rate is never above the target while it holds no more than its capacity', function() {
 		const few = new NamedStaples();
 		few.hold(staplesNamed('one', 1));
 		const full = new NamedStaples();
 		full.hold(staplesNamed('many', BLOOM_CAPACITY));
+		const overfull = new NamedStaples();
+		overfull.receive(staplesNamed('more', 2 * BLOOM_CAPACITY));
 		expect(filterOf(few).size).toBe(filterOf(full).size);
+		expect(filterOf(overfull).size).toBe(filterOf(full).size);
 	});
 
-	test('let go of the earliest named once more are named than a filter holds', function() {
+	test('name what the node held only while there is room, and let the latest of it go to make room for what the peer sent', function() {
 		const named = new NamedStaples();
-		const held = staplesNamed('held', BLOOM_CAPACITY);
+		const held = staplesNamed('held', BLOOM_CAPACITY + 1);
 		named.hold(held);
+		expect(named.size).toBe(BLOOM_CAPACITY);
 		const sent = stapleNamed('sent');
 		named.receive([sent]);
 		expect(named.size).toBe(BLOOM_CAPACITY);
-		expect(named.names(sent)).toBe(true);
-		expect([held[0], held[1]].map(function(staple): boolean {
+		expect([held[0], held[BLOOM_CAPACITY - 2], held[BLOOM_CAPACITY - 1], sent].map(function(staple): boolean {
 			return(staple !== undefined && named.names(staple));
-		})).toEqual([false, true]);
+		})).toEqual([true, true, false, true]);
 	});
 
-	test('let go, as the start moves past a page\'s staple, of what the peer sent before it, and keep what the node held', function() {
+	test('name every staple the peer sent, past the capacity, at an error rate that rises with their number', function() {
+		const named = new NamedStaples();
+		named.hold(staplesNamed('held', 10));
+		const sent = staplesNamed('sent', 3 * BLOOM_CAPACITY);
+		named.receive(sent);
+		expect(named.size).toBe(3 * BLOOM_CAPACITY);
+		expect(sent.every(function(staple): boolean {
+			return(named.names(staple));
+		})).toBe(true);
+		expect(inFilter(named, sent).every(Boolean)).toBe(true);
+		const rate = named.filter(1).errorRate;
+		expect(rate).toBeGreaterThan(ACCEPTED_ERROR_RATE);
+		expect(rate).toBeLessThan(0.01);
+	});
+
+	test('name a full filter at the error rate it was made for', function() {
+		const named = new NamedStaples();
+		named.receive(staplesNamed('sent', BLOOM_CAPACITY));
+		expect(named.filter(1).errorRate).toBe(ACCEPTED_ERROR_RATE);
+		expect(ACCEPTED_ERROR_RATE / BLOOM_ERROR_RATE).toBeCloseTo(1, 1);
+		const fewer = new NamedStaples();
+		fewer.receive(staplesNamed('sent', BLOOM_CAPACITY / 2));
+		expect(fewer.filter(1).errorRate).toBeLessThan(ACCEPTED_ERROR_RATE);
+	});
+
+	test('tell staples apart by their bytes, so that the same blocks with other votes are not named', function() {
+		const named = new NamedStaples();
+		named.receive([stapleNamed('blocks', 'first votes')]);
+		expect(named.names(stapleNamed('blocks', 'first votes'))).toBe(true);
+		expect(named.names(stapleNamed('blocks', 'other votes'))).toBe(false);
+	});
+
+	test('let go, as the start moves past a page\'s staple, of what the peer sent before it, and of what the node held, which is named again from the new start', function() {
 		const named = new NamedStaples();
 		const held = stapleNamed('held');
 		const earlier = stapleNamed('earlier-page');
@@ -95,24 +130,13 @@ describe('the staples a filter names', function() {
 		named.moveOn(page, 2);
 		expect([held, earlier, ...page].map(function(staple): boolean {
 			return(named.names(staple));
-		})).toEqual([true, false, false, false, true, true]);
+		})).toEqual([false, false, false, false, true, true]);
 	});
 
-	test('keep everything the peer sent when the start moves no further than a page\'s first staple', function() {
+	test.each([BLOOM_CAPACITY, 5000, MAX_NAMED])('keep a filter of %i staples, and so its request, within the URL the client allows', function(count: number) {
 		const named = new NamedStaples();
-		const earlier = stapleNamed('earlier-page');
-		const page = staplesNamed('page', 2);
-		named.receive([earlier]);
-		named.moveOn(page, 0);
-		expect([earlier, ...page].map(function(staple): boolean {
-			return(named.names(staple));
-		})).toEqual([true, true, true]);
-	});
-
-	test('keep a full filter, and so its request, within the URL the client allows', function() {
-		const named = new NamedStaples();
-		named.hold(staplesNamed('held', BLOOM_CAPACITY));
-		const url = pageURL({ endpoint: 'https://representative-with-a-long-name.example.keeta.network:65535/api', start: new Date(), limit: 1000, bloomFilter: named.serialize(2 ** 31 - 1) });
+		named.receive(staplesNamed('sent', count));
+		const url = pageURL({ endpoint: 'https://representative-with-a-long-name.example.keeta.network:65535/api', start: new Date(), limit: 1000, bloomFilter: named.filter(2 ** 31 - 1).serialized });
 		expect(url.toString().length).toBeLessThanOrEqual(CLIENT_URL_LIMIT);
 	});
 

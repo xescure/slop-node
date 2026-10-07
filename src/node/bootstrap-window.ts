@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 
 const lib = KeetaNet.lib;
@@ -21,8 +22,8 @@ export const PEER_CLOCK_SKEW_MILLISECONDS = 300_000;
 export const BOOTSTRAP_MARGIN_MILLISECONDS: number = VOTE_SLOP_MILLISECONDS + PEER_CLOCK_SKEW_MILLISECONDS;
 
 /**
- * How many staples a filter names at most. A filter is always made for this
- * many, so its size is fixed: about 40,000 bits at the rate below, which keeps
+ * How many staples a filter names at the error rate below. A filter is
+ * always as large as one made for this many, about 40,000 bits, which keeps
  * the request within the 8 KiB the client allows a URL
  * [Keeta TS] index.js:59614-59617 even when the filter is full.
  */
@@ -30,11 +31,48 @@ export const BLOOM_CAPACITY = 1200;
 
 /**
  * A staple the filter names by mistake is one the peer leaves out
- * [Keeta TS] index.js:69686-69690. A pass loses one only when it then moves
- * its start past it, which the deep re-scan undoes; at this rate a catch-up
- * of a million staples expects to lose a tenth of one.
+ * [Keeta TS] index.js:69686-69690. A pass loses one only when it then
+ * concludes that it holds every staple up to a moment past it, which the
+ * deep re-scans undo; at this rate a catch-up of a million staples expects
+ * to lose a tenth of one.
  */
 export const BLOOM_ERROR_RATE = 1e-7;
+
+/**
+ * The most staples a filter names. Past BLOOM_CAPACITY the filter keeps its
+ * size and names more at a higher error rate, about 0.4 here, which only
+ * more requests with other seeds bring back down; a pass that would name
+ * more ends at its bound instead.
+ */
+export const MAX_NAMED = 20_000;
+
+const FULL_FILTER = lib.Utils.Bloom.BloomFilter.create(BLOOM_CAPACITY, BLOOM_ERROR_RATE);
+
+const FILTER_BITS = FULL_FILTER.size;
+
+const FULL_FILTER_HASHES = FULL_FILTER._nbHashes;
+
+/** The hash functions a filter of FILTER_BITS uses for that many staples: as many as make it least likely to name another by mistake. */
+function hashesFor(named: number): number {
+	if (named <= BLOOM_CAPACITY) {
+		return(FULL_FILTER_HASHES);
+	}
+	return(Math.max(1, Math.round(FILTER_BITS / named * Math.LN2)));
+}
+
+/** How likely a filter of FILTER_BITS naming that many staples is to name another by mistake. */
+function errorRateOf(named: number): number {
+	const hashes = hashesFor(named);
+	return((1 - Math.exp(-hashes * named / FILTER_BITS)) ** hashes);
+}
+
+/**
+ * The error rate a pass accepts for a conclusion that it holds every staple
+ * up to a moment: that of one full filter, about BLOOM_ERROR_RATE. Filters
+ * that name more are each less certain, so the conclusion rests on several,
+ * each with a seed of its own, whose rates multiply.
+ */
+export const ACCEPTED_ERROR_RATE: number = errorRateOf(BLOOM_CAPACITY);
 
 /** What a filter reads of a staple: its bytes, as the peer tests them [Keeta TS] index.js:69686-69690. */
 export type NamedStaple = {
@@ -42,83 +80,109 @@ export type NamedStaple = {
 	toBytes(): ArrayBuffer;
 };
 
-type Entry = {
-	readonly bytes: ArrayBuffer;
-	/** Sent by the peer since the start last moved, rather than held before the pass. */
-	readonly received: boolean;
+const keys = new WeakMap<NamedStaple, string>();
+
+/**
+ * What tells staples apart for a filter: their bytes. Two staples on the same
+ * blocks with other votes differ, so a filter that names one leaves the
+ * other in.
+ */
+export function stapleKey(staple: NamedStaple): string {
+	let key = keys.get(staple);
+	if (key === undefined) {
+		key = createHash('sha256').update(new Uint8Array(staple.toBytes())).digest('base64');
+		keys.set(staple, key);
+	}
+	return(key);
+}
+
+/** A filter as sent, and how likely it is to name by mistake a staple it was not given. */
+export type Filter = {
+	readonly serialized: string | undefined;
+	readonly errorRate: number;
 };
 
 /**
  * The staples the next request's filter names, so that the peer sends only
- * staples the node lacks: those it held from the start when the pass began,
- * and those the peer has sent from the start. When there are more than a
- * filter holds, the earliest named are let go first, since the peer sends
- * staples in the order it applied them and the pass has moved past those
- * soonest; a staple let go is at worst sent again.
+ * staples the node lacks.
+ *
+ * Those the peer sent from the current start must be named, or the peer
+ * sends them again; they are let go only when the start moves past them.
+ * Those the node held already are named only while there is room, the
+ * earliest first, since the peer sends staples in the order it applied them;
+ * one left out is at worst sent again.
  */
 export class NamedStaples {
-	readonly #entries = new Map<string, Entry>();
+	readonly #received = new Map<string, ArrayBuffer>();
+	readonly #held = new Map<string, ArrayBuffer>();
+
+	/** The staples the peer sent from the current start. */
+	get received(): number {
+		return(this.#received.size);
+	}
 
 	get size(): number {
-		return(this.#entries.size);
+		return(this.#received.size + this.#held.size);
 	}
 
+	/** Whether the filter names exactly this staple, bytes and all. */
 	names(staple: NamedStaple): boolean {
-		return(this.#entries.has(staple.blocksHash.toString()));
+		const key = stapleKey(staple);
+		return(this.#received.has(key) || this.#held.has(key));
 	}
 
-	/** Staples the node held when the pass began, from about its start. */
+	/** Staples the node holds, from about the start on, earliest first; named as far as there is room. */
 	hold(staples: readonly NamedStaple[]): void {
 		for (const staple of staples) {
-			this.#name(staple, false);
+			if (this.size >= BLOOM_CAPACITY) {
+				break;
+			}
+			const key = stapleKey(staple);
+			if (!this.#received.has(key)) {
+				this.#held.set(key, staple.toBytes());
+			}
 		}
 	}
 
-	/** A page the peer sent from the current start. */
-	receive(page: readonly NamedStaple[]): void {
-		for (const staple of page) {
-			this.#name(staple, true);
+	/** Staples the peer sent from the current start, which make room for themselves among those held. */
+	receive(staples: readonly NamedStaple[]): void {
+		for (const staple of staples) {
+			const key = stapleKey(staple);
+			this.#held.delete(key);
+			this.#received.set(key, staple.toBytes());
+		}
+		const excess = this.size - BLOOM_CAPACITY;
+		if (excess > 0) {
+			for (const key of [...this.#held.keys()].slice(-excess)) {
+				this.#held.delete(key);
+			}
 		}
 	}
 
 	/**
 	 * The start moved on to the moment of the page's staple at that index,
-	 * which the page's earlier staples and everything sent before them
-	 * precede, so the peer will not send them from there again.
+	 * which the page's earlier staples precede, as do, but for staples the
+	 * peer applied late, those it sent before the page, so it will not send
+	 * them from there again; one it does is at worst sent again. Those held
+	 * were named for the old start.
 	 */
 	moveOn(page: readonly NamedStaple[], from: number): void {
-		if (from > 0) {
-			for (const [key, entry] of this.#entries) {
-				if (entry.received) {
-					this.#entries.delete(key);
-				}
-			}
-		}
+		this.#received.clear();
+		this.#held.clear();
 		this.receive(page.slice(from));
 	}
 
-	/** A filter of every staple named, made for BLOOM_CAPACITY staples with the seed given, or nothing when none is named. */
-	serialize(seed: number): string | undefined {
-		if (this.#entries.size === 0) {
-			return(undefined);
+	/** A filter of every staple named with the seed given, or none when none is named. */
+	filter(seed: number): Filter {
+		const named = this.size;
+		if (named === 0) {
+			return({ serialized: undefined, errorRate: 0 });
 		}
-		const filter = lib.Utils.Bloom.BloomFilter.create(BLOOM_CAPACITY, BLOOM_ERROR_RATE);
+		const filter = new lib.Utils.Bloom.BloomFilter(FILTER_BITS, hashesFor(named));
 		filter.seed = seed;
-		for (const entry of this.#entries.values()) {
-			filter.add(entry.bytes);
+		for (const bytes of [...this.#received.values(), ...this.#held.values()]) {
+			filter.add(bytes);
 		}
-		return(lib.Utils.Bloom.serializeBloomFilter(filter));
-	}
-
-	#name(staple: NamedStaple, received: boolean): void {
-		const key = staple.blocksHash.toString();
-		this.#entries.delete(key);
-		this.#entries.set(key, { bytes: staple.toBytes(), received });
-		for (const oldest of this.#entries.keys()) {
-			if (this.#entries.size <= BLOOM_CAPACITY) {
-				break;
-			}
-			this.#entries.delete(oldest);
-		}
+		return({ serialized: lib.Utils.Bloom.serializeBloomFilter(filter), errorRate: errorRateOf(named) });
 	}
 }
