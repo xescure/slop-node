@@ -8,6 +8,7 @@ import { endpointOf, RECEIVER, STORAGES_UNDER_TEST, SUPPLY, TRUSTED_SIGNER, useS
 import type { StorageUnderTest } from './testing/sdk.js';
 import { createDatabase } from './testing/postgres.js';
 import { deriveTestKeys, TEST_NETWORK_SEEDS } from './testing/network.js';
+import { startSilentPeer } from './testing/silent-peer.js';
 import { assertNever } from './util/assert-never.js';
 import { NODE_VERSION } from './version.js';
 
@@ -158,6 +159,17 @@ describe('slop-node run with peers', function() {
 		const cli = startCLI(['clear-peers'], NODE);
 		expect(await cli.exited).toEqual({ code: 1, signal: null });
 		expect(cli.stderr()).toBe('slop-node: clear-peers needs KEETANET_LOCAL_NODE_POSTGRES_URL: a node in memory forgets its peers when it stops\n');
+	});
+
+	/* Stopping waits for a dial, which waits for the peer's greeting [Keeta TS] index.js:72145-72156, 71373-71376. */
+	test('stops cleanly on SIGTERM while a peer it dialed has not greeted it', async function() {
+		const peer = await startSilentPeer(lib.Account.fromSeed(TEST_NETWORK_SEEDS.representative, 1));
+		const cli = startCLI(['run'], { ...NODE, ...await storageEnvironment('postgres'), KEETANET_LOCAL_NODE_MANUAL_PEERS: peer.setting });
+		await cli.printed(PEER_LINE);
+		await peer.greeted;
+		cli.signal('SIGTERM');
+		expect(await cli.exited).toEqual({ code: 0, signal: null });
+		expect(cli.stderr()).toBe('');
 	});
 
 	test('refuses peers named automatically', async function() {

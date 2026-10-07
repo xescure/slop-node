@@ -4,7 +4,7 @@ import type { LedgerStorageBase, computeLedgerEffect, addTimeStatistic } from '@
 import type { computeEffectOfBlocks } from '@keetanetwork/keetanet-client/lib/ledger/effects.js';
 import type { KVStorageProviderMemory } from '@keetanetwork/keetanet-client/lib/kv/kv_memory.js';
 import type { IdempotentKey } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
-import type { P2PHttpConnection as HTTPConnectionClass, P2PPeerFromJSO, P2PPeerToJSO, P2PWebSocket } from '@keetanetwork/keetanet-client/lib/p2p.js';
+import type { P2PHttpConnection as HTTPConnectionClass, P2PPeerFromJSO, P2PPeerToJSO, P2PSwitch, P2PWebSocket } from '@keetanetwork/keetanet-client/lib/p2p.js';
 import type { StatsPending as StatsPendingClass } from '@keetanetwork/keetanet-client/lib/stats.js';
 
 export type LedgerInternalsAPI = {
@@ -55,9 +55,9 @@ if (missingKV.length > 0) {
 
 export const KVInternals: KVInternalsAPI = KeetaNet.lib.KVInternals;
 
-/** The parts of a socket of the bundled "ws" server that the node uses. */
+/** The parts of a socket of the bundled "ws" server that the node and its tests use. */
 export type BundledWebSocket = {
-	once(event: 'close', listener: () => void): unknown;
+	once(event: 'close' | 'message', listener: () => void): unknown;
 	terminate(): void;
 };
 
@@ -124,6 +124,36 @@ export const P2PInternals: P2PInternalsAPI = {
 	P2P_WEBSOCKET_MAX_PAYLOAD_BYTES: KeetaNet.lib.P2PInternals.P2P_WEBSOCKET_MAX_PAYLOAD_BYTES,
 	WebSocketServer: exposedWebSocketServer
 };
+
+/** How a switch takes and lets go of its connections; both are public in lib/p2p.d.ts. */
+export type SwitchConnectionMethods = Pick<P2PSwitch, 'registerConnection' | 'unregisterConnection'>;
+
+const requiredSwitchConnectionMethods = {
+	registerConnection: true,
+	unregisterConnection: true
+} satisfies Record<keyof SwitchConnectionMethods, true>;
+
+const missingSwitchMethods = Object.keys(requiredSwitchConnectionMethods).filter(function(name): boolean {
+	return(typeof Reflect.get(KeetaNet.lib.P2P.prototype, name) !== 'function');
+});
+if (missingSwitchMethods.length > 0) {
+	throw(new Error(`the switch no longer has its connection methods: ${missingSwitchMethods.join(', ')}`));
+}
+
+/**
+ * Replaces, on this switch alone, the methods by which it takes and lets go
+ * of connections with those the wrapper builds around its own; every caller,
+ * upstream's connections included, then goes through them
+ * [Keeta TS] index.js:72324-72342, 73631.
+ */
+export function wrapSwitchConnections(p2pSwitch: P2PSwitch, wrap: (upstream: SwitchConnectionMethods) => SwitchConnectionMethods): void {
+	const wrapped = wrap({
+		registerConnection: p2pSwitch.registerConnection.bind(p2pSwitch),
+		unregisterConnection: p2pSwitch.unregisterConnection.bind(p2pSwitch)
+	});
+	p2pSwitch.registerConnection = wrapped.registerConnection;
+	p2pSwitch.unregisterConnection = wrapped.unregisterConnection;
+}
 
 function isStatsPendingConstructor(candidate: unknown): candidate is typeof StatsPendingClass {
 	return(typeof candidate === 'function' && candidate.name === 'StatsPending' && KeetaNet.lib.Stats.prototype instanceof candidate);

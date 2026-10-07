@@ -2,13 +2,16 @@ import { describe, expect, onTestFinished, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { P2PConnection, P2PPeer, P2PSwitch } from '@keetanetwork/keetanet-client/lib/p2p.js';
+import { TEST_NETWORK_SEEDS } from '../testing/network.js';
 import { useSDKNodes } from '../testing/sdk.js';
 import type { ServingNode } from '../testing/sdk.js';
+import { startSilentPeer } from '../testing/silent-peer.js';
 import { P2PInternals } from '../upstream/internals.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { formatManualPeer, getConfigFromEnv, localNodeConfig, manualPeerOf } from './config.js';
 import type { Environment } from './config.js';
 import { LocalNode } from './local.js';
+import { closeStorage, nodeResourcesOf, openStorage } from './storage.js';
 
 const lib = KeetaNet.lib;
 
@@ -47,11 +50,31 @@ type ConnectionLog = {
 	readonly registered: (p2pSwitch: P2PSwitch) => readonly P2PConnection[];
 	/** Whether the switch has finished unregistering the connection. */
 	readonly released: (connection: P2PConnection) => boolean;
+	/** Whether every registration of the connection has settled, and an unregistering started after the last one has finished. */
+	readonly settled: (connection: P2PConnection) => boolean;
+	/** How often the switch itself unregistered the connection. */
+	readonly timesUnregistered: (connection: P2PConnection) => number;
+	/** Whether the connection was closing as each of its registrations ended. */
+	readonly closingAsRegistered: (connection: P2PConnection) => readonly boolean[];
 };
+
+type Registration = (this: P2PSwitch, connection: P2PConnection) => Promise<void>;
+
+function isRegistration(candidate: unknown): candidate is Registration {
+	return(typeof candidate === 'function');
+}
 
 /** Records what every switch does with its connections, from before any node is built. */
 function logConnections(): ConnectionLog {
-	const register = vi.spyOn(lib.P2P.prototype, 'registerConnection');
+	const registerConnection: unknown = Object.getOwnPropertyDescriptor(lib.P2P.prototype, 'registerConnection')?.value;
+	if (!isRegistration(registerConnection)) {
+		throw(new Error('the switch has no registerConnection'));
+	}
+	const closingAsRegistered = new Map<P2PConnection, boolean[]>();
+	const register = vi.spyOn(lib.P2P.prototype, 'registerConnection').mockImplementation(async function(this: P2PSwitch, connection: P2PConnection): Promise<void> {
+		await registerConnection.call(this, connection);
+		closingAsRegistered.set(connection, [...closingAsRegistered.get(connection) ?? [], connection.abort]);
+	});
 	const unregister = vi.spyOn(lib.P2P.prototype, 'unregisterConnection');
 	onTestFinished(function() {
 		vi.restoreAllMocks();
@@ -71,6 +94,30 @@ function logConnections(): ConnectionLog {
 			return(unregister.mock.calls.some(function([unregistered], index): boolean {
 				return(unregistered === connection && unregister.mock.settledResults[index]?.type === 'fulfilled');
 			}));
+		},
+		settled: function(connection) {
+			const registrations: number[] = [];
+			for (const [index, [registered]] of register.mock.calls.entries()) {
+				if (registered !== connection) {
+					continue;
+				}
+				if (register.mock.settledResults[index]?.type !== 'fulfilled') {
+					return(false);
+				}
+				registrations.push(register.mock.invocationCallOrder[index] ?? Infinity);
+			}
+			const lastRegistration = Math.max(...registrations);
+			return(unregister.mock.calls.some(function([unregistered], index): boolean {
+				return(unregistered === connection && unregister.mock.settledResults[index]?.type === 'fulfilled' && (unregister.mock.invocationCallOrder[index] ?? 0) > lastRegistration);
+			}));
+		},
+		closingAsRegistered: function(connection) {
+			return(closingAsRegistered.get(connection) ?? []);
+		},
+		timesUnregistered: function(connection) {
+			return(unregister.mock.calls.filter(function([unregistered]): boolean {
+				return(unregistered === connection);
+			}).length);
 		}
 	});
 }
@@ -144,6 +191,78 @@ describe('peers configured through the environment', function() {
 		await second.stop();
 
 		expect(dialed.map(connections.released)).toEqual([true]);
+	});
+
+	/*
+	 * A dial waits for the peer's greeting before the switch takes the
+	 * connection [Keeta TS] index.js:72145-72156, 72708, and stopping waits for
+	 * the dial [Keeta TS] index.js:71373-71376 but closes only the connections
+	 * the switch has taken [Keeta TS] index.js:72663-72673; the registration
+	 * then adds the connection to the switch and its store anyway
+	 * [Keeta TS] index.js:72708-72731.
+	 */
+	test('still waiting for a greeting are closed as the node stops, so that nothing is written to a closed store', async function() {
+		const connections = logConnections();
+		const peer = await startSilentPeer(lib.Account.fromSeed(TEST_NETWORK_SEEDS.representative, 1));
+		const config = getConfigFromEnv(await nodes.environmentFor('postgres', { KEETANET_LOCAL_NODE_MANUAL_PEERS: peer.setting }));
+		const storage = openStorage(config.storage);
+		if (storage.kind !== 'postgres') {
+			throw(new Error('the node keeps no store in Postgres'));
+		}
+		const writes = vi.spyOn(storage.kv, 'set');
+		const node = new LocalNode(localNodeConfig(config, nodeResourcesOf(storage, new lib.Log())));
+		await node.run();
+		await peer.greeted;
+
+		await node.stop();
+		await closeStorage(storage);
+
+		const [dialed, ...others] = connections.registered(node.switch);
+		expect(others).toEqual([]);
+		if (dialed === undefined) {
+			throw(new Error('the node dialed no one'));
+		}
+		// The registration ended because the connection was closed, not because the greeting never came; the dial's second is not passed on.
+		expect(connections.closingAsRegistered(dialed)).toEqual([true]);
+		expect(connections.settled(dialed)).toBe(true);
+		expect(writes.mock.settledResults.map(function(result): string {
+			return(result.type);
+		})).not.toContain('incomplete');
+		expect(writes.mock.settledResults.map(function(result): string {
+			return(result.type);
+		})).not.toContain('rejected');
+	});
+
+	/* A socket's error is followed by its close, and each unregisters the connection [Keeta TS] index.js:72324-72329. */
+	test('are unregistered once, however often the switch is told to', async function() {
+		const connections = logConnections();
+		const first = await nodes.start(await nodes.environmentFor('memory'));
+		const second = await nodes.start(await nodes.environmentFor('memory', { ...SECOND, KEETANET_LOCAL_NODE_MANUAL_PEERS: await peerSettingOf(first, true) }));
+		await second.node.switch.wait();
+		const [dialed] = connections.registered(second.node.switch);
+		if (dialed === undefined) {
+			throw(new Error('the node dialed no one'));
+		}
+		const p2pSwitch = second.node.switch;
+		const unregister = p2pSwitch.unregisterConnection.bind(p2pSwitch);
+		let told = 0;
+		const toldOnClose = new Promise<void>(function(resolve) {
+			vi.spyOn(p2pSwitch, 'unregisterConnection').mockImplementation(function(connection: P2PConnection): Promise<void> {
+				if (connection === dialed) {
+					told++;
+				}
+				// The test tells the switch twice, as a socket's error would; its close tells it the third time.
+				if (told === 3) {
+					resolve();
+				}
+				return(unregister(connection));
+			});
+		});
+
+		await Promise.all([p2pSwitch.unregisterConnection(dialed), p2pSwitch.unregisterConnection(dialed), dialed.close()]);
+		await toldOnClose;
+
+		expect(connections.timesUnregistered(dialed)).toBe(1);
 	});
 
 	test('are told to post staples over HTTP when the node prefers it', async function() {

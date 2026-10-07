@@ -215,7 +215,7 @@ export class LocalNode extends ClientNode {
 	constructor(config: LocalNodeConfig) {
 		super(withoutManualPeers(config));
 		this.config = config;
-		this.#connections = new SwitchConnections(this.switch);
+		this.#connections = new SwitchConnections(this.switch, this.log);
 		// Outside production Express answers a failure that escapes every handler with its stack.
 		this.#app.set('env', 'production');
 	}
@@ -394,8 +394,8 @@ export class LocalNode extends ClientNode {
 	/**
 	 * Stops serving peers and requests, waiting for the requests in flight
 	 * and the messages peers posted, then stops the node, and waits until its
-	 * switch is done with the connections it closed, so that the storage can
-	 * be closed after.
+	 * switch is done with every connection, so that the storage can be closed
+	 * after.
 	 */
 	override async stop(): Promise<void> {
 		const peers = this.#peers;
@@ -410,6 +410,7 @@ export class LocalNode extends ClientNode {
 		}
 		await settleDeliveries(this);
 		this.#running = false;
+		await this.#connections.stopping();
 		await super.stop();
 		await this.#connections.closed();
 	}
