@@ -56,6 +56,35 @@ export const SPENDER: Account = lib.Account.fromSeed('4b8e2d6f0a3c5e7f9b1d3f5a7c
 
 const EPOCH = new Date(0);
 
+/*
+ * A socket that asks for any port is given one of the system's ephemeral
+ * range, 32768 to 60999 on Linux and above 49151 elsewhere, as is the local
+ * end of an outgoing connection, so any socket of the test run could take a
+ * port a member lets go of between its node and the placeholder that holds
+ * the port while the node is offline. Members listen below that range
+ * instead, each worker of the test run on ports of its own, so that nothing
+ * else of the run asks for a member's port.
+ */
+const MEMBER_PORT_BASE = 20_000;
+const MEMBER_PORTS_PER_WORKER = 500;
+/** As many workers as fit below the ephemeral range; more share blocks of ports. */
+const MEMBER_PORT_WORKERS = 25;
+
+/** The ports of this worker's members handed out so far. */
+let memberPortsTaken = 0;
+
+/** The next port of this worker's block, wrapping around within it. */
+function nextMemberPort(): number {
+	const worker = (Number(process.env['VITEST_POOL_ID'] ?? '1') - 1) % MEMBER_PORT_WORKERS;
+	const port = MEMBER_PORT_BASE + (worker * MEMBER_PORTS_PER_WORKER) + (memberPortsTaken % MEMBER_PORTS_PER_WORKER);
+	memberPortsTaken++;
+	return(port);
+}
+
+function isAddressInUse(error: unknown): boolean {
+	return(error instanceof Error && 'code' in error && error.code === 'EADDRINUSE');
+}
+
 /** More staples than any cluster holds, so that one read lists them all. */
 const STAPLE_LIMIT = 1000;
 
@@ -189,7 +218,9 @@ export class ClusterMember {
 	readonly #store: MemberStore;
 	readonly #genesis: VoteStaple | undefined;
 	#state: MemberState = { kind: 'stopped' };
-	#port = 0;
+	#port = nextMemberPort();
+	/** Whether the node has listened on the port, which peers then know it by. */
+	#listened = false;
 	readonly #adds: string[] = [];
 
 	constructor(index: number, environment: Environment, store: MemberStore, genesis: VoteStaple | undefined) {
@@ -253,14 +284,32 @@ export class ClusterMember {
 
 	/**
 	 * Builds and runs the node as the command does, on the port it had before
-	 * if it ran before. A store in memory starts empty, so it is given genesis,
-	 * as every node of the network was when it was made, unless the member is
-	 * to fetch it.
+	 * if it ran before. A port that a process outside the test run holds as
+	 * the member first starts is passed over for the next.
 	 */
 	async start(): Promise<void> {
 		if (this.#state.kind === 'running') {
 			throw(new Error(`member ${String(this.index)} is already running`));
 		}
+		for (let attempt = 1; ; attempt++) {
+			try {
+				await this.#startOnPort();
+				this.#listened = true;
+				return;
+			} catch (error: unknown) {
+				if (this.#listened || !isAddressInUse(error) || attempt >= MEMBER_PORTS_PER_WORKER) {
+					throw(error);
+				}
+				this.#port = nextMemberPort();
+			}
+		}
+	}
+
+	/**
+	 * A store in memory starts empty, so it is given genesis, as every node of
+	 * the network was when it was made, unless the member is to fetch it.
+	 */
+	async #startOnPort(): Promise<void> {
 		const config = getConfigFromEnv(this.environment());
 		const storage = openStorage(config.storage);
 		const nodeConfig = localNodeConfig(config, nodeResourcesOf(storage, new lib.Log()));
@@ -287,7 +336,6 @@ export class ClusterMember {
 		if (api === undefined || p2p === undefined) {
 			throw(new Error('the node advertises no endpoints'));
 		}
-		this.#port = Number(new URL(api).port);
 		this.#state = { kind: 'running', running: { node, storage, apiURL: api.replace(/\/$/, ''), p2pURL: p2p, commits } };
 	}
 
