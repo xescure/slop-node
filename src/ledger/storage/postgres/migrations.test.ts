@@ -17,7 +17,7 @@ const FIRST = 'CREATE TABLE first_probe (id integer PRIMARY KEY);\n';
 const SECOND = 'CREATE TABLE second_probe (id integer PRIMARY KEY);\nINSERT INTO second_probe (id) VALUES (1);\n';
 const THIRD = 'CREATE TABLE third_probe (id integer PRIMARY KEY);\n';
 
-type MigrationFiles = Readonly<Record<string, string>>;
+type MigrationFiles = Readonly<Record<string, string | Buffer>>;
 
 const TWO_MIGRATIONS: MigrationFiles = {
 	'0001_first.sql': FIRST,
@@ -248,5 +248,38 @@ describe('applyMigrations', function() {
 
 		expect(await refusalOf(applyMigrations(pool, notes, clockAt(FIRST_START)))).toEqual({ kind: 'invalid-file-name', fileName: 'notes.txt' });
 		expect(await refusalOf(applyMigrations(pool, zero, clockAt(FIRST_START)))).toEqual({ kind: 'invalid-file-name', fileName: '0000_zero.sql' });
+	});
+
+	test('two files with one migration number are refused', async function() {
+		const database = await freshDatabase();
+		const pool = database.pool();
+		const directory = await migrationDirectory({ '0001_first.sql': FIRST, '0001_third.sql': THIRD });
+
+		expect(await refusalOf(applyMigrations(pool, directory, clockAt(FIRST_START)))).toEqual({ kind: 'duplicate-file', version: 1 });
+		expect(await tableExists(pool, 'first_probe')).toBe(false);
+		expect(await tableExists(pool, 'third_probe')).toBe(false);
+	});
+
+	test('a missing migration directory is refused', async function() {
+		const database = await freshDatabase();
+		const parent = await migrationDirectory({});
+		const absent = new URL('absent/', parent);
+
+		const attempt = applyMigrations(database.pool(), absent, clockAt(FIRST_START));
+
+		expect(await refusalOf(attempt)).toEqual({ kind: 'unreadable-directory', directory: absent.href });
+		await expect(attempt).rejects.toMatchObject({ cause: { code: 'ENOENT' } });
+	});
+
+	test('a migration that is not UTF-8 is refused before anything applies', async function() {
+		const database = await freshDatabase();
+		const pool = database.pool();
+		const directory = await migrationDirectory({
+			'0001_first.sql': FIRST,
+			'0002_binary.sql': Buffer.from([0x53, 0xff, 0x0a])
+		});
+
+		expect(await refusalOf(applyMigrations(pool, directory, clockAt(FIRST_START)))).toEqual({ kind: 'invalid-file', fileName: '0002_binary.sql' });
+		expect(await tableExists(pool, 'first_probe')).toBe(false);
 	});
 });

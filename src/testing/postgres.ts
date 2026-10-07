@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -33,12 +33,18 @@ export type DatabaseName = string & { readonly __databaseName: never };
 const CLUSTER_USER = 'slop';
 const MAINTENANCE_DATABASE = 'postgres';
 
+const CLUSTER_DIRECTORY_PREFIX = 'slop-pg-';
+const DATA_DIRECTORY = 'data';
+const OWNER_FILE = 'owner.pid';
+
 const runFile = promisify(execFile);
 
 // The cluster is thrown away after the run, so durability is traded for speed,
-// and the vitest workers together hold many pools at once.
+// and the vitest workers together hold many pools at once. Timestamps print
+// the same on every host.
 const SERVER_SETTINGS = [
 	'listen_addresses=',
+	'timezone=UTC',
 	'max_connections=300',
 	'fsync=off',
 	'synchronous_commit=off',
@@ -133,25 +139,79 @@ const readLog = async function(logFile: string): Promise<string> {
 	}
 };
 
+const stopClusterServer = function(directory: string): Promise<void> {
+	// The data is thrown away, so nothing needs a clean shutdown.
+	return(runTool('pg_ctl', ['stop', '--pgdata', join(directory, DATA_DIRECTORY), '--mode', 'immediate', '--wait']));
+};
+
+/** The process that started the cluster in this directory, if it says. */
+const ownerOf = async function(directory: string): Promise<number | undefined> {
+	let recorded: string;
+	try {
+		recorded = await readFile(join(directory, OWNER_FILE), 'utf-8');
+	} catch {
+		return(undefined);
+	}
+	const owner = Number(recorded.trim());
+	if (!Number.isSafeInteger(owner) || owner < 1) {
+		return(undefined);
+	}
+	return(owner);
+};
+
+// Signal 0 only checks that the process exists; EPERM means it exists under another user.
+const isRunning = function(processID: number): boolean {
+	try {
+		process.kill(processID, 0);
+	} catch (error: unknown) {
+		return(!hasCode(error, 'ESRCH'));
+	}
+	return(true);
+};
+
+/**
+ * A run killed outright never reaches its teardown, and leaves its server
+ * running. Each cluster names the process that started it, so a later run
+ * stops and removes those whose owner has died. A directory that names no
+ * owner may belong to a run that is still starting its cluster, and is left.
+ */
+export const sweepAbandonedClusters = async function(parent: string = tmpdir()): Promise<void> {
+	const entries = await readdir(parent, { withFileTypes: true });
+	for (const entry of entries) {
+		if (!entry.isDirectory() || !entry.name.startsWith(CLUSTER_DIRECTORY_PREFIX)) {
+			continue;
+		}
+		const directory = join(parent, entry.name);
+		const owner = await ownerOf(directory);
+		if (owner === undefined || isRunning(owner)) {
+			continue;
+		}
+		await stopClusterServer(directory).catch(function() {
+			// A server that already died has nothing to stop.
+		});
+		await rm(directory, { recursive: true, force: true });
+	}
+};
+
 /**
  * Starts a private cluster in a fresh temporary directory, reachable only
  * through a Unix socket in that directory. Fails with the reason, never
  * silently, when the server binaries are missing or the server cannot start.
  */
-export const startCluster = async function(): Promise<Cluster> {
-	const directory = await mkdtemp(join(tmpdir(), 'slop-pg-'));
-	const dataDirectory = join(directory, 'data');
+export const startCluster = async function(parent: string = tmpdir()): Promise<Cluster> {
+	const directory = await mkdtemp(join(parent, CLUSTER_DIRECTORY_PREFIX));
+	const dataDirectory = join(directory, DATA_DIRECTORY);
 	const logFile = join(directory, 'server.log');
 	const removeDirectory = function(): Promise<void> {
 		return(rm(directory, { recursive: true, force: true }));
 	};
 	const stopServer = function(): Promise<void> {
-		// The data is thrown away, so nothing needs a clean shutdown.
-		return(runTool('pg_ctl', ['stop', '--pgdata', dataDirectory, '--mode', 'immediate', '--wait']));
+		return(stopClusterServer(directory));
 	};
 
 	let port: number;
 	try {
+		await writeFile(join(directory, OWNER_FILE), `${String(process.pid)}\n`);
 		assertShellSafePath(directory);
 		port = await findFreePort();
 		await runTool('initdb', [

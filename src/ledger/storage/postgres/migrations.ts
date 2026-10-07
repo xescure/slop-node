@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { Dirent } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import type pg from 'pg';
 import { assertNever } from '../../../util/assert-never.js';
@@ -19,8 +20,10 @@ const MIGRATION_LOCK_KEY = 0x6b656574616c6467n;
 const MIGRATION_FILE_NAME = /^(\d{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$/;
 
 export type MigrationProblem =
+	| { readonly kind: 'unreadable-directory'; readonly directory: string }
 	| { readonly kind: 'no-migrations'; readonly directory: string }
 	| { readonly kind: 'invalid-file-name'; readonly fileName: string }
+	| { readonly kind: 'invalid-file'; readonly fileName: string }
 	| { readonly kind: 'duplicate-file'; readonly version: SchemaVersion }
 	| { readonly kind: 'missing-file'; readonly version: SchemaVersion }
 	| { readonly kind: 'unknown-version'; readonly version: SchemaVersion; readonly newestKnown: SchemaVersion }
@@ -30,10 +33,14 @@ export type MigrationProblem =
 
 const describeProblem = function(problem: MigrationProblem): string {
 	switch (problem.kind) {
+		case 'unreadable-directory':
+			return(`cannot list the migrations in ${problem.directory}`);
 		case 'no-migrations':
 			return(`no migrations in ${problem.directory}`);
 		case 'invalid-file-name':
 			return(`${problem.fileName} is not named NNNN_<name>.sql`);
+		case 'invalid-file':
+			return(`the migration ${problem.fileName} is not valid UTF-8`);
 		case 'duplicate-file':
 			return(`more than one file is migration version ${String(problem.version)}`);
 		case 'missing-file':
@@ -92,11 +99,26 @@ const asDirectory = function(directory: URL): URL {
 // than the bytes its digest records.
 const UTF8 = new TextDecoder('utf-8', { fatal: true });
 
+const listDirectory = async function(base: URL): Promise<Dirent[]> {
+	try {
+		return(await readdir(base, { withFileTypes: true }));
+	} catch (error: unknown) {
+		throw(new MigrationError({ kind: 'unreadable-directory', directory: base.href }, { cause: error }));
+	}
+};
+
+const decodeMigrationFile = function(fileName: string, bytes: Buffer): string {
+	try {
+		return(UTF8.decode(bytes));
+	} catch (error: unknown) {
+		throw(new MigrationError({ kind: 'invalid-file', fileName }, { cause: error }));
+	}
+};
+
 const loadMigrations = async function(directory: URL): Promise<readonly Migration[]> {
 	const base = asDirectory(directory);
-	const entries = await readdir(base, { withFileTypes: true });
 	const migrations: Migration[] = [];
-	for (const entry of entries) {
+	for (const entry of await listDirectory(base)) {
 		const number = Number(MIGRATION_FILE_NAME.exec(entry.name)?.[1]);
 		if (!entry.isFile() || !(number >= 1)) {
 			throw(new MigrationError({ kind: 'invalid-file-name', fileName: entry.name }));
@@ -104,7 +126,7 @@ const loadMigrations = async function(directory: URL): Promise<readonly Migratio
 		const bytes = await readFile(new URL(entry.name, base));
 		migrations.push({
 			version: toSchemaVersion(number),
-			sql: UTF8.decode(bytes),
+			sql: decodeMigrationFile(entry.name, bytes),
 			sha256: createHash('sha256').update(bytes).digest()
 		});
 	}
