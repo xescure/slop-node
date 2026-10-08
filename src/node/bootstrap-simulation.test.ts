@@ -105,6 +105,8 @@ class Scenario {
 	readonly updates: UpdateRecord[] = [];
 	/** Staples the peer applies while each update reads it, and only then, so that a busy peer takes hours of updates without millions of staples. */
 	trafficWhileRead: LiveTraffic | undefined;
+	/** Where the passes over the peer start before any has moved on. */
+	from = new Date(0);
 
 	constructor(options: SimulatedPeerOptions = {}, bounds?: QueueBounds) {
 		this.peer = new SimulatedPeer({ latency: LATENCY, ...options });
@@ -119,7 +121,7 @@ class Scenario {
 		if (this.trafficWhileRead !== undefined) {
 			this.peer.goLive(this.trafficWhileRead);
 		}
-		const outcome = await bootstrapPeer(this.follower.io(this.peer), this.follower.options());
+		const outcome = await bootstrapPeer(this.follower.io(this.peer), this.follower.options(this.from));
 		if (this.trafficWhileRead !== undefined) {
 			this.peer.stopLive();
 		}
@@ -486,6 +488,67 @@ describe('bootstrapping against a simulated peer', { timeout: 120_000 }, functio
 			// A request under way when the bound falls is answered.
 			expect(update.elapsed).toBeLessThanOrEqual(MAX_PASS_MILLISECONDS + latency);
 		}
+	});
+
+	/*
+	 * A main network representative keys each vote at the moment it was made,
+	 * reads about 200 at a time, lists a staple once per read that holds one
+	 * of its votes, and runs out of time after about ten reads, taking about
+	 * 0.45 s for each; with the node's 1 s rest, a page of about 45 staples
+	 * comes every 5.8 s.
+	 */
+	describe('against a peer keyed by votes, as the main network\'s representatives are', function() {
+		const REPRESENTATIVE: SimulatedPeerOptions = {
+			latency: 1300,
+			keying: { kind: 'votes', votesPerRead: 20, readsAtMost: 10, readMilliseconds: 450 }
+		};
+
+		function requestsOf(scenario: Scenario): number {
+			return(scenario.updates.reduce(function(sum, update): number {
+				return(sum + update.requests);
+			}, 0));
+		}
+
+		test('catches up on its history, at the rate it allows', async function() {
+			freezeClock(new Date(NOW));
+			const scenario = new Scenario(REPRESENTATIVE);
+			const count = 3000;
+			liveHistory(scenario.peer, count, 0.1, NOW - HOUR);
+			scenario.from = new Date(NOW - HOUR - count * 10 * SECOND - MINUTE);
+
+			const { took } = await scenario.onScheduleUntilComplete(60);
+
+			expect(scenario.missing()).toEqual([]);
+			// 344 requests, about nine staples each, 160 staples a minute: one page of about 45 staples and its probes.
+			expect(count / requestsOf(scenario)).toBeLessThan(10);
+			expect(count / (took / MINUTE)).toBeLessThan(200);
+		});
+
+		/*
+		 * A probe that the peer answers with a staple of the page shows only
+		 * that one of its votes was made at or after the moment probed, which
+		 * need not be a vote the page read: the page may have ended before the
+		 * votes of other staples made before that moment.
+		 */
+		test.fails('holds every staple, whose votes were made up to minutes apart', async function() {
+			freezeClock(new Date(NOW));
+			const scenario = new Scenario(REPRESENTATIVE);
+			const count = 3000;
+			for (let index = 0; index < count; index++) {
+				const madeAt = NOW - HOUR - (count - index) * 10 * SECOND;
+				let stamps = [madeAt - 900, madeAt - 500, madeAt - 200, madeAt];
+				if (index % 3 === 0) {
+					// One voter's vote was made long after the others', as one a representative traded in late.
+					stamps = [madeAt - 900, madeAt - 500, madeAt - 200, madeAt + (1 + index % 13) * MINUTE];
+				}
+				scenario.peer.applyVoted(madeAt, madeAt, [], stamps);
+			}
+			scenario.from = new Date(NOW - HOUR - count * 10 * SECOND - MINUTE);
+
+			await scenario.onScheduleUntilComplete(60);
+
+			expect(scenario.missing()).toEqual([]);
+		});
 	});
 
 	test('holds every staple of a peer that holds blocks the node holds with other votes', async function() {

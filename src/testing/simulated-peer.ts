@@ -15,6 +15,8 @@ const STAPLE_BYTES = 64;
 /** A staple as a simulated peer holds it: when the peer applied it, and when its votes say it was made. */
 export type SimulatedStaple = PassStaple & {
 	readonly id: number;
+	/** When each of its votes was made, on its voter's clock. */
+	readonly votes: readonly { readonly validityFrom: Date }[];
 	/** The moment the peer applied it, on the peer's clock. */
 	readonly moment: number;
 	/** The order the peer applied it in among staples of the same moment. */
@@ -37,7 +39,7 @@ function nameOf(id: number): string {
 	return(`staple-${String(id)}`);
 }
 
-function simulatedStaple(id: number, moment: number, sequence: number, timestamp: number, needs: readonly number[], votes = 0): SimulatedStaple {
+function simulatedStaple(id: number, moment: number, sequence: number, timestamp: number, needs: readonly number[], stamps: readonly number[], votes = 0): SimulatedStaple {
 	const bytes = stapleBytes(id, votes);
 	const name = nameOf(id);
 	return({
@@ -45,6 +47,9 @@ function simulatedStaple(id: number, moment: number, sequence: number, timestamp
 		moment,
 		sequence,
 		needs,
+		votes: stamps.map(function(stamp) {
+			return({ validityFrom: new Date(stamp) });
+		}),
 		blocksHash: { toString: function(): string {
 			return(name);
 		} },
@@ -55,6 +60,12 @@ function simulatedStaple(id: number, moment: number, sequence: number, timestamp
 			return(new Date(timestamp));
 		}
 	});
+}
+
+function stampsOf(staple: SimulatedStaple): number[] {
+	return(staple.votes.map(function(vote): number {
+		return(vote.validityFrom.getTime());
+	}));
 }
 
 function compareApplied(left: SimulatedStaple, right: SimulatedStaple): number {
@@ -97,7 +108,51 @@ export type SimulatedPeerOptions = {
 	 * staples the filter names, as the main network's representatives do.
 	 */
 	readonly readsAtMost?: number;
+	/** How the peer keys and lists its staples: by when it applied them, as this node does, unless told otherwise. */
+	readonly keying?: SimulatedKeying;
 };
+
+/**
+ * How a peer finds the staples to list from a start.
+ *
+ * 'applied': as this node does, each staple once, at the moment it applied
+ * it, in the order applied (src/ledger/storage/memory/driver.ts
+ * getVotesAfter).
+ *
+ * 'votes': as the main network's representatives do, each vote at the moment
+ * it was made: the peer reads the votes made at or after the start, in that
+ * order, so many at a time, and lists the staple of each vote it read, once
+ * per read [Keeta TS] index.js:69655-69676, in no order of its own within a
+ * read; a staple whose votes two reads share is listed twice. Its time for a
+ * request runs out after so many reads, once it has a staple to send
+ * [Keeta TS] index.js:69641-69647, and each read takes so long.
+ */
+export type SimulatedKeying =
+	| { readonly kind: 'applied' }
+	| { readonly kind: 'votes'; readonly votesPerRead: number; readonly readsAtMost: number; readonly readMilliseconds: number };
+
+/** A vote as a peer keyed by votes holds it: the moment it was made, and the staple it is in. */
+type SimulatedVote = { readonly made: number; readonly vote: number; readonly staple: SimulatedStaple };
+
+function compareVotes(left: SimulatedVote, right: SimulatedVote): number {
+	if (left.made !== right.made) {
+		return(left.made - right.made);
+	}
+	if (left.staple.id !== right.staple.id) {
+		return(left.staple.id - right.staple.id);
+	}
+	return(left.vote - right.vote);
+}
+
+/** When the votes of a staple applied at a moment were made: its four voters' within a second before. */
+function stampsBefore(id: number, moment: number): number[] {
+	return([moment - 900, moment - 400 - (id * 91) % 300, moment - 150 - (id * 37) % 200, moment]);
+}
+
+/** A fixed order of no meaning, as a peer lists the staples of one read. */
+function scrambled(id: number, read: number): number {
+	return(createHash('sha256').update(`${String(id)}:${String(read)}`).digest().readUInt32BE(0));
+}
 
 /** A deterministic source of numbers below 1, so that a scenario runs the same each time. */
 export function deterministicRandom(seed: number): () => number {
@@ -119,6 +174,9 @@ export function deterministicRandom(seed: number): () => number {
  */
 export class SimulatedPeer {
 	readonly #applied: SimulatedStaple[] = [];
+	/** The votes of the staples applied, in the order made, for a peer keyed by votes. */
+	readonly #votes: SimulatedVote[] = [];
+	readonly #keying: SimulatedKeying;
 	readonly #clockOffset: number;
 	readonly #latency: number;
 	readonly #answersAtMost: number;
@@ -138,6 +196,7 @@ export class SimulatedPeer {
 		this.#latency = options.latency ?? 25;
 		this.#answersAtMost = options.answersAtMost ?? Number.POSITIVE_INFINITY;
 		this.#readsAtMost = options.readsAtMost ?? Number.POSITIVE_INFINITY;
+		this.#keying = options.keying ?? { kind: 'applied' };
 	}
 
 	/** Every staple the peer has applied, in the order applied. */
@@ -161,13 +220,18 @@ export class SimulatedPeer {
 
 	/** Applies a staple with the timestamp given, at the moment given or now on the peer's clock, which a ledger accepts once it holds those it needs. */
 	apply(timestamp: number, moment: number = this.now(), needs: readonly number[] = []): SimulatedStaple {
-		return(this.#insert(simulatedStaple(this.#nextID++, moment, this.#nextSequence++, timestamp, needs)));
+		return(this.applyVoted(timestamp, moment, needs, stampsBefore(this.#nextID, timestamp)));
+	}
+
+	/** Applies a staple whose votes were made at the moments given: under a peer keyed by votes, where it is listed. */
+	applyVoted(timestamp: number, moment: number, needs: readonly number[], stamps: readonly number[]): SimulatedStaple {
+		return(this.#insert(simulatedStaple(this.#nextID++, moment, this.#nextSequence++, timestamp, needs, stamps)));
 	}
 
 	/** Applies, at the moment given on this peer's clock, the staple another peer applied: the same blocks with the same votes. */
 	applyAlso(staple: SimulatedStaple, moment: number): SimulatedStaple {
 		this.#nextID = Math.max(this.#nextID, staple.id + 1);
-		return(this.#insert(simulatedStaple(staple.id, moment, this.#nextSequence++, staple.timestamp().getTime(), staple.needs)));
+		return(this.#insert(simulatedStaple(staple.id, moment, this.#nextSequence++, staple.timestamp().getTime(), staple.needs, stampsOf(staple))));
 	}
 
 	#insert(staple: SimulatedStaple): SimulatedStaple {
@@ -176,12 +240,20 @@ export class SimulatedPeer {
 			at--;
 		}
 		this.#applied.splice(at, 0, staple);
+		stampsOf(staple).forEach((made, vote) => {
+			const entry: SimulatedVote = { made, vote, staple };
+			let place = this.#votes.length;
+			while (place > 0 && compareVotes(this.#votes[place - 1] ?? entry, entry) > 0) {
+				place--;
+			}
+			this.#votes.splice(place, 0, entry);
+		});
 		return(staple);
 	}
 
 	/** The same blocks as the staple, with another set of votes on them, as another representative may hold them. */
 	otherVotesOn(staple: SimulatedStaple): SimulatedStaple {
-		return(simulatedStaple(staple.id, staple.moment, staple.sequence, staple.timestamp().getTime(), staple.needs, 1));
+		return(simulatedStaple(staple.id, staple.moment, staple.sequence, staple.timestamp().getTime(), staple.needs, stampsOf(staple), 1));
 	}
 
 	/** Commits staples late at every request from now on, until stopped. */
@@ -212,6 +284,70 @@ export class SimulatedPeer {
 		this.#catchUpLive();
 		this.#commitLate();
 		const filter = this.#filterOf(request.bloomFilter);
+		const keying = this.#keying;
+		let staples: SimulatedStaple[];
+		switch (keying.kind) {
+			case 'applied':
+				staples = this.#listApplied(request, filter);
+				break;
+			case 'votes':
+				staples = this.#listVoted(request, filter, keying);
+				break;
+			default:
+				return(assertNever(keying));
+		}
+		this.#served += staples.length;
+		return({ kind: 'page', staples });
+	}
+
+	/** The staples of the votes made at or after the start, read as a representative reads them. */
+	#listVoted(request: PassRequest, filter: BloomFilter | undefined, keying: SimulatedKeying & { readonly kind: 'votes' }): SimulatedStaple[] {
+		const staples: SimulatedStaple[] = [];
+		const start = request.start.getTime();
+		let at = this.#firstVoteAtOrAfter(start);
+		let reads = 0;
+		while (staples.length < request.limit && at < this.#votes.length) {
+			// [Keeta TS] index.js:69655-69659
+			const size = Math.min(keying.votesPerRead, (request.limit - staples.length) * 32);
+			const read = this.#votes.slice(at, at + size);
+			const listed = [...new Set(read.map(function(vote): SimulatedStaple {
+				return(vote.staple);
+			}))].sort(function(left, right): number {
+				return(scrambled(left.id, at) - scrambled(right.id, at));
+			});
+			at += size;
+			reads++;
+			for (const staple of listed) {
+				if (staples.length >= request.limit) {
+					break;
+				}
+				if (!this.#named(filter, staple)) {
+					staples.push(staple);
+				}
+			}
+			if (staples.length > 0 && reads >= keying.readsAtMost) {
+				break;
+			}
+		}
+		advanceClock(reads * keying.readMilliseconds);
+		return(staples);
+	}
+
+	#firstVoteAtOrAfter(moment: number): number {
+		let low = 0;
+		let high = this.#votes.length;
+		while (low < high) {
+			const middle = Math.floor((low + high) / 2);
+			if ((this.#votes[middle]?.made ?? moment) < moment) {
+				low = middle + 1;
+			} else {
+				high = middle;
+			}
+		}
+		return(low);
+	}
+
+	#listApplied(request: PassRequest, filter: BloomFilter | undefined): SimulatedStaple[] {
 		const start = request.start.getTime();
 		const staples: SimulatedStaple[] = [];
 		const limit = Math.min(request.limit, this.#answersAtMost);
@@ -230,8 +366,7 @@ export class SimulatedPeer {
 			}
 			staples.push(staple);
 		}
-		this.#served += staples.length;
-		return({ kind: 'page', staples });
+		return(staples);
 	}
 
 	#named(filter: BloomFilter | undefined, staple: SimulatedStaple): boolean {
