@@ -327,6 +327,7 @@ function refusalsOf(network: Devnet): PerRepresentative<number> {
 
 function report(fault: string, outcome: TrafficOutcome, detail: string): void {
 	process.stderr.write(`fault ${fault}: ${String(outcome.confirmed.length)} staples confirmed, ${detail}, ${String(outcome.clientWarnings)} client warnings, ${String(outcome.failures.length)} publishes failed: ${JSON.stringify(outcome.failures)}\n`);
+	expect(outcome.failures).toEqual([]);
 }
 
 describe('faults injected into the devnet under SDK traffic', function() {
