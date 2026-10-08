@@ -120,17 +120,39 @@ describe('the staples a filter names', function() {
 		expect(named.names(stapleNamed('blocks', 'other votes'))).toBe(false);
 	});
 
-	test('let go, as the start moves past a page\'s staple, of what the peer sent before it, and of what the node held, which is named again from the new start', function() {
+	test('let go, as the start moves on, of what the peer sent before, and of what the node held, which is named again from the new start', function() {
 		const named = new NamedStaples();
 		const held = stapleNamed('held');
 		const earlier = stapleNamed('earlier-page');
 		const page = staplesNamed('page', 4);
 		named.hold([held]);
 		named.receive([earlier]);
-		named.moveOn(page, 2);
+		named.moveOn(page.slice(2));
 		expect([held, earlier, ...page].map(function(staple): boolean {
 			return(named.names(staple));
 		})).toEqual([false, false, false, false, true, true]);
+	});
+
+	test('carry, as far as there is room, what another names, after what they name already', function() {
+		const named = new NamedStaples();
+		const held = stapleNamed('held');
+		const earlier = stapleNamed('earlier-page');
+		named.hold([held]);
+		named.receive([earlier]);
+		const page = staplesNamed('page', BLOOM_CAPACITY - 1);
+		const following = new NamedStaples();
+		following.receive(page);
+		following.carry(named);
+		expect([earlier, held].map(function(staple): boolean {
+			return(following.names(staple));
+		})).toEqual([true, false]);
+		expect(following.size).toBe(BLOOM_CAPACITY);
+		expect(following.received).toBe(BLOOM_CAPACITY - 1);
+		following.forget(earlier);
+		following.forget(page[0] ?? earlier);
+		expect([earlier, page[0] ?? earlier].map(function(staple): boolean {
+			return(following.names(staple));
+		})).toEqual([false, false]);
 	});
 
 	test.each([BLOOM_CAPACITY, 5000, MAX_NAMED])('keep a filter of %i staples, and so its request, within the URL the client allows', function(count: number) {

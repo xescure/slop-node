@@ -160,16 +160,34 @@ export class NamedStaples {
 	}
 
 	/**
-	 * The start moved on to the moment of the page's staple at that index,
-	 * which the page's earlier staples precede, as do, but for staples the
-	 * peer applied late, those it sent before the page, so it will not send
-	 * them from there again; one it does is at worst sent again. Those held
-	 * were named for the old start.
+	 * The start moved on to a moment the page was shown to reach, and the
+	 * peer may list the staples given from there again, but, for staples the
+	 * peer applied late, none it sent before the page; one it does is at
+	 * worst sent again. Those held were named for the old start.
 	 */
-	moveOn(page: readonly NamedStaple[], from: number): void {
+	moveOn(staples: readonly NamedStaple[]): void {
 		this.#received.clear();
 		this.#held.clear();
-		this.receive(page.slice(from));
+		this.receive(staples);
+	}
+
+	/** Names the staple no more, so that the peer lists it. */
+	forget(staple: NamedStaple): void {
+		const key = stapleKey(staple);
+		this.#received.delete(key);
+		this.#held.delete(key);
+	}
+
+	/** Names, as far as there is room, what another names too: what the peer sent from its start, which it may list from a later one again, and what the node held. */
+	carry(other: NamedStaples): void {
+		for (const [key, bytes] of [...other.#received, ...other.#held]) {
+			if (this.size >= BLOOM_CAPACITY) {
+				break;
+			}
+			if (!this.#received.has(key)) {
+				this.#held.set(key, bytes);
+			}
+		}
 	}
 
 	/** A filter of every staple named with the seed given, or none when none is named. */

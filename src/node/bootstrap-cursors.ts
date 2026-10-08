@@ -29,6 +29,7 @@ type StoredProgress = {
 	readonly deepScanFrom: number;
 	readonly nextDeepScan: number;
 	readonly deepScan: { readonly reached: number; readonly horizon: number } | null;
+	readonly heldSince: number | null;
 };
 
 function isWholeNumber(value: unknown): value is number {
@@ -50,16 +51,28 @@ function deepScanOf(value: unknown): DeepScan | undefined | false {
 	return({ reached: new Date(value['reached']), horizon: new Date(value['horizon']) });
 }
 
+/** When the node took the staples it holds from where it reached, as stored, nothing when it did not record it, as before it did, or false when the value is not one. */
+function heldSinceOf(value: unknown): Date | undefined | false {
+	if (value === null || value === undefined) {
+		return(undefined);
+	}
+	if (!isWholeNumber(value)) {
+		return(false);
+	}
+	return(new Date(value));
+}
+
 function progressOf(value: unknown): PeerProgress | undefined {
 	if (!isRecord(value)) {
 		return(undefined);
 	}
 	const { reached, caughtUp, deepScanFrom, nextDeepScan } = value;
 	const deepScan = deepScanOf(value['deepScan']);
-	if (!isWholeNumber(reached) || typeof caughtUp !== 'boolean' || !isWholeNumber(deepScanFrom) || !isWholeNumber(nextDeepScan) || deepScan === false) {
+	const heldSince = heldSinceOf(value['heldSince']);
+	if (!isWholeNumber(reached) || typeof caughtUp !== 'boolean' || !isWholeNumber(deepScanFrom) || !isWholeNumber(nextDeepScan) || deepScan === false || heldSince === false) {
 		return(undefined);
 	}
-	return({ reached: new Date(reached), caughtUp, deepScanFrom: new Date(deepScanFrom), nextDeepScan: new Date(nextDeepScan), deepScan });
+	return({ reached: new Date(reached), caughtUp, deepScanFrom: new Date(deepScanFrom), nextDeepScan: new Date(nextDeepScan), deepScan, heldSince });
 }
 
 function storedDeepScan(deepScan: DeepScan | undefined): StoredProgress['deepScan'] {
@@ -88,7 +101,8 @@ export class BootstrapCursors {
 			caughtUp: progress.caughtUp,
 			deepScanFrom: progress.deepScanFrom.getTime(),
 			nextDeepScan: progress.nextDeepScan.getTime(),
-			deepScan: storedDeepScan(progress.deepScan)
+			deepScan: storedDeepScan(progress.deepScan),
+			heldSince: progress.heldSince?.getTime() ?? null
 		};
 		await this.#kv.set(BOOTSTRAP_CURSOR_ARENA, endpoint, stored);
 	}

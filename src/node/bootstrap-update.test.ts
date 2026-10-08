@@ -7,7 +7,7 @@ const EPOCH = new Date(0);
 const HORIZON = new Date(Date.UTC(2026, 9, 8, 12));
 
 function progressAt(reached: Date, caughtUp = false): PeerProgress {
-	return({ reached, caughtUp, deepScanFrom: EPOCH, nextDeepScan: new Date(HORIZON.getTime() + 3_600_000), deepScan: undefined });
+	return({ reached, caughtUp, deepScanFrom: EPOCH, nextDeepScan: new Date(HORIZON.getTime() + 3_600_000), deepScan: undefined, heldSince: undefined });
 }
 
 /** What the node keeps of its peers, in memory, and the passes an update runs over them, which end as each peer's script says. */

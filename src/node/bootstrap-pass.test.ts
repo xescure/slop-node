@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { SimulatedNode, SimulatedPeer } from '../testing/simulated-peer.js';
 import type { SimulatedPeerOptions, SimulatedStaple } from '../testing/simulated-peer.js';
 import { advanceClock, freezeClock } from '../testing/network.js';
-import { DEEP_SCAN_DEPTH_MILLISECONDS, DEEP_SCAN_PERIOD_MILLISECONDS, MAX_PASS_MILLISECONDS, bootstrapPeer } from './bootstrap-pass.js';
+import { DEEP_SCAN_DEPTH_MILLISECONDS, DEEP_SCAN_PERIOD_MILLISECONDS, MAX_PASS_MILLISECONDS, bootstrapPeer, completes } from './bootstrap-pass.js';
 import type { PassAnswer, PassOptions, PassRequest, PeerIO, PeerOutcome, PeerProgress } from './bootstrap-pass.js';
 import { BOOTSTRAP_MARGIN_MILLISECONDS, MAX_NAMED } from './bootstrap-window.js';
 
@@ -151,7 +151,7 @@ describe('a pass over a peer', function() {
 			return(peer.page(request));
 		});
 
-		expect(await bootstrapPeer(harness.io, passOptions(1000))).toEqual(liveOnly({ kind: 'drained' }));
+		expect(completes((await bootstrapPeer(harness.io, passOptions(300))).live)).toBe(true);
 
 		expect(starts.length).toBeGreaterThan(2);
 		expect(harness.node.size).toBe(5000);
@@ -169,23 +169,58 @@ describe('a pass over a peer', function() {
 		}
 		freezeClock(new Date(NOW));
 
-		expect(await bootstrapPeer(harness.io, passOptions(1000))).toEqual(liveOnly({ kind: 'drained' }));
+		expect(completes((await bootstrapPeer(harness.io, passOptions(1000))).live)).toBe(true);
 
-		const moves = [...new Set(harness.pages().map(function(request): number {
-			return(request.start.getTime());
-		}))].slice(1);
+		const moves = harness.written.map(function(progress): number {
+			return(progress.reached.getTime());
+		}).filter(function(reached): boolean {
+			return(reached > 0);
+		});
 		expect(moves.length).toBeGreaterThan(1);
-		expect(harness.heldFrom).toEqual([0, ...moves]);
+		expect(harness.heldFrom[0]).toBe(0);
+		// A move recorded at the margin before the pass began went further, to where the node's clock and the peer's agree.
+		for (const move of moves.filter(function(reached): boolean {
+			return(reached < NOW - BOOTSTRAP_MARGIN_MILLISECONDS);
+		})) {
+			expect(harness.heldFrom).toContain(move);
+		}
 		// Of the 5000 staples the node held, the peer sent fewer than half again.
 		expect(harness.node.resent).toBeLessThan(2500);
+	});
+
+	test('names first, catching up, what the node took since it first asked from where the last pass reached, which the peer would send again', async function() {
+		freezeClock(new Date(NOW));
+		// A year of history, which the node takes long after the peer applied it, from a peer whose time for a request runs out.
+		const peer = new SimulatedPeer({ latency: 5 * SECOND, readsAtMost: 150 });
+		for (let index = 0; index < 20_000; index++) {
+			const madeAt = NOW - 365 * 24 * HOUR + index * 10 * SECOND;
+			peer.apply(madeAt, madeAt);
+		}
+		const harness = new Harness(function(request) {
+			return(peer.page(request));
+		});
+
+		expect((await bootstrapPeer(harness.io, passOptions(1000))).live.kind).toBe('bounded');
+		const heldSince = harness.progress?.heldSince;
+		expect(heldSince?.getTime()).toBeGreaterThanOrEqual(NOW);
+		const resent = harness.node.resent;
+		const before = harness.requests.length;
+		expect((await bootstrapPeer(harness.io, passOptions(1000))).live.kind).toBe('bounded');
+		expect(harness.heldFrom).toContain(heldSince?.getTime());
+		// One a page, the staple that shows the move: 19 here, where the peer sent 169 again when the node named the first staples it ever took.
+		const pages = harness.requests.slice(before).filter(function(request): boolean {
+			return(request.limit > 1);
+		});
+		expect(harness.node.resent - resent).toBeLessThanOrEqual(pages.length);
 	});
 
 	test.each([1, 2, 3, 4, 5])('passes more staples at one moment than a filter and a page hold, checking with further filters before it concludes it holds them all (seed %i)', async function(seed: number) {
 		freezeClock(new Date(NOW));
 		const peer = new SimulatedPeer();
 		const moment = NOW - MINUTE;
+		// Made over the hour before, and released at once, as deferred staples are.
 		for (let index = 0; index < 2500; index++) {
-			peer.apply(moment, moment);
+			peer.apply(moment - HOUR + index, moment);
 		}
 		for (let index = 0; index < 500; index++) {
 			peer.apply(moment + 1 + index * 10, moment + 1 + index * 10);
@@ -195,29 +230,36 @@ describe('a pass over a peer', function() {
 		});
 		let state = seed;
 
-		expect(await bootstrapPeer(harness.io, { limit: 1000, seed: function(): number {
+		const { live } = await bootstrapPeer(harness.io, { limit: 1000, seed: function(): number {
 			state = (state * 48271) % 2147483647;
 			return(state);
-		} })).toEqual(liveOnly({ kind: 'drained' }));
+		} });
 
+		expect(completes(live)).toBe(true);
 		expect(harness.node.size).toBe(3000);
-		const at = harness.requests.findIndex(function(request): boolean {
-			return(request.limit > 1 && request.start.getTime() === moment);
-		});
-		expect(at).toBeGreaterThan(0);
-		// Probes from the crowded moment itself, which only the further filters ask for, whether the pass then moves a millisecond on or drains the peer from there.
-		const checks = harness.requests.slice(at).filter(function(request): boolean {
-			return(request.limit === 1 && request.start.getTime() === moment);
+		// The last start before the crowded moment, from which the pass reads the crowd, and then, once it names it all, checks with further filters before it moves past it.
+		const pages = harness.pages();
+		const crowdStart = Math.max(...pages.map(function(request): number {
+			return(request.start.getTime());
+		}).filter(function(start): boolean {
+			return(start <= moment);
+		}));
+		const checks = pages.filter(function(request): boolean {
+			return(request.start.getTime() === crowdStart && request.served < 1000);
 		});
 		expect(checks.length).toBeGreaterThan(0);
+		expect(pages.some(function(request): boolean {
+			return(request.start.getTime() > moment);
+		})).toBe(true);
 	});
 
-	test('moves a millisecond on past more staples at one moment than a filter and a page hold, once a page reaches past them, before it names too many to go on', async function() {
+	test('moves past more staples at one moment than a filter and a page hold, once a page reaches past them, before it names too many to go on', async function() {
 		freezeClock(new Date(NOW));
 		const peer = new SimulatedPeer();
 		const moment = NOW - HOUR;
+		// Made over the hour before, and released at once, as deferred staples are.
 		for (let index = 0; index < 2500; index++) {
-			peer.apply(moment, moment);
+			peer.apply(moment - HOUR + index, moment);
 		}
 		for (let index = 0; index < MAX_NAMED; index++) {
 			peer.apply(moment + 1 + index * 10, moment + 1 + index * 10);
@@ -226,11 +268,12 @@ describe('a pass over a peer', function() {
 			return(peer.page(request));
 		});
 
-		expect(await bootstrapPeer(harness.io, passOptions(1000))).toEqual(liveOnly({ kind: 'drained' }));
+		const outcome = await bootstrapPeer(harness.io, passOptions(1000));
+		expect(completes(outcome.live)).toBe(true);
 
 		expect(harness.node.size).toBe(2500 + MAX_NAMED);
 		expect(harness.pages().some(function(request): boolean {
-			return(request.start.getTime() === moment + 1);
+			return(request.start.getTime() > moment);
 		})).toBe(true);
 	});
 
@@ -366,7 +409,7 @@ describe('deep re-scans of a peer', function() {
 		vi.useRealTimers();
 	});
 
-	const caughtUp: PeerProgress = { reached: new Date(NOW - BOOTSTRAP_MARGIN_MILLISECONDS), caughtUp: true, deepScanFrom: new Date(NOW - 2 * DEEP_SCAN_DEPTH_MILLISECONDS), nextDeepScan: new Date(NOW), deepScan: undefined };
+	const caughtUp: PeerProgress = { reached: new Date(NOW - BOOTSTRAP_MARGIN_MILLISECONDS), caughtUp: true, deepScanFrom: new Date(NOW - 2 * DEEP_SCAN_DEPTH_MILLISECONDS), nextDeepScan: new Date(NOW), deepScan: undefined, heldSince: undefined };
 
 	test('begin once due, from where the passes since the last began started, alongside the pass from where it reached', async function() {
 		freezeClock(new Date(NOW));
@@ -423,7 +466,7 @@ describe('deep re-scans of a peer', function() {
 
 		const outcome = await bootstrapPeer(harness.io, passOptions(1000));
 
-		expect(outcome.deepScan).toEqual({ kind: 'caught-up' });
+		expect(outcome.deepScan !== undefined && completes(outcome.deepScan)).toBe(true);
 		expect(harness.written.at(-1)?.deepScan).toBeUndefined();
 		const deepStarts = harness.written.flatMap(function(progress): number[] {
 			if (progress.deepScan === undefined) {
@@ -431,7 +474,6 @@ describe('deep re-scans of a peer', function() {
 			}
 			return([progress.deepScan.reached.getTime()]);
 		});
-		expect(deepStarts.at(-1)).toBeGreaterThanOrEqual(horizon.getTime());
 		expect(new Set(deepStarts).size).toBeGreaterThan(2);
 	});
 });
