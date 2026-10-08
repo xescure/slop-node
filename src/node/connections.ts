@@ -171,21 +171,25 @@ export class SwitchConnections {
 	/**
 	 * Closes every held connection that is not closing yet, then resolves once
 	 * the switch has let go of every one, those it registers meanwhile included.
+	 * Any connection the switch registers from then on is closed instead, until
+	 * opened again: work of the switch that nothing waits for may still dial
+	 * [Keeta TS] index.js:73211-73235, 73324.
 	 */
 	async closed(): Promise<void> {
 		this.#stopping = true;
-		try {
-			await this.#closeAll(function(): boolean {
-				return(true);
-			});
-			while (this.#tracked.size > 0) {
-				await Promise.all([...this.#tracked.values()].map(function(tracked): Promise<void> {
-					return(tracked.released.promise);
-				}));
-			}
-		} finally {
-			this.#stopping = false;
+		await this.#closeAll(function(): boolean {
+			return(true);
+		});
+		while (this.#tracked.size > 0) {
+			await Promise.all([...this.#tracked.values()].map(function(tracked): Promise<void> {
+				return(tracked.released.promise);
+			}));
 		}
+	}
+
+	/** Lets the switch register connections again, as the node runs. */
+	open(): void {
+		this.#stopping = false;
 	}
 
 	async #closeAll(select: (tracked: Tracked) => boolean): Promise<void> {

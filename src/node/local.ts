@@ -4,6 +4,7 @@ import type { Express, NextFunction, Request as ExpressRequest, Response as Expr
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { LocalNode as DeclaredLocalNode, LocalNodeConfig } from '@keetanetwork/keetanet-client/lib/node/local.js';
+import type { P2PPeer } from '@keetanetwork/keetanet-client/lib/p2p.js';
 import { answerError, ERROR_STATUS, newErrorID } from '../api/errors.js';
 import type { ErrorBody } from '../api/errors.js';
 import { API_ROUTES, invokeRoute } from '../api/index.js';
@@ -21,6 +22,7 @@ import type { PeerLimits } from './peer-limits.js';
 import { P2P_PATH, PeerServer } from './peers.js';
 import { close, listen } from './server.js';
 import type { Listening, ListenTarget } from './server.js';
+import { SwitchStore } from './switch-store.js';
 
 export type { ApiErrorResponse, LocalNodeConfig } from '@keetanetwork/keetanet-client/lib/node/local.js';
 
@@ -226,6 +228,8 @@ export class LocalNode extends ClientNode {
 	#peers: PeerServer | undefined;
 	readonly #connections: SwitchConnections;
 	readonly #messages: SwitchMessages;
+	readonly #switchStore: SwitchStore;
+	readonly #checkIns: NodeJS.Timeout[] = [];
 	#bootstrap: BootstrapClient | undefined;
 	#running = false;
 	readonly #peerLimits: PeerLimits;
@@ -236,6 +240,8 @@ export class LocalNode extends ClientNode {
 		this.#peerLimits = config.peerLimits ?? DEFAULT_PEER_LIMITS;
 		this.#connections = new SwitchConnections(this.switch, this.log);
 		this.#messages = new SwitchMessages(this.switch, this.log);
+		this.#switchStore = new SwitchStore(this.switch.config.kv);
+		this.switch.config.kv = this.#switchStore;
 		// Outside production Express answers a failure that escapes every handler with its stack.
 		this.#app.set('env', 'production');
 	}
@@ -364,6 +370,9 @@ export class LocalNode extends ClientNode {
 			throw(new LocalNodeError({ kind: 'already-running' }));
 		}
 		this.#running = true;
+		this.#switchStore.attach();
+		this.#connections.open();
+		this.#messages.open();
 		try {
 			await super.run();
 			const target = listenTarget(this.config);
@@ -381,13 +390,26 @@ export class LocalNode extends ClientNode {
 				}
 			}
 			for (const peer of this.config.manualPeers ?? []) {
-				this.switch.addManualPeer(peer);
+				this.#addManualPeer(peer);
 			}
 			this.#bootstrap = this.#startBootstrap();
 		} catch (error) {
 			this.#running = false;
 			throw(error);
 		}
+	}
+
+	/**
+	 * Checks in with the peer now, and again on the switch's period, as the
+	 * switch would on its own timer [Keeta TS] index.js:72622-72658: on the
+	 * node's timer, which stops before the switch does, each check-in joins
+	 * the work the switch is stopped only after [Keeta TS] index.js:72663-72683.
+	 */
+	#addManualPeer(peer: P2PPeer): void {
+		this.switch.addManualPeer(peer, false);
+		this.#checkIns.push(setInterval(() => {
+			this.switch.addManualPeer(peer, false);
+		}, this.switch.config.manualPeersCheckInFreq));
 	}
 
 	#openToPeers(): boolean {
@@ -435,13 +457,17 @@ export class LocalNode extends ClientNode {
 	}
 
 	/**
-	 * Stops bootstrapping, then serving peers and requests, waiting for the
-	 * requests in flight, then stops the node, and waits until its switch is
-	 * done with every message peers delivered, over a WebSocket or posted
-	 * over HTTP, and then with every connection, so that the storage can be
+	 * Stops checking in with manual peers and bootstrapping, then serving
+	 * peers and requests, waiting for the requests in flight, then stops the
+	 * node, and waits until its switch is done with every message peers
+	 * delivered, over a WebSocket or posted over HTTP, then with every
+	 * connection, and then with the node's store, so that the storage can be
 	 * closed after.
 	 */
 	override async stop(): Promise<void> {
+		for (const checkIn of this.#checkIns.splice(0)) {
+			clearInterval(checkIn);
+		}
 		await this.#bootstrap?.stop();
 		const peers = this.#peers;
 		this.#peers = undefined;
@@ -457,8 +483,9 @@ export class LocalNode extends ClientNode {
 		await this.#connections.stopping();
 		await super.stop();
 		// Handling a message may dial peers, which the connections refuse only until they are closed.
-		await this.#messages.settled();
+		await this.#messages.closed();
 		await this.#connections.closed();
+		await this.#switchStore.detach();
 	}
 
 	/** The client that catches the node up from its peers once it runs, unless its ledger is read-only. */

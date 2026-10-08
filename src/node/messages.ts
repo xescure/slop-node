@@ -24,16 +24,37 @@ export const MESSAGE_SETTLE_MILLISECONDS = 5000;
 export class SwitchMessages {
 	readonly #log: Logger;
 	readonly #handling = new Set<Promise<boolean>>();
+	#refusing = false;
 
 	constructor(p2pSwitch: P2PSwitch, log: Logger) {
 		this.#log = log;
 		wrapSwitchReceive(p2pSwitch, (upstream: SwitchReceiveMethod): SwitchReceiveMethod => {
 			return({
 				recvMessageFromPeer: (from: P2PConnection, buffer: Buffer | ArrayBuffer): Promise<boolean> => {
+					if (this.#refusing) {
+						return(Promise.resolve(false));
+					}
 					return(this.#track(upstream.recvMessageFromPeer(from, buffer)));
 				}
 			});
 		});
+	}
+
+	/**
+	 * Waits as settled does, then refuses every message until opened again:
+	 * a socket the switch dials after the node stopped, with work nothing
+	 * waits for [Keeta TS] index.js:73211-73235, 73324, still delivers what
+	 * the peer sends before it closes, and handling a message writes the
+	 * node's statistics [Keeta TS] index.js:72813-72815.
+	 */
+	async closed(): Promise<void> {
+		await this.settled();
+		this.#refusing = true;
+	}
+
+	/** Hands messages to the switch again, as the node runs. */
+	open(): void {
+		this.#refusing = false;
 	}
 
 	#track(handling: Promise<boolean>): Promise<boolean> {
