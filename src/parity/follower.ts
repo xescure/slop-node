@@ -77,6 +77,9 @@ const USAGE = [
 	'  logs    print the end of the node\'s log, or with --postgres the database\'s',
 	'          --lines <count> (50), --follow',
 	'  down    stop the node, then its Postgres',
+	'  reset-cursors',
+	'          with the node down, forget where it reached on each representative and the staples it',
+	'          queued for retry, keeping its ledger, so that the next "up" reads the history again',
 	'',
 	'The directory holds the seed, the database, the logs and the settings (~/.local/share/slop-node-follower).',
 	'"up" needs the PostgreSQL server binaries, which "devenv shell" provides.',
@@ -419,6 +422,53 @@ async function down(directory: string): Promise<ExitCode> {
 	return(code);
 }
 
+/** The arenas of the bootstrap client's state in the node's store (src/node/bootstrap-cursors.ts): its progress on each peer, the horizon of the first pass that completed, and the retry queue. */
+const BOOTSTRAP_ARENAS: readonly string[] = [BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_RETRY_ARENA];
+
+/**
+ * Clears the bootstrap client's state while the node is down, starting the
+ * follower's Postgres for it when it is not running and stopping it again.
+ * A queued staple is read again with the history, and the ledger keeps every
+ * staple it holds, which the passes then find held.
+ */
+async function resetCursors(directory: string): Promise<ExitCode> {
+	const node = await runningNode(directory);
+	if (node !== undefined) {
+		process.stderr.write(`the follower's node is up in ${directory} (process ${String(node)}); stop it first with "utils/follower down"\n`);
+		return(1);
+	}
+	const wasRunning = await runningPostmaster(directory) !== undefined;
+	await startPostgres(directory);
+	let cleared: { readonly arena: string; readonly count: string }[];
+	try {
+		cleared = await withDatabase(DATABASE, directory, async function(client) {
+			await client.query('BEGIN');
+			try {
+				const counts = await client.query<{ arena: string; count: string }>('SELECT arena, count(*) AS count FROM kv_entries WHERE arena = ANY($1) GROUP BY arena ORDER BY arena', [BOOTSTRAP_ARENAS]);
+				await client.query('DELETE FROM kv_entries WHERE arena = ANY($1)', [BOOTSTRAP_ARENAS]);
+				await client.query('COMMIT');
+				return(counts.rows);
+			} catch (error: unknown) {
+				await client.query('ROLLBACK');
+				throw(error);
+			}
+		});
+	} finally {
+		const postmaster = await runningPostmaster(directory);
+		if (!wasRunning && postmaster !== undefined) {
+			await stopProcess(postmaster, 'SIGINT', POSTGRES_STOP_MILLISECONDS);
+		}
+	}
+	let summary = 'there was none';
+	if (cleared.length > 0) {
+		summary = cleared.map(function(row): string {
+			return(`${row.arena}: ${row.count}`);
+		}).join(', ');
+	}
+	process.stdout.write(`bootstrap state cleared in ${directory} (${summary}); the ledger is kept\n`);
+	return(0);
+}
+
 type Memory = { readonly rssMiB: number; readonly pssMiB: number };
 
 const KIB_PER_MIB = 1024;
@@ -636,6 +686,8 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
 				return(await status(followerDirectory(command.directory, tmpdir())));
 			case 'logs':
 				return(await logs(followerDirectory(command.directory, tmpdir()), command.log, command.lines, command.follow));
+			case 'reset-cursors':
+				return(await resetCursors(followerDirectory(command.directory, tmpdir())));
 			default:
 				return(assertNever(command));
 		}

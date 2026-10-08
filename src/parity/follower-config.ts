@@ -52,6 +52,8 @@ export type FollowerCommand =
 	| { readonly kind: 'up'; readonly settings: FollowerSettings }
 	| { readonly kind: 'down'; readonly directory: string }
 	| { readonly kind: 'status'; readonly directory: string }
+	/** Forget where the node reached on each representative and its retry queue, keeping its ledger, so that it reads the history again from the beginning. */
+	| { readonly kind: 'reset-cursors'; readonly directory: string }
 	| { readonly kind: 'logs'; readonly directory: string; readonly log: FollowerLog; readonly lines: number; readonly follow: boolean };
 
 export function defaultFollowerDirectory(home: string): string {
@@ -272,6 +274,7 @@ export function parseFollowerCommand(argv: readonly string[], home: string): Fol
 			break;
 		case 'down':
 		case 'status':
+		case 'reset-cursors':
 			options = optionsOf(rest, ['--directory'], []);
 			break;
 		default:
@@ -288,6 +291,7 @@ export function parseFollowerCommand(argv: readonly string[], home: string): Fol
 			return(parseLogs(options, directory));
 		case 'down':
 		case 'status':
+		case 'reset-cursors':
 			return({ kind: name, directory });
 		default:
 			return(assertNever(name));
