@@ -69,6 +69,18 @@ function hasCode(error: unknown, codes: readonly string[]): boolean {
 	return(error instanceof Error && 'code' in error && typeof error.code === 'string' && codes.includes(error.code));
 }
 
+/** What a Unix-domain socket path may take: sun_path is 108 bytes on Linux, one of them the terminating NUL. */
+const SOCKET_PATH_LIMIT_BYTES = 107;
+
+/** Why the directory cannot hold the control socket, or undefined when it can. */
+function socketPathProblem(directory: string): string | undefined {
+	const length = Buffer.byteLength(join(directory, CONTROL_SOCKET));
+	if (length <= SOCKET_PATH_LIMIT_BYTES) {
+		return(undefined);
+	}
+	return(`the control socket path would take ${String(length)} bytes, over the ${String(SOCKET_PATH_LIMIT_BYTES)} a Unix socket path may; use a shorter directory`);
+}
+
 /** A connection to the supervisor of the devnet in the directory, or undefined when none is up. */
 function controlConnection(directory: string): Promise<Socket | undefined> {
 	return(new Promise(function(resolveConnection, reject) {
@@ -115,6 +127,9 @@ function summaryOf(devnet: Devnet, directory: string): string {
 		'a generator: client.recover(true, { generateFeeBlock: (staple) => client.initBuilder().computeFeeBlock(staple) }).\n',
 		'Without one it fails with "Votes require fees but generateFeeBlock was not defined", and so does the recovery\n',
 		'send() attempts after LEDGER_SUCCESSOR_VOTE_EXISTS.\n\n',
+		'After a send, wait until the staple is on every representative before sending again from the same account: a\n',
+		'representative asked to vote on a block whose previous it has not received refuses at once, and the client\'s\n',
+		'head re-sync recovers only when the heads differ.\n\n',
 		`Logs: ${directory}/node-<index>.log. Stop it with: utils/devnet down ${directory}\n`
 	].join(''));
 }
@@ -277,6 +292,11 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
 	if (command === undefined) {
 		process.stderr.write(USAGE);
 		return(2);
+	}
+	const problem = socketPathProblem(command.directory);
+	if (problem !== undefined) {
+		process.stderr.write(`${problem}\n`);
+		return(1);
 	}
 	switch (command.kind) {
 		case 'up':

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
@@ -38,6 +38,33 @@ function runCommand(args: readonly string[]): Promise<Finished> {
 	}));
 }
 
+/** Whether a process with the ID exists. */
+function isRunning(processID: number): boolean {
+	try {
+		process.kill(processID, 0);
+		return(true);
+	} catch {
+		return(false);
+	}
+}
+
+/** The nodes' processes, which their logs record, and Postgres', which its data directories record, in the devnet's directory. */
+async function devnetProcessIDs(directory: string): Promise<number[]> {
+	const processIDs: number[] = [];
+	for (const entry of await readdir(directory, { recursive: true })) {
+		const path = join(directory, entry);
+		if (/(^|\/)node-\d+\.log$/.test(entry)) {
+			for (const [, processID = ''] of (await readFile(path, 'utf8')).matchAll(/, process (\d+)$/gm)) {
+				processIDs.push(Number(processID));
+			}
+		}
+		if (/(^|\/)postmaster\.pid$/.test(entry)) {
+			processIDs.push(Number((await readFile(path, 'utf8')).split('\n')[0]));
+		}
+	}
+	return(processIDs);
+}
+
 describe('utils/devnet', function() {
 	const directories: string[] = [];
 
@@ -61,6 +88,17 @@ describe('utils/devnet', function() {
 		const finished = await runCommand(['down', directory]);
 		expect(finished.code).toBe(1);
 		expect(finished.stderr).toContain(`no devnet is up in ${directory}`);
+	});
+
+	test('refuses a directory whose control socket path is too long for a Unix socket', async function() {
+		const directory = join(tmpdir(), 'd'.repeat(120));
+		for (const command of ['up', 'down']) {
+			const finished = await runCommand([command, directory]);
+			expect(finished.code).toBe(1);
+			expect(finished.stderr).toMatch(/control socket path would take \d+ bytes, over the 107/);
+			expect(finished.stderr).not.toContain('EINVAL');
+		}
+		expect(existsSync(directory)).toBe(false);
 	});
 
 	test('brings a devnet up that a client reaches as printed, and takes it down', async function() {
@@ -92,8 +130,13 @@ describe('utils/devnet', function() {
 		}
 		expect((await runCommand(['up', directory])).stderr).toContain(`a devnet is already up in ${directory}`);
 
+		const processIDs = await devnetProcessIDs(directory);
+		// Four nodes and four Postgres servers; the genesis run has ended.
+		expect(processIDs.filter(isRunning).length).toBeGreaterThanOrEqual(8);
+
 		const down = await runCommand(['down', directory]);
 		expect(down).toMatchObject({ code: 0, stderr: '' });
+		expect(processIDs.filter(isRunning)).toEqual([]);
 		expect(existsSync(join(directory, 'control.sock'))).toBe(false);
 		expect((await runCommand(['down', directory])).code).toBe(1);
 	}, UP_AND_DOWN.milliseconds);
