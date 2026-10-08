@@ -180,8 +180,10 @@ describe('the TCP proxy of a devnet node', function() {
 
 		proxy.block();
 		expect(await before.ended).toBe('a:one');
+		expect(proxy.refusals).toBe(0);
 		const during = await client(proxy.port);
 		expect(await during.ended).toBe('');
+		expect(proxy.refusals).toBe(1);
 
 		proxy.unblock();
 		const after = await client(proxy.port);
@@ -257,6 +259,8 @@ describe('the TCP proxy of a devnet node', function() {
 		await proxy.refuseFrom(refused);
 		const third = await opened();
 		expect(await third.ended).toBe('');
+		// The connection cut as it was refused is not one refused as it came.
+		expect(proxy.refusals).toBe(1);
 
 		await proxy.refuseFrom(new Set());
 		const fourth = await opened();

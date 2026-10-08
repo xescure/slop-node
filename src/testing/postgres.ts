@@ -20,7 +20,12 @@ export type ClusterConnection = {
 };
 
 export type Cluster = ClusterConnection & {
+	/** Stops the server and removes the cluster. */
 	readonly stop: () => Promise<void>;
+	/** Shuts the server down as an operator would, ending every session, and keeps its data. */
+	readonly stopServer: () => Promise<void>;
+	/** Starts the server again on the data, socket and port it had. */
+	readonly startServer: () => Promise<void>;
 };
 
 declare module 'vitest' {
@@ -310,8 +315,11 @@ export const startCluster = async function(parent: string = tmpdir()): Promise<C
 		throw(error);
 	}
 
+	const startServer = function(): Promise<void> {
+		return(runTool('pg_ctl', ['start', '--pgdata', dataDirectory, '--log', logFile, '--wait', '--options', serverOptions(directory, port)]));
+	};
 	try {
-		await runTool('pg_ctl', ['start', '--pgdata', dataDirectory, '--log', logFile, '--wait', '--options', serverOptions(directory, port)]);
+		await startServer();
 	} catch (error: unknown) {
 		const log = await readLog(logFile);
 		await stopServer().catch(function() {
@@ -326,7 +334,14 @@ export const startCluster = async function(parent: string = tmpdir()): Promise<C
 		stopping ??= stopServer().finally(removeDirectory);
 		return(stopping);
 	};
-	return({ socketDirectory: directory, port, user: CLUSTER_USER, stop });
+	/*
+	 * A fast shutdown writes everything committed out first; an immediate one
+	 * would lose the commits that synchronous_commit=off has not flushed.
+	 */
+	const stopServerCleanly = function(): Promise<void> {
+		return(runTool('pg_ctl', ['stop', '--pgdata', dataDirectory, '--mode', 'fast', '--wait']));
+	};
+	return({ socketDirectory: directory, port, user: CLUSTER_USER, stop, stopServer: stopServerCleanly, startServer });
 };
 
 /** Only the connection fields, so that a whole Cluster can be passed as well. */

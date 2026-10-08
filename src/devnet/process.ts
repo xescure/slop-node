@@ -65,6 +65,7 @@ export class NodeProcess {
 	readonly logPath: string;
 	readonly #child: NodeChild;
 	readonly #waiting = new Set<() => void>();
+	#exit: Exit | undefined;
 	#stdout = '';
 	#stderr = '';
 
@@ -75,6 +76,7 @@ export class NodeProcess {
 		this.exited = new Promise<Exit>((resolve) => {
 			child.once('close', (code: number | null, signal: NodeJS.Signals | null) => {
 				running.delete(child);
+				this.#exit = { code, signal };
 				this.#log('exit', `exited with ${JSON.stringify({ code, signal })}`);
 				resolve({ code, signal });
 			});
@@ -99,6 +101,11 @@ export class NodeProcess {
 		running.add(child);
 		appendFileSync(logPath, `--- ${new Date().toISOString()} ${subcommand}, process ${String(processID)}\n`);
 		return(new NodeProcess(child, processID, logPath));
+	}
+
+	/** How the process ended, once it has. */
+	get exit(): Exit | undefined {
+		return(this.#exit);
 	}
 
 	get stdout(): string {

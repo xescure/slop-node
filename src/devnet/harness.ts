@@ -38,7 +38,7 @@ const PEER_LINE = /^peer: (\S+)$/m;
 const GENESIS_LINE = /^genesis: ([0-9A-F]{64})$/m;
 
 /** A bound on a wait, and what the wait was for, which a failure names. */
-type Deadline = { readonly milliseconds: number; readonly reason: string };
+export type Deadline = { readonly milliseconds: number; readonly reason: string };
 
 /*
  * A node loads the client, about a second, and migrates its database before
@@ -94,6 +94,50 @@ type NodeState =
 
 export type NodeDump = { readonly index: RepresentativeIndex; readonly dump: string };
 
+/**
+ * The clock a node runs on: the host's, or the host's moved by an offset,
+ * which only the devnet sets, for a node to run as if its host's clock were
+ * wrong.
+ */
+export type NodeClock =
+	| { readonly kind: 'host' }
+	| { readonly kind: 'offset'; readonly milliseconds: number };
+
+/*
+ * The offset is applied inside the node's process, before the node loads,
+ * by a module Node.js imports first: every Date made without a time and
+ * every Date.now() is moved by it. The node's own code is unchanged, and its
+ * Postgres is only ever given moments the node computed.
+ */
+function clockEnvironment(clock: NodeClock): Environment {
+	switch (clock.kind) {
+		case 'host':
+			return({});
+		case 'offset':
+			break;
+		default:
+			assertNever(clock);
+	}
+	const source = [
+		'const HostDate = Date;',
+		`const offset = ${String(clock.milliseconds)};`,
+		'function OffsetDate(...args) {',
+		'\tif (new.target === undefined) { return(new HostDate(HostDate.now() + offset).toString()); }',
+		'\tif (args.length === 0) { return(Reflect.construct(HostDate, [HostDate.now() + offset], new.target)); }',
+		'\treturn(Reflect.construct(HostDate, args, new.target));',
+		'}',
+		'Object.setPrototypeOf(OffsetDate, HostDate);',
+		'OffsetDate.prototype = HostDate.prototype;',
+		'OffsetDate.now = function() { return(HostDate.now() + offset); };',
+		'globalThis.Date = OffsetDate;'
+	].join('\n');
+	return({ NODE_OPTIONS: `--import=data:text/javascript,${encodeURIComponent(source)}` });
+}
+
+function noSpawnedWork(): Promise<void> {
+	return(Promise.resolve());
+}
+
 function freePort(): Promise<number> {
 	return(new Promise(function(resolve, reject) {
 		const server = createServer();
@@ -112,7 +156,7 @@ function freePort(): Promise<number> {
 }
 
 /** The value read() answers once it answers one, read again until the deadline. */
-async function until<Value>(deadline: Deadline, read: () => Promise<Value | undefined>): Promise<Value> {
+export async function until<Value>(deadline: Deadline, read: () => Promise<Value | undefined>): Promise<Value> {
 	const end = Date.now() + deadline.milliseconds;
 	let lastProblem = 'none';
 	for (;;) {
@@ -132,7 +176,7 @@ async function until<Value>(deadline: Deadline, read: () => Promise<Value | unde
 }
 
 /** A condition of a wait: true once it holds, and undefined, to be read again, until then. */
-function holding(condition: boolean): true | undefined {
+export function holding(condition: boolean): true | undefined {
 	if (condition) {
 		return(true);
 	}
@@ -214,14 +258,17 @@ export class DevnetNode {
 	readonly logPath: string;
 	readonly databaseURL: string;
 	readonly proxy: TCPProxy;
+	readonly #cluster: Cluster;
 	readonly #command: NodeCommand;
 	#peers: Environment = {};
+	#clock: NodeClock = { kind: 'host' };
 	#state: NodeState = { kind: 'down' };
 
-	constructor(index: RepresentativeIndex, proxy: TCPProxy, databaseURL: string, logPath: string, command: NodeCommand) {
+	constructor(index: RepresentativeIndex, proxy: TCPProxy, cluster: Cluster, databaseURL: string, logPath: string, command: NodeCommand) {
 		this.index = index;
 		this.representative = representativeOf(index);
 		this.proxy = proxy;
+		this.#cluster = cluster;
 		this.databaseURL = databaseURL;
 		this.logPath = logPath;
 		this.#command = command;
@@ -246,6 +293,29 @@ export class DevnetNode {
 		}
 	}
 
+	/** How the process the harness started ended by itself, if it has; undefined while it runs or once it is down. */
+	get exit(): Exit | undefined {
+		const state = this.#state;
+		switch (state.kind) {
+			case 'running':
+				return(state.process.exit);
+			case 'down':
+				return(undefined);
+			default:
+				return(assertNever(state));
+		}
+	}
+
+	/** Takes a node whose process ended by itself as down, so that it can be started again, and answers how it ended. */
+	reap(): Exit {
+		const exit = this.exit;
+		if (exit === undefined) {
+			throw(new Error(`node ${String(this.index)} has not exited`));
+		}
+		this.#state = { kind: 'down' };
+		return(exit);
+	}
+
 	get endpoints(): RepresentativeEndpoints {
 		return({ key: this.representative, endpoints: { api: this.apiURL, p2p: this.p2pURL } });
 	}
@@ -263,8 +333,23 @@ export class DevnetNode {
 			KEETANET_LOCAL_NODE_ENDPOINT_API: this.apiURL,
 			KEETANET_LOCAL_NODE_ENDPOINT_P2P: this.p2pURL,
 			...feeEnvironmentOf(this.index),
-			...this.#peers
+			...this.#peers,
+			...clockEnvironment(this.#clock)
 		});
+	}
+
+	/** The clock the node runs on from its next start. */
+	setClock(clock: NodeClock): void {
+		this.#clock = clock;
+	}
+
+	/** Shuts the node's Postgres down, as its operator would, keeping its data; the node is left as it is. */
+	async stopDatabase(): Promise<void> {
+		await this.#cluster.stopServer();
+	}
+
+	async startDatabase(): Promise<void> {
+		await this.#cluster.startServer();
 	}
 
 	/** The peers the node dials from its next start, each as that node printed itself on its "peer:" line. */
@@ -287,9 +372,11 @@ export class DevnetNode {
 	 * Starts the node on a free port, with its proxy holding the peers that
 	 * dial it meanwhile, and answers its "peer:" line once its API answers.
 	 * Another socket may take the port before the node listens on it, so a
-	 * node that finds its port in use is started again on another.
+	 * node that finds its port in use is started again on another. What is
+	 * to be done about a process as soon as it exists, before it can dial
+	 * anyone, is done through spawned.
 	 */
-	async start(): Promise<string> {
+	async start(spawned: (processID: number) => Promise<void> = noSpawnedWork): Promise<string> {
 		if (this.#state.kind === 'running') {
 			throw(new Error(`node ${String(this.index)} is already running`));
 		}
@@ -299,6 +386,7 @@ export class DevnetNode {
 			this.proxy.setTarget(port);
 			const started = NodeProcess.spawn(this.#command, 'run', { ...this.environment(), KEETANET_LOCAL_NODE_LISTEN_PORT: String(port) }, this.logPath);
 			this.#state = { kind: 'running', process: started, observedAt: `http://${LOOPBACK}:${String(port)}/api` };
+			await spawned(started.processID);
 			const reason = `node ${String(this.index)} to serve`;
 			let peer: string | undefined;
 			try {
@@ -502,7 +590,7 @@ export class Devnet {
 				started.clusters.push(cluster);
 				const proxy = await TCPProxy.start({ target: 0, origin: processOfConnection });
 				started.proxies.push(proxy);
-				const node = new DevnetNode(index, proxy, await createNodeDatabase(cluster), join(options.directory, `node-${String(index)}.log`), options.command);
+				const node = new DevnetNode(index, proxy, cluster, await createNodeDatabase(cluster), join(options.directory, `node-${String(index)}.log`), options.command);
 				started.nodes.push(node);
 				return(node);
 			}));
@@ -654,9 +742,14 @@ export class Devnet {
 		await this.nodes[index].stop('SIGKILL');
 	}
 
-	/** Starts the node again with the settings it had, on its database, still cut off if it was. */
+	/**
+	 * Starts the node again with the settings it had, on its database, still
+	 * cut off if it was: from before it can dial a peer or fetch from one.
+	 */
 	async restart(index: RepresentativeIndex): Promise<void> {
-		await this.nodes[index].start();
+		await this.nodes[index].start(async () => {
+			await this.#applyPartitions();
+		});
 		await this.#applyPartitions();
 	}
 
@@ -664,6 +757,10 @@ export class Devnet {
 	async partition(index: RepresentativeIndex): Promise<void> {
 		this.#partitioned.add(index);
 		await this.#applyPartitions();
+	}
+
+	partitioned(index: RepresentativeIndex): boolean {
+		return(this.#partitioned.has(index));
 	}
 
 	async heal(index: RepresentativeIndex): Promise<void> {

@@ -47,7 +47,8 @@ help:
 	@echo "  dist           - Builds the distribution directory"
 	@echo "  test           - Type-checks and runs the test suite"
 	@echo "                   Specify extra flags with SLOP_NODE_TEST_EXTRA_ARGS"
-	@echo "  devnet-test    - Runs the suites of the four-node devnet only"
+	@echo "  devnet-test    - Runs the suites of the four-node devnet only, with the"
+	@echo "                   fault injection that test leaves out"
 	@echo "  do-lint        - Runs the ASCII check, eslint and cspell"
 	@echo "  conformance    - Regenerates the vote-decision corpus, and the mainnet"
 	@echo "                   head state, shadow-vote exceptions and edge-case"
@@ -119,12 +120,12 @@ build/devnet/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts'
 test: dist/.done build/utils/.done build/devnet/.done | $(filter conformance,$(MAKECMDGOALS))
 	npm run tsc -- --noEmit --incremental false
 	npm run tsc -- --noEmit --incremental false -p utils
-	npm run vitest -- run --config .vitest.config.js $(SLOP_NODE_TEST_EXTRA_ARGS)
+	npm run vitest -- run --config .vitest.config.js --project unit --project devnet $(SLOP_NODE_TEST_EXTRA_ARGS)
 
 # The devnet runs the built node as separate processes, and utils/devnet's
-# test runs the built command.
+# test runs the built command. Its faults run here only, as they take minutes.
 devnet-test: dist/.done build/devnet/.done
-	npm run vitest -- run --config .vitest.config.js --project devnet $(SLOP_NODE_TEST_EXTRA_ARGS)
+	npm run vitest -- run --config .vitest.config.js --project devnet --project devnet-faults $(SLOP_NODE_TEST_EXTRA_ARGS)
 
 # The corpus records what upstream's ledger decides, the mainnet head state
 # what it reaches, the shadow-vote exceptions which head staples it refuses to

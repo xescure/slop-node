@@ -2,6 +2,8 @@ import { defineConfig } from 'vitest/config';
 
 const DEVNET_TESTS = 'src/devnet/**/*.test.ts';
 
+const DEVNET_FAULT_TESTS = 'src/devnet/faults.test.ts';
+
 export default defineConfig({
 	test: {
 		/*
@@ -40,8 +42,24 @@ export default defineConfig({
 				test: {
 					name: 'devnet',
 					include: [DEVNET_TESTS],
+					exclude: [DEVNET_FAULT_TESTS],
 					poolOptions: { forks: { singleFork: true } },
 					sequence: { groupOrder: 1 }
+				}
+			},
+			/*
+			 * The faults take about two and a half minutes, mostly waiting out
+			 * the client's retries of a representative that is down and the
+			 * minute a node cut off takes to catch up once healed, so only
+			 * "make devnet-test" runs them, after the other devnet files.
+			 */
+			{
+				extends: true,
+				test: {
+					name: 'devnet-faults',
+					include: [DEVNET_FAULT_TESTS],
+					poolOptions: { forks: { singleFork: true } },
+					sequence: { groupOrder: 2 }
 				}
 			}
 		]

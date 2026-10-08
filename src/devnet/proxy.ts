@@ -50,6 +50,7 @@ export class TCPProxy {
 	readonly #held = new Set<Connection>();
 	#target: number;
 	#holding = false;
+	#refusals = 0;
 	#admission: Admission = { kind: 'all' };
 
 	private constructor(server: Server, port: number, options: TCPProxyOptions) {
@@ -76,6 +77,15 @@ export class TCPProxy {
 				resolve(new TCPProxy(server, address.port, options));
 			});
 		}));
+	}
+
+	/**
+	 * How many connections were closed as they came, because the proxy was
+	 * blocked or refused their process: each an attempt to get through that
+	 * did not.
+	 */
+	get refusals(): number {
+		return(this.#refusals);
 	}
 
 	/** Passes new connections to another port, where the node listens after a restart. */
@@ -159,6 +169,7 @@ export class TCPProxy {
 			return;
 		}
 		if (!admitted) {
+			this.#refusals++;
 			cut(connection);
 			return;
 		}

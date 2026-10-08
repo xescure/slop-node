@@ -123,6 +123,31 @@ describe('the test cluster', function() {
 		expect(await connects(cluster)).toBe(true);
 	});
 
+	test('a cluster\'s server stops cleanly and starts again on its data', async function() {
+		const parent = await temporaryParent();
+		const cluster = await startCluster(parent);
+		onTestFinished(function() {
+			return(cluster.stop());
+		});
+		const client = new pg.Client({ host: cluster.socketDirectory, port: cluster.port, user: cluster.user, database: 'postgres' });
+		await client.connect();
+		await client.query('CREATE TABLE kept (value integer)');
+		await client.query('INSERT INTO kept VALUES (7)');
+		await client.end();
+
+		await cluster.stopServer();
+		expect(await connects(cluster)).toBe(false);
+		await cluster.startServer();
+
+		const again = new pg.Client({ host: cluster.socketDirectory, port: cluster.port, user: cluster.user, database: 'postgres' });
+		await again.connect();
+		try {
+			expect((await again.query<{ value: number }>('SELECT value FROM kept')).rows).toEqual([{ value: 7 }]);
+		} finally {
+			await again.end();
+		}
+	});
+
 	test('a cluster from an earlier boot is removed without signalling anything', async function() {
 		const parent = await temporaryParent();
 		const unrelated = bystander();
