@@ -22,6 +22,12 @@ export const MAX_PASS_MILLISECONDS: number = 2 * 60_000;
  */
 const MAX_PROBES_PER_PAGE = 96;
 
+/**
+ * How much of a short page a move on from it leaves behind at least, so
+ * that the filter names at most the rest from the new start.
+ */
+const EARLY_REACH_SHARE = 3 / 4;
+
 /** How far past the start the first probe of a pass looks. */
 const FIRST_STEP_MILLISECONDS = 1000;
 
@@ -253,7 +259,18 @@ type Taken = { readonly held: boolean; readonly added: boolean };
  * to it, each of which the node now holds or has queued; the page's staples
  * before the one answered precede the moment, and those from it on do not.
  * Probes gallop up from the start and then bisect, until the staples from
- * the moment found fit the filter with room for a page. The same probe at the horizon, after short pages, shows the pass
+ * the moment found fit the filter with room for a page.
+ *
+ * The start moves on after short pages too, the second of them in a row
+ * and on, once the filter names staples the peer sent from it; one short
+ * page is most often the last before an empty one. A peer cuts a page short when its time for the
+ * request runs out [Keeta TS] index.js:69641-69647, and it spends that time
+ * on the staples the filter names as well, which it reads before it leaves
+ * them out [Keeta TS] index.js:69686-69690: from a start that stays put,
+ * every page reads again all that was sent from it, and pages shrink to a
+ * handful of staples. So probes look for a moment as far into the page as
+ * EARLY_REACH_SHARE, and the filter then names only the page's staples from
+ * there. The same probe at the horizon, after short pages, shows the pass
  * has caught up while the peer keeps applying staples, when no page is
  * ever empty.
  *
@@ -339,7 +356,8 @@ class Pass<Staple extends PassStaple> {
 				}
 				continue;
 			}
-			if (page.length < this.#limit) {
+			const short = page.length < this.#limit;
+			if (short) {
 				shortPages++;
 			} else {
 				shortPages = 0;
@@ -347,16 +365,22 @@ class Pass<Staple extends PassStaple> {
 			if (probesHorizonAfter(shortPages) && await this.#reachesHorizon(page, filter)) {
 				return({ kind: 'caught-up' });
 			}
-			if (this.#named.size + page.length <= BLOOM_CAPACITY) {
+			const fits = this.#named.size + page.length <= BLOOM_CAPACITY;
+			const early = fits && shortPages >= 2 && this.#named.received > 0;
+			if (fits && !early) {
 				this.#named.receive(page);
 				continue;
 			}
 			if (filter.errorRate <= ACCEPTED_ERROR_RATE) {
-				const reach = await this.#reach(page, filter.serialized);
+				const reach = await this.#reach(page, filter.serialized, early);
 				if (reach !== undefined) {
 					await this.#moveTo(reach, page, held);
 					continue;
 				}
+			}
+			if (fits) {
+				this.#named.receive(page);
+				continue;
 			}
 			// Nothing proves the page reached past the start, as when more staples share its moment than a filter holds: the filter names them all, at a higher error rate, until a page reaches past that moment.
 			if (this.#named.received + page.length > MAX_NAMED) {
@@ -532,11 +556,18 @@ class Pass<Staple extends PassStaple> {
 		return((await this.#request(at, 1, bloomFilter))?.[0]);
 	}
 
-	/** The furthest moment found that the page reached, with the staples of the page from it on few enough to name. */
-	async #reach(page: readonly Staple[], bloomFilter: string | undefined): Promise<Reach | undefined> {
+	/**
+	 * The furthest moment found that the page reached, with the staples of
+	 * the page from it on few enough to name, or, early, after a short page
+	 * that fits the filter, at most the share of it EARLY_REACH_SHARE leaves.
+	 */
+	async #reach(page: readonly Staple[], bloomFilter: string | undefined, early: boolean): Promise<Reach | undefined> {
 		const positions = positionsOf(page);
 		// At least one staple of the page precedes the moment, so that those sent before the page do too and can be let go.
-		const enough = Math.max(1, page.length - Math.max(1, BLOOM_CAPACITY - this.#limit));
+		let enough = Math.max(1, page.length - Math.max(1, BLOOM_CAPACITY - this.#limit));
+		if (early) {
+			enough = Math.max(1, Math.min(page.length - 1, Math.ceil(page.length * EARLY_REACH_SHARE)));
+		}
 		// The peer applies no staple at a moment its clock has not reached.
 		const ceiling = Date.now() + PEER_CLOCK_SKEW_MILLISECONDS;
 		let reach: Reach | undefined;

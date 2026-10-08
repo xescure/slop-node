@@ -90,6 +90,13 @@ export type SimulatedPeerOptions = {
 	 * that many [Keeta TS] index.js:69641-69647.
 	 */
 	readonly answersAtMost?: number;
+	/**
+	 * The most staples the peer reads for a request, those the filter names
+	 * included, once it has one to send: one whose time for a request runs
+	 * out [Keeta TS] index.js:69639-69647 while it builds and skips the
+	 * staples the filter names, as the main network's representatives do.
+	 */
+	readonly readsAtMost?: number;
 };
 
 /** A deterministic source of numbers below 1, so that a scenario runs the same each time. */
@@ -115,6 +122,7 @@ export class SimulatedPeer {
 	readonly #clockOffset: number;
 	readonly #latency: number;
 	readonly #answersAtMost: number;
+	readonly #readsAtMost: number;
 	readonly #filters = new Map<string, BloomFilter>();
 	readonly #random = deterministicRandom(7);
 	#nextID = 0;
@@ -129,6 +137,7 @@ export class SimulatedPeer {
 		this.#clockOffset = options.clockOffset ?? 0;
 		this.#latency = options.latency ?? 25;
 		this.#answersAtMost = options.answersAtMost ?? Number.POSITIVE_INFINITY;
+		this.#readsAtMost = options.readsAtMost ?? Number.POSITIVE_INFINITY;
 	}
 
 	/** Every staple the peer has applied, in the order applied. */
@@ -206,11 +215,16 @@ export class SimulatedPeer {
 		const start = request.start.getTime();
 		const staples: SimulatedStaple[] = [];
 		const limit = Math.min(request.limit, this.#answersAtMost);
+		let read = 0;
 		for (let at = this.#firstAtOrAfter(start); at < this.#applied.length && staples.length < limit; at++) {
+			if (read >= this.#readsAtMost && staples.length > 0) {
+				break;
+			}
 			const staple = this.#applied[at];
 			if (staple === undefined) {
 				break;
 			}
+			read++;
 			if (this.#named(filter, staple)) {
 				continue;
 			}

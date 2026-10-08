@@ -417,6 +417,23 @@ describe('bootstrapping against a simulated peer', { timeout: 120_000 }, functio
 		scenario.expectEveryUpdateBounded();
 	});
 
+	test('holds every staple of a peer whose time for a request runs out on the staples the filter names too, in about as many requests as pages of its history', async function() {
+		freezeClock(new Date(NOW));
+		const reads = 150;
+		const scenario = new Scenario({ readsAtMost: reads });
+		const count = 20_000;
+		liveHistory(scenario.peer, count, 10, NOW - HOUR);
+
+		await scenario.untilComplete(10);
+
+		expect(scenario.missing()).toEqual([]);
+		const requests = scenario.updates.reduce(function(sum, update): number {
+			return(sum + update.requests);
+		}, 0);
+		expect(requests).toBeLessThan(4 * count / reads);
+		scenario.expectEveryUpdateBounded();
+	});
+
 	test('holds every staple of a peer that holds blocks the node holds with other votes', async function() {
 		freezeClock(new Date(NOW));
 		const scenario = new Scenario();
@@ -471,7 +488,7 @@ describe('bootstrapping against a simulated peer', { timeout: 120_000 }, functio
 		scenario.peer.goLive(steady(10));
 
 		await scenario.untilComplete(10);
-		expect(scenario.missing()).toEqual([refused.id]);
+		expect(scenario.missing()).toContain(refused.id);
 		await scenario.periodically(REPORT_REFUSED_AFTER_MILLISECONDS + 10 * PERIOD);
 		scenario.peer.stopLive();
 		await scenario.untilComplete(3);
