@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Brings a long-lived devnet of four representatives up or down. It needs
 # Node.js and the PostgreSQL server binaries, which "devenv shell" provides.
+#
+# Every representative charges a fee. The client's recover() builds the fee
+# block the votes ask for only when it is given generateFeeBlock (upstream
+# client [Keeta TS] index.js:59408-59417, 60856-60858), and send() recovers
+# that way after LEDGER_SUCCESSOR_VOTE_EXISTS (60644-60653), so pass one, as
+# "up" prints.
 set -euo pipefail
 
 if [ "$#" -lt 1 ] || [ "$#" -gt 2 ] || { [ "$1" != up ] && [ "$1" != down ]; }; then

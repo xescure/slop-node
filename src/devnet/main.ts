@@ -111,6 +111,10 @@ function summaryOf(devnet: Devnet, directory: string): string {
 		'\tnetwork: 0n,\n',
 		'\tnetworkAlias: \'test\'\n',
 		'});\n\n',
+		'Every representative charges a fee, and the client\'s recover() adds the fee block the votes ask for only when given\n',
+		'a generator: client.recover(true, { generateFeeBlock: (staple) => client.initBuilder().computeFeeBlock(staple) }).\n',
+		'Without one it fails with "Votes require fees but generateFeeBlock was not defined", and so does the recovery\n',
+		'send() attempts after LEDGER_SUCCESSOR_VOTE_EXISTS.\n\n',
 		`Logs: ${directory}/node-<index>.log. Stop it with: utils/devnet down ${directory}\n`
 	].join(''));
 }
