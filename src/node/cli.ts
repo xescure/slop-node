@@ -2,6 +2,7 @@ import { inspect } from 'node:util';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { assertNever } from '../util/assert-never.js';
 import { NODE_VERSION } from '../version.js';
+import { logUnhandledRejections, noteRejectionsHandledLate } from './background-failures.js';
 import { ConfigError, formatManualPeer, GENESIS_VARIABLES, getConfigFromEnv, localNodeConfig, MANUAL_PEER_FORM, manualPeerOf, MAX_FEE_SEED_ACCOUNTS, NODE_VARIABLES, TRUSTED_ACCOUNT_VARIABLE } from './config.js';
 import type { ConfigVariable, Environment, EnvironmentConfig, LogSettings, NetworkSelection } from './config.js';
 import { LocalNodeError } from './errors.js';
@@ -202,11 +203,15 @@ async function refuseRememberedPeersIn(config: EnvironmentConfig, storage: Opene
 
 /**
  * Serves until a signal, then stops serving, waiting for the requests in
- * flight, and closes the storage.
+ * flight, and closes the storage. While it serves, a rejection nothing
+ * handles is logged and the node carries on; while it starts or stops, one
+ * still ends the process with a failure, since the node is then not known to
+ * be whole.
  */
 async function run(config: EnvironmentConfig, output: Output): Promise<void> {
 	const stopping = firstSignal(['SIGINT', 'SIGTERM']);
 	const log = consoleLog(config.log);
+	const quiet = noteRejectionsHandledLate(log);
 	const storage = openStorage(config.storage);
 	try {
 		if (storage.kind === 'memory') {
@@ -219,14 +224,20 @@ async function run(config: EnvironmentConfig, output: Output): Promise<void> {
 			await node.ledger.getHeadBlock(node.networkAddress, 'main');
 			log.startAutoSync();
 			await node.run();
-			output.out(await startupSummary(config, storage, node));
-			const signal = await stopping.received;
-			output.out(`stopping on ${signal}\n`);
+			const uninstall = logUnhandledRejections(log);
+			try {
+				output.out(await startupSummary(config, storage, node));
+				const signal = await stopping.received;
+				output.out(`stopping on ${signal}\n`);
+			} finally {
+				uninstall();
+			}
 		} finally {
 			await node.stop();
 		}
 	} finally {
 		stopping.release();
+		quiet();
 		log.stopAutoSync();
 		await log.sync();
 		await closeStorage(storage);

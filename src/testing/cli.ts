@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { onTestFinished } from 'vitest';
 import type { Environment } from '../node/config.js';
+import { assertNever } from '../util/assert-never.js';
 
 /*
  * The command as built, which "make test" builds first, so that what is
@@ -10,10 +11,12 @@ const BUILT_CLI = new URL('../../dist/main.js', import.meta.url);
 
 export type Exit = { readonly code: number | null; readonly signal: NodeJS.Signals | null };
 
+export type OutputStream = 'stdout' | 'stderr';
+
 export type CLIProcess = {
 	readonly exited: Promise<Exit>;
-	/** The first match of the pattern in standard output, once it has been written. */
-	readonly printed: (pattern: RegExp) => Promise<RegExpMatchArray>;
+	/** The first match of the pattern in standard output, or in standard error, once it has been written. */
+	readonly printed: (pattern: RegExp, stream?: OutputStream) => Promise<RegExpMatchArray>;
 	readonly signal: (signal: NodeJS.Signals) => void;
 	readonly stdout: () => string;
 	readonly stderr: () => string;
@@ -29,20 +32,24 @@ export function startCLI(args: readonly string[], environment: Environment): CLI
 	let stderr = '';
 	child.stdout.setEncoding('utf8');
 	child.stderr.setEncoding('utf8');
+	const waiting: (() => void)[] = [];
+	const wake = function(): void {
+		for (const check of waiting) {
+			check();
+		}
+	};
 	child.stderr.on('data', function(chunk: string) {
 		stderr += chunk;
+		wake();
 	});
 	const exited = new Promise<Exit>(function(resolve) {
 		child.once('exit', function(code, signal) {
 			resolve({ code, signal });
 		});
 	});
-	const waiting: (() => void)[] = [];
 	child.stdout.on('data', function(chunk: string) {
 		stdout += chunk;
-		for (const check of waiting) {
-			check();
-		}
+		wake();
 	});
 	onTestFinished(function() {
 		if (child.exitCode === null && child.signalCode === null) {
@@ -51,10 +58,20 @@ export function startCLI(args: readonly string[], environment: Environment): CLI
 	});
 	return({
 		exited,
-		printed: function(pattern) {
+		printed: function(pattern, stream = 'stdout') {
+			const written = function(): string {
+				switch (stream) {
+					case 'stdout':
+						return(stdout);
+					case 'stderr':
+						return(stderr);
+					default:
+						return(assertNever(stream));
+				}
+			};
 			return(new Promise<RegExpMatchArray>(function(resolve, reject) {
 				const check = function(): void {
-					const match = stdout.match(pattern);
+					const match = written().match(pattern);
 					if (match !== null) {
 						resolve(match);
 					}
@@ -62,7 +79,7 @@ export function startCLI(args: readonly string[], environment: Environment): CLI
 				waiting.push(check);
 				check();
 				void exited.then(function(exit) {
-					reject(new Error(`the command exited (${JSON.stringify(exit)}) without printing ${String(pattern)}; it wrote ${JSON.stringify(stderr)}`));
+					reject(new Error(`the command exited (${JSON.stringify(exit)}) without printing ${String(pattern)} to ${stream}; it wrote ${JSON.stringify(stderr)}`));
 				});
 			}));
 		},

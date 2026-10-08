@@ -2,6 +2,7 @@ import { createServer } from 'node:net';
 import type { Server } from 'node:net';
 import { describe, expect, inject, onTestFinished, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
+import pg from 'pg';
 import { GENESIS_VARIABLES, NODE_VARIABLES, TRUSTED_ACCOUNT_VARIABLE } from './node/config.js';
 import type { Environment } from './node/config.js';
 import { API_LINE, PEER_LINE, startCLI } from './testing/cli.js';
@@ -274,6 +275,80 @@ describe('slop-node when its surroundings fail', function() {
 		const cli = startCLI(['run'], { ...NODE, KEETANET_LOCAL_NODE_LISTEN_PORT: 'eighty', KEETANET_LOCAL_NODE_LOG_LEVEL: 'INFO' });
 		expect(await cli.exited).toEqual({ code: 1, signal: null });
 		expect(cli.stderr().trimEnd().split('\n')).toHaveLength(1);
+	});
+});
+
+/** A representative's manual peer that nothing listens for. */
+async function unreachablePeer(): Promise<string> {
+	const port = await closedPort();
+	const key = lib.Account.fromSeed(TEST_NETWORK_SEEDS.representative, 1).publicKeyString.get();
+	return(`${key}@http://127.0.0.1:${String(port)}/api|ws://127.0.0.1:${String(port)}/p2p`);
+}
+
+/**
+ * Node.js options that load, before the command, a module that makes a
+ * promise rejection nothing handles as the node's HTTP server starts
+ * listening or closing. Listening is delayed by a turn of the event loop, so
+ * that Node.js has dealt with the rejection before the node listens.
+ */
+type ServerMoment = 'listen' | 'close';
+
+const CALL_THROUGH: Readonly<Record<ServerMoment, string>> = {
+	listen: 'setImmediate(() => original.apply(this, input)); return(this);',
+	close: 'return(original.apply(this, input));'
+};
+
+function rejectingAt(moment: ServerMoment): Environment {
+	const source = [
+		'import http from "node:http";',
+		`const original = http.Server.prototype.${moment};`,
+		`http.Server.prototype.${moment} = function(...input) {`,
+		`	Promise.reject(new Error("a rejection nothing handles, at ${moment}"));`,
+		`	${CALL_THROUGH[moment]}`,
+		'};'
+	].join('\n');
+	return({ NODE_OPTIONS: `--import=data:text/javascript,${encodeURIComponent(source)}` });
+}
+
+describe('slop-node and failures nothing handles', function() {
+	/* The switch checks in with a manual peer as the node runs, writing to the store without waiting for the write [Keeta TS] index.js:72622-72658. */
+	test('logs one in background work under an error ID while it serves, and carries on serving', async function() {
+		const url = await createTestDatabaseURL();
+		const pool = new pg.Pool({ connectionString: url });
+		onTestFinished(function() {
+			return(pool.end());
+		});
+		await pool.query(`CREATE FUNCTION refuse_check_ins() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'check-ins are refused'; END $$`);
+		await pool.query('CREATE TRIGGER refuse_check_ins BEFORE INSERT OR UPDATE ON kv_entries FOR EACH ROW WHEN (NEW.arena = \'manualPeerCheckIn\') EXECUTE FUNCTION refuse_check_ins()');
+		const cli = startCLI(['run'], { ...NODE, KEETANET_LOCAL_NODE_POSTGRES_URL: url, KEETANET_LOCAL_NODE_MANUAL_PEERS: await unreachablePeer() });
+		const [, api] = await cli.printed(API_LINE);
+
+		const [line, errorID] = await cli.printed(/^\[([0-9a-f-]{36})\] ERROR node: Background work failed, and the node carries on \(error ID: \1\):.*$/m, 'stderr');
+		expect(cli.stderr()).toContain('check-ins are refused');
+		expect(line).toContain(errorID);
+		expect(await getJSON(`${api ?? ''}/node/version`)).toEqual({ node: NODE_VERSION });
+
+		cli.signal('SIGTERM');
+		expect(await cli.exited).toEqual({ code: 0, signal: null });
+		expect(cli.stderr()).not.toContain('Warning');
+	});
+
+	test('ends with status 1 on one while it starts, before it listens', async function() {
+		const cli = startCLI(['run'], { ...NODE, ...rejectingAt('listen') });
+
+		expect(await cli.exited).toEqual({ code: 1, signal: null });
+		expect(cli.stdout()).not.toMatch(API_LINE);
+		expect(cli.stderr()).toContain('a rejection nothing handles, at listen');
+	});
+
+	test('ends with status 1 on one while it stops', async function() {
+		const cli = startCLI(['run'], { ...NODE, ...rejectingAt('close') });
+		await cli.printed(PEER_LINE);
+
+		cli.signal('SIGTERM');
+
+		expect(await cli.exited).toEqual({ code: 1, signal: null });
+		expect(cli.stderr()).toContain('a rejection nothing handles, at close');
 	});
 });
 

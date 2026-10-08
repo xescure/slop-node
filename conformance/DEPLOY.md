@@ -83,6 +83,7 @@ The node enforces these at start, before it serves anything:
 - **`clear-peers`.** The peers a node remembers belong to the network and mode it ran in. After changing `KEETANET_LOCAL_NODE_NETWORK` or `KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE`, stop the node and run `clear-peers` once with its new environment, for example `docker run --rm --env-file node.env slop-node:<tag> clear-peers`. It forgets every remembered peer and keeps the ledger and the statistics. A node in a voting mode on one of Keeta's networks refuses to start while its database remembers peers, and its error names this command.
 - **Startup.** Once it serves, the node prints a summary: its version, its representative, network, write mode and storage, and the lines `api:` and `peer:`. `GET <api>/node/version` answers once it serves.
 - **Exit status.** 0 after a signal, 1 when the node refuses its configuration or fails, 2 for a command line it does not understand.
+- **Background failures.** An error in work the node does in the background while it serves, such as recording a peer in Postgres, is logged at `ERROR` with an error ID and does not stop the node, so watch the log for them; one while the node starts or stops still ends it with status 1.
 
 ## 7. A devnet on network 0
 

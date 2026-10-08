@@ -33,6 +33,7 @@ export default {
 		'nextval',
 		'ordinality',
 		'datname',
+		'plpgsql',
 		'pkey',
 		'cmdline',
 		// Names in upstream's API: a route segment and a switch statistic.
