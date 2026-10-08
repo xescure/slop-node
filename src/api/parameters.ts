@@ -2,7 +2,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, GenericAccount, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { APIErrorCode } from '@keetanetwork/keetanet-client/lib/error/api.js';
-import type { Ledger, LedgerStorage } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
+import type { Ledger, LedgerSelector, LedgerStorage } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { APIRequest } from './route.js';
 
 const lib = KeetaNet.lib;
@@ -59,6 +59,22 @@ export function parseLimit(query: APIRequest['query'], bounds: LimitBounds): num
 
 const LEDGER_STORAGES: readonly LedgerStorage[] = ['main', 'side'];
 
+const LEDGER_SELECTORS: readonly LedgerSelector[] = [...LEDGER_STORAGES, 'both'];
+
+function parseSide<Side extends string>(query: APIRequest['query'], sides: readonly Side[]): Side | 'main' {
+	const text = query['side'];
+	if (text === undefined) {
+		return('main');
+	}
+	const side = sides.find(function(choice): boolean {
+		return(choice === text);
+	});
+	if (side === undefined) {
+		throw(apiError('API_INVALID_SIDE', `Invalid side: ${text}`));
+	}
+	return(side);
+}
+
 /**
  * Which ledger to read: the main ledger unless the request names the side
  * ledger [Keeta TS] index.js:67868-67873, 58778-58789; any other side is
@@ -66,17 +82,18 @@ const LEDGER_STORAGES: readonly LedgerStorage[] = ['main', 'side'];
  * [node-lite] adapted from ledgerSelector.
  */
 export function parseLedgerStorage(query: APIRequest['query']): LedgerStorage {
-	const text = query['side'];
-	if (text === undefined) {
-		return('main');
-	}
-	const side = LEDGER_STORAGES.find(function(choice): boolean {
-		return(choice === text);
-	});
-	if (side === undefined) {
-		throw(apiError('API_INVALID_SIDE', `Invalid side: ${text}`));
-	}
-	return(side);
+	return(parseSide(query, LEDGER_STORAGES));
+}
+
+/**
+ * Which ledger to find a block on, where a request may also name both, as
+ * the client does for the blocks of an account it recovers
+ * [Keeta TS] index.js:59349-59351; the ledger passes the choice on to its
+ * storage, which reads both as it does for its own checks
+ * [Keeta TS] index.js:69502-69505, 67668.
+ */
+export function parseLedgerSelector(query: APIRequest['query']): LedgerSelector {
+	return(parseSide(query, LEDGER_SELECTORS));
 }
 
 /** Throws the library's own error for anything that is not an account's public key string. */

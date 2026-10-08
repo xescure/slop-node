@@ -5,7 +5,7 @@ import { accountStates, requestedAccount } from './account.js';
 import type { DeclaredLedgerGroup, DeclaredResult } from './declared.js';
 import { historyPage } from './history.js';
 import type { HistoryPage } from './history.js';
-import { apiError, parseBlockHash, parseKeyAccount, parseLedgerStorage, readLedger } from './parameters.js';
+import { apiError, parseBlockHash, parseKeyAccount, parseLedgerSelector, readLedger } from './parameters.js';
 import { defineGET } from './route.js';
 import type { APIRequest, Route } from './route.js';
 
@@ -14,7 +14,7 @@ const lib = KeetaNet.lib;
 /** [node-lite] adapted from getBlockByHash. */
 function getBlockByHash(request: APIRequest, text: string): Promise<DeclaredResult<DeclaredLedgerGroup['block'][':blockhash']['GET']>> {
 	const blockhash = parseBlockHash(text);
-	const side = parseLedgerStorage(request.query);
+	const side = parseLedgerSelector(request.query);
 	return(readLedger(request, 'block', async function(ledger) {
 		return({ blockhash: blockhash.toString(), block: await ledger.getBlock(blockhash, side) });
 	}));

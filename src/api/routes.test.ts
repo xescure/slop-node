@@ -357,6 +357,21 @@ describe('requests a representative answers without a failure', function() {
 		expect(field(none.body, 'block')).toBeNull();
 	});
 
+	test('a block is found on either ledger when both are asked, as the client asks for the blocks of an account it recovers', async function() {
+		const node = await populated();
+		// [Keeta TS] index.js:59349-59351
+		function blockAt(hash: string, side: string): Promise<HTTPAnswer> {
+			return(request(node, `/node/ledger/block/${hash}?side=${side}`));
+		}
+		const pending = node.pending.hash.toString();
+		const confirmed = node.keyedSend.hash.toString();
+
+		expect(text(field((await blockAt(pending, 'both')).body, 'block'), '$binary')).toBe(base64(node.pending.toBytes()));
+		expect(text(field((await blockAt(confirmed, 'both')).body, 'block'), '$binary')).toBe(base64(node.keyedSend.toBytes()));
+		expect((await blockAt(pending, 'main')).body).toEqual({ blockhash: pending, block: null });
+		expectDocumented('GET', `/node/ledger/block/${pending}?side=both`, await blockAt(pending, 'both'));
+	});
+
 	test('a block named by its idempotent key is found on the ledger asked', async function() {
 		const node = await populated();
 		const path = `/node/ledger/account/${keyOf(node.user)}/idempotent/${encodeURIComponent(node.idempotentKey)}`;

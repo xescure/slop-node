@@ -378,7 +378,7 @@
         "summary": "A block by its hash",
         "description": "\"block\" is null when the ledger side holds no such block [Keeta TS] index.js:58790-58792.",
         "parameters": [
-          { "$ref": "#/components/parameters/Side" }
+          { "$ref": "#/components/parameters/BlockSide" }
         ],
         "responses": {
           "200": {
@@ -1147,6 +1147,16 @@
         "schema": {
           "type": "string",
           "enum": ["main", "side"]
+        }
+      },
+      "BlockSide": {
+        "name": "side",
+        "in": "query",
+        "required": false,
+        "description": "Which ledger to find the block on: \"main\", \"side\", or \"both\", which the client asks for when it recovers an account [Keeta TS] index.js:59349-59351, and which the ledger reads from either [Keeta TS] index.js:69502-69505, 67668. The API error codes include INVALID_SIDE [Keeta TS] index.js:66022-66030.",
+        "schema": {
+          "type": "string",
+          "enum": ["main", "side", "both"]
         }
       },
       "HistoryStart": {
