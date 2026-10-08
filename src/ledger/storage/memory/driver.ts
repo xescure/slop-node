@@ -167,6 +167,9 @@ function toACLRow(update: ACLUpdate, permissions: NonNullable<ACLUpdate['permiss
 /** Where a staple sits in history, the same on every node. */
 type HistoryOrder = Pick<StapleRow, 'stapleTime' | 'blocksHash'>;
 
+/** A main vote and where it sits in the catch-up order (D8). */
+type CatchUpVote = { readonly position: CatchUpPosition; readonly vote: Vote };
+
 /*
  * The staple time is a property of the staple alone, so it orders history
  * the same way however late a node applied each staple; the blocks hash,
@@ -309,7 +312,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	readonly #lock = new AsyncMutex();
 	// Lives outside every transaction, so an aborted attempt's serial is never issued again.
 	#nextSerial = 1n;
-	#nextStapleSequence = 0n;
+	#nextVoteSequence = 0n;
 
 	async beginTransaction(options: TransactionOptions): Promise<MemoryTransaction> {
 		const release = await this.#lock.acquire();
@@ -576,39 +579,45 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	}
 
 	/*
-	 * Pages end only between staples, so a staple whose votes straddle a page
-	 * is never returned twice; a page therefore holds at least one whole
-	 * staple even when that exceeds the page size. The key is omitted on the
-	 * last page, because the caller stops only when it is undefined.
+	 * The votes of main staples made at or after the moment, by when each was
+	 * made, then by the sequence it was stored with, in pages of at most the
+	 * page size, rounded up, as upstream asks for 32 times a fractional
+	 * remaining limit; a page holds at least one vote while any remains. The
+	 * key is omitted on the last page, because the caller stops only when it
+	 * is undefined (D8).
 	 * [Keeta TS] index.js:69633-69702
 	 */
 	async getVotesAfter(transaction: MemoryTransaction, moment: Date, startKey?: string, options?: GetVotesAfterOptions): Promise<PaginatedVotes> {
 		const overlay = await transaction.view();
-		const maximumVotes = options?.maxVotesPerPage ?? DEFAULT_VOTES_PER_PAGE;
+		const maximumVotes = Math.max(Math.ceil(options?.maxVotesPerPage ?? DEFAULT_VOTES_PER_PAGE), 1);
 		let resumeAfter: CatchUpPosition | undefined;
 		if (startKey !== undefined) {
 			resumeAfter = decodeCatchUpKey(startKey);
 		}
-		const remaining = this.#confirmedStaplesInOrder(overlay).filter(function(row): boolean {
-			if (row.moment.getTime() < moment.getTime()) {
-				return(false);
+		const remaining: CatchUpVote[] = [];
+		for (const row of this.#confirmedStaples(overlay)) {
+			let sequence = row.firstVote;
+			for (const vote of row.votes.values()) {
+				const position = { validityFrom: vote.validityFrom, sequence };
+				sequence++;
+				if (vote.validityFrom.getTime() < moment.getTime() || (resumeAfter !== undefined && compareCatchUpPositions(position, resumeAfter) <= 0)) {
+					continue;
+				}
+				remaining.push({ position, vote });
 			}
-			return(resumeAfter === undefined || compareCatchUpPositions(row, resumeAfter) > 0);
-		});
-		const votes: Vote[] = [];
-		let last: StapleRow | undefined;
-		let taken = 0;
-		for (const row of remaining) {
-			if (last !== undefined && votes.length >= maximumVotes) {
-				break;
-			}
-			votes.push(...row.votes.values());
-			last = row;
-			taken++;
 		}
-		const page: PaginatedVotes = { votes };
-		if (last !== undefined && taken < remaining.length) {
-			page.nextKey = encodeCatchUpKey(last);
+		remaining.sort(function(left, right): number {
+			return(compareCatchUpPositions(left.position, right.position));
+		});
+		const taken = remaining.slice(0, maximumVotes);
+		const page: PaginatedVotes = {
+			votes: taken.map(function({ vote }): Vote {
+				return(vote);
+			})
+		};
+		const last = taken.at(-1);
+		if (last !== undefined && taken.length < remaining.length) {
+			page.nextKey = encodeCatchUpKey(last.position);
 		}
 		return(page);
 	}
@@ -1025,10 +1034,6 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		}));
 	}
 
-	#confirmedStaplesInOrder(overlay: LedgerOverlay): StapleRow[] {
-		return(this.#confirmedStaples(overlay).sort(compareCatchUpPositions));
-	}
-
 	#headBlock(overlay: LedgerOverlay, account: AccountKey, from: LedgerSelector): Block | null {
 		switch (from) {
 			case 'side':
@@ -1087,7 +1092,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	}
 
 	#writeStaple(overlay: LedgerOverlay, change: ConfirmedStapleChange): StapleKey {
-		const { staple, blockHeights, moment } = change;
+		const { staple, blockHeights } = change;
 		const stapleKey = toStapleKey(staple.blocksHash);
 		const votes = new Map<VoteKey, Vote>();
 		for (const vote of staple.votes) {
@@ -1101,8 +1106,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 			votes,
 			bytes: staple.toBytes(),
 			stapleTime: staple.timestamp(),
-			moment,
-			sequence: this.#takeStapleSequence()
+			firstVote: this.#takeVoteSequences(votes.size)
 		});
 
 		for (const block of staple.blocks) {
@@ -1242,10 +1246,11 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		}
 	}
 
-	#takeStapleSequence(): bigint {
-		const sequence = this.#nextStapleSequence;
-		this.#nextStapleSequence += 1n;
-		return(sequence);
+	/** The first of that many node-local vote sequences, never handed out again. */
+	#takeVoteSequences(count: number): bigint {
+		const first = this.#nextVoteSequence;
+		this.#nextVoteSequence += BigInt(count);
+		return(first);
 	}
 }
 

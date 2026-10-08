@@ -36,6 +36,8 @@ export default {
 		'plpgsql',
 		'pkey',
 		'cmdline',
+		// A planner setting, which a test turns off to see the index a query can use.
+		'seqscan',
 		// The name of a Postgres socket, and a file of /proc.
 		'pgsql',
 		'smaps',

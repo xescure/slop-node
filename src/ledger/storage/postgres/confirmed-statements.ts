@@ -203,30 +203,20 @@ export const allHistoryAfter: Statement<[Buffer, number], { blocks_hash: Buffer 
 	ORDER BY staple_time DESC, blocks_hash DESC
 	LIMIT $2`);
 
-export type CatchUpStapleColumns = {
-	readonly blocks_hash: Buffer;
-	readonly moment: Date;
-	readonly sequence: IntegerText;
-	readonly vote_count: IntegerText;
-};
+export type CatchUpVoteColumns = VoteColumns & { readonly id: IntegerText };
 
-const CATCH_UP_VOTE_COUNT = `(SELECT count(*) FROM votes
-		WHERE votes.ledger = 'main' AND votes.blocks_hash = staples.blocks_hash) AS vote_count`;
-
-/** Staples confirmed at or after $1, in catch-up order (D8). */
-export const catchUpStaples: Statement<[Date, number], CatchUpStapleColumns> = statement('catch_up_staples', `
-	SELECT staples.blocks_hash, staples.moment, staples.sequence, ${CATCH_UP_VOTE_COUNT}
-	FROM staples
-	WHERE staples.moment >= $1
-	ORDER BY staples.moment, staples.sequence
+/** Main votes made at or after $1, in catch-up order (D8), through votes_catch_up. */
+export const catchUpVotes: Statement<[Date, number], CatchUpVoteColumns> = statement('catch_up_votes', `
+	SELECT id, bytes, validity_from, permanent FROM votes
+	WHERE ledger = 'main' AND validity_from >= $1
+	ORDER BY validity_from, id
 	LIMIT $2`);
 
-/** The same, resuming after the staple at ($2, $3). */
-export const catchUpStaplesAfter: Statement<[Date, Date, string, number], CatchUpStapleColumns> = statement('catch_up_staples_after', `
-	SELECT staples.blocks_hash, staples.moment, staples.sequence, ${CATCH_UP_VOTE_COUNT}
-	FROM staples
-	WHERE staples.moment >= $1 AND (staples.moment, staples.sequence) > ($2::timestamptz, $3::bigint)
-	ORDER BY staples.moment, staples.sequence
+/** The same, resuming after the vote at ($2, $3). */
+export const catchUpVotesAfter: Statement<[Date, Date, string, number], CatchUpVoteColumns> = statement('catch_up_votes_after', `
+	SELECT id, bytes, validity_from, permanent FROM votes
+	WHERE ledger = 'main' AND validity_from >= $1 AND (validity_from, id) > ($2::timestamptz, $3::bigint)
+	ORDER BY validity_from, id
 	LIMIT $4`);
 
 export const mainIdempotentKeys: Statement<[Buffer[]], { key: Buffer; block_hash: Buffer }> = statement('main_idempotent_keys', `

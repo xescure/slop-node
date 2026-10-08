@@ -18,6 +18,7 @@ import { assertNever } from '../util/assert-never.js';
 import { deriveTestKeys, TEST_NETWORK_SEEDS } from './network.js';
 import { createDatabase } from './postgres.js';
 import type { TestDatabase } from './postgres.js';
+import { eachStapleOnce } from '../util/each-staple-once.js';
 import { TRUSTED_SIGNER } from './sdk.js';
 import type { StorageUnderTest, UserClient } from './sdk.js';
 
@@ -413,7 +414,7 @@ export class ClusterMember {
 
 	/** The blocks hash of every staple the node's ledger holds. */
 	async stapleHashes(): Promise<VoteBlockHash[]> {
-		return((await this.node.ledger.getVoteStaplesAfter(EPOCH, STAPLE_LIMIT)).map(function(staple): VoteBlockHash {
+		return(eachStapleOnce(await this.node.ledger.getVoteStaplesAfter(EPOCH, STAPLE_LIMIT)).map(function(staple): VoteBlockHash {
 			return(staple.blocksHash);
 		}));
 	}
@@ -424,12 +425,12 @@ export class ClusterMember {
 	 */
 	async dump(): Promise<string> {
 		const node = this.node;
-		const staples = await node.ledger.getVoteStaplesAfter(EPOCH, STAPLE_LIMIT);
-		if (staples.length >= STAPLE_LIMIT) {
+		const listed = await node.ledger.getVoteStaplesAfter(EPOCH, STAPLE_LIMIT);
+		if (listed.length >= STAPLE_LIMIT) {
 			throw(new Error(`member ${String(this.index)} holds more staples than one read lists`));
 		}
 		const checksum = (await node.stats.getXor(LEDGER_CHECKSUM_KEY)).toBigInt();
-		return(await renderStateDump(node.ledger, staples, checksum));
+		return(await renderStateDump(node.ledger, eachStapleOnce(listed), checksum));
 	}
 
 	/**

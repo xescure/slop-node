@@ -1,12 +1,13 @@
 import { readFile } from 'node:fs/promises';
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
-import { startServingPeer } from '../testing/bootstrap-peers.js';
-import { TEST_NETWORK_SEEDS } from '../testing/network.js';
+import { listedByVotes, pageFrom, startServingPeer } from '../testing/bootstrap-peers.js';
+import { TEST_NETWORK_SEEDS, freezeClock } from '../testing/network.js';
 import { STORAGES_UNDER_TEST, useSDKNodes } from '../testing/sdk.js';
 import type { StorageUnderTest } from '../testing/sdk.js';
 import { assertNever } from '../util/assert-never.js';
+import { eachStapleOnce } from '../util/each-staple-once.js';
 import type { BootstrapClient } from './bootstrap.js';
 import { BOOTSTRAP_MARGIN_MILLISECONDS } from './bootstrap-window.js';
 import type { Environment } from './config.js';
@@ -70,19 +71,28 @@ async function followerOf(storage: StorageUnderTest, peer: string): Promise<Envi
 	}
 }
 
+function stampsOf(staple: VoteStaple): number[] {
+	return(staple.votes.map(function(vote): number {
+		return(vote.validityFrom.getTime());
+	}));
+}
+
 function base64Of(staple: VoteStaple): string {
 	return(Buffer.from(staple.toBytes()).toString('base64'));
 }
 
 describe('a node following the main network', function() {
+	afterEach(function() {
+		vi.useRealTimers();
+	});
+
 	test('applies every staple of the first page its first representative serves, in the order it serves them', async function() {
 		const staples = await servedPage();
 		expect(staples.findIndex(function(staple): boolean {
 			return(staple.blocksHash.toString() === GENESIS_BLOCKS_HASH);
 		})).toBe(4);
 		const serving = await startServingPeer();
-		// Applied long before the node begins, so that one pass reads them all.
-		serving.apply(staples, new Date(Date.now() - 2 * BOOTSTRAP_MARGIN_MILLISECONDS));
+		serving.apply(staples);
 		const follower = await sdkNodes.start(await followerOf('memory', serving.apiURL));
 
 		// The update the node ran as it started is ahead of this one in the queue.
@@ -95,6 +105,13 @@ describe('a node following the main network', function() {
 			}
 		}
 		expect(missing).toEqual([]);
+
+		// Serving them again, the node lists what the representative did, and as one keyed by votes does.
+		const listed = await pageFrom(`http://${follower.host}/api`, new Date(0));
+		expect(new Set(listed)).toEqual(new Set(staples.map(function(staple): string {
+			return(staple.blocksHash.toString());
+		})));
+		expect(listed).toEqual(listedByVotes(eachStapleOnce(staples), new Date(0)));
 	});
 
 	/*
@@ -107,8 +124,16 @@ describe('a node following the main network', function() {
 	test.each(STORAGES_UNDER_TEST)('names the staples it holds by the bytes the representative serves, so that reading them again downloads none of them (%s)', async function(storage: StorageUnderTest) {
 		const staples = await servedPage();
 		const serving = await startServingPeer();
-		// Within the margin, which the next update reads again.
-		serving.apply(staples, new Date(Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS / 2));
+		serving.apply(staples);
+		// The node runs soon after the last of the staples' votes was made, so that the next update reads some of them again over its margin.
+		const lastVote = Math.max(...staples.flatMap(stampsOf));
+		freezeClock(new Date(lastVote + BOOTSTRAP_MARGIN_MILLISECONDS / 2));
+		const withinMargin = staples.filter(function(staple): boolean {
+			return(stampsOf(staple).some(function(stamp): boolean {
+				return(stamp >= lastVote - BOOTSTRAP_MARGIN_MILLISECONDS / 2);
+			}));
+		});
+		expect(withinMargin.length).toBeGreaterThan(0);
 		const follower = await sdkNodes.start(await followerOf(storage, serving.apiURL));
 		const client = clientOf(follower.node.bootstrap);
 		expect(await client.update()).toEqual({ complete: true });

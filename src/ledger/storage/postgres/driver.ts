@@ -31,8 +31,8 @@ import {
 	allHistoryAfter,
 	appendHistory,
 	balanceOf,
-	catchUpStaples,
-	catchUpStaplesAfter,
+	catchUpVotes,
+	catchUpVotesAfter,
 	certificateOf,
 	certificatesOf,
 	deleteACL,
@@ -68,7 +68,7 @@ import {
 	totalWeight,
 	weightOf
 } from './confirmed-statements.js';
-import type { ACLColumns, AccountInfoColumns, CatchUpStapleColumns, CertificateColumns } from './confirmed-statements.js';
+import type { ACLColumns, AccountInfoColumns, CatchUpVoteColumns, CertificateColumns } from './confirmed-statements.js';
 import { checkIn, checkOut } from './connection.js';
 import { mapDatabaseError } from './errors.js';
 import { MigratedPostgresPool } from './pool.js';
@@ -948,49 +948,28 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	}
 
 	/*
-	 * Pages end only between staples, so a staple whose votes straddle a page
-	 * is never returned twice; a page therefore holds at least one whole
-	 * staple even when that exceeds the page size. The key is omitted on the
-	 * last page, because the caller stops only when it is undefined. Every
-	 * staple holds a vote, so a page takes at most as many staples as votes,
-	 * and one staple more shows whether any remain. The page size is 32 times
-	 * the caller's remaining limit, which is fractional when the limit is, so
-	 * it is rounded up: a page holds a whole number of votes, and "at least
-	 * 32.96 votes" means 33.
+	 * The votes of main staples made at or after the moment, by when each was
+	 * made, then by row ID, in pages of at most the page size, rounded up, as
+	 * upstream asks for 32 times a fractional remaining limit; a page holds at
+	 * least one vote while any remains. One vote more than the page shows
+	 * whether any remain: the key is omitted on the last page, because the
+	 * caller stops only when it is undefined (D8).
 	 * [Keeta TS] index.js:69633-69702
 	 */
 	async getVotesAfter(transaction: PostgresTransaction, moment: Date, startKey?: string, options?: GetVotesAfterOptions): Promise<PaginatedVotes> {
-		const maximumVotes = Math.ceil(options?.maxVotesPerPage ?? DEFAULT_VOTES_PER_PAGE);
-		const candidates = Math.max(maximumVotes, 1) + 1;
-		let rows: CatchUpStapleColumns[];
+		const maximumVotes = Math.max(Math.ceil(options?.maxVotesPerPage ?? DEFAULT_VOTES_PER_PAGE), 1);
+		let rows: CatchUpVoteColumns[];
 		if (startKey === undefined) {
-			rows = await transaction.run(catchUpStaples, [moment, candidates]);
+			rows = await transaction.run(catchUpVotes, [moment, maximumVotes + 1]);
 		} else {
 			const resumeAfter = decodeCatchUpKey(startKey);
-			rows = await transaction.run(catchUpStaplesAfter, [moment, resumeAfter.moment, resumeAfter.sequence.toString(), candidates]);
+			rows = await transaction.run(catchUpVotesAfter, [moment, resumeAfter.validityFrom, resumeAfter.sequence.toString(), maximumVotes + 1]);
 		}
-		const taken: CatchUpStapleColumns[] = [];
-		let voteCount = 0;
-		for (const row of rows) {
-			if (taken.length > 0 && voteCount >= maximumVotes) {
-				break;
-			}
-			taken.push(row);
-			voteCount += Number(fromInteger(row.vote_count));
-		}
-		const votesByStaple = groupBy(await transaction.run(mainStapleVotes, [taken.map(function(row) {
-			return(row.blocks_hash);
-		})]), function(row) {
-			return(hexOf(row.blocks_hash));
-		});
-		const votes: Vote[] = [];
-		for (const row of taken) {
-			votes.push(...(votesByStaple.get(hexOf(row.blocks_hash)) ?? []).map(decodeVote));
-		}
-		const page: PaginatedVotes = { votes };
+		const taken = rows.slice(0, maximumVotes);
+		const page: PaginatedVotes = { votes: taken.map(decodeVote) };
 		const last = taken.at(-1);
 		if (last !== undefined && taken.length < rows.length) {
-			page.nextKey = encodeCatchUpKey({ moment: last.moment, sequence: fromInteger(last.sequence) });
+			page.nextKey = encodeCatchUpKey({ validityFrom: last.validity_from, sequence: fromInteger(last.id) });
 		}
 		return(page);
 	}

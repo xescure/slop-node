@@ -209,21 +209,29 @@ function bytesOf(staple: ServedStaple): Buffer {
 }
 
 export type ServingPeer = RecordingPeer & {
-	/** Applies the staples, in that order, one a millisecond from the moment given, after those it applied already. */
-	readonly apply: (staples: readonly ServedStaple[], from: Date) => void;
+	/** Applies the staples, in that order, after those it applied already. */
+	readonly apply: (staples: readonly ServedStaple[]) => void;
 	/** The staples it has sent in all, its answers to probes included. */
 	readonly served: () => number;
 };
 
+/** The moment the staple's last vote was made, which a peer keyed by votes lists it from at the latest. */
+function lastVoteOf(bytes: Buffer): number {
+	return(Math.max(...new KeetaNet.lib.Vote.Staple(bytes.toString('base64')).votes.map(function(vote): number {
+		return(vote.validityFrom.getTime());
+	})));
+}
+
 /**
  * A representative that applied the staples it is given in the order given,
- * whatever they depend on, as the main network's representatives serve
- * their history, and pages them as one does: those applied at or after the
- * start, leaving out those the filter names, up to the limit
- * [Keeta TS] index.js:69633-69702.
+ * whatever they depend on, and pages them as the main network's
+ * representatives do: it keys each vote at the moment it was made, and lists
+ * from a start each staple with a vote made at or after it, leaving out
+ * those the filter names, up to the limit [Keeta TS] index.js:69633-69702,
+ * as one read of its votes, in no order of its own: the order applied.
  */
 export async function startServingPeer(): Promise<ServingPeer> {
-	const applied: { readonly bytes: Buffer; readonly moment: number }[] = [];
+	const applied: { readonly bytes: Buffer; readonly lastVote: number }[] = [];
 	const pages: RecordedPage[] = [];
 	let served = 0;
 	const server = http.createServer(function(request, response): void {
@@ -238,7 +246,7 @@ export async function startServingPeer(): Promise<ServingPeer> {
 				break;
 			}
 			const bytes = staple.bytes.buffer.slice(staple.bytes.byteOffset, staple.bytes.byteOffset + staple.bytes.byteLength);
-			if (staple.moment < start || filter?.has(bytes) === true) {
+			if (staple.lastVote < start || filter?.has(bytes) === true) {
 				continue;
 			}
 			page.push(staple.bytes.toString('base64'));
@@ -253,17 +261,62 @@ export async function startServingPeer(): Promise<ServingPeer> {
 	return({
 		apiURL: await listenUntilTestEnds(server),
 		pages,
-		apply: function(staples: readonly ServedStaple[], from: Date): void {
-			staples.forEach(function(staple, index): void {
-				applied.push({ bytes: bytesOf(staple), moment: from.getTime() + index });
-			});
-			// A representative pages in the order it applied, which is the moments' (the sort keeps the order given within one).
-			applied.sort(function(left, right): number {
-				return(left.moment - right.moment);
-			});
+		apply: function(staples: readonly ServedStaple[]): void {
+			for (const staple of staples) {
+				const bytes = bytesOf(staple);
+				applied.push({ bytes, lastVote: lastVoteOf(bytes) });
+			}
 		},
 		served: function(): number {
 			return(served);
 		}
 	});
+}
+
+/** The most votes upstream's catch-up reads at a time [Keeta TS] index.js:69653-69656. */
+export const VOTES_PER_READ = 200;
+
+/** A staple as the catch-up reads it: its blocks hash and when its votes were made. */
+type VotedStaple = { readonly blocksHash: { toString(): string }; readonly votes: readonly { readonly validityFrom: Date }[] };
+
+/**
+ * What a node's catch-up lists from the moment, as upstream's loop reads its
+ * storage keyed by votes (CONTRACT D8), over staples none of which has a vote
+ * made in the same millisecond as another staple's: the votes made at or
+ * after the moment, by when they were made, read VOTES_PER_READ at a time,
+ * and each read's staples once, in the order their votes come
+ * [Keeta TS] index.js:69633-69702.
+ */
+export function listedByVotes(staples: readonly VotedStaple[], from: Date): string[] {
+	const votes = staples.flatMap(function(staple): { readonly staple: string; readonly made: number }[] {
+		return(staple.votes.map(function(vote): { readonly staple: string; readonly made: number } {
+			return({ staple: staple.blocksHash.toString(), made: vote.validityFrom.getTime() });
+		}));
+	}).filter(function(vote): boolean {
+		return(vote.made >= from.getTime());
+	}).sort(function(left, right): number {
+		return(left.made - right.made);
+	});
+	const listed: string[] = [];
+	for (let first = 0; first < votes.length; first += VOTES_PER_READ) {
+		listed.push(...new Set(votes.slice(first, first + VOTES_PER_READ).map(function(vote): string {
+			return(vote.staple);
+		})));
+	}
+	return(listed);
+}
+
+/** The blocks hashes of the staples of a page the API answers from the moment, in the order listed. */
+export async function pageFrom(apiURL: string, start: Date): Promise<string[]> {
+	const response = await fetch(`${apiURL}/node/bootstrap/votes?start=${encodeURIComponent(start.toISOString())}`);
+	const body: unknown = await response.json();
+	if (!isRecord(body) || !Array.isArray(body['voteStaples'])) {
+		throw(new Error(`no page of staples: ${JSON.stringify(body)}`));
+	}
+	return(body['voteStaples'].map(function(staple: unknown): string {
+		if (!isRecord(staple) || typeof staple['$binary'] !== 'string') {
+			throw(new Error('a staple was served without its bytes'));
+		}
+		return(new KeetaNet.lib.Vote.Staple(staple['$binary']).blocksHash.toString());
+	}));
 }

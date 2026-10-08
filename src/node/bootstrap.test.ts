@@ -8,7 +8,7 @@ import type { P2PPeer } from '@keetanetwork/keetanet-client/lib/p2p.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { GENESIS_MOMENT, ChainCursor, requireAt } from '../ledger/storage/suite/support.js';
 import { confirmedStaple, sendBlock } from '../testing/blocks.js';
-import { startFailingPeer, startRecordingPeer, startServingPeer, startSilentAPIPeer, unreachableEndpoint } from '../testing/bootstrap-peers.js';
+import { VOTES_PER_READ, listedByVotes, pageFrom, startFailingPeer, startRecordingPeer, startServingPeer, startSilentAPIPeer, unreachableEndpoint } from '../testing/bootstrap-peers.js';
 import type { RecordedPage } from '../testing/bootstrap-peers.js';
 import { useLocalNodes } from '../testing/local-node.js';
 import type { CreatedLocalNode, LocalNodeOptions, RunningLocalNode } from '../testing/local-node.js';
@@ -17,6 +17,7 @@ import type { TestNetwork } from '../testing/network.js';
 import { watchOpenHandles } from '../testing/open-handles.js';
 import { STORAGES_UNDER_TEST, useSDKNodes } from '../testing/sdk.js';
 import { KVInternals } from '../upstream/internals.js';
+import { eachStapleOnce } from '../util/each-staple-once.js';
 import type { ServingNode, StorageUnderTest } from '../testing/sdk.js';
 import { BootstrapClient } from './bootstrap.js';
 import { BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RETRY_ARENA, BootstrapCursors } from './bootstrap-cursors.js';
@@ -63,7 +64,7 @@ async function addAll(node: Node, staples: readonly VoteStaple[]): Promise<void>
 
 /** The blocks hashes of every staple the node's ledger holds, sorted. */
 async function heldBlocksHashes(node: Node): Promise<string[]> {
-	return((await node.ledger.getVoteStaplesAfter(new Date(0), 1000)).map(function(staple): string {
+	return(eachStapleOnce(await node.ledger.getVoteStaplesAfter(new Date(0), 1000)).map(function(staple): string {
 		return(staple.blocksHash.toString());
 	}).sort());
 }
@@ -274,7 +275,7 @@ describe('a bootstrap client', function() {
 		const peer = await representative();
 		const sends = await sendsFrom(peer.network, 0, 2);
 		const serving = await startServingPeer();
-		serving.apply([...sends, peer.network.genesis], new Date());
+		serving.apply([...sends, peer.network.genesis]);
 		const late = await joiner({ bootstrapFrom: [serving.apiURL] });
 		const kv = new KVInternals.KVStorageProviderMemory();
 		const set = vi.spyOn(kv, 'set');
@@ -299,7 +300,7 @@ describe('a bootstrap client', function() {
 		const peer = await representative();
 		const sends = await sendsFrom(peer.network, 0, 2);
 		const serving = await startServingPeer();
-		serving.apply(sends, new Date());
+		serving.apply(sends);
 		const late = await joiner({ bootstrapFrom: [serving.apiURL] });
 		const kv = new KVInternals.KVStorageProviderMemory();
 		expect(await clientOf(late.node, { kv }).update()).toEqual({ complete: true });
@@ -307,7 +308,7 @@ describe('a bootstrap client', function() {
 		expect(await heldBlocksHashes(late.node)).toEqual([]);
 
 		advanceClock(1000);
-		serving.apply([peer.network.genesis], new Date());
+		serving.apply([peer.network.genesis]);
 		const restarted = clientOf(late.node, { kv });
 		const before = serving.pages.length;
 		expect(await restarted.update()).toEqual({ complete: true });
@@ -327,7 +328,7 @@ describe('a bootstrap client', function() {
 			throw(new Error('no staple was made'));
 		}
 		const serving = await startServingPeer();
-		serving.apply([send], new Date());
+		serving.apply([send]);
 		const late = await joiner({ bootstrapFrom: [serving.apiURL] });
 		const warnings = warningsOf(late.node);
 		const client = clientOf(late.node);
@@ -605,6 +606,70 @@ describe('a bootstrap client', function() {
 		await client.stop();
 
 		expect(await watch.open()).toEqual([]);
+	});
+});
+
+/** How long after its first vote a straddling staple's second is made (straddlingHistory). */
+const STRADDLE_MILLISECONDS = 200_000;
+
+/**
+ * A staple whose two votes were made STRADDLE_MILLISECONDS apart, and,
+ * between them, sends with more votes than one read holds, which the peer
+ * applies.
+ */
+async function straddlingHistory(peer: RunningLocalNode): Promise<{ readonly straddling: VoteStaple; readonly between: readonly VoteStaple[] }> {
+	const network = peer.network;
+	advanceClock(1000);
+	const from = requireAt(network.users, 1);
+	const block = await sendBlock({ from, to: RECIPIENT, amount: 1n, token: network.baseToken, previous: new ChainCursor(network.genesis).previous(from), network: network.network });
+	const between = await sendsFrom(network, 0, VOTES_PER_READ / WEIGHTS.length + 10);
+	advanceClock(STRADDLE_MILLISECONDS);
+	// Voted on now, as of when the block was made and that long after: no vote is issued in the future.
+	const straddling = await confirmedStaple([block], network.representatives, { voteDelays: [0, STRADDLE_MILLISECONDS] });
+	await addAll(peer.node, [straddling, ...between]);
+	return({ straddling, between });
+}
+
+describe('this node\'s bootstrap route', function() {
+	test('lists staples as the main network\'s representatives do: by when their votes were made, once for each read of votes holding one of them', async function() {
+		const peer = await representative();
+		const { straddling, between } = await straddlingHistory(peer);
+		const staples = [peer.network.genesis, straddling, ...between];
+		const straddlingKey = straddling.blocksHash.toString();
+		const [firstVote] = straddling.votes.map(function(vote): number {
+			return(vote.validityFrom.getTime());
+		}).sort();
+		const afterFirstVote = new Date((firstVote ?? 0) + 1);
+
+		const everything = await pageFrom(peer.apiURL, new Date(0));
+		const later = await pageFrom(peer.apiURL, afterFirstVote);
+
+		expect(everything).toEqual(listedByVotes(staples, new Date(0)));
+		// The read holding its first vote lists it, and so does the one holding its second.
+		expect(everything.filter(function(key): boolean {
+			return(key === straddlingKey);
+		})).toHaveLength(2);
+		expect(new Set(everything).size).toBe(staples.length);
+		// From after its first vote, genesis is left out, and the staple is listed once, for its second.
+		expect(later).toEqual(listedByVotes(staples, afterFirstVote));
+		expect(later).not.toContain(peer.network.genesis.blocksHash.toString());
+		expect(later.filter(function(key): boolean {
+			return(key === straddlingKey);
+		})).toHaveLength(1);
+	});
+
+	test('is learned by a client to key staples by votes, which it lists twice in one answer', async function() {
+		const peer = await representative();
+		// Made first, as making a node sets the clock back to when its network began.
+		const late = await joiner({ bootstrapFrom: [peer.apiURL] });
+		await straddlingHistory(peer);
+		const kv = new KVInternals.KVStorageProviderMemory();
+		const warnings = warningsOf(late.node);
+
+		expect([await clientOf(late.node, { kv }).update(), warnings()]).toEqual([{ complete: true }, []]);
+
+		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
+		expect((await new BootstrapCursors(kv).read(peer.apiURL))?.keying).toBe('votes');
 	});
 });
 

@@ -21,7 +21,7 @@ export type ConfirmedBlockRow = {
 	readonly staple: StapleKey;
 };
 
-/** A confirmed staple: its blocks in order, its votes, its bytes, its staple time, and when this node confirmed it. */
+/** A confirmed staple: its blocks in order, its votes, its bytes, its staple time, and where its votes sit in the catch-up order. */
 export type StapleRow = {
 	readonly blocksHash: VoteBlockHash;
 	readonly blocks: readonly BlockHashKey[];
@@ -30,9 +30,8 @@ export type StapleRow = {
 	readonly bytes: ArrayBuffer;
 	/** `VoteStaple.timestamp()` with no preferred representative, taken when the staple is stored. */
 	readonly stapleTime: Date;
-	readonly moment: Date;
-	/** Node-local confirmation order; breaks ties between equal moments. */
-	readonly sequence: bigint;
+	/** The node-local sequence of its first vote, which breaks ties between votes made in the same millisecond; its other votes take the next ones, in staple order. */
+	readonly firstVote: bigint;
 };
 
 export type BalanceRow = {

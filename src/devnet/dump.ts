@@ -6,6 +6,7 @@ import { PostgresKVStorage } from '../kv/postgres.js';
 import { LEDGER_CHECKSUM_KEY } from '../ledger/storage/base.js';
 import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
 import type { PostgresPoolSource } from '../ledger/storage/postgres/pool.js';
+import { eachStapleOnce } from '../util/each-staple-once.js';
 import { TRUSTED_ACCOUNT } from './genesis.js';
 
 const lib = KeetaNet.lib;
@@ -53,11 +54,11 @@ async function withNodeLedger<Result>(connectionString: string, use: (ledger: Le
 			storageDriver: storage,
 			ledgerWriteMode: 'read-only'
 		});
-		const staples = await ledger.getVoteStaplesAfter(EPOCH, STAPLE_LIMIT);
-		if (staples.length >= STAPLE_LIMIT) {
+		const listed = await ledger.getVoteStaplesAfter(EPOCH, STAPLE_LIMIT);
+		if (listed.length >= STAPLE_LIMIT) {
 			throw(new Error(`the node holds more staples than one read lists (${String(STAPLE_LIMIT)})`));
 		}
-		return(await use(ledger, staples));
+		return(await use(ledger, eachStapleOnce(listed)));
 	} finally {
 		await storage.destroy();
 	}

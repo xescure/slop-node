@@ -113,6 +113,33 @@ function staplesOfPage(page: PaginatedVotes): string[] {
 	}));
 }
 
+function validitiesOf(page: PaginatedVotes): number[] {
+	return(page.votes.map(function(vote): number {
+		return(vote.validityFrom.getTime());
+	}));
+}
+
+/** How long after the first staple's other votes its last is made (interleavedStaples). */
+const LATE_VOTE_MILLISECONDS = 3000;
+
+/**
+ * Two staples from different users whose votes interleave in time: two of
+ * the first's, made when it was, then the second's three, a second later,
+ * then the first's last, LATE_VOTE_MILLISECONDS after its others. The clock
+ * is moved past every vote, so that none is in the future.
+ */
+async function interleavedStaples(network: TestNetwork): Promise<{ readonly first: VoteStaple; readonly second: VoteStaple; readonly made: Date }> {
+	advanceClock(1000);
+	const made = new Date(Date.now());
+	const firstSender = requireAt(network.users, 0);
+	const first = await confirmedStaple([await sendBlock({ from: firstSender, previous: headOf(network.genesis, firstSender), to: requireAt(network.users, 2), amount: 1n, token: network.baseToken, network: network.network })], network.representatives, { voteDelays: [0, 0, LATE_VOTE_MILLISECONDS] });
+	advanceClock(1000);
+	const secondSender = requireAt(network.users, 1);
+	const second = await confirmedStaple([await sendBlock({ from: secondSender, previous: headOf(network.genesis, secondSender), to: requireAt(network.users, 2), amount: 1n, token: network.baseToken, network: network.network })], network.representatives);
+	advanceClock(2 * LATE_VOTE_MILLISECONDS);
+	return({ first, second, made });
+}
+
 async function addEach(ledger: Ledger, staples: readonly VoteStaple[]): Promise<void> {
 	for (const staple of staples) {
 		await ledger.add(staple);
@@ -655,44 +682,92 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(blocksHashesOf(await ledger.getHistory(null, spread.blocksHash, 1))).toEqual(blocksHashesOf([belowMean]));
 		});
 
-		test('getVotesAfter pages on staple boundaries', async function() {
+		test('getVotesAfter lists the votes of main staples made at or after the moment, by when each was made, in pages of whole votes', async function() {
 			const { network, storage, ledger } = await startNetwork();
-			const user = requireAt(network.users, 0);
-			const cursor = new ChainCursor(network.genesis);
 			await ledger.add(network.genesis);
-			const earlier = await confirmedStaple([cursor.append(await sendBlock({ from: user, previous: cursor.previous(user), to: requireAt(network.users, 1), amount: 1n, token: network.baseToken, network: network.network }))], network.representatives);
-			const later = await confirmedStaple([cursor.append(await sendBlock({ from: user, previous: cursor.previous(user), to: requireAt(network.users, 2), amount: 1n, token: network.baseToken, network: network.network }))], network.representatives);
-			advanceClock(1000);
-			const earlierMoment = new Date(Date.now());
-			await ledger.add(earlier);
-			advanceClock(1000);
-			const laterMoment = new Date(Date.now());
-			await ledger.add(later);
+			const { first, second, made } = await interleavedStaples(network);
+			// Applied in the other order: the order is the votes', not the ledger's.
+			await ledger.add(second);
+			await ledger.add(first);
+			// A pending vote of this node's own, made later still, is on the side ledger and not listed.
+			const other = requireAt(network.users, 2);
+			await ledger.vote([await sendBlock({ from: other, previous: headOf(network.genesis, other), to: requireAt(network.users, 0), amount: 1n, token: network.baseToken, network: network.network })]);
 
+			const firstKey = first.blocksHash.toString();
+			const secondKey = second.blocksHash.toString();
 			const pages = await readStorage(storage, async function(transaction) {
-				const first = await storage.getVotesAfter(transaction, earlierMoment, undefined, { maxVotesPerPage: 1 });
-				const second = await storage.getVotesAfter(transaction, earlierMoment, first.nextKey, { maxVotesPerPage: 1 });
+				const firstPage = await storage.getVotesAfter(transaction, made, undefined, { maxVotesPerPage: 2 });
+				const secondPage = await storage.getVotesAfter(transaction, made, firstPage.nextKey, { maxVotesPerPage: 2 });
+				const thirdPage = await storage.getVotesAfter(transaction, made, secondPage.nextKey, { maxVotesPerPage: 2 });
 				return({
-					first,
-					second,
-					fromLater: await storage.getVotesAfter(transaction, laterMoment, undefined, { maxVotesPerPage: 1 }),
-					afterAll: await storage.getVotesAfter(transaction, new Date(laterMoment.getTime() + 1), undefined, { maxVotesPerPage: 1 }),
+					firstPage,
+					secondPage,
+					thirdPage,
+					fromLater: await storage.getVotesAfter(transaction, new Date(made.getTime() + 1), undefined, { maxVotesPerPage: 200 }),
+					afterAll: await storage.getVotesAfter(transaction, new Date(made.getTime() + LATE_VOTE_MILLISECONDS + 1), undefined, { maxVotesPerPage: 1 }),
 					everything: await storage.getVotesAfter(transaction, GENESIS_MOMENT, undefined, { maxVotesPerPage: 200 })
 				});
 			});
-			expect(staplesOfPage(pages.first)).toEqual(Array<string>(3).fill(earlier.blocksHash.toString()));
-			expect(pages.first.nextKey).toBeTypeOf('string');
-			expect(staplesOfPage(pages.second)).toEqual(Array<string>(3).fill(later.blocksHash.toString()));
-			expect(Object.hasOwn(pages.second, 'nextKey')).toBe(false);
-			expect(staplesOfPage(pages.fromLater)).toEqual(Array<string>(3).fill(later.blocksHash.toString()));
+			expect(staplesOfPage(pages.firstPage)).toEqual([firstKey, firstKey]);
+			expect(pages.firstPage.nextKey).toBeTypeOf('string');
+			expect(staplesOfPage(pages.secondPage)).toEqual([secondKey, secondKey]);
+			expect(pages.secondPage.nextKey).toBeTypeOf('string');
+			expect(staplesOfPage(pages.thirdPage)).toEqual([secondKey, firstKey]);
+			expect(Object.hasOwn(pages.thirdPage, 'nextKey')).toBe(false);
+			expect(staplesOfPage(pages.fromLater)).toEqual([secondKey, secondKey, secondKey, firstKey]);
 			expect(Object.hasOwn(pages.fromLater, 'nextKey')).toBe(false);
 			expect(pages.afterAll.votes).toEqual([]);
 			expect(Object.hasOwn(pages.afterAll, 'nextKey')).toBe(false);
 			expect(pages.everything.votes).toHaveLength(network.genesis.votes.length + 6);
 			expect(Object.hasOwn(pages.everything, 'nextKey')).toBe(false);
+			expect(validitiesOf(pages.everything)).toEqual([...validitiesOf(pages.everything)].sort(function(left, right): number {
+				return(left - right);
+			}));
+		});
 
-			const staples = await ledger.getVoteStaplesAfter(GENESIS_MOMENT, 1000, { maxVotesPerPage: 1 });
-			expect(blocksHashesOf(staples)).toEqual(blocksHashesOf([network.genesis, earlier, later]));
+		test('upstream\'s catch-up lists a staple once for each read that holds one of its votes', async function() {
+			const { network, ledger } = await startNetwork();
+			await ledger.add(network.genesis);
+			const { first, second, made } = await interleavedStaples(network);
+			await ledger.add(first);
+			await ledger.add(second);
+
+			// Reads of two votes: the first's earliest two, then two of the second's, then the second's last and the first's last.
+			expect(blocksHashesOf(await ledger.getVoteStaplesAfter(made, 1000, { maxVotesPerPage: 2 }))).toEqual(blocksHashesOf([first, second, second, first]));
+			expect(blocksHashesOf(await ledger.getVoteStaplesAfter(made, 1000))).toEqual(blocksHashesOf([first, second]));
+			expect(blocksHashesOf(await ledger.getVoteStaplesAfter(made, 3, { maxVotesPerPage: 2 }))).toEqual(blocksHashesOf([first, second, second]));
+		});
+
+		test('votes made in the same millisecond page one at a time, none skipped or listed twice', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			await ledger.add(network.genesis);
+			advanceClock(1000);
+			const made = new Date(Date.now());
+			const staples = await Promise.all([0, 1].map(async function(index) {
+				const sender = requireAt(network.users, index);
+				return(await confirmedStaple([await sendBlock({ from: sender, previous: headOf(network.genesis, sender), to: requireAt(network.users, 2), amount: 1n, token: network.baseToken, network: network.network })], network.representatives));
+			}));
+			advanceClock(1000);
+			await addEach(ledger, staples);
+
+			const votes = await readStorage(storage, async function(transaction) {
+				const listed: string[] = [];
+				let nextKey: string | undefined;
+				do {
+					const page = await storage.getVotesAfter(transaction, made, nextKey, { maxVotesPerPage: 1 });
+					expect(page.votes.length).toBeLessThanOrEqual(1);
+					listed.push(...page.votes.map(function(vote): string {
+						return(`${lib.Vote.VoteBlocksHash.fromVote(vote).toString()}/${vote.$uid}`);
+					}));
+					nextKey = page.nextKey;
+				} while (nextKey !== undefined && listed.length <= 6);
+				return(listed);
+			});
+			expect([...votes].sort()).toEqual(staples.flatMap(function(staple): string[] {
+				return(staple.votes.map(function(vote): string {
+					return(`${staple.blocksHash.toString()}/${vote.$uid}`);
+				}));
+			}).sort());
 		});
 
 		test('a fractional page size is rounded up for votes and down for history', async function() {
@@ -700,12 +775,13 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			const user = requireAt(network.users, 0);
 			const cursor = new ChainCursor(network.genesis);
 			await ledger.add(network.genesis);
-			const earlier = await confirmedStaple([cursor.append(await sendBlock({ from: user, previous: cursor.previous(user), to: requireAt(network.users, 1), amount: 1n, token: network.baseToken, network: network.network }))], network.representatives);
-			const later = await confirmedStaple([cursor.append(await sendBlock({ from: user, previous: cursor.previous(user), to: requireAt(network.users, 2), amount: 1n, token: network.baseToken, network: network.network }))], network.representatives);
 			advanceClock(1000);
 			const earlierMoment = new Date(Date.now());
-			await ledger.add(earlier);
+			const earlier = await confirmedStaple([cursor.append(await sendBlock({ from: user, previous: cursor.previous(user), to: requireAt(network.users, 1), amount: 1n, token: network.baseToken, network: network.network }))], network.representatives);
 			advanceClock(1000);
+			const later = await confirmedStaple([cursor.append(await sendBlock({ from: user, previous: cursor.previous(user), to: requireAt(network.users, 2), amount: 1n, token: network.baseToken, network: network.network }))], network.representatives);
+			advanceClock(1000);
+			await ledger.add(earlier);
 			await ledger.add(later);
 
 			const pages = await readStorage(storage, async function(transaction) {
@@ -715,37 +791,40 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 					belowFour: await storage.getVotesAfter(transaction, earlierMoment, undefined, { maxVotesPerPage: 3.5 })
 				});
 			});
-			expect(staplesOfPage(pages.belowOneVote)).toEqual(Array<string>(3).fill(earlier.blocksHash.toString()));
+			expect(staplesOfPage(pages.belowOneVote)).toEqual([earlier.blocksHash.toString()]);
 			expect(pages.belowOneVote.nextKey).toBeTypeOf('string');
 			expect(staplesOfPage(pages.belowThree)).toEqual(Array<string>(3).fill(earlier.blocksHash.toString()));
 			expect(pages.belowThree.nextKey).toBeTypeOf('string');
-			expect(staplesOfPage(pages.belowFour)).toEqual([...Array<string>(3).fill(earlier.blocksHash.toString()), ...Array<string>(3).fill(later.blocksHash.toString())]);
-			expect(Object.hasOwn(pages.belowFour, 'nextKey')).toBe(false);
+			expect(staplesOfPage(pages.belowFour)).toEqual([...Array<string>(3).fill(earlier.blocksHash.toString()), later.blocksHash.toString()]);
+			expect(pages.belowFour.nextKey).toBeTypeOf('string');
 			expect(await ledger.getHistory(null, null, 1.5)).toHaveLength(1);
 		});
 
-		test('catch-up orders by the moment each staple was applied, then by application, even when the clock goes back', async function() {
+		test('catch-up orders by when each vote was made, not by when its staple was applied, even when the clock goes back', async function() {
 			const { network, ledger } = await startNetwork();
 			await ledger.add(network.genesis);
-			const [first, second, third] = await Promise.all([0, 1, 2].map(async function(index) {
+			const staples: VoteStaple[] = [];
+			for (const index of [0, 1, 2]) {
+				advanceClock(1000);
 				const sender = requireAt(network.users, index);
-				return(await confirmedStaple([await sendBlock({ from: sender, previous: headOf(network.genesis, sender), to: requireAt(network.users, (index + 1) % 3), amount: 1n, token: network.baseToken, network: network.network })], network.representatives));
-			}));
+				staples.push(await confirmedStaple([await sendBlock({ from: sender, previous: headOf(network.genesis, sender), to: requireAt(network.users, (index + 1) % 3), amount: 1n, token: network.baseToken, network: network.network })], network.representatives));
+			}
+			const [first, second, third] = staples;
 			if (first === undefined || second === undefined || third === undefined) {
 				throw(new Error('three staples expected'));
 			}
+			const secondMade = new Date(Math.min(...second.votes.map(function(vote): number {
+				return(vote.validityFrom.getTime());
+			})));
 
 			advanceClock(2000);
-			await ledger.add(first);
-			advanceClock(-1000);
-			const wentBack = new Date(Date.now());
-			await ledger.add(second);
 			await ledger.add(third);
+			advanceClock(-1000);
+			await ledger.add(first);
+			await ledger.add(second);
 
-			const fromBack = await ledger.getVoteStaplesAfter(wentBack, 1000, { maxVotesPerPage: 1 });
-			expect(blocksHashesOf(fromBack)).toEqual(blocksHashesOf([second, third, first]));
-			const afterBack = await ledger.getVoteStaplesAfter(new Date(wentBack.getTime() + 1), 1000, { maxVotesPerPage: 1 });
-			expect(blocksHashesOf(afterBack)).toEqual(blocksHashesOf([first]));
+			expect(blocksHashesOf(await ledger.getVoteStaplesAfter(secondMade, 1000, { maxVotesPerPage: 1 }))).toEqual(blocksHashesOf([second, second, second, third, third, third]));
+			expect(blocksHashesOf(await ledger.getVoteStaplesAfter(new Date(secondMade.getTime() + 1), 1000))).toEqual(blocksHashesOf([third]));
 		});
 
 		test('a confirmed staple reads back as the bytes it was received as, by its blocks hash, by its blocks and in catch-up order', async function() {

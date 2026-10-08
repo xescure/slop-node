@@ -10,6 +10,7 @@ import type { TestDatabase } from '../../../testing/postgres.js';
 import { MemoryLedgerStorage } from '../memory/driver.js';
 import { DEFAULT_WEIGHTS, GENESIS_MOMENT, headOf, requireAt } from '../suite/support.js';
 import type { TransactionOptions } from '../base.js';
+import { catchUpVotes, catchUpVotesAfter } from './confirmed-statements.js';
 import { PostgresLedgerStorage } from './driver.js';
 import type { PostgresTransaction } from './driver.js';
 import type { PostgresPoolSource } from './pool.js';
@@ -386,7 +387,7 @@ describe('the Postgres driver', function() {
 		await storage.abortTransaction(transaction);
 
 		const versions = await database.pool().query<{ version: number }>('SELECT version FROM schema_version ORDER BY version');
-		expect(versions.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
+		expect(versions.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
 	});
 
 	test('destroy ends a pool the driver opened and leaves an injected pool to its owner', async function() {
@@ -493,6 +494,26 @@ describe('the Postgres driver', function() {
 		expect(keysOf(owners.any)).toEqual([owner.publicKeyString.get()]);
 		expect(keysOf(owners.first)).toEqual([owner.publicKeyString.get()]);
 		expect(owners.admin).toEqual([]);
+	});
+
+	test.each([
+		{ name: 'from a moment', text: catchUpVotes.text, parameters: [GENESIS_MOMENT, 201] },
+		{ name: 'after a key', text: catchUpVotesAfter.text, parameters: [GENESIS_MOMENT, GENESIS_MOMENT, '7', 201] }
+	])('a catch-up page $name reads main votes in order from votes_catch_up, without sorting them', async function({ text, parameters }) {
+		const database = await ledgerDatabase();
+		await genesisOn(database);
+		const client = await database.pool().connect();
+		try {
+			// The test tables are too small for the planner to prefer an index of its own accord.
+			await client.query('SET enable_seqscan = off');
+			const plan = (await client.query<{ 'QUERY PLAN': string }>(`EXPLAIN ${text}`, parameters)).rows.map(function(row): string {
+				return(row['QUERY PLAN']);
+			}).join('\n');
+			expect(plan).toContain('Index Scan using votes_catch_up on votes');
+			expect(plan).not.toContain('Sort');
+		} finally {
+			client.release();
+		}
 	});
 
 	test('a staple stored before its bytes were kept is rebuilt from its votes and blocks', async function() {

@@ -214,7 +214,7 @@ Tested by:
 
 **Postgres.** Each failed statement's error is mapped where it is raised. SQLSTATE `40001` (serialization failure) and `40P01` (deadlock) become a retryable `LEDGER_TRANSACTION_ABORTED`, and so does `23505` (unique violation) on the constraints two processes can race to: `staples_pkey`, `blocks_pkey`, `blocks_main_successor`, `votes_main`, `votes_side` and `idempotent_keys_main`. A unique violation on any other constraint is a fault, and retrying would only repeat it. Account interning is absent from the list: its insert skips existing rows, and under `SERIALIZABLE` a row it cannot see yet fails with `40001`. `40001` at `COMMIT` means nothing was committed and is retryable; a connection lost during `COMMIT` leaves the outcome unknown and is not (D17). A connection lost on any statement before `COMMIT` is retryable as well, because Postgres rolls back the open transaction of a session that ends, and `COMMIT` was never sent: the statement fails with SQLSTATE `57P01`, `57P02` or `25P03` (the server ended the session, the last for idling in its transaction) or a class `08` code (connection exception), or it fails after `pg` has reported the connection lost. Tested by the cases of `src/ledger/storage/postgres/errors.test.ts`, by `src/ledger/storage/postgres/driver.test.ts: "a connection lost before commit is retried by Ledger.run"`, and by `src/ledger/storage/postgres/driver.test.ts: "a broken connection at commit is not retried"`, where the next statement after the loss is `COMMIT`. Under `READ COMMITTED`, by contrast, both competing votes would pass their check and be stored, and an insert that skips an account row another process has just committed could not read that row back in the same statement.
 
-Under real concurrency, commit order and transaction-moment order can differ: a transaction that began earlier can commit later. A staple can therefore appear with a confirmation moment earlier than staples that are already visible. Readers that page by moment across transactions must allow for this. That a driver stores and orders such a staple by its own moment is tested by `confirmed.ts: "catch-up orders by the moment each staple was applied, then by application, even when the clock goes back"`; two transactions committing out of moment order is untested.
+Under real concurrency, commit order and transaction-moment order can differ: a transaction that began earlier can commit later. Whatever the order, a staple is applied when it arrives, and its votes may have been made long before: the catch-up feed lists it by its votes (D8), behind votes of staples that are already visible. Readers that page the catch-up feed across transactions must allow for this. That a driver lists a staple by its votes, whenever it applied it, is tested by `confirmed.ts: "catch-up orders by when each vote was made, not by when its staple was applied, even when the clock goes back"`; two transactions committing out of order is untested.
 
 ### 3.6 Serial numbers
 
@@ -740,17 +740,23 @@ getAccountRep: (transaction: any, account: GenericAccount | string) => Promise<A
 getVotesAfter: (transaction: any, moment: Date, startKey?: string, options?: GetVotesAfterOptions) => Promise<PaginatedVotes>;
 ```
 
-- **Semantics.** The votes of main staples confirmed at or after `moment`, page by page (D8, catch-up order). The confirmation moment is the transaction moment of the transaction that applied the staple. `options.bloomFilter` and `options.timeout` may be ignored.
+- **Semantics.** The votes of main staples made at or after `moment`, those whose `validityFrom` is, page by page (D8, catch-up order). `options.bloomFilter` and `options.timeout` may be ignored.
 - **Ordering and paging.**
-  - Staples ascend in confirmation order: moment, then the node-local sequence.
-  - A page ends only between staples, so a page may exceed `maxVotesPerPage`, and always holds at least one whole staple when any remains. The default page size is 200, the largest upstream requests. Upstream asks for 32 times its remaining limit [Keeta TS] index.js:69653-69656, which is not an integer when the limit is not, so a driver treats a fractional `maxVotesPerPage` as the next whole number: 32.96 votes means 33.
-  - `nextKey` is an opaque string that resumes after the page's last staple. It is omitted on the last page, because upstream's loop stops only when it is `undefined` [Keeta TS] index.js:69695-69699.
+  - Votes ascend by `validityFrom`, then by a node-local sequence that breaks ties within a millisecond.
+  - A page holds at most `maxVotesPerPage` votes, and at least one while any remains. The default page size is 200, the largest upstream requests. Upstream asks for 32 times its remaining limit [Keeta TS] index.js:69653-69656, which is not an integer when the limit is not, so a driver treats a fractional `maxVotesPerPage` as the next whole number: 32.96 votes means 33.
+  - A page ends between votes, wherever they fall in their staples, so a staple whose votes two pages hold is listed by both (D8).
+  - `nextKey` is an opaque string that resumes after the page's last vote. It is omitted on the last page, because upstream's loop stops only when it is `undefined` [Keeta TS] index.js:69695-69699.
   - The key is used only within one read transaction.
-- **Selector.** Main only.
+- **Selector.** Main only: a side vote is never listed.
 - **Errors.** A malformed `startKey` throws, which `evaluateError` turns into `LEDGER_OTHER`. Untested.
-- **Tested by** `confirmed.ts: "a fractional page size is rounded up for votes and down for history"` and `confirmed.ts: "getVotesAfter pages on staple boundaries"`, which also runs upstream's `getVoteStaplesAfter` loop over the pages.
+- **Tested by**:
+  - `confirmed.ts: "getVotesAfter lists the votes of main staples made at or after the moment, by when each was made, in pages of whole votes"`, which also shows a side vote left out
+  - `confirmed.ts: "upstream's catch-up lists a staple once for each read that holds one of its votes"`, which runs upstream's `getVoteStaplesAfter` loop over the pages
+  - `confirmed.ts: "votes made in the same millisecond page one at a time, none skipped or listed twice"`
+  - `confirmed.ts: "a fractional page size is rounded up for votes and down for history"`
+  - `confirmed.ts: "catch-up orders by when each vote was made, not by when its staple was applied, even when the clock goes back"`
 - **Upstream.** [Keeta TS] index.js:69633-69702. The moment comparison is "on or after" [Keeta TS] index.js:69659-69666.
-- **Postgres.** `staples` with `moment >= $moment`, `ORDER BY moment, sequence`, through `staples_catch_up` (`moment`, `sequence`); a page after a key continues with `(moment, sequence) > (key)`. `sequence` is an identity column, so it is node-local and never reused. The query fetches `max(ceil(maxVotesPerPage), 1) + 1` staples with their main vote counts; the page takes staples until it holds `maxVotesPerPage` votes, and at least one staple, and the key of its last staple is returned only when a fetched staple was left over. Votes are read by `blocks_hash` (`votes_main`) in row ID order. The key is the last staple's moment in milliseconds and its sequence, in decimal, joined by `:` (`src/ledger/storage/paging.ts`).
+- **Postgres.** `votes` with `ledger = 'main'` and `validity_from >= $moment`, `ORDER BY validity_from, id`, through `votes_catch_up` (`validity_from`, `id`, main rows only; schema version 4); a page after a key continues with `(validity_from, id) > (key)`. `id` is an identity column, so it is node-local and never reused, and a staple's votes are inserted in staple order. The query fetches `max(ceil(maxVotesPerPage), 1) + 1` votes; the page takes all but the last, and the key of its last vote is returned only when a fetched vote was left over. The key is the last vote's `validity_from` in milliseconds and its `id`, in decimal, joined by `:` (`src/ledger/storage/paging.ts`). Tested by `src/ledger/storage/postgres/driver.test.ts: "a catch-up page $name reads main votes in order from votes_catch_up, without sorting them"`, from a moment and after a key.
 
 ### `getVoteStaplesFromBlockHash`
 
@@ -880,7 +886,7 @@ Writes everything that one confirmed staple changes, all of it or none of it (se
 
 - **`staple`, `blockHeights`, `moment`.**
   - Store the staple under its `blocksHash`, with its block order, every vote keyed by `$uid`, and its bytes, `VoteStaple.toBytes()` without an argument (section 1, staple bytes). Votes are kept per staple: a vote stored once globally could be overwritten by an equivocating representative's vote with the same `$uid`.
-  - Stamp the staple with `moment` and a node-local sequence number that is never reused.
+  - Give each of its votes, in staple order, a node-local sequence number that is never reused: the tie-break of the catch-up key (D8). `moment`, when this node applied the staple, orders nothing.
   - Store the staple with its history key: its staple time and its `blocksHash` (D8).
   - Store each block with its height, record it as the successor of its `previous` (opening sentinel included), and make it the account's head when its height exceeds the current head's.
   - Refuse a block already on the main ledger with `LEDGER_BLOCK_ALREADY_EXISTS`.
@@ -910,7 +916,7 @@ Writes everything that one confirmed staple changes, all of it or none of it (se
 3. Intern every account the change names, in public-key order, inserting missing rows and skipping existing ones.
 4. Insert the `staples` row: `blocks_hash`, `staple_time` (`VoteStaple.timestamp()`), `moment` (`change.moment`), `bytes` (`VoteStaple.toBytes()`) and the next `sequence`.
 5. Insert the blocks as main rows with their staple and position. A side copy is turned into the main row in place (`ON CONFLICT (hash) DO UPDATE ... WHERE ledger = 'side'`); a hash already on main returns no row, and fewer rows than blocks is `LEDGER_BLOCK_ALREADY_EXISTS`. Delete the blocks' side claims, insert their `chain` rows, and raise each account's `heads` row only when the new height is greater.
-6. Delete side votes with the staple's `uid`s, then insert the staple's votes with `ledger = 'main'` in staple order.
+6. Delete side votes with the staple's `uid`s, then insert the staple's votes with `ledger = 'main'` in staple order, so that their row IDs, the catch-up key's sequence, follow it.
 7. Add each balance, supply and weight delta to its row, creating it at the delta (`ON CONFLICT ... DO UPDATE SET x = x + delta`); never clamp.
 8. Upsert delegations; delete or upsert ACL rows by `acls_scope`; merge account info with `COALESCE`, clearing the quorum only when the update carries it as `null`; add or delete certificates; insert the main idempotent keys.
 9. Set `first_staple` on accounts that have none, and insert one `history` row per touched account with the staple's time.
@@ -1138,7 +1144,7 @@ For `getVoteStaples`, `getVotesFromMultiplePrevious` and `getBlockFromPrevious`,
 
 ### D8. Ordering and paging
 
-Main staples have two order keys. History is ordered by the staple itself; the catch-up feed is ordered by when this node applied each staple.
+Main staples are ordered two ways. History is ordered by the staple itself; the catch-up feed by its votes, by when each was made.
 
 #### History order
 
@@ -1163,15 +1169,26 @@ The history key of a main staple is the ordered pair (staple time, `blocksHash`)
 
 #### Catch-up order
 
-The catch-up key of a main staple is the moment this node applied it, which is the transaction moment, followed by a node-local sequence number that breaks ties and is never reused.
+The catch-up key is a main vote's: the moment the vote was made, its `validityFrom`, followed by a node-local sequence number that breaks ties within a millisecond and is never reused. A staple has one key per vote.
 
-- `getVotesAfter` ascends by this key and includes staples whose moment is at or after the requested moment. Pages break only between staples. `nextKey` is omitted on the last page. (provisional: confirmed by the live parity checks)
+- `getVotesAfter` lists the votes of main staples made at or after the requested moment, ascending by this key, in pages of whole votes: at most the page size asked for, rounded up, and at least one while any remains. `nextKey` is omitted on the last page.
+- Upstream's `getVoteStaplesAfter` takes each page as one read: it lists the staples holding the read's votes, each once, in the order `getVoteStaplesFromBlockHash` returns them, the order of the votes, and leaves out those the filter names, until its limit [Keeta TS] index.js:69633-69702. So a staple is listed once for each read that holds one of its votes, and again by a later read that holds another. A read holds at most 200 votes [Keeta TS] index.js:69653-69656, and the loop stops for time only between reads [Keeta TS] index.js:69641-69647.
+
+So a bootstrap page from a moment lists only staples with a vote made at or after it, reads votes a bounded number at a time, and runs out of time only between reads.
 
 **Reason.**
-- Upstream's caller stops paging only when `nextKey` is `undefined`, and removes duplicates only within one page. A staple split across pages would be returned twice [Keeta TS] index.js:69633-69702.
-- The moment a staple entered this node orders a catch-up feed by what this node can serve.
+- Observed on main network representatives: a representative keys each vote at its own `validityFrom`, so that a page from a later moment leaves out exactly the staples whose votes all precede it; it reads votes a few at a time, about 15 to 25 on recent pages; it lists a staple once for each read that holds one of its votes, about 15% of a page being a staple listed again; it lists the staples of one read in no fixed order; and it runs out of time only between reads. A catch-up from this node and one from a representative then read alike.
+- The votes say when a staple was made, the same on every node; when this node applied it does not. A staple applied late, as during a bootstrap, is listed where the representatives list it.
+- The sequence makes the key a total order, so a page boundary falls between two definite votes, even within a millisecond.
+- Pages end between votes, not staples: upstream's loop removes duplicates only within one read [Keeta TS] index.js:69668-69674, and a staple listed again by a later read is what a representative lists too.
+- Not fixed by the observations, and not to be relied on by a reader: how many votes a read holds, below 200, and the order of the staples within a read. This node reads as many votes as upstream asks for and lists a read's staples in the order of their votes.
 
-**Tested by** `confirmed.ts: "getVotesAfter pages on staple boundaries"`, and `confirmed.ts: "catch-up orders by the moment each staple was applied, then by application, even when the clock goes back"`, where a staple is applied with a moment earlier than one already stored.
+**Tested by**:
+- `confirmed.ts: "getVotesAfter lists the votes of main staples made at or after the moment, by when each was made, in pages of whole votes"`
+- `confirmed.ts: "upstream's catch-up lists a staple once for each read that holds one of its votes"`
+- `confirmed.ts: "catch-up orders by when each vote was made, not by when its staple was applied, even when the clock goes back"`, where a staple is applied after a later one and with the clock set back
+- `src/node/bootstrap.test.ts: "lists staples as the main network's representatives do: by when their votes were made, once for each read of votes holding one of them"`, through the bootstrap route, with a staple whose votes two reads hold
+- `src/node/bootstrap-mainnet.test.ts: "applies every staple of the first page its first representative serves, in the order it serves them"`, which serves a representative's first page again from a node that applied it and finds the same staples
 
 ### D9. Balances and weights are stored values
 
@@ -1357,7 +1374,8 @@ The Postgres driver keeps the ledger, and the Postgres key-value store the node'
 - **Main and side.** A row that can exist on both ledgers carries `ledger` (`'main'` or `'side'`): `blocks`, `votes` and `idempotent_keys`. A block is one row, so it is never on both ledgers: promotion turns a side row into the main row in place. Main votes are unique per staple and `uid` (`votes_main`); side votes per `uid` (`votes_side`). A side vote lists its blocks in `vote_blocks`, which outlives the side copies of those blocks.
 - **Accounts.** Every account the ledger names is interned once in `accounts`, with its public key spelled as upstream prints it and its key type, and other tables refer to it by its `bigint` ID. IDs are local to one database.
 - **Types.** Hashes are `hash32`, a `bytea` of exactly 32 bytes. Balances, supplies and weights are `amount`, an integer-valued `numeric` without bounds or a sign check (D9). Permission sets are two `permission_bits` columns, base and external: integer-valued `numeric`, since the flag offsets exceed 63 bits and a decoded set may be negative. Section 6.5 states the format of every column whose content is not plain SQL data.
-- **Staples.** `staples` holds each main staple under its `blocksHash`, with its history key (`staple_time`), its catch-up key (`moment`, `sequence`) and, from schema version 3, its bytes as received (`bytes`). `sequence` is an identity column, local to the database.
+- **Staples.** `staples` holds each main staple under its `blocksHash`, with its history key (`staple_time`), when this node applied it (`moment`, and `sequence`, an identity column local to the database), which orders nothing from schema version 4, and, from schema version 3, its bytes as received (`bytes`).
+- **Catch-up.** From schema version 4, `votes_catch_up` orders the main votes by their catch-up key (D8): `validity_from`, then `id`, an identity column local to the database.
 - **Deferral.** `deferred_staples` holds a deferred staple's bytes; `deferred_waits` the blocks it waits on; `deferred_blocks` the previous of each of its blocks, for the check that it can never apply.
 - **Serials.** The sequence `vote_serials` (section 3.6).
 
@@ -1365,8 +1383,8 @@ The Postgres driver keeps the ledger, and the Postgres key-value store the node'
 
 - Every moment the schema stores comes from the caller: the transaction moment, a vote's validity, a staple's time, or, for `schema_version.applied_at`, the clock of the process that migrates. Each is stored as a `timestamptz`, which holds a JavaScript millisecond time exactly and reaches far beyond the year 3027 that a permanent vote's validity reaches.
 - No statement reads the database clock: not `now()`, `CURRENT_TIMESTAMP`, `CURRENT_TIME`, `CURRENT_DATE`, `LOCALTIMESTAMP`, `LOCALTIME`, `clock_timestamp()`, `statement_timestamp()`, `transaction_timestamp()`, `timeofday()` or `age()`, nor the inputs `'now'`, `'today'`, `'tomorrow'` and `'yesterday'` in any quoting. The database's clock is not the node's, and a moment taken from it would make one transaction's expiry decisions disagree with the moment `Ledger` fixed for the attempt.
-- **Whole milliseconds.** Every `timestamptz` column the migrations create has the domain `timestamptz_ms`, which refuses a moment that is not a whole number of milliseconds: `CHECK (VALUE = date_trunc('milliseconds', VALUE))`. Every moment the node writes is a JavaScript `Date`, which is whole milliseconds; another implementation must truncate, or refuse, a finer moment before writing it. The rule protects the keys built from moments: the catch-up page key carries the moment in milliseconds (`src/ledger/storage/paging.ts`), so a stored moment with a fraction would compare after the key of its own page, and the next page would return the same staple again, forever. `schema_version.applied_at`, which no key reads, is a plain `timestamptz`. Tested by `src/ledger/storage/postgres/schema.test.ts`.
-- Moments need not increase. A transaction that began earlier can commit later (section 3.5), and the node's clock can step back. Order keys therefore break ties with the node-local `sequence`, never with "the latest moment".
+- **Whole milliseconds.** Every `timestamptz` column the migrations create has the domain `timestamptz_ms`, which refuses a moment that is not a whole number of milliseconds: `CHECK (VALUE = date_trunc('milliseconds', VALUE))`. Every moment the node writes is a JavaScript `Date`, which is whole milliseconds; another implementation must truncate, or refuse, a finer moment before writing it. The rule protects the keys built from moments: the catch-up page key carries a vote's `validity_from` in milliseconds (`src/ledger/storage/paging.ts`), so a stored moment with a fraction would compare after the key of its own page, and the next page would return the same vote again, forever. `schema_version.applied_at`, which no key reads, is a plain `timestamptz`. Tested by `src/ledger/storage/postgres/schema.test.ts`.
+- Moments need not increase. A transaction that began earlier can commit later (section 3.5), the node's clock can step back, and votes are made long before some staples arrive. Order keys therefore break ties with a node-local sequence, `votes.id` for the catch-up key, never with "the latest moment".
 
 Tested by `src/ledger/storage/sql-clock.test.ts: "no SQL uses the database clock"`, which scans every file in `schema/migrations/`, `src/ledger/storage/postgres/` and `src/kv/` and refuses escape strings there, since they can spell any of these, and `src/ledger/storage/sql-clock.test.ts: "the scan recognizes every form of the database clock"`. The vote case C7 (`conformance/vote-cases/clock.json`), replayed on Postgres, stores a permanent vote valid until 3027.
 

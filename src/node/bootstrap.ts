@@ -4,6 +4,7 @@ import type { BootstrapClient as DeclaredBootstrapClient, BootstrapConfig } from
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { KVInternals } from '../upstream/internals.js';
 import { assertNever } from '../util/assert-never.js';
+import { eachStapleOnce } from '../util/each-staple-once.js';
 import type { AssertNever } from '../util/assert-never.js';
 import type { ClassSurface } from '../util/class-surface.js';
 import { BootstrapCursors, KVRetryStore } from './bootstrap-cursors.js';
@@ -314,7 +315,7 @@ export class BootstrapClient {
 				if (queued.length >= count) {
 					return(queued);
 				}
-				return([...queued, ...await this.#node.ledger.getVoteStaplesAfter(since, count - queued.length)]);
+				return([...queued, ...eachStapleOnce(await this.#node.ledger.getVoteStaplesAfter(since, count - queued.length))]);
 			},
 			add: async (staple, use) => {
 				this.#stopping.signal.throwIfAborted();

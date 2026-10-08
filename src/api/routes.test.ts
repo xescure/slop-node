@@ -410,7 +410,7 @@ describe('requests a representative answers without a failure', function() {
 	/*
 	 * Mainnet answered limit=1.5 with two staples (node-bootstrap-votes-fractional-limit.json),
 	 * so a fractional limit rounds up. Only the count is compared: which
-	 * staples come first follows the moments the representative added them at.
+	 * staples come first follows when their votes were made.
 	 */
 	test('limit=1.5 holds as many staples as mainnet\'s capture', async function() {
 		const capture = readCapture('node-bootstrap-votes-fractional-limit.json');
