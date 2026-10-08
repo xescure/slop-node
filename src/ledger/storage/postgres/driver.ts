@@ -49,7 +49,9 @@ import {
 	mainIdempotentHolder,
 	mainIdempotentKeys,
 	mainLedgerCounts,
+	mainBlockStaples,
 	mainStapleBlocks,
+	mainStapleBytes,
 	mainStapleVotes,
 	mainSuccessor,
 	mainSuccessorVotes,
@@ -535,14 +537,30 @@ function holderOf(rows: readonly { block_hash: Buffer }[]): BlockHash | null {
 	return(toBlockHash(row.block_hash));
 }
 
+/*
+ * A staple is read back as the bytes it was received as, which are the
+ * bytes the network names it by (schema/migrations/0003_staple_bytes.sql);
+ * only one stored before those were kept is rebuilt from its rows.
+ */
 async function mainStaples(transaction: PostgresTransaction, keys: Buffer[]): Promise<Map<string, VoteStaple>> {
-	const blocksByStaple = groupBy(await transaction.run(mainStapleBlocks, [keys]), function(row) {
+	const staples = new Map<string, VoteStaple>();
+	const rebuilt: Buffer[] = [];
+	for (const row of await transaction.run(mainStapleBytes, [keys])) {
+		if (row.bytes === null) {
+			rebuilt.push(row.blocks_hash);
+		} else {
+			staples.set(hexOf(row.blocks_hash), new lib.Vote.Staple(row.bytes));
+		}
+	}
+	if (rebuilt.length === 0) {
+		return(staples);
+	}
+	const blocksByStaple = groupBy(await transaction.run(mainStapleBlocks, [rebuilt]), function(row) {
 		return(hexOf(row.staple));
 	});
-	const votesByStaple = groupBy(await transaction.run(mainStapleVotes, [keys]), function(row) {
+	const votesByStaple = groupBy(await transaction.run(mainStapleVotes, [rebuilt]), function(row) {
 		return(hexOf(row.blocks_hash));
 	});
-	const staples = new Map<string, VoteStaple>();
 	for (const [key, blockRows] of blocksByStaple) {
 		const voteRows = votesByStaple.get(key);
 		if (voteRows === undefined) {
@@ -888,6 +906,21 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 		return(staples);
 	}
 
+	protected async listMainStaplesHolding(transaction: PostgresTransaction, blocks: readonly BlockHash[]): Promise<readonly VoteBlockHash[]> {
+		const stapleOf = new Map<string, Buffer>();
+		for (const row of await transaction.run(mainBlockStaples, [blocks.map(hashBytes)])) {
+			stapleOf.set(hexOf(row.hash), row.staple);
+		}
+		const holding = new Map<string, VoteBlockHash>();
+		for (const block of blocks) {
+			const staple = stapleOf.get(hexOf(hashBytes(block)));
+			if (staple !== undefined && !holding.has(hexOf(staple))) {
+				holding.set(hexOf(staple), new lib.Vote.VoteBlocksHash(staple));
+			}
+		}
+		return([...holding.values()]);
+	}
+
 	/*
 	 * Newest first by (staple time, blocks hash). The start is exclusive, so a
 	 * caller can pass the last staple of one page to get the next; a start
@@ -1130,7 +1163,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 			await this.#assertExtendsMainChains(transaction, change);
 			const ids = await this.#intern(transaction, accountsNamedBy(change));
 			const blocksHash = hashBytes(change.staple.blocksHash);
-			await transaction.run(insertStaple, [blocksHash, change.staple.timestamp(), change.moment]);
+			await transaction.run(insertStaple, [blocksHash, change.staple.timestamp(), change.moment, Buffer.from(change.staple.toBytes())]);
 			await this.#writeBlocks(transaction, change, ids, blocksHash);
 			await this.#writeVotes(transaction, change, ids, blocksHash);
 			await this.#writeAmounts(transaction, change, ids);

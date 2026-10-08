@@ -1,0 +1,14 @@
+-- Schema version 3: each main staple's bytes, as the node received them.
+--
+-- A staple's compressed bytes are not a function of its votes and blocks: the
+-- zlib stream depends on the implementation that compressed it, and a staple
+-- decoded from compressed bytes returns exactly those bytes
+-- [Keeta TS] index.js:80976-80983, 81016-81027. A representative leaves out of
+-- a bootstrap page each staple whose bytes, as it holds them, the requester's
+-- filter names [Keeta TS] index.js:69686-69690, so a node names its staples by
+-- the bytes it received, which are the bytes the network holds, and serves
+-- those.
+--
+-- NULL for a staple stored before this version, whose bytes were not kept; it
+-- is rebuilt from its votes and blocks.
+ALTER TABLE staples ADD COLUMN bytes bytea;

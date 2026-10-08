@@ -148,6 +148,14 @@ export const mainSuccessorVotes: Statement<[Buffer[], string | null], VoteColumn
 		AND ($2::text IS NULL OR issuer.public_key = $2::text)
 	ORDER BY votes.id`);
 
+/** The bytes each staple was received as, NULL for one stored before they were kept. */
+export const mainStapleBytes: Statement<[Buffer[]], { blocks_hash: Buffer; bytes: Buffer | null }> = statement('main_staple_bytes', `
+	SELECT blocks_hash, bytes FROM staples WHERE blocks_hash = ANY($1::bytea[])`);
+
+/** The staple holding each main block, the blocks named by no main row left out. */
+export const mainBlockStaples: Statement<[Buffer[]], { hash: Buffer; staple: Buffer }> = statement('main_block_staples', `
+	SELECT hash, staple FROM blocks WHERE ledger = 'main' AND hash = ANY($1::bytea[])`);
+
 export const mainStapleBlocks: Statement<[Buffer[]], { staple: Buffer; bytes: Buffer }> = statement('main_staple_blocks', `
 	SELECT staple, bytes FROM blocks
 	WHERE ledger = 'main' AND staple = ANY($1::bytea[])
@@ -242,8 +250,8 @@ export const mainBlocksOrSuccessors: Statement<[Buffer[], Buffer[]], { hash: Buf
 	SELECT hash, previous FROM blocks
 	WHERE ledger = 'main' AND (hash = ANY($1::bytea[]) OR previous = ANY($2::bytea[]))`);
 
-export const insertStaple: Statement<[Buffer, Date, Date]> = statement('insert_staple', `
-	INSERT INTO staples (blocks_hash, staple_time, moment) VALUES ($1, $2, $3)`);
+export const insertStaple: Statement<[Buffer, Date, Date, Buffer]> = statement('insert_staple', `
+	INSERT INTO staples (blocks_hash, staple_time, moment, bytes) VALUES ($1, $2, $3, $4)`);
 
 // A side copy of a block becomes the main block in place; a main block is never replaced.
 export const insertMainBlocks: Statement<[Buffer[], AccountID[], Buffer[], number[], Buffer[], number[], Buffer], { hash: Buffer }> = statement('insert_main_blocks', `

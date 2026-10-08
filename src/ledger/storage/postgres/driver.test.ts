@@ -386,7 +386,7 @@ describe('the Postgres driver', function() {
 		await storage.abortTransaction(transaction);
 
 		const versions = await database.pool().query<{ version: number }>('SELECT version FROM schema_version ORDER BY version');
-		expect(versions.rows).toEqual([{ version: 1 }, { version: 2 }]);
+		expect(versions.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
 	});
 
 	test('destroy ends a pool the driver opened and leaves an injected pool to its owner', async function() {
@@ -493,6 +493,19 @@ describe('the Postgres driver', function() {
 		expect(keysOf(owners.any)).toEqual([owner.publicKeyString.get()]);
 		expect(keysOf(owners.first)).toEqual([owner.publicKeyString.get()]);
 		expect(owners.admin).toEqual([]);
+	});
+
+	test('a staple stored before its bytes were kept is rebuilt from its votes and blocks', async function() {
+		const database = await ledgerDatabase();
+		const { storage, network } = await genesisOn(database);
+		await database.pool().query('UPDATE staples SET bytes = NULL');
+
+		const staples = await readOn(storage, function(transaction) {
+			return(storage.getVoteStaples(transaction, [network.genesis.blocksHash], 'main'));
+		});
+
+		const rebuilt = lib.Vote.Staple.fromVotesAndBlocks(network.genesis.votes, network.genesis.blocks);
+		expect(Buffer.from(staples.get(network.genesis.blocksHash)?.toBytes() ?? new ArrayBuffer(0))).toEqual(Buffer.from(rebuilt.toBytes()));
 	});
 
 	test('a stored vote whose permanence disagrees with its bytes is an integrity error', async function() {

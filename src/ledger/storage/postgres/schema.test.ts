@@ -105,6 +105,8 @@ describe('the Postgres schema', function() {
 		for (const row of accounts.rows) {
 			expect(row.key_type, row.public_key).toBe(lib.Account.fromPublicKeyString(row.public_key).keyType);
 		}
+		const staples = await pool.query<{ bytes: Buffer }>('SELECT bytes FROM staples');
+		expect(staples.rows).toEqual([{ bytes: Buffer.from(network.genesis.toBytes()) }]);
 		const stapleBytes = Buffer.from(network.genesis.toBytes());
 		expect(stapleBytes.readUInt8(0) & 0x0f).toBe(ZLIB_DEFLATE_METHOD);
 		expect(stapleBytes.readUInt16BE(0) % 31).toBe(0);

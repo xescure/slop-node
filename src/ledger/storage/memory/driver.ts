@@ -528,12 +528,24 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 				if (row === undefined) {
 					return(null);
 				}
-				return(this.#voteStapleOf(overlay, row));
+				return(this.#voteStapleOf(row));
 			}, () => {
 				return(this.#sideStaple(overlay, key, transaction.moment));
 			}));
 		}
 		return(staples);
+	}
+
+	protected async listMainStaplesHolding(transaction: MemoryTransaction, blocks: readonly BlockHash[]): Promise<readonly VoteBlockHash[]> {
+		const overlay = await transaction.view();
+		const holding = new Map<StapleKey, VoteBlockHash>();
+		for (const block of blocks) {
+			const row = overlay.blocks.get(toBlockHashKey(block));
+			if (row !== undefined && !holding.has(row.staple)) {
+				holding.set(row.staple, this.#confirmedStaple(overlay, row.staple).blocksHash);
+			}
+		}
+		return([...holding.values()]);
 	}
 
 	/*
@@ -993,11 +1005,9 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		return(votes);
 	}
 
-	#voteStapleOf(overlay: LedgerOverlay, row: StapleRow): VoteStaple {
-		const blocks = row.blocks.map((hash): Block => {
-			return(this.#confirmedBlock(overlay, hash));
-		});
-		return(lib.Vote.Staple.fromVotesAndBlocks(Array.from(row.votes.values()), blocks));
+	/** The staple as the bytes it was received as, which the network names it by (schema/migrations/0003_staple_bytes.sql). */
+	#voteStapleOf(row: StapleRow): VoteStaple {
+		return(new lib.Vote.Staple(row.bytes));
 	}
 
 	#historyOf(overlay: LedgerOverlay, account: GenericAccount | null): StapleRow[] {
@@ -1089,6 +1099,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 				return(toBlockHashKey(block.hash));
 			}),
 			votes,
+			bytes: staple.toBytes(),
 			stapleTime: staple.timestamp(),
 			moment,
 			sequence: this.#takeStapleSequence()

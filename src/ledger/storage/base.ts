@@ -5,11 +5,12 @@ import type { ComputedEffectOfBlocks } from '@keetanetwork/keetanet-client/lib/l
 import type {
 	Ledger,
 	LedgerConfig,
+	LedgerSelector,
 	LedgerStorageAPI,
 	LedgerStorageTransactionBase
 } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { AccountInfoForType, LedgerStatistics } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
-import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import type { VoteBlockHash, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerInternals, StatsPending } from '../../upstream/internals.js';
 import { assertNever } from '../../util/assert-never.js';
 import { SharedExclusiveGate } from '../../util/shared-exclusive-gate.js';
@@ -230,6 +231,34 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	}
 
 	/**
+	 * The distinct main staples holding the blocks, in the order their blocks
+	 * are first named, as upstream's fallback over getVotes and getBlock
+	 * finds them [Keeta TS] index.js:69565-69631, but read as getVoteStaples
+	 * reads them: as the bytes each was received as. A peer bootstrapping
+	 * from this node names the staples it holds by those bytes, and this
+	 * node's bootstrap client names its own to its peers by them
+	 * [Keeta TS] index.js:69686-69690. Upstream asks for the main ledger only
+	 * [Keeta TS] index.js:69561-69563.
+	 */
+	async getVoteStaplesFromBlockHash(transaction: Transaction, blocks: BlockHash[], from: LedgerSelector): Promise<VoteStaple[]> {
+		if (from !== 'main') {
+			throw(new Error(`internal error: staples are found by their blocks on the main ledger only, not on '${from}'`));
+		}
+		const holding = await this.listMainStaplesHolding(transaction, blocks);
+		if (holding.length === 0) {
+			return([]);
+		}
+		const staples = await this.getVoteStaples(transaction, [...holding], 'main');
+		return(holding.map(function(blocksHash): VoteStaple {
+			const staple = staples.get(blocksHash);
+			if (staple === undefined || staple === null) {
+				throw(new Error(`storage integrity error: the main staple ${toStapleKey(blocksHash)} holds a block but is not stored`));
+			}
+			return(staple);
+		}));
+	}
+
+	/**
 	 * One batch of upstream's gc loop, which runs batches in one transaction
 	 * until a batch reports that nothing remains or the time budget is spent.
 	 * [Keeta TS] index.js:67852-67862
@@ -376,6 +405,9 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * test hook reads it.
 	 */
 	protected abstract countOrphanedSideRows(transaction: Transaction): Promise<number>;
+
+	/** The staples holding those of the blocks on the main ledger, each once, in the order its first block is given. */
+	protected abstract listMainStaplesHolding(transaction: Transaction, blocks: readonly BlockHash[]): Promise<readonly VoteBlockHash[]>;
 
 	/** The counts stats() reports, as of one consistent snapshot of the main ledger. */
 	protected abstract countLedger(): Promise<LedgerCountsSnapshot>;

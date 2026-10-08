@@ -1,3 +1,4 @@
+import { deflateSync } from 'node:zlib';
 import { describe, expect, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
@@ -83,6 +84,22 @@ function byTarget(left: ACLSummary, right: ACLSummary): number {
 
 function byBlocksHashDescending(left: VoteStaple, right: VoteStaple): number {
 	return(right.blocksHash.getBuffer().compare(left.blocksHash.getBuffer()));
+}
+
+/**
+ * The staple as one that arrived compressed by another zlib, which no
+ * rebuild from its votes and blocks reproduces: it decodes alike, and
+ * returns exactly these bytes [Keeta TS] index.js:80976-80983, 81016-81027.
+ */
+function receivedAsCompressedElsewhere(staple: VoteStaple): VoteStaple {
+	return(new lib.Vote.Staple(deflateSync(Buffer.from(staple.toBytes(true)), { level: 1 })));
+}
+
+function bytesOf(staple: VoteStaple | null | undefined): string | undefined {
+	if (staple === null || staple === undefined) {
+		return(undefined);
+	}
+	return(Buffer.from(staple.toBytes()).toString('base64'));
 }
 
 function newcomerAccount(): Account {
@@ -729,6 +746,36 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(blocksHashesOf(fromBack)).toEqual(blocksHashesOf([second, third, first]));
 			const afterBack = await ledger.getVoteStaplesAfter(new Date(wentBack.getTime() + 1), 1000, { maxVotesPerPage: 1 });
 			expect(blocksHashesOf(afterBack)).toEqual(blocksHashesOf([first]));
+		});
+
+		test('a confirmed staple reads back as the bytes it was received as, by its blocks hash, by its blocks and in catch-up order', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			const cursor = new ChainCursor(network.genesis);
+			await ledger.add(network.genesis);
+			const first = cursor.append(await sendBlock({ from: user, previous: cursor.previous(user), to: requireAt(network.users, 1), amount: 1n, token: network.baseToken, network: network.network }));
+			const second = cursor.append(await sendBlock({ from: user, previous: cursor.previous(user), to: requireAt(network.users, 2), amount: 1n, token: network.baseToken, network: network.network }));
+			const built = await confirmedStaple([first, second], network.representatives);
+			const received = receivedAsCompressedElsewhere(built);
+			const third = cursor.append(await sendBlock({ from: user, previous: cursor.previous(user), to: requireAt(network.users, 1), amount: 1n, token: network.baseToken, network: network.network }));
+			const later = await confirmedStaple([third], network.representatives);
+			advanceClock(1000);
+			await ledger.add(received);
+			advanceClock(1000);
+			await ledger.add(later);
+
+			expect(bytesOf(received)).not.toBe(bytesOf(built));
+			expect(bytesOf(await ledger.getVoteStaple(received.blocksHash, 'main'))).toBe(bytesOf(received));
+			const neverConfirmed = await sendBlock({ from: requireAt(network.users, 1), previous: headOf(network.genesis, requireAt(network.users, 1)), to: user, amount: 1n, token: network.baseToken, network: network.network });
+			const genesisBlock = requireAt(network.genesis.blocks, 0);
+			const found = await readStorage(storage, function(transaction) {
+				return(storage.getVoteStaplesFromBlockHash(transaction, [second.hash, third.hash, first.hash, neverConfirmed.hash, genesisBlock.hash, second.hash], 'main'));
+			});
+			// Each staple once, where its first block is named; a block on no main staple names none.
+			expect(blocksHashesOf(found)).toEqual(blocksHashesOf([received, later, network.genesis]));
+			expect(found.map(bytesOf)).toEqual([received, later, network.genesis].map(bytesOf));
+			const caughtUp = await ledger.getVoteStaplesAfter(GENESIS_MOMENT, 1000);
+			expect(caughtUp.map(bytesOf)).toEqual([network.genesis, received, later].map(bytesOf));
 		});
 
 		test('fork in confirmed history is rejected with LEDGER_PREVIOUS_ALREADY_USED', async function() {

@@ -23,6 +23,8 @@
 
 **Staple and its identity.** A staple is a set of votes on one ordered list of blocks. Its identity is its `blocksHash`: the hash of the concatenated hashes of its blocks, in vote order [Keeta TS] index.js:80126-80143. Different subsets of a quorum produce different vote sets for the same blocks, so a driver keys a staple by `blocksHash` and never by the hash of its serialized form.
 
+**Staple bytes.** A staple's bytes are a zlib stream (RFC 1950) of its ASN.1 encoding: its blocks in vote order, then its votes in ascending order of vote hash [Keeta TS] index.js:80741-80775. The encoding is a function of the votes and blocks; the zlib stream is not, since zlib implementations differ in the streams they make, and a staple decoded from compressed bytes returns exactly those bytes [Keeta TS] index.js:80976-80983, 81016-81027. Of the 140 staples of one page a main network representative served from the beginning of time, all 140 encode their votes in vote-hash order, yet Node.js's `zlib.deflateSync`, at any level, memory level, strategy or window, reproduces none of their streams, and zlib-ng at level 6 only 85 of them. All four representatives serve the same bytes for the same staple. A representative leaves out of a bootstrap page each staple whose bytes, as it holds them, the requester's filter names [Keeta TS] index.js:69686-69690, so a driver keeps each main staple's bytes as it received them and reads the staple back as those bytes (`getVoteStaples`, `getVoteStaplesFromBlockHash`); a staple rebuilt from its votes and blocks would be named by bytes no peer holds. Tested by `src/node/bootstrap-mainnet.test.ts: "names the staples it holds by the bytes the representative serves, so that reading them again downloads none of them"`, on the representative's page (`src/testing/fixtures/mainnet-rep1-epoch-page.json`).
+
 **Vote identity.** A vote is identified by `$uid`, built from its issuer and serial [Keeta TS] index.js:80569-80570.
 
 **Temporary and permanent votes.** A temporary vote is valid until five minutes after it is issued [Keeta TS] index.js:70204-70207. A permanent vote is valid for about a thousand years [Keeta TS] index.js:81526-81529 and is flagged `$permanent` [Keeta TS] index.js:80376-80380.
@@ -623,7 +625,7 @@ getVoteStaples: (transaction: any, voteBlockHashes: VoteBlockHash[], from: Ledge
 ```
 
 - **Semantics.** A `VoteBlockHashMap` with an entry for every requested `blocksHash`:
-  - `'main'`: the confirmed staple, with its blocks in staple order and every stored vote.
+  - `'main'`: the confirmed staple, as the bytes it was received as (section 1, staple bytes).
   - `'side'`: a staple built from the unexpired side votes with that `blocksHash` and the block list stored with them. If any of those votes is permanent, only the permanent ones are used [Keeta TS] index.js:80795-80827. `null` when none is unexpired.
   - `'both'`: for each key, the main answer, or else the side answer.
 - Upstream never passes an empty list or more than 10,000 hashes [Keeta TS] index.js:69521-69531. A missing entry is an internal error to upstream, and a `null` entry is an internal error to history [Keeta TS] index.js:69512-69520, 69540-69548.
@@ -635,7 +637,8 @@ getVoteStaples: (transaction: any, voteBlockHashes: VoteBlockHash[], from: Ledge
   - `gc.ts: "gc removes side votes whose blocks were all confirmed under another staple"`
 
   Untested: `'both'` when the main ledger and an unexpired side vote both hold one `blocksHash`.
-- **Postgres.** `'main'`: the staple's blocks by `staple` in `staple_position` order (`blocks_staple_order`), and its main votes by `blocks_hash` in row ID order (`votes_main`). `'side'`: the votes with the `blocksHash` unexpired at the transaction moment (`votes_side_staple`), in row ID order; the permanent ones when there are any, otherwise all of them. The blocks are those that `vote_blocks` lists for the lowest-ID chosen vote, in position order.
+- **Tested by** `confirmed.ts: "a confirmed staple reads back as the bytes it was received as, by its blocks hash, by its blocks and in catch-up order"` for the main answer's bytes.
+- **Postgres.** `'main'`: the `staples` row's `bytes` (`staples_pkey`). A row stored before schema version 3 has none, and its staple is rebuilt with `VoteStaple.fromVotesAndBlocks` from its blocks by `staple` in `staple_position` order (`blocks_staple_order`) and its main votes by `blocks_hash` in row ID order (`votes_main`); tested by `src/ledger/storage/postgres/driver.test.ts: "a staple stored before its bytes were kept is rebuilt from its votes and blocks"`. `'side'`: the votes with the `blocksHash` unexpired at the transaction moment (`votes_side_staple`), in row ID order; the permanent ones when there are any, otherwise all of them. The blocks are those that `vote_blocks` lists for the lowest-ID chosen vote, in position order.
 
 ### `getHistory`
 
@@ -755,14 +758,14 @@ getVotesAfter: (transaction: any, moment: Date, startKey?: string, options?: Get
 getVoteStaplesFromBlockHash?: (transaction: any, blocks: BlockHash[], from: LedgerSelector) => Promise<VoteStaple[]>;
 ```
 
-- **Semantics.** Optional, and implemented by no driver here. When present, it replaces upstream's fallback [Keeta TS] index.js:69559-69564, and must return what the fallback returns [Keeta TS] index.js:69565-69631:
+- **Semantics.** Optional upstream; `LedgerStorageDriverBase` implements it for every driver here. When present, it replaces upstream's fallback [Keeta TS] index.js:69559-69564, which `getVoteStaplesAfter`, and so the bootstrap route, reads through. It returns the staples the fallback finds [Keeta TS] index.js:69565-69631:
   - the distinct, complete main staples containing the given blocks
   - in order of first appearance
   - skipping hashes with no main votes, and staples with a block that is not on the main ledger
 
-  Upstream always passes `'main'`.
-- Untested. The fallback, over `getVotes` and `getBlock`, is exercised by `confirmed.ts: "getVotesAfter pages on staple boundaries"`.
-- **Postgres.** Not implemented; upstream's fallback runs.
+  but as `getVoteStaples` reads them, as the bytes each was received as, where the fallback rebuilds each with `VoteStaple.fromVotesAndBlocks` (section 1, staple bytes). Upstream always passes `'main'`; any other selector throws.
+- **Tested by** `confirmed.ts: "a confirmed staple reads back as the bytes it was received as, by its blocks hash, by its blocks and in catch-up order"`.
+- **Postgres.** The main rows of the given blocks (`blocks_pkey`) give their `staple`, each staple taken once in the order its first block is given, then read as `getVoteStaples` reads `'main'`.
 
 ### `cache`
 
@@ -876,7 +879,7 @@ protected abstract persistConfirmedStaple(transaction: Transaction, change: Conf
 Writes everything that one confirmed staple changes, all of it or none of it (section 3.3, item 4). `change` is computed before any write (`src/ledger/storage/confirmed.ts`), and its fields are written as follows.
 
 - **`staple`, `blockHeights`, `moment`.**
-  - Store the staple under its `blocksHash`, with its block order and every vote keyed by `$uid`. Votes are kept per staple: a vote stored once globally could be overwritten by an equivocating representative's vote with the same `$uid`.
+  - Store the staple under its `blocksHash`, with its block order, every vote keyed by `$uid`, and its bytes, `VoteStaple.toBytes()` without an argument (section 1, staple bytes). Votes are kept per staple: a vote stored once globally could be overwritten by an equivocating representative's vote with the same `$uid`.
   - Stamp the staple with `moment` and a node-local sequence number that is never reused.
   - Store the staple with its history key: its staple time and its `blocksHash` (D8).
   - Store each block with its height, record it as the successor of its `previous` (opening sentinel included), and make it the account's head when its height exceeds the current head's.
@@ -905,7 +908,7 @@ Writes everything that one confirmed staple changes, all of it or none of it (se
 1. Refuse a key that `idempotent_keys_main` gives to a different block, or that an earlier block of the change claims.
 2. Refuse a block already on main (`blocks_pkey`) or whose previous has a main successor (`blocks_main_successor`), as section D14 states.
 3. Intern every account the change names, in public-key order, inserting missing rows and skipping existing ones.
-4. Insert the `staples` row: `blocks_hash`, `staple_time` (`VoteStaple.timestamp()`), `moment` (`change.moment`) and the next `sequence`.
+4. Insert the `staples` row: `blocks_hash`, `staple_time` (`VoteStaple.timestamp()`), `moment` (`change.moment`), `bytes` (`VoteStaple.toBytes()`) and the next `sequence`.
 5. Insert the blocks as main rows with their staple and position. A side copy is turned into the main row in place (`ON CONFLICT (hash) DO UPDATE ... WHERE ledger = 'side'`); a hash already on main returns no row, and fewer rows than blocks is `LEDGER_BLOCK_ALREADY_EXISTS`. Delete the blocks' side claims, insert their `chain` rows, and raise each account's `heads` row only when the new height is greater.
 6. Delete side votes with the staple's `uid`s, then insert the staple's votes with `ledger = 'main'` in staple order.
 7. Add each balance, supply and weight delta to its row, creating it at the delta (`ON CONFLICT ... DO UPDATE SET x = x + delta`); never clamp.
@@ -1354,7 +1357,7 @@ The Postgres driver keeps the ledger, and the Postgres key-value store the node'
 - **Main and side.** A row that can exist on both ledgers carries `ledger` (`'main'` or `'side'`): `blocks`, `votes` and `idempotent_keys`. A block is one row, so it is never on both ledgers: promotion turns a side row into the main row in place. Main votes are unique per staple and `uid` (`votes_main`); side votes per `uid` (`votes_side`). A side vote lists its blocks in `vote_blocks`, which outlives the side copies of those blocks.
 - **Accounts.** Every account the ledger names is interned once in `accounts`, with its public key spelled as upstream prints it and its key type, and other tables refer to it by its `bigint` ID. IDs are local to one database.
 - **Types.** Hashes are `hash32`, a `bytea` of exactly 32 bytes. Balances, supplies and weights are `amount`, an integer-valued `numeric` without bounds or a sign check (D9). Permission sets are two `permission_bits` columns, base and external: integer-valued `numeric`, since the flag offsets exceed 63 bits and a decoded set may be negative. Section 6.5 states the format of every column whose content is not plain SQL data.
-- **Staples.** `staples` holds each main staple under its `blocksHash`, with its history key (`staple_time`) and its catch-up key (`moment`, `sequence`). `sequence` is an identity column, local to the database.
+- **Staples.** `staples` holds each main staple under its `blocksHash`, with its history key (`staple_time`), its catch-up key (`moment`, `sequence`) and, from schema version 3, its bytes as received (`bytes`). `sequence` is an identity column, local to the database.
 - **Deferral.** `deferred_staples` holds a deferred staple's bytes; `deferred_waits` the blocks it waits on; `deferred_blocks` the previous of each of its blocks, for the check that it can never apply.
 - **Serials.** The sequence `vote_serials` (section 3.6).
 
@@ -1403,6 +1406,7 @@ What another implementation must write, and can expect to read, in each column w
 |---|---|
 | `blocks.bytes` | `Block.toBytes()`: the ASN.1 encoding of the block with its signatures. A block decoded from bytes returns exactly those bytes; a block built in the process returns upstream's encoding of it [Keeta TS] index.js:63836-63844, 64051-64122 |
 | `votes.bytes` | `Vote.toBytes()`: the vote, an X.509 certificate signed by its issuer, as the bytes it was decoded from or sealed as [Keeta TS] index.js:80588-80590 |
+| `staples.bytes` | `VoteStaple.toBytes()` without an argument when the staple was applied: the compressed bytes it was received as, or, for a staple built in the process, upstream's compression of its encoding [Keeta TS] index.js:80976-80983, 81016-81027. Read back as those bytes (section 1, staple bytes). `NULL` only for a staple stored before schema version 3, which a reader rebuilds from its rows. No key is built from these bytes |
 | `deferred_staples.bytes` | `VoteStaple.toBytes()` without an argument: a zlib stream (RFC 1950) of the staple's ASN.1 encoding, the compressed bytes it was decoded from when it arrived compressed [Keeta TS] index.js:81016-81027. A reader inflates bytes that begin with a zlib header and reads any other bytes as the encoding itself [Keeta TS] index.js:79804-79817, 80969-81003, so a writer may store either. No key is built from these bytes |
 | `certificates.certificate` | `Certificate.toDER()`: the certificate's DER, as the bytes it was decoded from [Keeta TS] index.js:78102-78105 |
 | `certificates.intermediates` | `CertificateBundle.getDERBuffer()` of the operation's intermediate certificates: the DER of a `SEQUENCE OF Certificate`, or the bytes the bundle was decoded from, or `NULL` when the operation names none [Keeta TS] index.js:77436-77500 |

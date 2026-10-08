@@ -21,11 +21,13 @@ export type ConfirmedBlockRow = {
 	readonly staple: StapleKey;
 };
 
-/** A confirmed staple: its blocks in order, its votes, its staple time, and when this node confirmed it. */
+/** A confirmed staple: its blocks in order, its votes, its bytes, its staple time, and when this node confirmed it. */
 export type StapleRow = {
 	readonly blocksHash: VoteBlockHash;
 	readonly blocks: readonly BlockHashKey[];
 	readonly votes: ReadonlyMap<VoteKey, Vote>;
+	/** `VoteStaple.toBytes()` as the staple was received, which no rebuild from its votes and blocks reproduces. */
+	readonly bytes: ArrayBuffer;
 	/** `VoteStaple.timestamp()` with no preferred representative, taken when the staple is stored. */
 	readonly stapleTime: Date;
 	readonly moment: Date;
