@@ -5,7 +5,7 @@ import { CAPTURE_DIRECTORY, jsonFiles, readCapture, requestPathOf } from '../con
 import { isJSONObject } from '../conformance/api/document.js';
 import { loadMainnetFixture, mainnetReplayRepresentative } from '../conformance/mainnet/fixture.js';
 import { REPLAY_TIMEOUT_MILLISECONDS } from '../conformance/mainnet/head-replay.js';
-import { mainnetNodeConfig, replayMainnetOn } from '../conformance/mainnet/replay.js';
+import { mainnetNodeConfig, replayOn } from '../conformance/mainnet/replay.js';
 import { driverUnderTestNamed } from '../ledger/storage/suite/drivers.js';
 import { LocalNode } from '../node/local.js';
 import { request } from '../testing/local-node.js';
@@ -319,7 +319,7 @@ let served: { readonly node: LocalNode; readonly apiURL: string } | undefined;
 beforeAll(async function() {
 	const storage = await driverUnderTestNamed('memory').create();
 	const node = new LocalNode({ ...mainnetNodeConfig(storage), nodeOptions: { listenIP: LOOPBACK, listenPort: 0 } });
-	const replay = await replayMainnetOn(node, await loadMainnetFixture('head'));
+	const replay = await replayOn(node, await loadMainnetFixture('head'));
 	expect(replay.deferred).toEqual([]);
 	await node.run();
 	const apiURL = node.config.endpoints?.api;

@@ -1,4 +1,6 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
+import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
+import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { renderStateDump } from '../conformance/mainnet/dump.js';
 import { PostgresKVStorage } from '../kv/postgres.js';
 import { LEDGER_CHECKSUM_KEY } from '../ledger/storage/base.js';
@@ -35,11 +37,10 @@ export async function storedChecksum(connectionString: string): Promise<bigint> 
 }
 
 /**
- * A node's confirmed state in the canonical dump format, read from its
- * database by a ledger of its own that never writes, over every staple the
- * node holds.
+ * Runs with a ledger of its own over the node's database, which never
+ * writes, and every staple the node holds, oldest first.
  */
-export async function renderNodeDump(connectionString: string, ledgerChecksum: bigint): Promise<string> {
+async function withNodeLedger<Result>(connectionString: string, use: (ledger: Ledger, staples: VoteStaple[]) => Promise<Result>): Promise<Result> {
 	const storage = new PostgresLedgerStorage(sourceOf(connectionString));
 	try {
 		const ledger = new lib.Ledger({
@@ -56,8 +57,22 @@ export async function renderNodeDump(connectionString: string, ledgerChecksum: b
 		if (staples.length >= STAPLE_LIMIT) {
 			throw(new Error(`the node holds more staples than one read lists (${String(STAPLE_LIMIT)})`));
 		}
-		return(await renderStateDump(ledger, staples, ledgerChecksum));
+		return(await use(ledger, staples));
 	} finally {
 		await storage.destroy();
 	}
+}
+
+/** A node's confirmed state in the canonical dump format, read from its database. */
+export async function renderNodeDump(connectionString: string, ledgerChecksum: bigint): Promise<string> {
+	return(await withNodeLedger(connectionString, function(ledger, staples): Promise<string> {
+		return(renderStateDump(ledger, staples, ledgerChecksum));
+	}));
+}
+
+/** Every staple a node holds, read from its database. */
+export async function confirmedStaples(connectionString: string): Promise<VoteStaple[]> {
+	return(await withNodeLedger(connectionString, function(_ledger, staples): Promise<VoteStaple[]> {
+		return(Promise.resolve(staples));
+	}));
 }

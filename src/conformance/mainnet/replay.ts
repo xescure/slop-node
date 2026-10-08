@@ -114,7 +114,7 @@ export async function addInReplayOrder(ledger: Ledger, staples: readonly VoteSta
  * Adds every staple to the node's ledger as replayMainnet does, without
  * stopping the node, so that it can go on to serve the replayed ledger.
  */
-export async function replayMainnetOn(node: Node, staples: readonly VoteStaple[], options: ReplayOptions = {}): Promise<ReplayResult> {
+export async function replayOn(node: Node, staples: readonly VoteStaple[], options: ReplayOptions = {}): Promise<ReplayResult> {
 	const { ledger } = node;
 	await addInReplayOrder(ledger, staples, async function(staple) {
 		await options.beforeAdd?.(staple, ledger);
@@ -145,7 +145,7 @@ export async function replayMainnetOn(node: Node, staples: readonly VoteStaple[]
 export async function replayMainnet(storage: LedgerStorageAPI, staples: readonly VoteStaple[], options: ReplayOptions = {}): Promise<ReplayResult> {
 	const node = createReplayNode(storage);
 	try {
-		return(await replayMainnetOn(node, staples, options));
+		return(await replayOn(node, staples, options));
 	} finally {
 		/*
 		 * Stopping flushes the node's statistics and closes its switch, which

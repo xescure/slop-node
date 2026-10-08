@@ -10,7 +10,7 @@ import type { Environment } from '../node/config.js';
 import { startCluster } from '../testing/postgres.js';
 import type { Cluster } from '../testing/postgres.js';
 import { assertNever } from '../util/assert-never.js';
-import { renderNodeDump, storedChecksum } from './dump.js';
+import { confirmedStaples, renderNodeDump, storedChecksum } from './dump.js';
 import { checkQuorumShape, delegateWeight, feeEnvironmentOf, GENESIS_ENVIRONMENT, perRepresentative, REPRESENTATIVE_INDEXES, REPRESENTATIVE_SEED, representativeOf, settledPerRepresentative, TRUSTED_ACCOUNT } from './genesis.js';
 import type { PerRepresentative, RepresentativeIndex, RepresentativeWeights, UserClient } from './genesis.js';
 import { processOfConnection } from './origin.js';
@@ -416,6 +416,11 @@ export class DevnetNode {
 	/** The node's confirmed state, rendered from its own database. */
 	async dump(): Promise<string> {
 		return(await renderNodeDump(this.databaseURL, await this.checksum()));
+	}
+
+	/** Every staple the node holds, read from its own database. */
+	async confirmedStaples(): Promise<VoteStaple[]> {
+		return(await confirmedStaples(this.databaseURL));
 	}
 
 	async logTail(): Promise<string> {
