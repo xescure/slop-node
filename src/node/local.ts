@@ -21,6 +21,7 @@ import type { PeerLimits } from './peer-limits.js';
 import { P2P_PATH, PeerServer } from './peers.js';
 import { close, listen } from './server.js';
 import type { Listening, ListenTarget } from './server.js';
+import { NodeStats } from './stats.js';
 import { SwitchStore } from './switch-store.js';
 
 export type { ApiErrorResponse, LocalNodeConfig } from '@keetanetwork/keetanet-client/lib/node/local.js';
@@ -235,6 +236,7 @@ export class LocalNode extends ClientNode {
 	constructor(config: LimitedLocalNodeConfig) {
 		super(withoutManualPeers(config));
 		this.config = config;
+		this.stats = new NodeStats(config.stats);
 		this.#peerLimits = config.peerLimits ?? DEFAULT_PEER_LIMITS;
 		this.#connections = new SwitchConnections(this.switch, this.log);
 		this.#messages = new SwitchMessages(this.switch, this.log);
