@@ -3,10 +3,14 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { BufferStorage } from '@keetanetwork/keetanet-client/lib/utils/buffer.js';
 import pg from 'pg';
 import { advanceClock, freezeClock } from '../testing/network.js';
+import { assertNever } from '../util/assert-never.js';
 import { createDatabase } from '../testing/postgres.js';
+import { interceptQueries, serverError } from '../testing/query-faults.js';
 import type { TestDatabase } from '../testing/postgres.js';
+import { POOL_CHECKOUT_TIMEOUT_MESSAGE } from '../ledger/storage/postgres/errors.js';
 import type { PostgresPoolSource } from '../ledger/storage/postgres/pool.js';
-import { PostgresKVStorage } from './postgres.js';
+import { DEFAULT_KV_RETRY_POLICY, PostgresKVStorage } from './postgres.js';
+import type { KVRetryPolicy } from './postgres.js';
 
 const BufferStorageClass = KeetaNet.lib.Utils.Buffer.BufferStorage;
 
@@ -26,8 +30,8 @@ const freshDatabase = async function(template?: 'migrated'): Promise<TestDatabas
 	return(database);
 };
 
-const storeOn = function(source: PostgresPoolSource): PostgresKVStorage {
-	const store = new PostgresKVStorage(source);
+const storeOn = function(source: PostgresPoolSource, retry?: KVRetryPolicy): PostgresKVStorage {
+	const store = new PostgresKVStorage(source, retry);
 	onTestFinished(function() {
 		return(store.destroy());
 	});
@@ -38,10 +42,10 @@ const ownedStoreOn = function(database: TestDatabase): PostgresKVStorage {
 	return(storeOn({ kind: 'connection-string', connectionString: database.connectionString }));
 };
 
-const injectedStoreOn = function(pool: pg.Pool): PostgresKVStorage {
+const injectedStoreOn = function(pool: pg.Pool, retry?: KVRetryPolicy): PostgresKVStorage {
 	return(storeOn({ kind: 'injected', pool: function() {
 		return(Promise.resolve(pool));
-	} }));
+	} }, retry));
 };
 
 const rowCount = async function(pool: pg.Pool, table: 'kv_entries' | 'kv_buffers'): Promise<number> {
@@ -77,6 +81,21 @@ const afterStatement = function(pool: pg.Pool, name: string, action: () => Promi
 			}
 			return(result);
 		});
+	});
+};
+
+/** A policy of the default's attempts that does not wait, recording after which attempts it was asked to. */
+const immediateRetries = function(): { readonly policy: KVRetryPolicy; readonly waitedAfter: number[] } {
+	const waitedAfter: number[] = [];
+	return({
+		policy: {
+			attempts: DEFAULT_KV_RETRY_POLICY.attempts,
+			backoffMilliseconds: function(failedAttempt: number): number {
+				waitedAfter.push(failedAttempt);
+				return(0);
+			}
+		},
+		waitedAfter
 	});
 };
 
@@ -229,6 +248,145 @@ describe('the Postgres key-value store', function() {
 		await expect(injected.get('stats', 'probe')).rejects.toThrow('destroyed');
 		expect(injectedPool.ended).toBe(false);
 		expect(await rowCount(injectedPool, 'kv_entries')).toBe(1);
+	});
+});
+
+describe('the Postgres key-value store after a transient failure', function() {
+	test.each([
+		['a serialization failure', '40001'],
+		['a deadlock', '40P01']
+	])('attempts a write again after %s, once', async function(_name, code) {
+		const database = await freshDatabase('migrated');
+		const pool = database.pool();
+		const { policy, waitedAfter } = immediateRetries();
+		const store = injectedStoreOn(pool, policy);
+		let puts = 0;
+		interceptQueries(pool, function(issued, run) {
+			if (issued.name === 'kv_put_entry' && ++puts === 1) {
+				return(Promise.reject(serverError(code, 'the transaction was aborted')));
+			}
+			return(run());
+		});
+
+		await store.set('manualPeerCheckIn', 'peer', 1);
+
+		expect(await store.get('manualPeerCheckIn', 'peer')).toBe(1);
+		expect(puts).toBe(2);
+		expect(waitedAfter).toEqual([1]);
+	});
+
+	test('attempts a write again after the server ends its session before COMMIT', async function() {
+		const database = await freshDatabase('migrated');
+		const pool = database.pool();
+		const { policy, waitedAfter } = immediateRetries();
+		const store = injectedStoreOn(pool, policy);
+		await store.set('lastSeenPeers', 'peer', '1');
+		const holder = await pool.connect();
+		onTestFinished(function() {
+			holder.release(true);
+		});
+		await holder.query('BEGIN');
+		await holder.query('UPDATE kv_entries SET value = \'"2"\' WHERE arena = \'lastSeenPeers\' AND key = \'peer\'');
+
+		const writing = store.set('lastSeenPeers', 'peer', '3');
+		await expect.poll(function() {
+			return(lockWaiters(pool));
+		}).toBe(1);
+		await pool.query('SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = \'Lock\'');
+		await holder.query('COMMIT');
+		await writing;
+
+		expect(await store.get('lastSeenPeers', 'peer')).toBe('3');
+		expect(waitedAfter).toEqual([1]);
+	});
+
+	test('attempts an operation again when no connection could be checked out in time', async function() {
+		const database = await freshDatabase('migrated');
+		const pool = database.pool();
+		const { policy, waitedAfter } = immediateRetries();
+		const store = injectedStoreOn(pool, policy);
+		vi.spyOn(pool, 'connect').mockRejectedValueOnce(new Error(POOL_CHECKOUT_TIMEOUT_MESSAGE));
+
+		expect(await store.incr('stats', 'requests', 1)).toBe(1n);
+		expect(waitedAfter).toEqual([1]);
+	});
+
+	test('gives up after the policy\'s attempts, with the last failure', async function() {
+		const database = await freshDatabase('migrated');
+		const pool = database.pool();
+		const { policy, waitedAfter } = immediateRetries();
+		const store = injectedStoreOn(pool, policy);
+		let attempts = 0;
+		interceptQueries(pool, function(issued, run) {
+			if (issued.name === 'kv_put_entry') {
+				attempts++;
+				return(Promise.reject(serverError('40001', `attempt ${String(attempts)} was aborted`)));
+			}
+			return(run());
+		});
+
+		await expect(store.set('manualPeerCheckIn', 'peer', 1)).rejects.toThrow('attempt 3 was aborted');
+
+		expect(attempts).toBe(DEFAULT_KV_RETRY_POLICY.attempts);
+		expect(waitedAfter).toEqual([1, 2]);
+		expect(await store.get('manualPeerCheckIn', 'peer')).toBeUndefined();
+	});
+
+	test('does not attempt again a failure that would only repeat', async function() {
+		const database = await freshDatabase('migrated');
+		const pool = database.pool();
+		const { policy, waitedAfter } = immediateRetries();
+		const store = injectedStoreOn(pool, policy);
+		await store.incr('stats', 'large', Number.MAX_VALUE);
+
+		await expect(store.incr('stats', 'large', Number.MAX_VALUE)).rejects.toThrow(pg.DatabaseError);
+		await expect(store.set('stats', 'large', 1, { exclusiveCreate: true })).rejects.toEqual(expect.objectContaining({ code: 'KV_KEY_ALREADY_EXISTS' }));
+
+		expect(waitedAfter).toEqual([]);
+	});
+
+	test('attempts again a COMMIT the server aborted, but not one whose connection was lost, which may have committed', async function() {
+		const database = await freshDatabase('migrated');
+		const pool = database.pool();
+		const { policy, waitedAfter } = immediateRetries();
+		const store = injectedStoreOn(pool, policy);
+		let failure: 'aborted' | 'lost' | undefined = 'aborted';
+		interceptQueries(pool, async function(issued, run) {
+			if (issued.text !== 'COMMIT' || failure === undefined) {
+				return(await run());
+			}
+			const failing = failure;
+			failure = undefined;
+			switch (failing) {
+				case 'aborted':
+					// The store closes a connection whose COMMIT failed, which rolls its transaction back.
+					throw(serverError('40001', 'could not serialize access'));
+				case 'lost':
+					await run();
+					throw(serverError('57P01', 'terminating connection due to administrator command'));
+				default:
+					return(assertNever(failing));
+			}
+		});
+
+		expect(await store.incr('stats', 'requests', 1)).toBe(1n);
+		expect(waitedAfter).toEqual([1]);
+
+		failure = 'lost';
+		await expect(store.incr('stats', 'requests', 1)).rejects.toThrow('terminating connection');
+		expect(waitedAfter).toEqual([1]);
+		expect(await store.get('stats', 'requests')).toBe(2);
+	});
+
+	test('waits up to 100 ms after the first failed attempt and up to 200 ms after the second, each at least half of that', function() {
+		const random = vi.spyOn(Math, 'random');
+		random.mockReturnValue(0);
+		expect([1, 2].map(DEFAULT_KV_RETRY_POLICY.backoffMilliseconds)).toEqual([50, 100]);
+		random.mockReturnValue(1 - Number.EPSILON);
+		const longest = [1, 2].map(DEFAULT_KV_RETRY_POLICY.backoffMilliseconds);
+		expect(longest[0]).toBeLessThan(100);
+		expect(longest[1]).toBeLessThan(200);
+		expect(DEFAULT_KV_RETRY_POLICY.attempts).toBe(3);
 	});
 });
 

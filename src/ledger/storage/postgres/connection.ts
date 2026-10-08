@@ -19,9 +19,14 @@ export async function checkOut(pool: pg.Pool): Promise<pg.PoolClient> {
 /**
  * Returns the connection to the pool, or closes it when its session may
  * still hold a transaction or a lock: closing a session rolls back the one
- * and releases the other.
+ * and releases the other. A connection that is closed keeps listening for
+ * its errors: one the server ended reports the loss of its socket after the
+ * failed statement, and the pool, which listens for the errors of the
+ * connections it holds idle, no longer holds it.
  */
 export function checkIn(client: pg.PoolClient, close: boolean): void {
-	client.removeListener('error', ignoreConnectionError);
+	if (!close) {
+		client.removeListener('error', ignoreConnectionError);
+	}
 	client.release(close);
 }

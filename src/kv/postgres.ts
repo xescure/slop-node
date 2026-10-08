@@ -3,8 +3,11 @@ import type { KVErrorCode } from '@keetanetwork/keetanet-client/lib/error/kv.js'
 import type { KVSetOptionsType, KVStorageProviderAPI } from '@keetanetwork/keetanet-client/lib/kv/index.js';
 import type { BufferStorage } from '@keetanetwork/keetanet-client/lib/utils/buffer.js';
 import type { JSONSerializable } from '@keetanetwork/keetanet-client/lib/utils/conversion.js';
+import { setTimeout as delay } from 'node:timers/promises';
 import type pg from 'pg';
 import { checkIn, checkOut } from '../ledger/storage/postgres/connection.js';
+import { isTransientCheckoutError, isTransientDatabaseError } from '../ledger/storage/postgres/errors.js';
+import type { FailedStatement } from '../ledger/storage/postgres/errors.js';
 import { MigratedPostgresPool } from '../ledger/storage/postgres/pool.js';
 import type { PostgresPoolSource } from '../ledger/storage/postgres/pool.js';
 import { Statement } from '../ledger/storage/postgres/sql.js';
@@ -87,6 +90,37 @@ const foldBuffer: Statement<[string, Buffer]> = kvStatement('fold_buffer', `
 	INSERT INTO kv_buffers AS stored (key, value) VALUES ($1, $2)
 	ON CONFLICT (key) DO UPDATE SET value = kv_xor(stored.value, EXCLUDED.value)`);
 
+/** How the store makes an operation again after a transient failure. */
+export type KVRetryPolicy = {
+	/** The most attempts at one operation, the first included. */
+	readonly attempts: number;
+	/** How long to wait after the failed attempt of this number, counted from 1, before the next. */
+	readonly backoffMilliseconds: (failedAttempt: number) => number;
+};
+
+/** The longest wait after the first failed attempt; each later one may wait twice as long as the one before. */
+const FIRST_BACKOFF_CEILING_MILLISECONDS = 100;
+
+/**
+ * Three attempts. Each wait is drawn from the upper half of its ceiling,
+ * 100 ms and then 200 ms, so that writers that failed together do not retry
+ * together: an operation waits at most 300 ms in all between its attempts,
+ * besides the attempts themselves, each of which the pool's checkout
+ * timeout and the session's statement timeout bound.
+ */
+export const DEFAULT_KV_RETRY_POLICY: KVRetryPolicy = {
+	attempts: 3,
+	backoffMilliseconds: function(failedAttempt: number): number {
+		const ceiling = FIRST_BACKOFF_CEILING_MILLISECONDS * 2 ** (failedAttempt - 1);
+		return(ceiling * (1 + Math.random()) / 2);
+	}
+};
+
+/** How one attempt at an operation ended; a failure is transient when it committed nothing and may pass. */
+type Attempt<Result> =
+	| { readonly kind: 'committed'; readonly result: Result }
+	| { readonly kind: 'failed'; readonly error: unknown; readonly transient: boolean };
+
 /**
  * Builds upstream's error for a code of its key-value type. The package
  * exports no key-value error class, so the public JSON decoder builds it.
@@ -140,12 +174,20 @@ function encodeValue(value: JSONSerializable): string {
  * finds the first's row. SERIALIZABLE would abort one of two such writes
  * instead, for a retry that reaches the same result. A read is one
  * statement, so it sees one snapshot.
+ *
+ * An operation that fails transiently, committing nothing, is attempted
+ * again as the retry policy says: the switch writes to the store from timers
+ * and from work it does not wait for [Keeta TS] index.js:72622-72658, 73015-73017,
+ * so a database that is busy or restarting for a moment would otherwise fail
+ * work that no caller retries. Any other failure is the operation's.
  */
 export class PostgresKVStorage implements KVStorageProviderAPI {
 	readonly #pool: MigratedPostgresPool;
+	readonly #retry: KVRetryPolicy;
 
-	constructor(source: PostgresPoolSource) {
+	constructor(source: PostgresPoolSource, retry: KVRetryPolicy = DEFAULT_KV_RETRY_POLICY) {
 		this.#pool = new MigratedPostgresPool(source, 'key-value store');
+		this.#retry = retry;
 	}
 
 	/** Ends the pool if this store opened it; an injected pool is left to its owner. */
@@ -270,25 +312,62 @@ export class PostgresKVStorage implements KVStorageProviderAPI {
 		}));
 	}
 
-	/*
-	 * A connection whose rollback fails may still hold the transaction, so it
-	 * is closed rather than returned to the pool.
-	 */
 	async #transaction<Result>(work: (client: pg.PoolClient) => Promise<Result>): Promise<Result> {
-		const { pool } = await this.#pool.connection();
-		const client = await checkOut(pool);
-		let broken = false;
+		let attempt = 1;
+		let outcome = await this.#attempt(work);
+		while (outcome.kind === 'failed' && outcome.transient && attempt < this.#retry.attempts) {
+			await delay(this.#retry.backoffMilliseconds(attempt));
+			attempt++;
+			outcome = await this.#attempt(work);
+		}
+		if (outcome.kind === 'failed') {
+			throw(outcome.error);
+		}
+		return(outcome.result);
+	}
+
+	/*
+	 * A connection whose rollback or COMMIT fails may still hold the
+	 * transaction, so it is closed rather than returned to the pool.
+	 */
+	async #attempt<Result>(work: (client: pg.PoolClient) => Promise<Result>): Promise<Attempt<Result>> {
+		let client: pg.PoolClient;
 		try {
-			await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
-			const result = await work(client);
-			await client.query('COMMIT');
-			return(result);
+			const { pool } = await this.#pool.connection();
+			client = await checkOut(pool);
 		} catch (error: unknown) {
-			await client.query('ROLLBACK').catch(function() {
+			return({ kind: 'failed', error, transient: isTransientCheckoutError(error) });
+		}
+		// pg reports the loss of the connection before it fails the statements it affects.
+		let connectionLost = false;
+		const noteConnectionLost = function(): void {
+			connectionLost = true;
+		};
+		client.on('error', noteConnectionLost);
+		let broken = false;
+		const failed = function(error: unknown, statement: FailedStatement): Attempt<Result> {
+			return({ kind: 'failed', error, transient: isTransientDatabaseError(error, statement) });
+		};
+		try {
+			let result: Result;
+			try {
+				await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
+				result = await work(client);
+			} catch (error: unknown) {
+				await client.query('ROLLBACK').catch(function() {
+					broken = true;
+				});
+				return(failed(error, { kind: 'before-commit', connectionLost }));
+			}
+			try {
+				await client.query('COMMIT');
+			} catch (error: unknown) {
 				broken = true;
-			});
-			throw(error);
+				return(failed(error, { kind: 'commit' }));
+			}
+			return({ kind: 'committed', result });
 		} finally {
+			client.removeListener('error', noteConnectionLost);
 			checkIn(client, broken);
 		}
 	}

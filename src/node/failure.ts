@@ -1,4 +1,5 @@
 import { assertNever } from '../util/assert-never.js';
+import { POOL_CHECKOUT_TIMEOUT_MESSAGE } from '../ledger/storage/postgres/errors.js';
 import { MigrationError } from '../ledger/storage/postgres/migrations.js';
 import type { Environment } from './config.js';
 
@@ -13,9 +14,6 @@ const MAXIMUM_CAUSE_DEPTH = 8;
 
 /** Codes of the system errors that say a server cannot be reached. */
 const UNREACHABLE_CODES: ReadonlySet<string> = new Set(['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN']);
-
-/** What pg-pool raises when a server accepts no connection within the timeout. */
-const CONNECT_TIMEOUT_MESSAGE = 'timeout exceeded when trying to connect';
 
 const DEFAULT_POSTGRES_PORT = '5432';
 
@@ -58,7 +56,7 @@ function isUnreachable(error: unknown): boolean {
 	if (code !== undefined && UNREACHABLE_CODES.has(code)) {
 		return(true);
 	}
-	return(error instanceof Error && error.message === CONNECT_TIMEOUT_MESSAGE);
+	return(error instanceof Error && error.message === POOL_CHECKOUT_TIMEOUT_MESSAGE);
 }
 
 /** The first of the error and its causes that the operator can act on. */

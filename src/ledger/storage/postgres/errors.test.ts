@@ -3,7 +3,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import pg from 'pg';
 import { createDatabase } from '../../../testing/postgres.js';
 import { PostgresLedgerStorage } from './driver.js';
-import { CONFLICT_MESSAGE, mapDatabaseError } from './errors.js';
+import { CONFLICT_MESSAGE, isTransientCheckoutError, mapDatabaseError, POOL_CHECKOUT_TIMEOUT_MESSAGE } from './errors.js';
 import type { FailedStatement } from './errors.js';
 
 const lib = KeetaNet.lib;
@@ -218,5 +218,37 @@ describe('mapDatabaseError', function() {
 	test('other errors are returned unchanged', function() {
 		expectUnchanged(new Error('disk on fire'));
 		expectUnchanged('not even an error');
+	});
+});
+
+describe('isTransientCheckoutError', function() {
+	const withCode = function(error: Error, code: string): Error {
+		Reflect.set(error, 'code', code);
+		return(error);
+	};
+
+	test('a checkout that timed out, a server that refused or dropped the connection, or one starting up may pass', function() {
+		const startingUp = new pg.DatabaseError('the database system is starting up', 0, 'error');
+		startingUp.code = '57P03';
+		for (const error of [
+			new Error(POOL_CHECKOUT_TIMEOUT_MESSAGE),
+			new Error('Connection terminated unexpectedly'),
+			new Error('Connection terminated due to connection timeout'),
+			withCode(new Error('connect ECONNREFUSED 127.0.0.1:5432'), 'ECONNREFUSED'),
+			withCode(new Error('read ECONNRESET'), 'ECONNRESET'),
+			startingUp
+		]) {
+			expect(isTransientCheckoutError(error), error.message).toBe(true);
+		}
+	});
+
+	test('a refusal that stays does not, nor does a store that was destroyed', function() {
+		const password = new pg.DatabaseError('password authentication failed for user "slop"', 0, 'error');
+		password.code = '28P01';
+		const missing = new pg.DatabaseError('database "ledger" does not exist', 0, 'error');
+		missing.code = '3D000';
+		for (const error of [password, missing, withCode(new Error('getaddrinfo ENOTFOUND db'), 'ENOTFOUND'), new Error('key-value store is destroyed'), 'not even an error']) {
+			expect(isTransientCheckoutError(error), String(error)).toBe(false);
+		}
 	});
 });
