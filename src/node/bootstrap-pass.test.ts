@@ -62,6 +62,9 @@ class Harness {
 			retry: function() {
 				return(Promise.resolve());
 			},
+			saturated: function() {
+				return(Promise.resolve(false));
+			},
 			readProgress: () => {
 				return(Promise.resolve(this.progress));
 			},

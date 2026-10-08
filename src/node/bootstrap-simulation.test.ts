@@ -78,11 +78,14 @@ class Follower {
 				const queued = (await this.retries.staples()).slice(0, count);
 				return([...queued, ...await this.node.held(from, count - queued.length)]);
 			},
-			add: (staple) => {
-				return(this.retries.add(staple));
+			add: (staple, use) => {
+				return(this.retries.add(staple, use));
 			},
 			retry: async () => {
 				await this.retries.retry();
+			},
+			saturated: () => {
+				return(Promise.resolve(this.retries.saturated()));
 			},
 			readProgress: () => {
 				return(Promise.resolve(this.progress.get(peer)));
@@ -165,6 +168,20 @@ class Scenario {
 		for (let waited = 0; waited < duration; waited += PERIOD) {
 			advanceClock(PERIOD);
 			await this.update();
+		}
+	}
+
+	/** Updates on the period for that long, as the client does whether or not an update failed. */
+	async periodicallyThroughFailures(duration: number): Promise<void> {
+		for (let waited = 0; waited < duration; waited += PERIOD) {
+			advanceClock(PERIOD);
+			try {
+				await this.update();
+			} catch (error: unknown) {
+				if (!(error instanceof RetryQueueFull)) {
+					throw(error);
+				}
+			}
 		}
 	}
 
@@ -603,13 +620,14 @@ describe.each(ORDERINGS)('bootstrapping against a simulated peer that %s', { tim
 			return([]);
 		});
 		const supply = stapleAt(scenario.peer, supplyAt);
-		const eleventh = stapleAt(scenario.peer, 100 + bounds.staples);
+		const tenth = stapleAt(scenario.peer, 100 + bounds.staples - 1);
 
 		await expect(scenario.update()).rejects.toThrow(RetryQueueFull);
 
-		expect(scenario.follower.retryStore.largest).toBe(bounds.staples);
-		expect(scenario.follower.progress.get(scenario.peer)?.reached.getTime()).toBeLessThanOrEqual(eleventh.moment);
-		expect(scenario.missing()).toContain(eleventh.id);
+		// A pass from where the last reached leaves a tenth of the queue to deep re-scans.
+		expect(scenario.follower.retryStore.largest).toBe(bounds.staples - 1);
+		expect(scenario.follower.progress.get(scenario.peer)?.reached.getTime()).toBeLessThanOrEqual(tenth.moment);
+		expect(scenario.missing()).toContain(tenth.id);
 
 		// The staple the sends need arrives otherwise, as over P2P.
 		await scenario.node.add(supply);
@@ -617,7 +635,32 @@ describe.each(ORDERINGS)('bootstrapping against a simulated peer that %s', { tim
 
 		expect(scenario.missing()).toEqual([]);
 		expect(await scenario.follower.retries.size()).toBe(0);
-		expect(scenario.follower.retryStore.largest).toBe(bounds.staples);
+		expect(scenario.follower.retryStore.largest).toBeLessThanOrEqual(bounds.staples);
+	});
+
+	test('re-reads the peer, once a full queue stops every pass, for a staple a pass missed that the queued staples need', async function() {
+		freezeClock(new Date(NOW));
+		const bounds: QueueBounds = { staples: 20, bytes: 1024 * 1024 };
+		const scenario = new Scenario({}, bounds);
+		// Fifty sends of a token whose supply, past the first page, which no filter names, a pass missed long before: more than the queue holds.
+		const supplyAt = 1500;
+		liveHistory(scenario.peer, 5000, 10, NOW - HOUR, undefined, function(index): readonly number[] {
+			if (index >= 3000 && index % 40 === 0) {
+				return([supplyAt]);
+			}
+			return([]);
+		});
+		const supply = stapleAt(scenario.peer, supplyAt);
+		scenario.peer.forceFalsePositive(supply);
+		await expect(scenario.update()).rejects.toThrow(RetryQueueFull);
+		scenario.peer.forceFalsePositive(undefined);
+		expect(scenario.missing()).toContain(supply.id);
+
+		await scenario.periodicallyThroughFailures(15 * PERIOD);
+
+		expect(scenario.missing()).toEqual([]);
+		expect(await scenario.follower.retries.size()).toBe(0);
+		expect(completes(scenario.updates.at(-1)?.outcome.live ?? { kind: 'bounded', reached: new Date(0) })).toBe(true);
 	});
 
 	test('downloads each staple about once in a first catch-up from four peers that hold the same history, then reads each peer on its own', async function() {

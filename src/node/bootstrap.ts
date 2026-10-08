@@ -306,15 +306,18 @@ export class BootstrapClient {
 				}
 				return([...queued, ...await this.#node.ledger.getVoteStaplesAfter(since, count - queued.length)]);
 			},
-			add: async (staple) => {
+			add: async (staple, use) => {
 				this.#stopping.signal.throwIfAborted();
-				const added = await this.#retries.add(staple);
+				const added = await this.#retries.add(staple, use);
 				tally[added]++;
 				return(added);
 			},
 			retry: async () => {
 				this.#stopping.signal.throwIfAborted();
 				await this.#retries.retry();
+			},
+			saturated: () => {
+				return(Promise.resolve(this.#retries.saturated()));
 			},
 			readProgress: () => {
 				return(this.#cursors.read(endpoint));

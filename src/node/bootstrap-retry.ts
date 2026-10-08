@@ -16,6 +16,15 @@ export const MAX_QUEUED_STAPLES = 1000;
 export const MAX_QUEUED_BYTES: number = 16 * 1024 * 1024;
 
 /**
+ * The share of the queue's bounds only a deep re-scan may fill. A pass from
+ * where the last reached that a full queue stops cannot bring a staple the
+ * queued ones need that a pass missed before it: only a deep re-scan reads
+ * that far back, and one that met a full queue would stop at the first
+ * staple refused while its dependencies are a page later.
+ */
+const DEEP_SCAN_SHARE = 1 / 10;
+
+/**
  * How long the ledger may refuse a staple before the node reports it, once,
  * as one it cannot apply although the network did: by then every staple a
  * page or two later has long been read.
@@ -63,6 +72,9 @@ const DEFAULT_BOUNDS: QueueBounds = { staples: MAX_QUEUED_STAPLES, bytes: MAX_QU
 /** Whether a staple a pass was sent was new to the node, one it held already, perhaps with other votes, or one the ledger refused and the queue holds. */
 export type Added = 'added' | 'held' | 'queued';
 
+/** Which pass adds a staple: one from where the last reached leaves the deep re-scans their share of the queue. */
+export type QueueUse = 'live' | 'deep';
+
 /**
  * The queue was full when the ledger refused one more staple. The staple is
  * not held, so the pass that was sent it must not move past it; the pass
@@ -104,8 +116,11 @@ export class RetryQueue<Staple extends NamedStaple> {
 	readonly #store: RetryStore<Staple>;
 	readonly #report: (entry: QueuedStaple<Staple>, age: number) => void;
 	readonly #bounds: QueueBounds;
+	readonly #liveBounds: QueueBounds;
 	#entries: Promise<Map<string, QueuedStaple<Staple>>> | undefined;
 	#bytes = 0;
+	/** Whether a pass from where the last reached found no room since a staple last left the queue. */
+	#stoppedLive = false;
 	/** Retries run one after another, so that a staple is offered by one at a time. */
 	#retrying: Promise<unknown> = Promise.resolve();
 
@@ -115,6 +130,12 @@ export class RetryQueue<Staple extends NamedStaple> {
 		this.#store = store;
 		this.#report = report;
 		this.#bounds = bounds;
+		this.#liveBounds = { staples: bounds.staples - Math.ceil(bounds.staples * DEEP_SCAN_SHARE), bytes: bounds.bytes - Math.ceil(bounds.bytes * DEEP_SCAN_SHARE) };
+	}
+
+	/** Whether the queue stopped a pass from where the last reached, and no staple has left it since. */
+	saturated(): boolean {
+		return(this.#stoppedLive);
 	}
 
 	async size(): Promise<number> {
@@ -131,9 +152,10 @@ export class RetryQueue<Staple extends NamedStaple> {
 	/**
 	 * Adds the staple, or queues it when the ledger refuses it and does not
 	 * hold its blocks; one queued already is left to the retries. Throws
-	 * RetryQueueFull when the queue has no room for it.
+	 * RetryQueueFull when the queue has no room for it, which, for a pass
+	 * from where the last reached, is short of the deep re-scans' share.
 	 */
-	async add(staple: Staple): Promise<Added> {
+	async add(staple: Staple, use: QueueUse): Promise<Added> {
 		const entries = await this.#load();
 		if (await this.#ledger.holds(staple)) {
 			return('held');
@@ -150,7 +172,7 @@ export class RetryQueue<Staple extends NamedStaple> {
 				if (await this.#ledger.holds(staple)) {
 					return('held');
 				}
-				await this.#enqueue(entries, key, staple, offered.code);
+				await this.#enqueue(entries, key, staple, offered.code, use);
 				return('queued');
 			default:
 				return(assertNever(offered));
@@ -220,12 +242,26 @@ export class RetryQueue<Staple extends NamedStaple> {
 	}
 
 	/** Queues the staple, unless another pass, sent it too, queued it meanwhile. */
-	async #enqueue(entries: Map<string, QueuedStaple<Staple>>, key: string, staple: Staple, code: string): Promise<void> {
+	async #enqueue(entries: Map<string, QueuedStaple<Staple>>, key: string, staple: Staple, code: string, use: QueueUse): Promise<void> {
 		if (entries.has(key)) {
 			return;
 		}
-		if (entries.size >= this.#bounds.staples || this.#bytes + sizeOf(staple) > this.#bounds.bytes) {
-			throw(new RetryQueueFull(key, this.#bounds));
+		let bounds: QueueBounds;
+		switch (use) {
+			case 'live':
+				bounds = this.#liveBounds;
+				break;
+			case 'deep':
+				bounds = this.#bounds;
+				break;
+			default:
+				return(assertNever(use));
+		}
+		if (entries.size >= bounds.staples || this.#bytes + sizeOf(staple) > bounds.bytes) {
+			if (use === 'live') {
+				this.#stoppedLive = true;
+			}
+			throw(new RetryQueueFull(key, bounds));
 		}
 		this.#bytes += sizeOf(staple);
 		await this.#put(entries, key, { staple, queuedAt: Date.now(), code, reported: false });
@@ -243,6 +279,7 @@ export class RetryQueue<Staple extends NamedStaple> {
 		}
 		entries.delete(key);
 		this.#bytes -= sizeOf(entry.staple);
+		this.#stoppedLive = false;
 		await this.#store.remove(key);
 	}
 

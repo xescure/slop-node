@@ -1,6 +1,6 @@
 import { randomInt } from 'node:crypto';
 import { assertNever } from '../util/assert-never.js';
-import type { Added } from './bootstrap-retry.js';
+import type { Added, QueueUse } from './bootstrap-retry.js';
 import { ACCEPTED_ERROR_RATE, BLOOM_CAPACITY, BOOTSTRAP_MARGIN_MILLISECONDS, MAX_NAMED, NamedStaples, PEER_CLOCK_SKEW_MILLISECONDS, stapleKey } from './bootstrap-window.js';
 import type { Filter, NamedStaple } from './bootstrap-window.js';
 
@@ -136,10 +136,12 @@ export type PeerIO<Staple extends PassStaple> = {
 	page(request: PassRequest): Promise<PassAnswer<Staple>>;
 	/** Staples the node has queued for retry, and then those it added at or after the moment, on its own clock, the earliest first. */
 	held(from: Date, count: number): Promise<readonly NamedStaple[]>;
-	/** Adds the staple, or queues it for retry when the ledger refuses it (src/node/bootstrap-retry.ts), failing only when there is no room. */
-	add(staple: Staple): Promise<Added>;
+	/** Adds the staple, or queues it for retry when the ledger refuses it (src/node/bootstrap-retry.ts), failing only when there is no room for the pass adding it. */
+	add(staple: Staple, use: QueueUse): Promise<Added>;
 	/** Offers the ledger again the staples it refused, round after round while a round applies any. */
 	retry(): Promise<void>;
+	/** Whether the queue stopped a pass from where the last reached, and none of its staples has left it since. */
+	saturated(): Promise<boolean>;
 	readProgress(): Promise<PeerProgress | undefined>;
 	writeProgress(progress: PeerProgress): Promise<void>;
 };
@@ -225,12 +227,18 @@ function firstProgress(now: number, stagger: number, from: Date): PeerProgress {
 
 /**
  * Begins a deep re-scan once one is due and the node has caught up on the
- * peer: from DEEP_SCAN_DEPTH_MILLISECONDS back, or from where the passes
+ * peer, or at once when the retry queue stopped a pass from where the last
+ * reached: from DEEP_SCAN_DEPTH_MILLISECONDS back, or from where the passes
  * since the last one began started, if earlier, so that the first re-reads
- * the first catch-up.
+ * the first catch-up. The queued staples may need a staple a pass missed
+ * before; a pass from where the last reached that the queue stops never
+ * completes, and only a deep re-scan reads that far back.
  */
-function withDeepScanBegun(progress: PeerProgress, now: number): PeerProgress {
-	if (progress.deepScan !== undefined || !progress.caughtUp || now < progress.nextDeepScan.getTime()) {
+function withDeepScanBegun(progress: PeerProgress, now: number, saturated: boolean): PeerProgress {
+	if (progress.deepScan !== undefined) {
+		return(progress);
+	}
+	if (!saturated && (!progress.caughtUp || now < progress.nextDeepScan.getTime())) {
 		return(progress);
 	}
 	const from = new Date(Math.max(0, Math.min(progress.deepScanFrom.getTime(), now - DEEP_SCAN_DEPTH_MILLISECONDS)));
@@ -445,6 +453,7 @@ class Pass<Staple extends PassStaple> {
 	readonly #moved: (start: Date, heldSince: Date | undefined) => Promise<void>;
 	/** Whether the node took the staples it holds from the start on lately, as it does catching up, rather than about when the peer applied them. */
 	readonly #tracksHeld: boolean;
+	readonly #use: QueueUse;
 	#named = new NamedStaples();
 	#start: number;
 	#limit: number;
@@ -457,7 +466,7 @@ class Pass<Staple extends PassStaple> {
 	#askedSince: number | undefined;
 
 	/** The end is at or after the horizon: the pass stops reading once its start reaches it. */
-	constructor(io: PeerIO<Staple>, start: Date, horizon: Date, end: Date, options: PassOptions, held: { readonly tracked: boolean; readonly since: Date | undefined }, moved: (start: Date, heldSince: Date | undefined) => Promise<void>) {
+	constructor(io: PeerIO<Staple>, start: Date, horizon: Date, end: Date, options: PassOptions, held: { readonly tracked: boolean; readonly since: Date | undefined }, use: QueueUse, moved: (start: Date, heldSince: Date | undefined) => Promise<void>) {
 		this.#io = io;
 		this.#start = start.getTime();
 		this.#horizon = horizon.getTime();
@@ -469,6 +478,7 @@ class Pass<Staple extends PassStaple> {
 		this.#tracksHeld = held.tracked;
 		this.#heldSince = held.since?.getTime();
 		this.#askedSince = this.#heldSince;
+		this.#use = use;
 		this.#moved = moved;
 	}
 
@@ -634,7 +644,7 @@ class Pass<Staple extends PassStaple> {
 		}
 		const outcomes: Added[] = [];
 		for (const staple of page) {
-			outcomes.push(await this.#io.add(staple));
+			outcomes.push(await this.#io.add(staple, this.#use));
 		}
 		return({ outcomes, held: outcomes.includes('held'), added: outcomes.includes('added') });
 	}
@@ -942,12 +952,15 @@ function probesHorizonAfter(shortPages: number): boolean {
  * it applies, and is retried at the end of the update's passes too. One
  * still refused after REPORT_REFUSED_AFTER_MILLISECONDS is reported once
  * (src/node/bootstrap-retry.ts) and stays queued; it does not hold up the
- * passes.
+ * passes. A queue so full that it stops the passes from where the last
+ * reached, as staples needing one a pass missed fill it, begins a deep
+ * re-scan at once, which has a share of the queue of its own, and reads
+ * that staple again.
  */
 export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple>, options: PassOptions): Promise<PeerOutcome> {
 	const began = Date.now();
 	const floor = floorOf(began);
-	let progress = withDeepScanBegun(await io.readProgress() ?? firstProgress(began, options.stagger ?? 0, options.from ?? EPOCH), began);
+	let progress = withDeepScanBegun(await io.readProgress() ?? firstProgress(began, options.stagger ?? 0, options.from ?? EPOCH), began, await io.saturated());
 	// Both passes record their progress, so each write follows the one before.
 	let written = io.writeProgress(progress);
 	const record = async (change: (current: PeerProgress) => PeerProgress): Promise<void> => {
@@ -959,7 +972,7 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 		await written;
 	};
 	await written;
-	const live = new Pass(io, progress.reached, floor, new Date(began), options, { tracked: true, since: progress.heldSince }, function(start, heldSince) {
+	const live = new Pass(io, progress.reached, floor, new Date(began), options, { tracked: true, since: progress.heldSince }, 'live', function(start, heldSince) {
 		return(record(function(current) {
 			return({ ...current, reached: earlier(start, floor), heldSince });
 		}));
@@ -968,7 +981,7 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 	let deep: Pass<Staple> | undefined;
 	if (deepScan !== undefined) {
 		// The node took the staples a deep re-scan reads again about when the peer applied them.
-		deep = new Pass(io, deepScan.reached, deepScan.horizon, deepScan.horizon, options, { tracked: false, since: undefined }, function(start) {
+		deep = new Pass(io, deepScan.reached, deepScan.horizon, deepScan.horizon, options, { tracked: false, since: undefined }, 'deep', function(start) {
 			return(record(function(current) {
 				return({ ...current, deepScan: { reached: start, horizon: deepScan.horizon } });
 			}));

@@ -52,10 +52,10 @@ describe('a bootstrap retry queue', function() {
 		const queue = harness.queue();
 
 		for (const staple of list.slice(0, 3)) {
-			expect(await queue.add(staple)).toBe('queued');
+			expect(await queue.add(staple, 'deep')).toBe('queued');
 		}
 		expect(await queue.retry()).toBe(0);
-		expect(await queue.add(at(list, 3))).toBe('added');
+		expect(await queue.add(at(list, 3), 'deep')).toBe('added');
 
 		expect(await queue.retry()).toBe(3);
 		expect(await queue.size()).toBe(0);
@@ -71,8 +71,8 @@ describe('a bootstrap retry queue', function() {
 		const offer = vi.spyOn(harness.node, 'offer');
 		const queue = harness.queue();
 
-		expect(await queue.add(refused)).toBe('queued');
-		expect(await queue.add(refused)).toBe('queued');
+		expect(await queue.add(refused, 'deep')).toBe('queued');
+		expect(await queue.add(refused, 'deep')).toBe('queued');
 
 		expect(offer).toHaveBeenCalledTimes(1);
 		expect(idsOf(await queue.staples())).toEqual([refused.id]);
@@ -86,14 +86,14 @@ describe('a bootstrap retry queue', function() {
 		const harness = new Harness();
 		const queue = harness.queue({ staples: 1, bytes: refused.toBytes().byteLength });
 
-		expect(await Promise.all([queue.add(refused), queue.add(refused)])).toEqual(['queued', 'queued']);
+		expect(await Promise.all([queue.add(refused, 'deep'), queue.add(refused, 'deep')])).toEqual(['queued', 'queued']);
 
 		expect(idsOf(await queue.staples())).toEqual([refused.id]);
 		const [other] = staples([[], [1]]).slice(1);
 		if (other === undefined) {
 			throw(new Error('no staple'));
 		}
-		await expect(queue.add(other)).rejects.toThrow(RetryQueueFull);
+		await expect(queue.add(other, 'deep')).rejects.toThrow(RetryQueueFull);
 	});
 
 	test('counts a staple whose blocks the ledger holds as held, and lets a queued one go once the ledger holds its blocks by other means', async function() {
@@ -105,8 +105,8 @@ describe('a bootstrap retry queue', function() {
 		const queue = harness.queue();
 		await harness.node.add(genesis);
 
-		expect(await queue.add(genesis)).toBe('held');
-		expect(await queue.add(refused)).toBe('queued');
+		expect(await queue.add(genesis, 'deep')).toBe('held');
+		expect(await queue.add(refused, 'deep')).toBe('queued');
 		// Its blocks arrive with other votes, as over P2P.
 		vi.spyOn(harness.node, 'holds').mockReturnValue(true);
 
@@ -118,18 +118,40 @@ describe('a bootstrap retry queue', function() {
 		const list = staples([[9], [9], [9]]);
 		const byCount = new Harness();
 		const countBound = byCount.queue({ staples: 2, bytes: 1024 * 1024 });
-		await countBound.add(at(list, 0));
-		await countBound.add(at(list, 1));
+		await countBound.add(at(list, 0), 'deep');
+		await countBound.add(at(list, 1), 'deep');
 
-		await expect(countBound.add(at(list, 2))).rejects.toThrow(RetryQueueFull);
+		await expect(countBound.add(at(list, 2), 'deep')).rejects.toThrow(RetryQueueFull);
 		expect(await countBound.size()).toBe(2);
 		expect(byCount.store.largest).toBe(2);
 
 		const byBytes = new Harness();
 		const bytesBound = byBytes.queue({ staples: 100, bytes: at(list, 0).toBytes().byteLength });
-		await bytesBound.add(at(list, 0));
-		await expect(bytesBound.add(at(list, 1))).rejects.toThrow(RetryQueueFull);
+		await bytesBound.add(at(list, 0), 'deep');
+		await expect(bytesBound.add(at(list, 1), 'deep')).rejects.toThrow(RetryQueueFull);
 		expect(await bytesBound.size()).toBe(1);
+	});
+
+	test('leaves a tenth of its bound to deep re-scans, and says it is saturated once that stops a pass from where the last reached, until a staple leaves it', async function() {
+		const list = staples([[], ...Array.from({ length: 11 }, function(): number[] {
+			return([0]);
+		})]);
+		const harness = new Harness();
+		const queue = harness.queue({ staples: 10, bytes: 1024 * 1024 });
+		for (const staple of list.slice(1, 10)) {
+			expect(await queue.add(staple, 'live')).toBe('queued');
+		}
+		expect(queue.saturated()).toBe(false);
+
+		await expect(queue.add(at(list, 10), 'live')).rejects.toThrow(RetryQueueFull);
+		expect(queue.saturated()).toBe(true);
+		expect(await queue.add(at(list, 10), 'deep')).toBe('queued');
+		await expect(queue.add(at(list, 11), 'deep')).rejects.toThrow(RetryQueueFull);
+		expect(await queue.size()).toBe(10);
+
+		await harness.node.add(at(list, 0));
+		expect(await queue.retry()).toBe(10);
+		expect(queue.saturated()).toBe(false);
 	});
 
 	test('keeps its staples in its store, so that a queue built on it after a restart applies them', async function() {
@@ -137,7 +159,7 @@ describe('a bootstrap retry queue', function() {
 		const harness = new Harness();
 		const before = harness.queue();
 		for (const staple of list.slice(0, 3)) {
-			await before.add(staple);
+			await before.add(staple, 'deep');
 		}
 
 		const after = harness.queue();
@@ -156,7 +178,7 @@ describe('a bootstrap retry queue', function() {
 		}
 		const harness = new Harness();
 		const queue = harness.queue();
-		await queue.add(refused);
+		await queue.add(refused, 'deep');
 
 		advanceClock(REPORT_REFUSED_AFTER_MILLISECONDS - MINUTE);
 		await queue.retry();
