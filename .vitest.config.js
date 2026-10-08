@@ -11,6 +11,13 @@ export default defineConfig({
 		 * loading the client. This leaves room for a machine several times slower.
 		 */
 		testTimeout: 30_000,
+		/*
+		 * The workspace shares a hard 12 GiB memory cap, and a worker holds 1 to
+		 * 2.4 GiB; the default of one worker per core got workers OOM-killed and
+		 * then the whole session. Three keeps the suite well under the cap
+		 * beside lint and the build.
+		 */
+		maxWorkers: 3,
 		globalSetup: ['src/testing/postgres-global-setup.ts'],
 		projects: [
 			{
