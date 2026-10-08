@@ -71,7 +71,7 @@ async function moveOnTo(horizon: Date, peers: readonly string[], io: UpdateIO): 
 	for (const peer of peers) {
 		const progress = await io.readProgress(peer);
 		if (progress !== undefined && progress.reached.getTime() < horizon.getTime()) {
-			await io.writeProgress(peer, { ...progress, reached: horizon, deepScanFrom: later(progress.deepScanFrom, horizon), heldSince: undefined });
+			await io.writeProgress(peer, { ...progress, reached: horizon, deepScanFrom: later(progress.deepScanFrom, horizon) });
 		}
 	}
 }

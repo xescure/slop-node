@@ -11,31 +11,28 @@ const PROGRESS: PeerProgress = {
 	deepScanFrom: new Date(0),
 	nextDeepScan: new Date(Date.UTC(2026, 9, 8, 20)),
 	deepScan: undefined,
-	heldSince: new Date(Date.UTC(2026, 9, 8, 19, 14)),
 	keying: 'votes'
 };
 
 describe('the bootstrap cursors', function() {
-	test('keep when the node took the staples it holds from where it reached', async function() {
+	test('keep a peer\'s progress', async function() {
 		const cursors = new BootstrapCursors(new KVInternals.KVStorageProviderMemory());
 
 		await cursors.write(ENDPOINT, PROGRESS);
 		expect(await cursors.read(ENDPOINT)).toEqual(PROGRESS);
-
-		await cursors.write(ENDPOINT, { ...PROGRESS, heldSince: undefined });
-		expect((await cursors.read(ENDPOINT))?.heldSince).toBeUndefined();
+		expect(await cursors.read('https://other.example/api')).toBeUndefined();
 	});
 
-	test('read progress written before they kept it as taken about where it reached, and refuse a value that is not a moment', async function() {
+	test('read progress written by versions that kept no keying, or kept when the node took what it holds, which a pass no longer reads', async function() {
 		const kv = new KVInternals.KVStorageProviderMemory();
 		const cursors = new BootstrapCursors(kv);
 		const stored = { reached: PROGRESS.reached.getTime(), caughtUp: false, deepScanFrom: 0, nextDeepScan: PROGRESS.nextDeepScan.getTime(), deepScan: null };
 
 		await kv.set(BOOTSTRAP_CURSOR_ARENA, ENDPOINT, stored);
-		expect(await cursors.read(ENDPOINT)).toEqual({ ...PROGRESS, heldSince: undefined, keying: 'unknown' });
+		expect(await cursors.read(ENDPOINT)).toEqual({ ...PROGRESS, keying: 'unknown' });
 
-		await kv.set(BOOTSTRAP_CURSOR_ARENA, ENDPOINT, { ...stored, heldSince: 'yesterday' });
-		expect(await cursors.read(ENDPOINT)).toBeUndefined();
+		await kv.set(BOOTSTRAP_CURSOR_ARENA, ENDPOINT, { ...stored, heldSince: Date.UTC(2026, 9, 8, 19, 14), keying: 'votes' });
+		expect(await cursors.read(ENDPOINT)).toEqual(PROGRESS);
 	});
 
 	test('keep how the peer keys its staples, and refuse a value that names no way', async function() {

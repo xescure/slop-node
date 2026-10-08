@@ -108,18 +108,18 @@ export type SimulatedPeerOptions = {
 	 * staples the filter names, as the main network's representatives do.
 	 */
 	readonly readsAtMost?: number;
-	/** How the peer keys and lists its staples: by when it applied them, as this node does, unless told otherwise. */
+	/** How the peer keys and lists its staples: by when it applied them, as earlier versions of this node did, unless told otherwise. */
 	readonly keying?: SimulatedKeying;
 };
 
 /**
  * How a peer finds the staples to list from a start.
  *
- * 'applied': as this node does, each staple once, at the moment it applied
- * it, in the order applied (src/ledger/storage/memory/driver.ts
- * getVotesAfter).
+ * 'applied': as versions of this node before it keyed votes did, each
+ * staple once, at the moment it applied it, in the order applied.
  *
- * 'votes': as the main network's representatives do, each vote at the moment
+ * 'votes': as the main network's representatives and this node do
+ * (src/ledger/storage/memory/driver.ts getVotesAfter), each vote at the moment
  * it was made: the peer reads the votes made at or after the start, in that
  * order, so many at a time, and lists the staple of each vote it read, once
  * per read [Keeta TS] index.js:69655-69676, in no order of its own within a
@@ -177,11 +177,10 @@ export function deterministicRandom(seed: number): () => number {
 }
 
 /**
- * A representative answering bootstrap pages as this node's API does: the
- * staples applied at or after the start, in the order applied (the moment,
- * then the sequence, as src/ledger/storage/memory/driver.ts getVotesAfter
- * orders them), leaving out those the filter names before counting towards
- * the limit [Keeta TS] index.js:69633-69702. The filter travels serialized
+ * A representative answering bootstrap pages as this node's API does, or
+ * did before it keyed votes: the staples it holds a key at or after the
+ * start for (SimulatedKeying), leaving out those the filter names before
+ * counting towards the limit [Keeta TS] index.js:69633-69702. The filter travels serialized
  * and is read back with the client's own Bloom functions, as
  * src/api/node.ts does.
  */
@@ -449,14 +448,12 @@ export class SimulatedPeer {
 }
 
 /**
- * What a simulated node holds: each staple added, in the order added, with
- * the moment it added it. As a ledger does, it holds one staple per set of
- * blocks, adds none whose blocks it holds, and refuses one until it holds
- * those it needs.
+ * What a simulated node holds: each staple added. As a ledger does, it
+ * holds one staple per set of blocks, adds none whose blocks it holds, and
+ * refuses one until it holds those it needs.
  */
 export class SimulatedNode {
-	readonly #held = new Map<string, number>();
-	readonly #order: { readonly staple: PassStaple; readonly moment: number }[] = [];
+	readonly #held = new Map<string, PassStaple>();
 	#resent = 0;
 
 	holds(staple: PassStaple): boolean {
@@ -501,24 +498,31 @@ export class SimulatedNode {
 		if (lacking) {
 			return(Promise.resolve({ kind: 'refused', code: 'LEDGER_INSUFFICIENT_VOTING_WEIGHT' }));
 		}
-		this.#held.set(key, Date.now());
-		this.#order.push({ staple, moment: Date.now() });
+		this.#held.set(key, staple);
 		return(Promise.resolve({ kind: 'added' }));
 	}
 
-	/** The staples added at or after the moment, as many as asked for, in the order added. */
+	/**
+	 * The staples it holds with a vote made at or after the moment, as many as
+	 * asked for, by the earliest such vote, as the node's own catch-up lists
+	 * them (src/ledger/storage/memory/driver.ts getVotesAfter), each once.
+	 */
 	held(from: Date, count: number): Promise<readonly PassStaple[]> {
-		let low = 0;
-		let high = this.#order.length;
-		while (low < high) {
-			const middle = Math.floor((low + high) / 2);
-			if ((this.#order[middle]?.moment ?? from.getTime()) < from.getTime()) {
-				low = middle + 1;
-			} else {
-				high = middle;
+		const listed: { readonly staple: PassStaple; readonly vote: number }[] = [];
+		for (const staple of this.#held.values()) {
+			const since = staple.votes.map(function(vote): number {
+				return(vote.validityFrom.getTime());
+			}).filter(function(stamp): boolean {
+				return(stamp >= from.getTime());
+			});
+			if (since.length > 0) {
+				listed.push({ staple, vote: Math.min(...since) });
 			}
 		}
-		return(Promise.resolve(this.#order.slice(low, low + count).map(function(entry): PassStaple {
+		listed.sort(function(left, right): number {
+			return(left.vote - right.vote);
+		});
+		return(Promise.resolve(listed.slice(0, count).map(function(entry): PassStaple {
 			return(entry.staple);
 		})));
 	}

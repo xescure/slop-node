@@ -88,11 +88,11 @@ const MAX_VOTES_PER_READ = 200;
  * (see Pass).
  */
 export type PeerKeying =
-	/** Nothing yet: as this node does, or as the representatives do. */
+	/** Nothing yet: either way. */
 	| 'unknown'
 	/** It listed a staple twice in one answer, which only a peer keyed by votes does. */
 	| 'votes'
-	/** It listed from a start a staple none of whose votes was made at or after the tolerance before it, which only a peer keyed as this node is does. */
+	/** It listed from a start a staple none of whose votes was made at or after the tolerance before it, which only a peer keyed by when it applied its staples does. */
 	| 'applied'
 	/** It did both: it keys votes later than the tolerance after they were made. */
 	| 'late-votes';
@@ -161,19 +161,17 @@ export type PeerProgress = {
 	readonly deepScanFrom: Date;
 	readonly nextDeepScan: Date;
 	readonly deepScan: DeepScan | undefined;
-	/**
-	 * From when, on the node's clock, the node took the staples it holds of
-	 * the peer from where it reached: those the next pass names first. Nothing
-	 * when about that moment itself, as once caught up.
-	 */
-	readonly heldSince: Date | undefined;
 	readonly keying: PeerKeying;
 };
 
 /** How a pass reaches the peer and the node. */
 export type PeerIO<Staple extends PassStaple> = {
 	page(request: PassRequest): Promise<PassAnswer<Staple>>;
-	/** Staples the node has queued for retry, and then those it added at or after the moment, on its own clock, the earliest first. */
+	/**
+	 * Staples the node has queued for retry, and then those it holds with a
+	 * vote made at or after the moment, as its own catch-up lists them
+	 * (CONTRACT D8): those a peer keyed by votes lists from there.
+	 */
 	held(from: Date, count: number): Promise<readonly NamedStaple[]>;
 	/** Adds the staple, or queues it for retry when the ledger refuses it (src/node/bootstrap-retry.ts), failing only when there is no room for the pass adding it. */
 	add(staple: Staple, use: QueueUse): Promise<Added>;
@@ -264,7 +262,7 @@ function floorOf(now: number): Date {
 }
 
 function firstProgress(now: number, stagger: number, from: Date): PeerProgress {
-	return({ reached: from, caughtUp: false, deepScanFrom: from, nextDeepScan: new Date(now + DEEP_SCAN_PERIOD_MILLISECONDS + stagger), deepScan: undefined, heldSince: undefined, keying: 'unknown' });
+	return({ reached: from, caughtUp: false, deepScanFrom: from, nextDeepScan: new Date(now + DEEP_SCAN_PERIOD_MILLISECONDS + stagger), deepScan: undefined, keying: 'unknown' });
 }
 
 /**
@@ -574,12 +572,15 @@ function madeBetween(staple: PassStaple, start: number, moment: number): boolean
  * leaving out those the filter names, until the limit, or until its time for
  * the request runs out once it has one to send
  * [Keeta TS] index.js:69633-69702. Peers key in one of two ways:
- * - this node keys each staple once, at the moment it applied it, and lists
- *   staples in the order of their keys (CONTRACT D8);
- * - the main network's representatives key each vote at the moment it was
- *   made, as the vote says, to within VOTE_KEY_TOLERANCE_MILLISECONDS either
- *   way: a staple has a key per vote, is listed once per read holding one of
- *   them, and in no order within a read.
+ * - by when they applied them, as versions of this node before it keyed
+ *   votes did: each staple once, at the moment it applied it, listed in the
+ *   order of their keys;
+ * - by votes, as the main network's representatives and this node do
+ *   (CONTRACT D8): each vote at the moment it was made, as the vote says, to
+ *   within VOTE_KEY_TOLERANCE_MILLISECONDS either way for a representative,
+ *   exactly for this node: a staple has a key per vote, and is listed once
+ *   per read holding one of them, in no order within a read that the pass
+ *   relies on.
  * Either way, a page lists every staple not named with a key among those
  * read, which run from the start up to a key the pass does not learn, and an
  * empty page shows the peer had no staple not named from the start on.
@@ -599,7 +600,7 @@ function madeBetween(staple: PassStaple, start: number, moment: number): boolean
  * The pass learns which way the peer keys from what it lists (PeerKeying): a
  * staple listed twice in one answer comes only from a peer keyed by votes,
  * and a staple listed from a start none of whose votes was made at or after
- * the tolerance before it only from one keyed as this node is, or from one
+ * the tolerance before it only from one keyed by when it applied them, or from one
  * that keys votes later than the tolerance after they were made, as it would
  * keying them when it received them. One that does both keys votes late.
  *
@@ -624,7 +625,7 @@ function madeBetween(staple: PassStaple, start: number, moment: number): boolean
  * S to T only on an answer from T, with any filter, that lists a staple x of
  * the page that shows T (shows), which, as far as the pass knows how the
  * peer keys, means:
- * - keyed as this node is, x's one key is at or after T, and the page,
+ * - keyed by when it applied them, x's one key is at or after T, and the page,
  *   listing x, listed every staple not named keyed before it, wherever the
  *   page was cut;
  * - keyed by votes, every vote of x was made at least the tolerance after
@@ -686,7 +687,7 @@ function madeBetween(staple: PassStaple, start: number, moment: number): boolean
  * each, a page from the start must show it read up to that moment and list
  * no staple the node lacked with a vote made about then, from a peer keyed
  * by votes, and list first the first staple from the moment, from one keyed
- * as this node is. A peer that keys votes late gives no such check, as a
+ * by when it applied them. A peer that keys votes late gives no such check, as a
  * staple the node lacked may have its votes made anywhere before; a pass
  * that names MAX_NAMED staples from one start ends there, and reports it.
  *
@@ -700,9 +701,7 @@ class Pass<Staple extends PassStaple> {
 	readonly #horizon: number;
 	readonly #end: number;
 	readonly #seed: () => number;
-	readonly #moved: (start: Date, heldSince: Date | undefined) => Promise<void>;
-	/** Whether the node took the staples it holds from the start on lately, as it does catching up, rather than about when the peer applied them. */
-	readonly #tracksHeld: boolean;
+	readonly #moved: (start: Date) => Promise<void>;
 	readonly #use: QueueUse;
 	readonly #keying: KeyingRecord;
 	readonly #known = new KnownVotes();
@@ -712,10 +711,6 @@ class Pass<Staple extends PassStaple> {
 	#requests = 0;
 	/** How far the start last moved, from which probes look next. */
 	#step = FIRST_STEP_MILLISECONDS;
-	/** From when, on the node's clock, it took the staples it holds from the start on, if it tracks that. */
-	#heldSince: number | undefined;
-	/** When, on the node's clock, it first asked for staples from the start. */
-	#askedSince: number | undefined;
 
 	constructor(io: PeerIO<Staple>, setup: PassSetup, options: PassOptions) {
 		this.#io = io;
@@ -726,9 +721,6 @@ class Pass<Staple extends PassStaple> {
 		this.#seed = options.seed ?? function(): number {
 			return(randomInt(SEED_LIMIT));
 		};
-		this.#tracksHeld = setup.held.tracked;
-		this.#heldSince = setup.held.since?.getTime();
-		this.#askedSince = this.#heldSince;
 		this.#use = setup.use;
 		this.#keying = setup.keying;
 		this.#moved = setup.moved;
@@ -814,7 +806,6 @@ class Pass<Staple extends PassStaple> {
 	/** A page from the start, taken, or nothing when it was too large, and fewer staples are asked for from then on. */
 	async #list(): Promise<Listed<Staple> | undefined> {
 		const filter = this.#named.filter(this.#seed());
-		this.#askedSince ??= Date.now();
 		const answer = await this.#request(this.#start, this.#limit, filter.serialized);
 		if (answer === undefined) {
 			return(undefined);
@@ -824,42 +815,34 @@ class Pass<Staple extends PassStaple> {
 
 	/**
 	 * Names, as far as there is room, the staples the node has queued, which
-	 * the peer would otherwise send again, then those it took since it began
-	 * taking those it holds from the start on, when it tracks that, and those
-	 * it added from the start on, by its own clock: the likeliest to be those
-	 * the peer sends from there. While catching up, the node takes a peer's
-	 * staples long after their moments, so only the first find them. Given
-	 * the first staple the peer sends from the start, it names each from that
-	 * staple on, and none when the node added it elsewhere in its order,
-	 * which the peer would send all the same.
+	 * the peer would otherwise send again, then those it holds with a vote
+	 * made from the start on, which the node lists as a peer keyed by votes
+	 * does (PeerIO.held), whenever it took them: those the peer sends from
+	 * there. Given the first staple the peer sends from the start, it names
+	 * each from that staple on, and none when the node lists it elsewhere in
+	 * its order, which the peer would send all the same.
 	 */
 	async #hold(first?: NamedStaple): Promise<void> {
-		await this.#holdInto(this.#named, this.#start, this.#heldSince, first);
+		await this.#holdInto(this.#named, this.#start, first);
 	}
 
 	/** Names, for the start given, what the node holds from there, as #hold does for the current one. */
-	async #holdInto(named: NamedStaples, start: number, heldSince: number | undefined, first?: NamedStaple): Promise<void> {
-		const since = [start];
-		if (heldSince !== undefined) {
-			since.unshift(heldSince);
+	async #holdInto(named: NamedStaples, start: number, first?: NamedStaple): Promise<void> {
+		const room = BLOOM_CAPACITY - named.size;
+		if (room <= 0) {
+			return;
 		}
-		for (const moment of since) {
-			const room = BLOOM_CAPACITY - named.size;
-			if (room <= 0) {
-				return;
-			}
-			const held = await this.#io.held(new Date(moment), room);
-			if (first === undefined) {
-				named.hold(held);
-				continue;
-			}
-			const key = stapleKey(first);
-			const at = held.findIndex(function(staple): boolean {
-				return(stapleKey(staple) === key);
-			});
-			if (at >= 0) {
-				named.hold(held.slice(at));
-			}
+		const held = await this.#io.held(new Date(start), room);
+		if (first === undefined) {
+			named.hold(held);
+			return;
+		}
+		const key = stapleKey(first);
+		const at = held.findIndex(function(staple): boolean {
+			return(stapleKey(staple) === key);
+		});
+		if (at >= 0) {
+			named.hold(held.slice(at));
 		}
 	}
 
@@ -963,7 +946,7 @@ class Pass<Staple extends PassStaple> {
 			return(undefined);
 		}
 		const shownKey = stapleKey(shownStaple);
-		// The peer may list from there again the staples of the page whose votes were made about then or later and, from this node, those last in the page.
+		// The peer may list from there again the staples of the page whose votes were made about then or later and, keyed by when it applied them, those last in the page.
 		const tail = Math.floor(page.length * EARLY_REACH_SHARE);
 		const named = new NamedStaples();
 		named.receive(page.filter(function(staple, index): boolean {
@@ -972,13 +955,9 @@ class Pass<Staple extends PassStaple> {
 			})));
 		}));
 		if (held) {
-			let heldSince: number | undefined;
-			if (this.#tracksHeld) {
-				heldSince = this.#askedSince;
-			}
-			await this.#holdInto(named, target.at, heldSince);
+			await this.#holdInto(named, target.at);
 		}
-		// Of what the peer sent from the start, a peer keyed by votes lists from there again only the staples with a vote made about then or later; one keyed as this node is lists those that sort after the moment, which those votes tell only of staples it applied about when they were made.
+		// Of what the peer sent from the start, a peer keyed by votes lists from there again only the staples with a vote made about then or later; one keyed by when it applied them lists those that sort after the moment, which those votes tell only of staples it applied about when they were made.
 		const known = this.#known;
 		const keying = this.#keying.current;
 		named.carry(this.#named, function(key): boolean {
@@ -986,7 +965,6 @@ class Pass<Staple extends PassStaple> {
 		});
 		named.forget(shownStaple);
 		const filter = named.filter(this.#seed());
-		const asked = Date.now();
 		const answer = await this.#request(target.at, this.#limit, filter.serialized);
 		if (answer === undefined) {
 			return(undefined);
@@ -1000,19 +978,14 @@ class Pass<Staple extends PassStaple> {
 		const taken = await this.#takeAll(answer.staples, named, shownKey);
 		named.receive(answer.staples);
 		this.#named = named;
-		await this.#advance(target.at, asked);
+		await this.#advance(target.at);
 		return({ ...answer, filter, taken });
 	}
 
-	/** The start moves on to the moment given, the node having first asked from there at the moment given on its own clock. */
-	async #advance(start: number, asked: number | undefined): Promise<void> {
-		if (this.#tracksHeld) {
-			this.#heldSince = this.#askedSince;
-		}
-		this.#askedSince = asked;
+	async #advance(start: number): Promise<void> {
 		this.#step = start - this.#start;
 		this.#start = start;
-		await this.#moved(new Date(start), heldSinceOf(this.#heldSince));
+		await this.#moved(new Date(start));
 	}
 
 	/**
@@ -1030,7 +1003,7 @@ class Pass<Staple extends PassStaple> {
 				return(stamp >= reach.start - VOTE_KEY_TOLERANCE_MILLISECONDS);
 			}));
 		}));
-		await this.#advance(reach.start, undefined);
+		await this.#advance(reach.start);
 		if (held) {
 			await this.#hold(page[reach.from]);
 		}
@@ -1047,7 +1020,7 @@ class Pass<Staple extends PassStaple> {
 	 */
 	async #passMoment(evidence: Evidence<Staple>, filter: Filter, held: boolean): Promise<void> {
 		const next = shownTarget(evidence)?.at ?? this.#start + 1;
-		// From this node, the staple that shows the moment may come after others whose votes were made about then.
+		// From a peer keyed by when it applied them, the staple that shows the moment may come after others whose votes were made about then.
 		const from = await this.#probe(next, filter.serialized, evidence, this.#limit);
 		if (from !== undefined && await this.#confirm(next, filter.errorRate)) {
 			await this.#moveTo({ start: next, from }, evidence.page, held);
@@ -1099,11 +1072,11 @@ class Pass<Staple extends PassStaple> {
 
 	/**
 	 * Whether a further filter holds up to the moment: a page from the start
-	 * lists first the staple listed first from the moment, which this node's
-	 * order requires, and shows it read up to the moment and lists no staple
-	 * the node lacked with a vote made about the moments between, which a
-	 * representative's requires, each as far as the pass knows how the peer
-	 * keys. A peer that keys votes late gives no such check.
+	 * lists first the staple listed first from the moment, which keying by
+	 * when it applied them requires, and shows it read up to the moment and
+	 * lists no staple the node lacked with a vote made about the moments
+	 * between, which keying by votes requires, each as far as the pass knows
+	 * how the peer keys. A peer that keys votes late gives no such check.
 	 */
 	async #confirmUpTo(to: number, filter: Filter): Promise<boolean> {
 		const keying = this.#keying.current;
@@ -1233,18 +1206,10 @@ type PassSetup = {
 	readonly horizon: Date;
 	/** At or after the horizon: the pass stops reading once its start reaches it. */
 	readonly end: Date;
-	readonly held: { readonly tracked: boolean; readonly since: Date | undefined };
 	readonly use: QueueUse;
 	readonly keying: KeyingRecord;
-	readonly moved: (start: Date, heldSince: Date | undefined) => Promise<void>;
+	readonly moved: (start: Date) => Promise<void>;
 };
-
-function heldSinceOf(moment: number | undefined): Date | undefined {
-	if (moment === undefined) {
-		return(undefined);
-	}
-	return(new Date(moment));
-}
 
 /**
  * Whether to probe the horizon after that many short pages in a row: after
@@ -1318,12 +1283,11 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 		start: progress.reached,
 		horizon: floor,
 		end: new Date(began),
-		held: { tracked: true, since: progress.heldSince },
 		use: 'live',
 		keying,
-		moved: function(start, heldSince) {
+		moved: function(start) {
 			return(record(function(current) {
-				return({ ...current, reached: earlier(start, floor), heldSince });
+				return({ ...current, reached: earlier(start, floor) });
 			}));
 		}
 	}, options);
@@ -1334,8 +1298,6 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 			start: deepScan.reached,
 			horizon: deepScan.horizon,
 			end: deepScan.horizon,
-			// The node took the staples a deep re-scan reads again about when the peer applied them.
-			held: { tracked: false, since: undefined },
 			use: 'deep',
 			keying,
 			moved: function(start) {
@@ -1353,7 +1315,7 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 	await record(function(current) {
 		let next: PeerProgress = { ...current, caughtUp: false };
 		if (liveOutcome !== undefined && completes(liveOutcome)) {
-			next = { ...next, reached: floor, caughtUp: true, heldSince: undefined };
+			next = { ...next, reached: floor, caughtUp: true };
 		}
 		if (deepOutcome !== undefined && completes(deepOutcome)) {
 			next = { ...next, deepScan: undefined };

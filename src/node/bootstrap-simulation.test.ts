@@ -13,7 +13,8 @@ import { assertNever } from '../util/assert-never.js';
 
 /*
  * Catch-ups against a simulated representative that pages and filters as
- * this node's API does, with the client's own Bloom filters, under the
+ * this node's API does, or as that of its versions keyed by when they applied
+ * staples did, with the client's own Bloom filters, under the
  * conditions that make a peer's moments diverge from staple timestamps.
  */
 
@@ -389,7 +390,12 @@ function outOfOrderHistory(peer: SimulatedPeer, count: number, endingAt: number)
  * own Bloom filters, which cost about 15 ms each to build and to test a page
  * against, so they are given more time than the suite's default.
  */
-/** How the peers of a scenario key and list their staples: as this node does, or as the main network's representatives do, with reads quick enough not to bound passes in time. */
+/**
+ * How the peers of a scenario key and list their staples: by when they
+ * applied them, as earlier versions of this node did, or by votes, in reads
+ * of at most 200 votes, as this node and the main network's representatives
+ * do, with reads quick enough not to bound passes in time.
+ */
 const ORDERINGS: readonly (readonly [string, SimulatedKeying])[] = [
 	['lists staples in the order it applied them', { kind: 'applied' }],
 	['lists staples by their votes\' timestamps', { kind: 'votes', votesPerRead: 200, readsAtMost: Number.POSITIVE_INFINITY, readMilliseconds: 0 }]
@@ -415,7 +421,7 @@ function outOfTimeAfter(staples: number): SimulatedPeerOptions {
 
 /**
  * A peer whose time for a request runs out once it has listed about that
- * many staples: one keyed as this node is cuts the list there, and one keyed
+ * many staples: one keyed by when it applied them cuts the list there, and one keyed
  * by votes stops after the read that brings it there, in reads of about
  * four votes a staple.
  */
