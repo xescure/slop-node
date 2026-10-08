@@ -1,5 +1,10 @@
+import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { KVStorageProvider } from '@keetanetwork/keetanet-client/lib/kv/index.js';
+import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import type { DeepScan, PeerProgress } from './bootstrap-pass.js';
+import type { QueuedStaple, RetryStore } from './bootstrap-retry.js';
+
+const lib = KeetaNet.lib;
 
 /**
  * The arena that holds, for each representative the node bootstraps from,
@@ -8,6 +13,9 @@ import type { DeepScan, PeerProgress } from './bootstrap-pass.js';
  * reached on one says nothing about another.
  */
 export const BOOTSTRAP_CURSOR_ARENA = 'bootstrapCursors';
+
+/** The arena that holds the staples the ledger refused, by the hash of their blocks, until they apply (src/node/bootstrap-retry.ts). */
+export const BOOTSTRAP_RETRY_ARENA = 'bootstrapRetries';
 
 /** A peer's progress as stored: moments in milliseconds. */
 type StoredProgress = {
@@ -80,9 +88,68 @@ export class BootstrapCursors {
 		await this.#kv.set(BOOTSTRAP_CURSOR_ARENA, endpoint, stored);
 	}
 
+	/** Forgets every peer's progress; the staples queued for retry stay, as nothing reads them again. */
 	async clear(): Promise<void> {
 		for (const endpoint of await this.#kv.list(BOOTSTRAP_CURSOR_ARENA)) {
 			await this.#kv.set(BOOTSTRAP_CURSOR_ARENA, endpoint, undefined);
 		}
+	}
+}
+
+/** A queued staple as stored: its bytes in base64. */
+type StoredQueued = {
+	readonly staple: string;
+	readonly queuedAt: number;
+	readonly code: string;
+	readonly reported: boolean;
+};
+
+/** The staple of a stored value, or nothing when the node did not write it. */
+function queuedOf(value: unknown): QueuedStaple<VoteStaple> | undefined {
+	if (!isRecord(value)) {
+		return(undefined);
+	}
+	const { staple, queuedAt, code, reported } = value;
+	if (typeof staple !== 'string' || !isWholeNumber(queuedAt) || typeof code !== 'string' || typeof reported !== 'boolean') {
+		return(undefined);
+	}
+	try {
+		return({ staple: new lib.Vote.Staple(staple), queuedAt, code, reported });
+	} catch {
+		return(undefined);
+	}
+}
+
+/** The staples queued for retry, kept in the node's store so that a restart loses none. */
+export class KVRetryStore implements RetryStore<VoteStaple> {
+	readonly #kv: KVStorageProvider;
+
+	constructor(kv: KVStorageProvider) {
+		this.#kv = kv;
+	}
+
+	/** A value the node did not write counts as none, as a cursor's does. */
+	async load(): Promise<QueuedStaple<VoteStaple>[]> {
+		return(Object.values(await this.#kv.getAll(BOOTSTRAP_RETRY_ARENA)).flatMap(function(value): QueuedStaple<VoteStaple>[] {
+			const queued = queuedOf(value);
+			if (queued === undefined) {
+				return([]);
+			}
+			return([queued]);
+		}));
+	}
+
+	async put(key: string, entry: QueuedStaple<VoteStaple>): Promise<void> {
+		const stored: StoredQueued = {
+			staple: Buffer.from(entry.staple.toBytes()).toString('base64'),
+			queuedAt: entry.queuedAt,
+			code: entry.code,
+			reported: entry.reported
+		};
+		await this.#kv.set(BOOTSTRAP_RETRY_ARENA, key, stored);
+	}
+
+	async remove(key: string): Promise<void> {
+		await this.#kv.set(BOOTSTRAP_RETRY_ARENA, key, undefined);
 	}
 }

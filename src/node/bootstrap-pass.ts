@@ -1,5 +1,6 @@
 import { randomInt } from 'node:crypto';
 import { assertNever } from '../util/assert-never.js';
+import type { Added } from './bootstrap-retry.js';
 import { ACCEPTED_ERROR_RATE, BLOOM_CAPACITY, BOOTSTRAP_MARGIN_MILLISECONDS, MAX_NAMED, NamedStaples, PEER_CLOCK_SKEW_MILLISECONDS, stapleKey } from './bootstrap-window.js';
 import type { Filter, NamedStaple } from './bootstrap-window.js';
 
@@ -77,9 +78,6 @@ export type PassAnswer<Staple extends PassStaple> =
 	/** The answer was larger than a page may be, so fewer staples must be asked for. */
 	| { readonly kind: 'too-large' };
 
-/** Whether a staple a peer sent was new to the node, or one whose blocks it held already, perhaps with other votes. */
-export type Added = 'added' | 'held';
-
 /** A deep re-scan under way: it reads the peer again from where it has reached up to the horizon, the margin before it began. */
 export type DeepScan = {
 	readonly reached: Date;
@@ -89,12 +87,12 @@ export type DeepScan = {
 /** What the node keeps of its passes over one peer. */
 export type PeerProgress = {
 	/**
-	 * The node holds every staple the peer applied before this moment, on
-	 * the peer's clock, save those a filter named by mistake and those
-	 * committed later than the margin allows.
+	 * The node holds, or has queued for retry, every staple the peer applied
+	 * before this moment, on the peer's clock, save those a filter named by
+	 * mistake and those committed later than the margin allows.
 	 */
 	readonly reached: Date;
-	/** Whether the last pass held every staple the peer had applied before the margin before it began. */
+	/** Whether the last pass held or queued every staple the peer had applied before the margin before it began. */
 	readonly caughtUp: boolean;
 	/** Where the next deep re-scan starts at the latest: where the passes since the last one began started. */
 	readonly deepScanFrom: Date;
@@ -105,9 +103,12 @@ export type PeerProgress = {
 /** How a pass reaches the peer and the node. */
 export type PeerIO<Staple extends PassStaple> = {
 	page(request: PassRequest): Promise<PassAnswer<Staple>>;
-	/** Staples the node added at or after the moment, on its own clock, the earliest first. */
+	/** Staples the node has queued for retry, and then those it added at or after the moment, on its own clock, the earliest first. */
 	held(from: Date, count: number): Promise<readonly NamedStaple[]>;
+	/** Adds the staple, or queues it for retry when the ledger refuses it (src/node/bootstrap-retry.ts), failing only when there is no room. */
 	add(staple: Staple): Promise<Added>;
+	/** Offers the ledger again the staples it refused, round after round while a round applies any. */
+	retry(): Promise<void>;
 	readProgress(): Promise<PeerProgress | undefined>;
 	writeProgress(progress: PeerProgress): Promise<void>;
 };
@@ -125,9 +126,9 @@ export type PassOptions = {
 };
 
 export type PassOutcome =
-	/** An empty page came back: the node held every staple the peer had applied from the start. */
+	/** An empty page came back: the node held or queued every staple the peer had applied from the start. */
 	| { readonly kind: 'drained' }
-	/** The node was shown to hold every staple the peer applied before the pass's horizon, the margin before it began. */
+	/** The node was shown to hold or have queued every staple the peer applied before the pass's horizon, the margin before it began. */
 	| { readonly kind: 'caught-up' }
 	/** The pass reached its bound first; the next one starts from where it reached. */
 	| { readonly kind: 'bounded'; readonly reached: Date };
@@ -144,7 +145,7 @@ function earlier(left: Date, right: Date): Date {
 	return(new Date(Math.min(left.getTime(), right.getTime())));
 }
 
-/** Whether the pass showed the node holds every staple it was to read: it did, unless it reached its bound first. */
+/** Whether the pass showed the node holds or has queued every staple it was to read: it did, unless it reached its bound first. */
 export function completes(outcome: PassOutcome): boolean {
 	switch (outcome.kind) {
 		case 'drained':
@@ -207,6 +208,9 @@ function withDeepScanBegun(progress: PeerProgress, now: number): PeerProgress {
 /** What a page's staples were proven to reach: the start moves to that moment, which every staple of the page from that index on is at or after. */
 type Reach = { readonly start: number; readonly from: number };
 
+/** What the node made of the staples of a page: whether it held any already, and whether it added any. */
+type Taken = { readonly held: boolean; readonly added: boolean };
+
 /**
  * One pass over a peer's staples, from a start up to a horizon.
  *
@@ -221,8 +225,18 @@ type Reach = { readonly start: number; readonly from: number };
  *
  * Progress is made by exclusion: the next request asks from the same start,
  * with a filter that names everything sent from it as well as what the node
- * held, so that the peer sends only staples the node lacks. Only an empty
- * page shows that the peer had nothing more.
+ * held or queued, so that the peer sends only staples the node lacks. Only
+ * an empty page shows that the peer had nothing more.
+ *
+ * Every staple sent is taken before the pass goes on: added, found held, or,
+ * when the ledger refuses it, as it does a staple whose dependencies the
+ * peer applied later, queued for retry (src/node/bootstrap-retry.ts), where
+ * it stays, durably, until the ledger accepts it or holds its blocks. So
+ * whatever the pass concludes the node holds, it holds or has queued, which
+ * loses nothing: a queued staple is offered again after each page that adds
+ * a staple and at the end of each pass, for as long as it takes. A staple
+ * the queue has no room for is not taken, and the pass fails before it
+ * moves past it.
  *
  * A filter names a fixed number of staples, so before a page would overfill
  * it, the start moves on, but only to a moment the page is proven to have
@@ -230,20 +244,20 @@ type Reach = { readonly start: number; readonly from: number };
  * filter: the peer answers with the first staple not named that it applied
  * at or after that moment, and when that is a staple of the page, the page
  * reached that moment, so it held every staple not named from the start up
- * to it; the page's staples before the one answered precede the moment, and
- * those from it on do not. Probes gallop up from the start and then bisect,
- * until the staples from the moment found fit the filter with room for a
- * page. The same probe at the horizon, after short pages, shows the pass
+ * to it, each of which the node now holds or has queued; the page's staples
+ * before the one answered precede the moment, and those from it on do not.
+ * Probes gallop up from the start and then bisect, until the staples from
+ * the moment found fit the filter with room for a page. The same probe at the horizon, after short pages, shows the pass
  * has caught up while the peer keeps applying staples, when no page is
  * ever empty.
  *
- * A pass completes once the node is shown to hold every staple before its
- * horizon, the margin before the pass began: the next pass starts there
- * whatever this one reads past it, so no more needs to be shown. It probes
- * the horizon only after short pages, which a peer answers once the pass
- * has read up to the present, and so reads that far all the same, unless
- * the peer answers short pages throughout, when the next passes bring the
- * rest. It stops earlier only when its start reaches its end: the moment it
+ * A pass completes once the node is shown to hold or have queued every
+ * staple before its horizon, the margin before the pass began: the next
+ * pass starts there whatever this one reads past it, so no more needs to be
+ * shown. It probes the horizon only after short pages, which a peer answers
+ * once the pass has read up to the present, and so reads that far all the
+ * same, unless the peer answers short pages throughout, when the next
+ * passes bring the rest. It stops earlier only when its start reaches its end: the moment it
  * began, for a pass from where the last reached, and the horizon, for a
  * deep re-scan, which need not read the present. The horizon must not be
  * the moment the pass began: the probe needs a staple the peer applied at
@@ -252,8 +266,8 @@ type Reach = { readonly start: number; readonly from: number };
  * allows for a clock that far behind.
  *
  * A filter names a staple it was not given at a small rate, and a conclusion
- * that the node holds every staple up to a moment is wrong when the filter
- * named one it lacks. When more staples share the start's moment than a
+ * that the node holds or has queued every staple up to a moment is wrong
+ * when the filter named one it lacks. When more staples share the start's moment than a
  * filter and a page hold, no page reaches past them; the filter then names
  * all of them at a higher rate, and once a page reaches past that moment
  * the start moves a millisecond on. Such a conclusion is checked with
@@ -308,7 +322,11 @@ class Pass<Staple extends PassStaple> {
 				this.#limit = Math.ceil(this.#limit / 2);
 				continue;
 			}
-			const held = await this.#take(page);
+			const taken = await this.#take(page);
+			if (taken.added) {
+				await this.#io.retry();
+			}
+			const held = taken.held;
 			if (page.length === 0) {
 				if (await this.#confirm(undefined, filter.errorRate)) {
 					return({ kind: 'drained' });
@@ -350,9 +368,10 @@ class Pass<Staple extends PassStaple> {
 	}
 
 	/**
-	 * Names, as far as there is room, the staples the node added from the
-	 * start on, by its own clock, the likeliest to be those the peer sends
-	 * from there. Given the first staple the peer sends from the start, it
+	 * Names, as far as there is room, the staples the node has queued, which
+	 * the peer would otherwise send again, and those it added from the start
+	 * on, by its own clock, the likeliest to be those the peer sends from
+	 * there. Given the first staple the peer sends from the start, it
 	 * names them from that staple on, and none when the node added it
 	 * elsewhere in its order, as it does staples it bootstrapped long after
 	 * their moments, which the peer would send all the same.
@@ -394,13 +413,12 @@ class Pass<Staple extends PassStaple> {
 	}
 
 	/**
-	 * Adds the staples a peer sent, which answers whether the node held any
-	 * of them already. A peer that sends a staple the filter named ignores
-	 * the filter, and would send it again forever; one that sends blocks the
-	 * node holds with other votes does not, and the filter names those votes
-	 * from then on.
+	 * Adds or queues the staples a peer sent. A peer that sends a staple the
+	 * filter named ignores the filter, and would send it again forever; one
+	 * that sends blocks the node holds with other votes does not, and the
+	 * filter names those votes from then on.
 	 */
-	async #take(page: readonly Staple[]): Promise<boolean> {
+	async #take(page: readonly Staple[]): Promise<Taken> {
 		const named = page.find((staple) => {
 			return(this.#named.names(staple));
 		});
@@ -408,12 +426,23 @@ class Pass<Staple extends PassStaple> {
 			throw(new Error(`the peer sent staple ${named.blocksHash.toString()}, which the filter named, so it does not leave out what a filter names`));
 		}
 		let held = false;
+		let added = false;
 		for (const staple of page) {
-			if (await this.#io.add(staple) === 'held') {
-				held = true;
+			const outcome = await this.#io.add(staple);
+			switch (outcome) {
+				case 'added':
+					added = true;
+					break;
+				case 'held':
+					held = true;
+					break;
+				case 'queued':
+					break;
+				default:
+					assertNever(outcome);
 			}
 		}
-		return(held);
+		return({ held, added });
 	}
 
 	/**
@@ -447,7 +476,7 @@ class Pass<Staple extends PassStaple> {
 		}
 	}
 
-	/** Whether the node holds every staple before the horizon: shown once the start has moved past it, or by the page, with no staple not named before it, reaching it. */
+	/** Whether the node holds or has queued every staple before the horizon: shown once the start has moved past it, or by the page, with no staple not named before it, reaching it. */
 	async #reachesHorizon(page: readonly Staple[], filter: Filter): Promise<boolean> {
 		if (this.#start >= this.#horizon) {
 			return(true);
@@ -459,10 +488,10 @@ class Pass<Staple extends PassStaple> {
 	}
 
 	/**
-	 * Whether a conclusion that the node holds every staple from the start up
-	 * to the moment given, or to the end when none is, drawn from a filter of
-	 * that error rate, holds with further filters until their rates multiply
-	 * to ACCEPTED_ERROR_RATE. A staple a further filter finds is added, and
+	 * Whether a conclusion that the node holds or has queued every staple from
+	 * the start up to the moment given, or to the end when none is, drawn
+	 * from a filter of that error rate, holds with further filters until
+	 * their rates multiply to ACCEPTED_ERROR_RATE. A staple a further filter finds is added, and
 	 * the conclusion is not drawn.
 	 */
 	async #confirm(to: number | undefined, errorRate: number): Promise<boolean> {
@@ -478,7 +507,9 @@ class Pass<Staple extends PassStaple> {
 			}
 			const first = await this.#first(this.#start, filter.serialized);
 			if (first !== undefined && (beyond === undefined || stapleKey(first) !== stapleKey(beyond))) {
-				await this.#take([first]);
+				if ((await this.#take([first])).added) {
+					await this.#io.retry();
+				}
 				this.#named.receive([first]);
 				return(false);
 			}
@@ -580,6 +611,12 @@ function positionsOf(page: readonly NamedStaple[]): Map<string, number> {
  * than the margin allows but within LATE_COMMIT_BOUND_MILLISECONDS, two deep
  * re-scans, which overlap for that. A staple a filter of one named by
  * mistake is read by the other.
+ *
+ * Read means held or queued: a staple the ledger refused stays queued until
+ * it applies, and is retried at the end of the update's passes too. One
+ * still refused after REPORT_REFUSED_AFTER_MILLISECONDS is reported once
+ * (src/node/bootstrap-retry.ts) and stays queued; it does not hold up the
+ * passes.
  */
 export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple>, options: PassOptions): Promise<PeerOutcome> {
 	const began = Date.now();
@@ -611,6 +648,8 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 		});
 	}
 	const [liveResult, deepResult] = await Promise.allSettled([live.run(), deep?.run()]);
+	// Whatever the passes did, the staples they queued, and those queued before, are offered again, which also makes room in a queue that was full.
+	const [retried] = await Promise.allSettled([io.retry()]);
 	const liveOutcome = outcomeOf(liveResult);
 	const deepOutcome = outcomeOf(deepResult);
 	await record(function(current) {
@@ -628,6 +667,9 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 	}
 	if (deepResult.status === 'rejected') {
 		throw(failureOf(deepResult));
+	}
+	if (retried.status === 'rejected') {
+		throw(failureOf(retried));
 	}
 	return({ live: liveResult.value, deepScan: deepResult.value });
 }

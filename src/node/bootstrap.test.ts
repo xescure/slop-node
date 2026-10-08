@@ -8,7 +8,7 @@ import type { P2PPeer } from '@keetanetwork/keetanet-client/lib/p2p.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { GENESIS_MOMENT, ChainCursor, requireAt } from '../ledger/storage/suite/support.js';
 import { confirmedStaple, sendBlock } from '../testing/blocks.js';
-import { startFailingPeer, startRecordingPeer, startSilentAPIPeer, unreachableEndpoint } from '../testing/bootstrap-peers.js';
+import { startFailingPeer, startRecordingPeer, startServingPeer, startSilentAPIPeer, unreachableEndpoint } from '../testing/bootstrap-peers.js';
 import type { RecordedPage } from '../testing/bootstrap-peers.js';
 import { useLocalNodes } from '../testing/local-node.js';
 import type { CreatedLocalNode, LocalNodeOptions, RunningLocalNode } from '../testing/local-node.js';
@@ -19,8 +19,9 @@ import { STORAGES_UNDER_TEST, useSDKNodes } from '../testing/sdk.js';
 import { KVInternals } from '../upstream/internals.js';
 import type { ServingNode, StorageUnderTest } from '../testing/sdk.js';
 import { BootstrapClient } from './bootstrap.js';
-import { BOOTSTRAP_CURSOR_ARENA, BootstrapCursors } from './bootstrap-cursors.js';
+import { BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RETRY_ARENA, BootstrapCursors } from './bootstrap-cursors.js';
 import { bootstrapFrom, bootstrapSources } from './bootstrap-peers.js';
+import { REPORT_REFUSED_AFTER_MILLISECONDS } from './bootstrap-retry.js';
 import { BOOTSTRAP_MARGIN_MILLISECONDS } from './bootstrap-window.js';
 import type { LocalNode } from './local.js';
 
@@ -259,8 +260,86 @@ describe('a bootstrap client', function() {
 				return(line.includes('Bootstrap pass over'));
 			}));
 		};
-		expect(lines(info.mock.calls)).toEqual([`BOOTSTRAP Bootstrap pass over ${recording.apiURL}: drained after ${String(requests)} requests, 4 staples added, 0 held already`]);
-		expect(lines(debug.mock.calls)).toEqual([`BOOTSTRAP Bootstrap pass over ${recording.apiURL}: drained after ${String(recording.pages.length - requests)} requests, 0 staples added, 0 held already`]);
+		expect(lines(info.mock.calls)).toEqual([`BOOTSTRAP Bootstrap pass over ${recording.apiURL}: drained after ${String(requests)} requests, 4 staples added, 0 held already, 0 queued for retry (0 in the queue)`]);
+		expect(lines(debug.mock.calls)).toEqual([`BOOTSTRAP Bootstrap pass over ${recording.apiURL}: drained after ${String(recording.pages.length - requests)} requests, 0 staples added, 0 held already, 0 queued for retry (0 in the queue)`]);
+	});
+
+	/*
+	 * The main network's representatives serve their history in the order
+	 * they applied it, which is not causal: here the sends come before the
+	 * genesis staple that gives their voters weight.
+	 */
+	test('queues the staples the ledger refuses until those they need arrive, naming them meanwhile, and applies them then', async function() {
+		const peer = await representative();
+		const sends = await sendsFrom(peer.network, 0, 2);
+		const serving = await startServingPeer();
+		serving.apply([...sends, peer.network.genesis], new Date());
+		const late = await joiner({ bootstrapFrom: [serving.apiURL] });
+		const kv = new KVInternals.KVStorageProviderMemory();
+		const set = vi.spyOn(kv, 'set');
+
+		expect(await clientOf(late.node, { kv }).update(2)).toEqual({ complete: true });
+
+		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([peer.network.genesis, ...sends]));
+		expect(set.mock.calls.filter(function([arena, , value]): boolean {
+			return(arena === BOOTSTRAP_RETRY_ARENA && value !== undefined);
+		}).map(function([, key]): string {
+			return(key);
+		}).sort()).toEqual(blocksHashesOf(sends));
+		expect(await kv.list(BOOTSTRAP_RETRY_ARENA)).toEqual([]);
+		// The second page names the two staples queued, so that the peer sends genesis.
+		expect(servedCounts(serving.pages)).toEqual([2, 1, 0]);
+		expect(sends.map(function(staple): boolean | undefined {
+			return(serving.pages[1]?.bloomFilter?.has(staple.toBytes()));
+		})).toEqual([true, true]);
+	});
+
+	test('keeps the staples it queued across a restart, completing its passes meanwhile, and applies them once what they need arrives', async function() {
+		const peer = await representative();
+		const sends = await sendsFrom(peer.network, 0, 2);
+		const serving = await startServingPeer();
+		serving.apply(sends, new Date());
+		const late = await joiner({ bootstrapFrom: [serving.apiURL] });
+		const kv = new KVInternals.KVStorageProviderMemory();
+		expect(await clientOf(late.node, { kv }).update()).toEqual({ complete: true });
+		expect((await kv.list(BOOTSTRAP_RETRY_ARENA)).sort()).toEqual(blocksHashesOf(sends));
+		expect(await heldBlocksHashes(late.node)).toEqual([]);
+
+		advanceClock(1000);
+		serving.apply([peer.network.genesis], new Date());
+		const restarted = clientOf(late.node, { kv });
+		const before = serving.pages.length;
+		expect(await restarted.update()).toEqual({ complete: true });
+
+		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([peer.network.genesis, ...sends]));
+		expect(await kv.list(BOOTSTRAP_RETRY_ARENA)).toEqual([]);
+		// The restarted client named the queued staples from its first request on.
+		expect(sends.map(function(staple): boolean | undefined {
+			return(serving.pages[before]?.bloomFilter?.has(staple.toBytes()));
+		})).toEqual([true, true]);
+	});
+
+	test('reports a staple the ledger still refuses an hour after it queued it, once', async function() {
+		const peer = await representative();
+		const [send] = await sendsFrom(peer.network, 0, 1);
+		if (send === undefined) {
+			throw(new Error('no staple was made'));
+		}
+		const serving = await startServingPeer();
+		serving.apply([send], new Date());
+		const late = await joiner({ bootstrapFrom: [serving.apiURL] });
+		const warnings = warningsOf(late.node);
+		const client = clientOf(late.node);
+		await client.update();
+
+		advanceClock(REPORT_REFUSED_AFTER_MILLISECONDS);
+		await client.update();
+		advanceClock(60_000);
+		await client.update();
+
+		expect(warnings().filter(function(warning): boolean {
+			return(warning.includes('bootstrap: staple refused'));
+		})).toEqual([`BOOTSTRAP bootstrap: staple refused for 60 min: LEDGER_INSUFFICIENT_VOTING_WEIGHT (staple ${send.blocksHash.toString()})`]);
 	});
 
 	test('keeps trying the peers that fail, and catches up on the others meanwhile', async function() {

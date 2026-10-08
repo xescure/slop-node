@@ -7,13 +7,15 @@ import { assertNever } from '../util/assert-never.js';
 import { eachAtMost } from '../util/concurrency.js';
 import type { AssertNever } from '../util/assert-never.js';
 import type { ClassSurface } from '../util/class-surface.js';
-import { BootstrapCursors } from './bootstrap-cursors.js';
+import { BootstrapCursors, KVRetryStore } from './bootstrap-cursors.js';
 import { PageError, PageFetcher } from './bootstrap-page.js';
 import { PeerPacer } from './bootstrap-pacing.js';
 import { DEEP_SCAN_PERIOD_MILLISECONDS, bootstrapPeer, completes } from './bootstrap-pass.js';
-import type { Added, PassAnswer, PassOutcome, PassRequest, PeerIO } from './bootstrap-pass.js';
+import type { PassAnswer, PassOutcome, PassRequest, PeerIO } from './bootstrap-pass.js';
 import { bootstrapPacingOf, bootstrapSources } from './bootstrap-peers.js';
 import type { BootstrapNode } from './bootstrap-peers.js';
+import { RetryQueue } from './bootstrap-retry.js';
+import type { Added, Offered, QueuedStaple } from './bootstrap-retry.js';
 
 export type { BootstrapConfig } from '@keetanetwork/keetanet-client/lib/bootstrap.js';
 
@@ -33,9 +35,14 @@ const MAX_PAGE_LIMIT = 1000;
 /** How many peers an update reads at once; the others wait for one of them to finish its pass. */
 const MAX_CONCURRENT_PASSES = 4;
 
+/** The most of a refusal's message kept as its code when the error carries no code. */
+const MAX_REFUSAL_LENGTH = 200;
+
+const MINUTE_MILLISECONDS = 60_000;
+
 type UpdateResult = { complete: boolean };
 
-/** What an update's passes over one peer did: its requests, and the staples it was sent, by whether the node held them already. */
+/** What an update's passes over one peer did: its requests, and the staples it was sent, by whether the node added them, held them already or queued them. */
 type PassTally = Record<'requests' | Added, number>;
 
 function describeOutcome(outcome: PassOutcome): string {
@@ -52,6 +59,17 @@ function describeOutcome(outcome: PassOutcome): string {
 }
 
 type Callback = NonNullable<BootstrapConfig['callback']>;
+
+/** What names why the ledger refused a staple: the code upstream's errors carry, or the message of one without. */
+function refusalOf(error: unknown): string {
+	if (error instanceof Error && 'code' in error && typeof error.code === 'string') {
+		return(error.code);
+	}
+	if (error instanceof Error) {
+		return(`${error.name}: ${error.message}`.slice(0, MAX_REFUSAL_LENGTH));
+	}
+	return(String(error).slice(0, MAX_REFUSAL_LENGTH));
+}
 
 function positiveMilliseconds(name: string, value: number): number {
 	if (!Number.isFinite(value) || value <= 0) {
@@ -80,19 +98,21 @@ function pageLimit(limit: number): number {
  * An update makes one pass over each peer, a few peers at a time: it pages
  * through the peer's staples from where the node last reached on that peer
  * (src/node/bootstrap-pass.ts), adds each staple to the ledger as a
- * bootstrap, and is done with the peer once it is shown to hold every staple
- * the peer had applied before the margin before the pass began. A deep
- * re-scan of the peer, when one is under way, runs alongside. A pass is
- * bounded in requests and time, and one that reaches its bound is continued
- * on the next update; a peer that fails is logged and tried again on the
- * next update. Neither holds up any other peer for longer. Requests to a
- * peer are paced as the node's configuration asks (paceBootstrap), the
- * pause counting towards the pass's bound in time.
+ * bootstrap, queuing for retry each the ledger refuses
+ * (src/node/bootstrap-retry.ts), and is done with the peer once it is shown
+ * to hold or have queued every staple the peer had applied before the
+ * margin before the pass began. A deep re-scan of the peer, when one is
+ * under way, runs alongside. A pass is bounded in requests and time, and
+ * one that reaches its bound is continued on the next update; a peer that
+ * fails is logged and tried again on the next update. Neither holds up any
+ * other peer for longer. Requests to a peer are paced as the node's
+ * configuration asks (paceBootstrap), the pause counting towards the pass's
+ * bound in time.
  *
  * stats() counts the updates in a row that were complete: every peer's pass
- * completed, so the node held all its peers had applied before the margin
- * before each pass began. An incomplete update sets the count back to 0, so
- * a count above 0 says the node is caught up.
+ * completed, so the node held or queued all its peers had applied before
+ * the margin before each pass began. An incomplete update sets the count
+ * back to 0, so a count above 0 says the node is caught up.
  */
 export class BootstrapClient {
 	static isInstance: (obj: unknown, strict?: boolean) => obj is BootstrapClient = lib.Utils.Helper.checkableGenerator(BootstrapClient);
@@ -101,6 +121,7 @@ export class BootstrapClient {
 	timeout: number;
 	readonly #node: BootstrapNode;
 	readonly #cursors: BootstrapCursors;
+	readonly #retries: RetryQueue<VoteStaple>;
 	/** Kept across updates, so that the first request of an update is paced after the last of the one before. */
 	readonly #pacer: PeerPacer;
 	readonly #callback: Callback | undefined;
@@ -120,7 +141,18 @@ export class BootstrapClient {
 	constructor(node: BootstrapNode, config: BootstrapConfig = {}) {
 		this.#node = node;
 		this.timeout = positiveMilliseconds('timeout', config.timeout ?? DEFAULT_TIMEOUT_MILLISECONDS);
-		this.#cursors = new BootstrapCursors(config.kv ?? new KVInternals.KVStorageProviderMemory());
+		const kv = config.kv ?? new KVInternals.KVStorageProviderMemory();
+		this.#cursors = new BootstrapCursors(kv);
+		this.#retries = new RetryQueue({
+			holds: (staple) => {
+				return(this.#holds(staple));
+			},
+			offer: (staple) => {
+				return(this.#offer(staple));
+			}
+		}, new KVRetryStore(kv), (entry, age) => {
+			this.#reportRefused(entry, age);
+		});
 		this.#pacer = new PeerPacer(bootstrapPacingOf(node.config));
 		this.#callback = config.callback;
 		if (config.period !== undefined) {
@@ -229,19 +261,28 @@ export class BootstrapClient {
 
 	/** The update's passes over the peer, which answer whether the node caught up on it. */
 	async #catchUp(endpoint: string, limit: number, fetcher: PageFetcher): Promise<boolean> {
-		const tally: PassTally = { requests: 0, added: 0, held: 0 };
+		const tally: PassTally = { requests: 0, added: 0, held: 0, queued: 0 };
 		const io: PeerIO<VoteStaple> = {
 			page: (request) => {
 				tally.requests++;
 				return(this.#page(fetcher, endpoint, request));
 			},
-			held: (from, count) => {
-				return(this.#node.ledger.getVoteStaplesAfter(from, count));
+			held: async (since, count) => {
+				const queued = (await this.#retries.staples()).slice(0, count);
+				if (queued.length >= count) {
+					return(queued);
+				}
+				return([...queued, ...await this.#node.ledger.getVoteStaplesAfter(since, count - queued.length)]);
 			},
 			add: async (staple) => {
-				const added = await this.#add(staple);
+				this.#stopping.signal.throwIfAborted();
+				const added = await this.#retries.add(staple);
 				tally[added]++;
 				return(added);
+			},
+			retry: async () => {
+				this.#stopping.signal.throwIfAborted();
+				await this.#retries.retry();
 			},
 			readProgress: () => {
 				return(this.#cursors.read(endpoint));
@@ -251,9 +292,9 @@ export class BootstrapClient {
 			}
 		};
 		const { live: outcome } = await bootstrapPeer(io, { limit, stagger: staggerOf(endpoint) });
-		const summary = `Bootstrap pass over ${endpoint}: ${describeOutcome(outcome)} after ${String(tally.requests)} requests, ${String(tally.added)} staples added, ${String(tally.held)} held already`;
+		const summary = `Bootstrap pass over ${endpoint}: ${describeOutcome(outcome)} after ${String(tally.requests)} requests, ${String(tally.added)} staples added, ${String(tally.held)} held already, ${String(tally.queued)} queued for retry (${String(await this.#retries.size())} in the queue)`;
 		// Once caught up, a pass every period adds nothing, which an operator need not read.
-		if (tally.added > 0 || !completes(outcome)) {
+		if (tally.added > 0 || tally.queued > 0 || !completes(outcome)) {
 			this.#node.log.info(LOG_SOURCE, summary);
 		} else {
 			this.#node.log.debug(LOG_SOURCE, summary);
@@ -284,33 +325,37 @@ export class BootstrapClient {
 	 * The ledger refuses a staple whose blocks it holds already, as a block
 	 * that exists [Keeta TS] index.js:67683-67687, or, for genesis, as votes
 	 * without weight once genesis has assigned it
-	 * [Keeta TS] index.js:69398-69401, whatever votes the staple carries. So
-	 * a staple whose blocks are held is skipped before it is added, and so is
-	 * one refused because another peer's pass or a P2P message added it
-	 * meanwhile. One that fills a gap may release staples deferred until
-	 * then, and the callback hears of each staple added
-	 * [Keeta TS] index.js:69361-69420. Once the client is stopped, the rest of
-	 * a page already fetched is not added: the node stopping it may close its
-	 * storage next.
+	 * [Keeta TS] index.js:69398-69401, whatever votes the staple carries; the
+	 * queue skips a staple whose blocks are held before it offers it, and
+	 * counts one refused because another peer's pass or a P2P message added
+	 * it meanwhile as held. The ledger also refuses a staple whose
+	 * dependencies it lacks, as votes without weight before the staples that
+	 * give the voters weight [Keeta TS] index.js:69397-69400, 69740-69752,
+	 * which the queue keeps until they arrive. One that fills a gap may
+	 * release staples deferred until then, and the callback hears of each
+	 * staple added [Keeta TS] index.js:69361-69420.
+	 * Once the client is stopped, nothing more is offered, the rest of a page
+	 * already fetched included, and a refusal is not queued: the node
+	 * stopping it may close its storage next.
 	 */
-	async #add(staple: VoteStaple): Promise<Added> {
-		if (await this.#holds(staple)) {
-			return('held');
-		}
+	async #offer(staple: VoteStaple): Promise<Offered> {
 		this.#stopping.signal.throwIfAborted();
 		let added: VoteStaple[];
 		try {
 			added = await this.#node.ledger.add(staple, 'bootstrap');
 		} catch (error: unknown) {
-			if (await this.#holds(staple)) {
-				return('held');
-			}
-			throw(error);
+			this.#stopping.signal.throwIfAborted();
+			return({ kind: 'refused', code: refusalOf(error) });
 		}
 		for (const each of added) {
 			await this.#tell(each);
 		}
-		return('added');
+		return({ kind: 'added' });
+	}
+
+	/** A staple the network applied that this node's ledger still refuses: the two diverge on it. */
+	#reportRefused(entry: QueuedStaple<VoteStaple>, age: number): void {
+		this.#node.log.warn(LOG_SOURCE, `bootstrap: staple refused for ${String(Math.floor(age / MINUTE_MILLISECONDS))} min: ${entry.code} (staple ${entry.staple.blocksHash.toString()})`);
 	}
 
 	async #tell(staple: VoteStaple): Promise<void> {

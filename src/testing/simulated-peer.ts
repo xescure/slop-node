@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { BloomFilter } from '@keetanetwork/keetanet-client/lib/utils/bloom.js';
-import type { Added, PassAnswer, PassRequest, PassStaple } from '../node/bootstrap-pass.js';
+import type { PassAnswer, PassRequest, PassStaple } from '../node/bootstrap-pass.js';
+import { RetryQueue } from '../node/bootstrap-retry.js';
+import type { Added, Offered, QueuedStaple, QueueBounds, RetryStore } from '../node/bootstrap-retry.js';
+import { assertNever } from '../util/assert-never.js';
 import { advanceClock } from './network.js';
 
 const lib = KeetaNet.lib;
@@ -16,6 +19,8 @@ export type SimulatedStaple = PassStaple & {
 	readonly moment: number;
 	/** The order the peer applied it in among staples of the same moment. */
 	readonly sequence: number;
+	/** The staples a ledger must hold before it accepts this one, by ID: genesis for the voting weight, a credit for the balance a debit spends. */
+	readonly needs: readonly number[];
 	timestamp(): Date;
 };
 
@@ -28,13 +33,18 @@ function stapleBytes(id: number, votes: number): ArrayBuffer {
 	return(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
 }
 
-function simulatedStaple(id: number, moment: number, sequence: number, timestamp: number, votes = 0): SimulatedStaple {
+function nameOf(id: number): string {
+	return(`staple-${String(id)}`);
+}
+
+function simulatedStaple(id: number, moment: number, sequence: number, timestamp: number, needs: readonly number[], votes = 0): SimulatedStaple {
 	const bytes = stapleBytes(id, votes);
-	const name = `staple-${String(id)}`;
+	const name = nameOf(id);
 	return({
 		id,
 		moment,
 		sequence,
+		needs,
 		blocksHash: { toString: function(): string {
 			return(name);
 		} },
@@ -134,9 +144,12 @@ export class SimulatedPeer {
 		return(Date.now() + this.#clockOffset);
 	}
 
-	/** Applies a staple with the timestamp given, at the moment given or now on the peer's clock. */
-	apply(timestamp: number, moment: number = this.now()): SimulatedStaple {
-		const staple = simulatedStaple(this.#nextID++, moment, this.#nextSequence++, timestamp);
+	/** Applies a staple with the timestamp given, at the moment given or now on the peer's clock, which a ledger accepts once it holds those it needs. */
+	apply(timestamp: number, moment: number = this.now(), needs: readonly number[] = []): SimulatedStaple {
+		return(this.#insert(simulatedStaple(this.#nextID++, moment, this.#nextSequence++, timestamp, needs)));
+	}
+
+	#insert(staple: SimulatedStaple): SimulatedStaple {
 		let at = this.#applied.length;
 		while (at > 0 && compareApplied(this.#applied[at - 1] ?? staple, staple) > 0) {
 			at--;
@@ -147,7 +160,7 @@ export class SimulatedPeer {
 
 	/** The same blocks as the staple, with another set of votes on them, as another representative may hold them. */
 	otherVotesOn(staple: SimulatedStaple): SimulatedStaple {
-		return(simulatedStaple(staple.id, staple.moment, staple.sequence, staple.timestamp().getTime(), 1));
+		return(simulatedStaple(staple.id, staple.moment, staple.sequence, staple.timestamp().getTime(), staple.needs, 1));
 	}
 
 	/** Commits staples late at every request from now on, until stopped. */
@@ -256,7 +269,8 @@ export class SimulatedPeer {
 /**
  * What a simulated node holds: each staple added, in the order added, with
  * the moment it added it. As a ledger does, it holds one staple per set of
- * blocks, and adds none whose blocks it holds.
+ * blocks, adds none whose blocks it holds, and refuses one until it holds
+ * those it needs.
  */
 export class SimulatedNode {
 	readonly #held = new Map<string, number>();
@@ -276,15 +290,38 @@ export class SimulatedNode {
 		return(this.#resent);
 	}
 
-	add(staple: PassStaple): Promise<Added> {
+	/** Adds a staple, which the node must accept. */
+	async add(staple: SimulatedStaple): Promise<Added> {
+		const offered = await this.offer(staple);
+		switch (offered.kind) {
+			case 'added':
+				return('added');
+			case 'refused':
+				if (this.holds(staple)) {
+					return('held');
+				}
+				throw(new Error(`the node refused staple ${staple.blocksHash.toString()}: ${offered.code}`));
+			default:
+				return(assertNever(offered));
+		}
+	}
+
+	/** Offers a staple as a ledger is offered one: it refuses one whose blocks it holds, and one that needs a staple it lacks. */
+	offer(staple: SimulatedStaple): Promise<Offered> {
 		const key = staple.blocksHash.toString();
 		if (this.#held.has(key)) {
 			this.#resent++;
-			return(Promise.resolve('held'));
+			return(Promise.resolve({ kind: 'refused', code: 'LEDGER_BLOCK_ALREADY_EXISTS' }));
+		}
+		const lacking = staple.needs.some((id) => {
+			return(!this.#held.has(nameOf(id)));
+		});
+		if (lacking) {
+			return(Promise.resolve({ kind: 'refused', code: 'LEDGER_INSUFFICIENT_VOTING_WEIGHT' }));
 		}
 		this.#held.set(key, Date.now());
 		this.#order.push({ staple, moment: Date.now() });
-		return(Promise.resolve('added'));
+		return(Promise.resolve({ kind: 'added' }));
 	}
 
 	/** The staples added at or after the moment, as many as asked for, in the order added. */
@@ -303,4 +340,47 @@ export class SimulatedNode {
 			return(entry.staple);
 		})));
 	}
+}
+
+/** A queue's store that a simulated node keeps in memory, and keeps across the queues built on it, as a restart does. */
+export class SimulatedRetryStore implements RetryStore<SimulatedStaple> {
+	readonly #entries = new Map<string, QueuedStaple<SimulatedStaple>>();
+	#largest = 0;
+
+	/** The most staples it held at once. */
+	get largest(): number {
+		return(this.#largest);
+	}
+
+	load(): Promise<QueuedStaple<SimulatedStaple>[]> {
+		return(Promise.resolve([...this.#entries.values()]));
+	}
+
+	put(key: string, entry: QueuedStaple<SimulatedStaple>): Promise<void> {
+		this.#entries.set(key, entry);
+		this.#largest = Math.max(this.#largest, this.#entries.size);
+		return(Promise.resolve());
+	}
+
+	remove(key: string): Promise<void> {
+		this.#entries.delete(key);
+		return(Promise.resolve());
+	}
+}
+
+/** A staple reported as refused for long, and how long it had been refused. */
+export type RefusalReport = { readonly id: number; readonly code: string; readonly age: number };
+
+/** The retry queue a node builds on its ledger, here on a simulated node, recording what it reports. */
+export function simulatedRetries(node: SimulatedNode, store: SimulatedRetryStore, reports: RefusalReport[], bounds?: QueueBounds): RetryQueue<SimulatedStaple> {
+	return(new RetryQueue<SimulatedStaple>({
+		holds: function(staple): Promise<boolean> {
+			return(Promise.resolve(node.holds(staple)));
+		},
+		offer: function(staple): Promise<Offered> {
+			return(node.offer(staple));
+		}
+	}, store, function(entry, age): void {
+		reports.push({ id: entry.staple.id, code: entry.code, age });
+	}, bounds));
 }

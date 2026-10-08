@@ -59,6 +59,9 @@ class Harness {
 			add: (staple) => {
 				return(this.node.add(staple));
 			},
+			retry: function() {
+				return(Promise.resolve());
+			},
 			readProgress: () => {
 				return(Promise.resolve(this.progress));
 			},

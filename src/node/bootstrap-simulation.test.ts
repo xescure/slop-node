@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { SimulatedNode, SimulatedPeer } from '../testing/simulated-peer.js';
-import type { LiveTraffic, SimulatedPeerOptions, SimulatedStaple } from '../testing/simulated-peer.js';
+import { SimulatedNode, SimulatedPeer, SimulatedRetryStore, simulatedRetries } from '../testing/simulated-peer.js';
+import type { LiveTraffic, RefusalReport, SimulatedPeerOptions, SimulatedStaple } from '../testing/simulated-peer.js';
 import { advanceClock, freezeClock } from '../testing/network.js';
 import { DEEP_SCAN_PERIOD_MILLISECONDS, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, bootstrapPeer, completes } from './bootstrap-pass.js';
-import type { PassOutcome, PeerIO, PeerOutcome, PeerProgress } from './bootstrap-pass.js';
+import type { PassOptions, PassOutcome, PeerIO, PeerOutcome, PeerProgress } from './bootstrap-pass.js';
+import { REPORT_REFUSED_AFTER_MILLISECONDS, RetryQueueFull } from './bootstrap-retry.js';
+import type { QueueBounds, RetryQueue } from './bootstrap-retry.js';
 import { BLOOM_CAPACITY } from './bootstrap-window.js';
 
 /*
@@ -50,45 +52,72 @@ function seeds(): () => number {
 	});
 }
 
+/** A simulated node with the retry queue it keeps for the staples its ledger refuses, and its progress on each peer. */
+class Follower {
+	readonly node = new SimulatedNode();
+	readonly retryStore = new SimulatedRetryStore();
+	readonly reports: RefusalReport[] = [];
+	readonly retries: RetryQueue<SimulatedStaple>;
+	readonly progress = new Map<SimulatedPeer, PeerProgress>();
+	readonly #seed = seeds();
+
+	constructor(bounds?: QueueBounds) {
+		this.retries = simulatedRetries(this.node, this.retryStore, this.reports, bounds);
+	}
+
+	/** How a pass over the peer reaches it and this node. */
+	io(peer: SimulatedPeer): PeerIO<SimulatedStaple> {
+		return({
+			page: function(request) {
+				return(peer.page(request));
+			},
+			held: async (from, count) => {
+				const queued = (await this.retries.staples()).slice(0, count);
+				return([...queued, ...await this.node.held(from, count - queued.length)]);
+			},
+			add: (staple) => {
+				return(this.retries.add(staple));
+			},
+			retry: async () => {
+				await this.retries.retry();
+			},
+			readProgress: () => {
+				return(Promise.resolve(this.progress.get(peer)));
+			},
+			writeProgress: (progress) => {
+				this.progress.set(peer, progress);
+				return(Promise.resolve());
+			}
+		});
+	}
+
+	options(): PassOptions {
+		return({ limit: LIMIT, seed: this.#seed });
+	}
+}
+
 class Scenario {
 	readonly peer: SimulatedPeer;
-	readonly node = new SimulatedNode();
+	readonly follower: Follower;
+	readonly node: SimulatedNode;
 	readonly updates: UpdateRecord[] = [];
 	/** Staples the peer applies while each update reads it, and only then, so that a busy peer takes hours of updates without millions of staples. */
 	trafficWhileRead: LiveTraffic | undefined;
-	#progress: PeerProgress | undefined;
-	readonly #seed = seeds();
 
-	constructor(options: SimulatedPeerOptions = {}) {
+	constructor(options: SimulatedPeerOptions = {}, bounds?: QueueBounds) {
 		this.peer = new SimulatedPeer({ latency: LATENCY, ...options });
+		this.follower = new Follower(bounds);
+		this.node = this.follower.node;
 	}
 
 	/** One update: a pass over the peer, and the deep re-scan under way alongside, if any. */
 	async update(): Promise<PeerOutcome> {
 		const requests = this.peer.requests;
 		const began = Date.now();
-		const io: PeerIO<SimulatedStaple> = {
-			page: (request) => {
-				return(this.peer.page(request));
-			},
-			held: (from, count) => {
-				return(this.node.held(from, count));
-			},
-			add: (staple) => {
-				return(this.node.add(staple));
-			},
-			readProgress: () => {
-				return(Promise.resolve(this.#progress));
-			},
-			writeProgress: (progress) => {
-				this.#progress = progress;
-				return(Promise.resolve());
-			}
-		};
 		if (this.trafficWhileRead !== undefined) {
 			this.peer.goLive(this.trafficWhileRead);
 		}
-		const outcome = await bootstrapPeer(io, { limit: LIMIT, seed: this.#seed });
+		const outcome = await bootstrapPeer(this.follower.io(this.peer), this.follower.options());
 		if (this.trafficWhileRead !== undefined) {
 			this.peer.stopLive();
 		}
@@ -163,14 +192,67 @@ class Scenario {
 	}
 }
 
-/** History the peer applied as it was made, so many a second, ending at the moment given. */
-function liveHistory(peer: SimulatedPeer, count: number, perSecond: number, endingAt: number, voterSkew: (index: number) => number = function(): number {
+function noSkew(): number {
 	return(0);
-}): void {
+}
+
+function noNeeds(): readonly number[] {
+	return([]);
+}
+
+/** History the peer applied as it was made, so many a second, ending at the moment given, each staple needing those named by ID. */
+function liveHistory(peer: SimulatedPeer, count: number, perSecond: number, endingAt: number, voterSkew: (index: number) => number = noSkew, needs: (index: number) => readonly number[] = noNeeds): void {
 	const spacing = 1000 / perSecond;
 	for (let index = 0; index < count; index++) {
 		const madeAt = Math.floor(endingAt - (count - index) * spacing);
-		peer.apply(madeAt + voterSkew(index), madeAt);
+		peer.apply(madeAt + voterSkew(index), madeAt, needs(index));
+	}
+}
+
+/** The staple the peer applied at that index of its order. */
+function stapleAt(peer: SimulatedPeer, index: number): SimulatedStaple {
+	const staple = peer.staples[index];
+	if (staple === undefined) {
+		throw(new Error(`the peer applied no staple at ${String(index)}`));
+	}
+	return(staple);
+}
+
+/** The ID of a staple no peer applies: one that needs it is refused forever. */
+const NEVER_APPLIED = -1;
+
+/**
+ * History a peer applied in an order that is not causal, as the main
+ * network's representatives serve theirs: genesis, which gives voting
+ * weight to every staple after it, comes fifth; debits come before the
+ * credits they spend, some a page and a filter later; a token's sends come
+ * before its supply; and one staple waits on a chain of three.
+ */
+function outOfOrderHistory(peer: SimulatedPeer, count: number, endingAt: number): void {
+	const genesis = 4;
+	const needs = new Map<number, number[]>();
+	function need(index: number, on: number): void {
+		needs.set(index, [...needs.get(index) ?? [], on]);
+	}
+	for (let index = 0; index < count; index++) {
+		if (index !== genesis) {
+			need(index, genesis);
+		}
+	}
+	for (let debit = 100; debit < count - 1500; debit += 40) {
+		need(debit, debit + 1 + (debit % 3) * 700);
+	}
+	const supply = count - 500;
+	for (let send = supply - 400; send < supply - 380; send++) {
+		need(send, supply);
+	}
+	need(600, 700);
+	need(700, 800);
+	need(800, count - 1);
+	const spacing = 100;
+	for (let index = 0; index < count; index++) {
+		const madeAt = endingAt - (count - index) * spacing;
+		peer.apply(madeAt, madeAt, needs.get(index) ?? []);
 	}
 }
 
@@ -292,6 +374,75 @@ describe('bootstrapping against a simulated peer', { timeout: 120_000 }, functio
 
 		expect(scenario.missing()).toEqual([]);
 		scenario.expectEveryUpdateBounded();
+	});
+
+	test('holds every staple of a peer that serves its history out of causal order', async function() {
+		freezeClock(new Date(NOW));
+		const scenario = new Scenario();
+		outOfOrderHistory(scenario.peer, 3000, NOW - HOUR);
+
+		await scenario.untilComplete(10);
+
+		expect(scenario.missing()).toEqual([]);
+		expect(await scenario.follower.retries.size()).toBe(0);
+		expect(scenario.follower.reports).toEqual([]);
+		scenario.expectEveryUpdateBounded();
+	});
+
+	test('keeps a staple its ledger refuses forever queued, reports it once after an hour, and catches up on every other staple meanwhile', async function() {
+		freezeClock(new Date(NOW));
+		const scenario = new Scenario();
+		liveHistory(scenario.peer, 1500, 10, NOW - 2 * HOUR);
+		const refused = scenario.peer.apply(NOW - 2 * HOUR, NOW - 2 * HOUR, [NEVER_APPLIED]);
+		liveHistory(scenario.peer, 1500, 10, NOW - HOUR);
+		scenario.peer.goLive(steady(10));
+
+		await scenario.untilComplete(10);
+		expect(scenario.missing()).toEqual([refused.id]);
+		await scenario.periodically(REPORT_REFUSED_AFTER_MILLISECONDS + 10 * PERIOD);
+		scenario.peer.stopLive();
+		await scenario.untilComplete(3);
+
+		expect(scenario.missing()).toEqual([refused.id]);
+		expect(await scenario.follower.retries.staples()).toEqual([refused]);
+		expect(scenario.follower.reports.map(function({ id, code }): string {
+			return(`${String(id)} ${code}`);
+		})).toEqual([`${String(refused.id)} LEDGER_INSUFFICIENT_VOTING_WEIGHT`]);
+		expect(scenario.follower.reports[0]?.age).toBeGreaterThanOrEqual(REPORT_REFUSED_AFTER_MILLISECONDS);
+		expect(scenario.liveOutcomes().slice(1).every(function(kind): boolean {
+			return(kind !== 'bounded');
+		})).toBe(true);
+		scenario.expectEveryUpdateBounded();
+	});
+
+	test('fails a pass rather than move past a refused staple its full queue has no room for, and moves on once the queue drains', async function() {
+		freezeClock(new Date(NOW));
+		const bounds: QueueBounds = { staples: 10, bytes: 1024 * 1024 };
+		const scenario = new Scenario({}, bounds);
+		// Twenty sends of a token whose supply comes far later: more than the queue holds.
+		const supplyAt = 2900;
+		liveHistory(scenario.peer, 3000, 10, NOW - HOUR, undefined, function(index): readonly number[] {
+			if (index >= 100 && index < 120) {
+				return([supplyAt]);
+			}
+			return([]);
+		});
+		const supply = stapleAt(scenario.peer, supplyAt);
+		const eleventh = stapleAt(scenario.peer, 100 + bounds.staples);
+
+		await expect(scenario.update()).rejects.toThrow(RetryQueueFull);
+
+		expect(scenario.follower.retryStore.largest).toBe(bounds.staples);
+		expect(scenario.follower.progress.get(scenario.peer)?.reached.getTime()).toBeLessThanOrEqual(eleventh.moment);
+		expect(scenario.missing()).toContain(eleventh.id);
+
+		// The staple the sends need arrives otherwise, as over P2P.
+		await scenario.node.add(supply);
+		await scenario.untilComplete(5);
+
+		expect(scenario.missing()).toEqual([]);
+		expect(await scenario.follower.retries.size()).toBe(0);
+		expect(scenario.follower.retryStore.largest).toBe(bounds.staples);
 	});
 
 	/*

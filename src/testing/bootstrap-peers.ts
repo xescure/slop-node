@@ -194,3 +194,73 @@ export async function unreachableEndpoint(): Promise<string> {
 	});
 	return(`http://127.0.0.1:${String(port)}/api`);
 }
+
+/** A staple's bytes, from the staple or from base64 as a representative writes them. */
+export type ServedStaple = { toBytes(): ArrayBuffer } | string;
+
+function bytesOf(staple: ServedStaple): Buffer {
+	if (typeof staple === 'string') {
+		return(Buffer.from(staple, 'base64'));
+	}
+	return(Buffer.from(staple.toBytes()));
+}
+
+export type ServingPeer = RecordingPeer & {
+	/** Applies the staples, in that order, one a millisecond from the moment given, after those it applied already. */
+	readonly apply: (staples: readonly ServedStaple[], from: Date) => void;
+	/** The staples it has sent in all, its answers to probes included. */
+	readonly served: () => number;
+};
+
+/**
+ * A representative that applied the staples it is given in the order given,
+ * whatever they depend on, as the main network's representatives serve
+ * their history, and pages them as one does: those applied at or after the
+ * start, leaving out those the filter names, up to the limit
+ * [Keeta TS] index.js:69633-69702.
+ */
+export async function startServingPeer(): Promise<ServingPeer> {
+	const applied: { readonly bytes: Buffer; readonly moment: number }[] = [];
+	const pages: RecordedPage[] = [];
+	let served = 0;
+	const server = http.createServer(function(request, response): void {
+		const received = performance.now();
+		const query = new URL(request.url ?? '/', 'http://127.0.0.1').searchParams;
+		const start = Date.parse(query.get('start') ?? '');
+		const limit = Number(query.get('limit') ?? '1000');
+		const filter = bloomFilterOf(query);
+		const page: string[] = [];
+		for (const staple of applied) {
+			if (page.length >= limit) {
+				break;
+			}
+			const bytes = staple.bytes.buffer.slice(staple.bytes.byteOffset, staple.bytes.byteOffset + staple.bytes.byteLength);
+			if (staple.moment < start || filter?.has(bytes) === true) {
+				continue;
+			}
+			page.push(staple.bytes.toString('base64'));
+		}
+		served += page.length;
+		response.writeHead(200, { 'content-type': 'application/json' });
+		response.end(JSON.stringify({ voteStaples: page.map(function(binary): { readonly $binary: string } {
+			return({ $binary: binary });
+		}) }));
+		pages.push({ start: query.get('start'), limit: query.get('limit'), bloomFilter: filter, status: 200, served: page, received, answered: performance.now() });
+	});
+	return({
+		apiURL: await listenUntilTestEnds(server),
+		pages,
+		apply: function(staples: readonly ServedStaple[], from: Date): void {
+			staples.forEach(function(staple, index): void {
+				applied.push({ bytes: bytesOf(staple), moment: from.getTime() + index });
+			});
+			// A representative pages in the order it applied, which is the moments' (the sort keeps the order given within one).
+			applied.sort(function(left, right): number {
+				return(left.moment - right.moment);
+			});
+		},
+		served: function(): number {
+			return(served);
+		}
+	});
+}
