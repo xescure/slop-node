@@ -43,6 +43,16 @@ const MAX_REFUSAL_LENGTH = 200;
 
 const MINUTE_MILLISECONDS = 60_000;
 
+/**
+ * How long one read of what the node holds, to name in a filter, runs at
+ * most, besides the read of votes under way then
+ * [Keeta TS] index.js:69641-69647. It cannot be stopped otherwise, and each
+ * staple read is decoded and its votes' signatures checked, a few
+ * milliseconds a staple, so this bounds how long it holds up a stop. What it
+ * leaves out the peer may send again, which the pass finds held.
+ */
+const HELD_READ_MILLISECONDS = 2000;
+
 type UpdateResult = { complete: boolean };
 
 /** What an update's passes over one peer did: its requests, and the staples it was sent, by whether the node added them, held them already or queued them. */
@@ -205,6 +215,10 @@ export class BootstrapClient {
 		await this.#queue;
 	}
 
+	#stopped(): boolean {
+		return(this.#stopping.signal.aborted);
+	}
+
 	#enqueue<Result>(work: () => Promise<Result>): Promise<Result> {
 		const run = this.#queue.then(work);
 		this.#queue = run.catch(function(): void {
@@ -283,11 +297,15 @@ export class BootstrapClient {
 		}
 	}
 
+	/** Once stopped, a pass not yet begun is not begun: it would read the node's ledger before its first request found the stop. */
 	async #catchUpLogged(endpoint: string, limit: number, fetcher: PageFetcher, from: Date): Promise<PeerResult> {
+		if (this.#stopped()) {
+			return('failed');
+		}
 		try {
 			return(await this.#catchUp(endpoint, limit, fetcher, from));
 		} catch (error: unknown) {
-			if (this.#stopping.signal.aborted) {
+			if (this.#stopped()) {
 				this.#node.log.debug(LOG_SOURCE, `Stopped bootstrapping from ${endpoint}`);
 			} else {
 				this.#node.log.warn(LOG_SOURCE, `Bootstrapping from ${endpoint} failed; it is tried again on the next update:`, error);
@@ -311,11 +329,12 @@ export class BootstrapClient {
 				return(this.#page(fetcher, endpoint, request));
 			},
 			held: async (since, count) => {
+				this.#stopping.signal.throwIfAborted();
 				const queued = (await this.#retries.staples()).slice(0, count);
 				if (queued.length >= count) {
 					return(queued);
 				}
-				return([...queued, ...eachStapleOnce(await this.#node.ledger.getVoteStaplesAfter(since, count - queued.length))]);
+				return([...queued, ...eachStapleOnce(await this.#node.ledger.getVoteStaplesAfter(since, count - queued.length, { timeout: HELD_READ_MILLISECONDS }))]);
 			},
 			add: async (staple, use) => {
 				this.#stopping.signal.throwIfAborted();

@@ -43,6 +43,9 @@ const RECIPIENT: Account = lib.Account.fromSeed('4e2a6c8f0b1d3e5f7a9c1b3d5f7e9a0
 
 const EPOCH = new Date(0).toISOString();
 
+/** Far less than the 20 s a deployment gives the node to stop (conformance/DEPLOY.md), of which the bootstrap client's share is a fraction. */
+const STOP_BOUND_MILLISECONDS = 2000;
+
 /** Sends of one base unit from the user, each following the one before and made a second after it. */
 async function sendsFrom(network: TestNetwork, user: number, count: number): Promise<VoteStaple[]> {
 	const cursor = new ChainCursor(network.genesis);
@@ -409,6 +412,46 @@ describe('a bootstrap client', function() {
 		// Genesis, the first staple of the page, was being added as the client stopped.
 		expect(adds).toHaveBeenCalledTimes(1);
 		expect(await heldBlocksHashes(late.node)).toEqual([peer.network.genesis.blocksHash.toString()]);
+	});
+
+	/*
+	 * Until a pass completes, the peers are read one at a time, and a pass
+	 * that fails, as one stopped does, hands over to the next; each pass
+	 * reads what the node holds before its first request.
+	 */
+	test('stops at once while catching up from a slow peer with staples queued for retry, beginning no pass over the next peer', async function() {
+		const peer = await representative();
+		const serving = await startServingPeer();
+		serving.apply(await sendsFrom(peer.network, 0, 30));
+		const silent = await startSilentAPIPeer();
+		// The sends are refused without genesis, which the peer does not serve, and an earlier client queued them all.
+		const queuedBy = new KVInternals.KVStorageProviderMemory();
+		await clientOf((await joiner({ bootstrapFrom: [serving.apiURL] })).node, { kv: queuedBy }).update();
+		const kv = new KVInternals.KVStorageProviderMemory();
+		for (const key of await queuedBy.list(BOOTSTRAP_RETRY_ARENA)) {
+			await kv.set(BOOTSTRAP_RETRY_ARENA, key, await queuedBy.get(BOOTSTRAP_RETRY_ARENA, key));
+		}
+		expect(await kv.list(BOOTSTRAP_RETRY_ARENA)).toHaveLength(30);
+		const late = await joiner({ bootstrapFrom: [silent.apiURL, serving.apiURL] });
+		const client = clientOf(late.node, { kv });
+		const reads = vi.spyOn(late.node.ledger, 'getVoteStaplesAfter');
+		const adds = vi.spyOn(late.node.ledger, 'add');
+		const requested = serving.pages.length;
+
+		const updating = client.update();
+		await silent.requested;
+		const before = { reads: reads.mock.calls.length, adds: adds.mock.calls.length };
+		const stopping = performance.now();
+		await client.stop();
+		const stoppedIn = performance.now() - stopping;
+
+		expect(await updating).toEqual({ complete: false });
+		expect({ reads: reads.mock.calls.length, adds: adds.mock.calls.length, requests: serving.pages.length - requested }).toEqual({ ...before, requests: 0 });
+		expect(stoppedIn).toBeLessThan(STOP_BOUND_MILLISECONDS);
+		// A read of what the node holds, which a stop cannot end, ends of itself in time.
+		expect(reads.mock.calls.map(function([, , options]): number | undefined {
+			return(options?.timeout);
+		})).toEqual(Array<number>(before.reads).fill(STOP_BOUND_MILLISECONDS));
 	});
 
 	test('gives up on a peer that sends again what the filter names, rather than page through it forever', async function() {

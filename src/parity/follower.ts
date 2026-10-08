@@ -374,26 +374,30 @@ async function up(settings: FollowerSettings): Promise<ExitCode> {
 	return(0);
 }
 
-/** Signals the process and waits for it to exit, killing it once the deadline has passed; answers whether it had to be killed. */
-async function stopProcess(processID: number, signal: NodeJS.Signals, milliseconds: number): Promise<boolean> {
+/** How a process asked to stop ended: of itself, so many milliseconds after the signal, or killed at the deadline. */
+type Stopped = { readonly kind: 'exited'; readonly milliseconds: number } | { readonly kind: 'killed' };
+
+/** Signals the process and waits for it to exit, killing it once the deadline has passed. */
+async function stopProcess(processID: number, signal: NodeJS.Signals, milliseconds: number): Promise<Stopped> {
+	const signalled = Date.now();
 	try {
 		process.kill(processID, signal);
 	} catch (error: unknown) {
 		// It exited after it was found.
 		if (hasCode(error, 'ESRCH')) {
-			return(false);
+			return({ kind: 'exited', milliseconds: 0 });
 		}
 		throw(error);
 	}
-	const deadline = Date.now() + milliseconds;
+	const deadline = signalled + milliseconds;
 	while (isAlive(processID)) {
 		if (Date.now() > deadline) {
 			process.kill(processID, 'SIGKILL');
-			return(true);
+			return({ kind: 'killed' });
 		}
 		await delay(POLL_MILLISECONDS);
 	}
-	return(false);
+	return({ kind: 'exited', milliseconds: Date.now() - signalled });
 }
 
 async function down(directory: string): Promise<ExitCode> {
@@ -405,15 +409,23 @@ async function down(directory: string): Promise<ExitCode> {
 	}
 	let code: ExitCode = 0;
 	if (node !== undefined) {
-		if (await stopProcess(node, 'SIGTERM', NODE_STOP_MILLISECONDS)) {
-			process.stderr.write(`the node did not stop within ${String(NODE_STOP_MILLISECONDS)} ms and was killed\n`);
-			code = 1;
+		const stopped = await stopProcess(node, 'SIGTERM', NODE_STOP_MILLISECONDS);
+		switch (stopped.kind) {
+			case 'exited':
+				process.stdout.write(`the node stopped ${String(stopped.milliseconds)} ms after SIGTERM\n`);
+				break;
+			case 'killed':
+				process.stderr.write(`the node did not stop within ${String(NODE_STOP_MILLISECONDS)} ms and was killed\n`);
+				code = 1;
+				break;
+			default:
+				assertNever(stopped);
 		}
 		await rm(join(directory, NODE_PID_FILE), { force: true });
 	}
 	if (postmaster !== undefined) {
 		// SIGINT is Postgres' fast shutdown: it ends the sessions and checkpoints.
-		if (await stopProcess(postmaster, 'SIGINT', POSTGRES_STOP_MILLISECONDS)) {
+		if ((await stopProcess(postmaster, 'SIGINT', POSTGRES_STOP_MILLISECONDS)).kind === 'killed') {
 			process.stderr.write(`Postgres did not stop within ${String(POSTGRES_STOP_MILLISECONDS)} ms and was killed\n`);
 			code = 1;
 		}
