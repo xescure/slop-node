@@ -9,9 +9,10 @@ import type { AssertNever } from '../util/assert-never.js';
 import type { ClassSurface } from '../util/class-surface.js';
 import { BootstrapCursors } from './bootstrap-cursors.js';
 import { PageError, PageFetcher } from './bootstrap-page.js';
-import { DEEP_SCAN_PERIOD_MILLISECONDS, bootstrapPeer } from './bootstrap-pass.js';
-import type { Added, PassAnswer, PassRequest, PeerIO } from './bootstrap-pass.js';
-import { bootstrapSources } from './bootstrap-peers.js';
+import { PeerPacer } from './bootstrap-pacing.js';
+import { DEEP_SCAN_PERIOD_MILLISECONDS, bootstrapPeer, completes } from './bootstrap-pass.js';
+import type { Added, PassAnswer, PassOutcome, PassRequest, PeerIO } from './bootstrap-pass.js';
+import { bootstrapPacingOf, bootstrapSources } from './bootstrap-peers.js';
 import type { BootstrapNode } from './bootstrap-peers.js';
 
 export type { BootstrapConfig } from '@keetanetwork/keetanet-client/lib/bootstrap.js';
@@ -33,6 +34,22 @@ const MAX_PAGE_LIMIT = 1000;
 const MAX_CONCURRENT_PASSES = 4;
 
 type UpdateResult = { complete: boolean };
+
+/** What an update's passes over one peer did: its requests, and the staples it was sent, by whether the node held them already. */
+type PassTally = Record<'requests' | Added, number>;
+
+function describeOutcome(outcome: PassOutcome): string {
+	switch (outcome.kind) {
+		case 'drained':
+			return('drained');
+		case 'caught-up':
+			return('caught up');
+		case 'bounded':
+			return(`reached ${outcome.reached.toISOString()} within this update's bound (it continues on the next update)`);
+		default:
+			return(assertNever(outcome));
+	}
+}
 
 type Callback = NonNullable<BootstrapConfig['callback']>;
 
@@ -68,7 +85,9 @@ function pageLimit(limit: number): number {
  * re-scan of the peer, when one is under way, runs alongside. A pass is
  * bounded in requests and time, and one that reaches its bound is continued
  * on the next update; a peer that fails is logged and tried again on the
- * next update. Neither holds up any other peer for longer.
+ * next update. Neither holds up any other peer for longer. Requests to a
+ * peer are paced as the node's configuration asks (paceBootstrap), the
+ * pause counting towards the pass's bound in time.
  *
  * stats() counts the updates in a row that were complete: every peer's pass
  * completed, so the node held all its peers had applied before the margin
@@ -82,6 +101,8 @@ export class BootstrapClient {
 	timeout: number;
 	readonly #node: BootstrapNode;
 	readonly #cursors: BootstrapCursors;
+	/** Kept across updates, so that the first request of an update is paced after the last of the one before. */
+	readonly #pacer: PeerPacer;
 	readonly #callback: Callback | undefined;
 	readonly #stopping = new AbortController();
 	/** Updates and resets run one after another, each after those called before it. */
@@ -100,6 +121,7 @@ export class BootstrapClient {
 		this.#node = node;
 		this.timeout = positiveMilliseconds('timeout', config.timeout ?? DEFAULT_TIMEOUT_MILLISECONDS);
 		this.#cursors = new BootstrapCursors(config.kv ?? new KVInternals.KVStorageProviderMemory());
+		this.#pacer = new PeerPacer(bootstrapPacingOf(node.config));
 		this.#callback = config.callback;
 		if (config.period !== undefined) {
 			this.#updateEvery(positiveMilliseconds('period', config.period));
@@ -207,15 +229,19 @@ export class BootstrapClient {
 
 	/** The update's passes over the peer, which answer whether the node caught up on it. */
 	async #catchUp(endpoint: string, limit: number, fetcher: PageFetcher): Promise<boolean> {
+		const tally: PassTally = { requests: 0, added: 0, held: 0 };
 		const io: PeerIO<VoteStaple> = {
 			page: (request) => {
+				tally.requests++;
 				return(this.#page(fetcher, endpoint, request));
 			},
 			held: (from, count) => {
 				return(this.#node.ledger.getVoteStaplesAfter(from, count));
 			},
-			add: (staple) => {
-				return(this.#add(staple));
+			add: async (staple) => {
+				const added = await this.#add(staple);
+				tally[added]++;
+				return(added);
 			},
 			readProgress: () => {
 				return(this.#cursors.read(endpoint));
@@ -225,21 +251,22 @@ export class BootstrapClient {
 			}
 		};
 		const { live: outcome } = await bootstrapPeer(io, { limit, stagger: staggerOf(endpoint) });
-		switch (outcome.kind) {
-			case 'drained':
-			case 'caught-up':
-				return(true);
-			case 'bounded':
-				this.#node.log.info(LOG_SOURCE, `Bootstrapping from ${endpoint} reached ${outcome.reached.toISOString()} within this update's bound; it continues on the next update`);
-				return(false);
-			default:
-				return(assertNever(outcome));
+		const summary = `Bootstrap pass over ${endpoint}: ${describeOutcome(outcome)} after ${String(tally.requests)} requests, ${String(tally.added)} staples added, ${String(tally.held)} held already`;
+		// Once caught up, a pass every period adds nothing, which an operator need not read.
+		if (tally.added > 0 || !completes(outcome)) {
+			this.#node.log.info(LOG_SOURCE, summary);
+		} else {
+			this.#node.log.debug(LOG_SOURCE, summary);
 		}
+		return(completes(outcome));
 	}
 
 	async #page(fetcher: PageFetcher, endpoint: string, request: PassRequest): Promise<PassAnswer<VoteStaple>> {
 		try {
-			return({ kind: 'page', staples: await fetcher.page({ endpoint, ...request }, this.timeout, this.#stopping.signal) });
+			const staples = await this.#pacer.paced(endpoint, this.#stopping.signal, () => {
+				return(fetcher.page({ endpoint, ...request }, this.timeout, this.#stopping.signal));
+			});
+			return({ kind: 'page', staples });
 		} catch (error: unknown) {
 			if (error instanceof PageError && error.problem.kind === 'too-large') {
 				return({ kind: 'too-large' });

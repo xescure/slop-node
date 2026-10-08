@@ -17,6 +17,9 @@ export type RecordedPage = {
 	readonly status: number;
 	/** The staples of the answer, in base64. */
 	readonly served: readonly string[];
+	/** When the request arrived and when its answer was written, on the monotonic clock, in milliseconds. */
+	readonly received: number;
+	readonly answered: number;
 };
 
 /** An API endpoint on the loopback interface, open until the test ends. */
@@ -137,11 +140,12 @@ export async function startRecordingPeer(apiURL: string, options: RecordingPeerO
 	const target = new URL(apiURL);
 	const pages: RecordedPage[] = [];
 	const server = http.createServer(function(request, response): void {
+		const received = performance.now();
 		forward(target, request, options.filter ?? 'passed-on').then(function(answer): void {
 			const query = new URL(request.url ?? '/', target).searchParams;
-			pages.push({ start: query.get('start'), limit: query.get('limit'), bloomFilter: bloomFilterOf(query), status: answer.status, served: servedStaples(answer.body) });
 			response.writeHead(answer.status, { 'content-type': answer.contentType ?? 'application/json' });
 			response.end(answer.body + padding(query, options.padAboveLimit));
+			pages.push({ start: query.get('start'), limit: query.get('limit'), bloomFilter: bloomFilterOf(query), status: answer.status, served: servedStaples(answer.body), received, answered: performance.now() });
 		}, function(error: unknown): void {
 			response.writeHead(502);
 			response.end(String(error));

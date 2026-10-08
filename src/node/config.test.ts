@@ -8,8 +8,8 @@ import { PostgresKVStorage } from '../kv/postgres.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { requireAt } from '../ledger/storage/suite/support.js';
 import { deriveTestKeys, TEST_NETWORK_SEEDS } from '../testing/network.js';
-import { bootstrapEndpointsOf } from './bootstrap-peers.js';
-import { ConfigError, formatManualPeer, getConfigFromEnv, LEDGER_WRITE_MODES, localNodeConfig, MAX_FEE_SEED_ACCOUNTS } from './config.js';
+import { bootstrapEndpointsOf, bootstrapPacingOf } from './bootstrap-peers.js';
+import { ConfigError, DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, formatManualPeer, getConfigFromEnv, LEDGER_WRITE_MODES, localNodeConfig, MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, MAX_FEE_SEED_ACCOUNTS } from './config.js';
 import type { ConfigProblem, Environment, EnvironmentConfig, LedgerWriteMode } from './config.js';
 import { LocalNode } from './local.js';
 import { MAX_PEER_LIMIT } from './peer-limits.js';
@@ -636,6 +636,32 @@ describe('KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS', function() {
 		expect(problem).toMatchObject({ kind: 'invalid', variable: 'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS' });
 		expect(problem).not.toHaveProperty('value');
 		expect(messageOf({ KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: 'https://slop:hunter2@rep.example/api' })).not.toContain('hunter2');
+	});
+});
+
+describe('KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS', function() {
+	test('is 0 on the local network, whose representatives are the operator\'s own', function() {
+		expect(parse({}).bootstrapMinIntervalMilliseconds).toBe(0);
+	});
+
+	test.each<Networks>(['main', 'test', 'dev', 'staging'])('is a second on the %s network, whose representatives are Keeta\'s', function(network) {
+		expect(DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS).toBe(1000);
+		expect(parse({ KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'bootstrap-only' }, { KEETANET_LOCAL_NODE_SEED: SEED }).bootstrapMinIntervalMilliseconds).toBe(1000);
+	});
+
+	test('takes whole milliseconds, 0 turning pacing off on any network', function() {
+		expect(parse({ KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS: '250' }).bootstrapMinIntervalMilliseconds).toBe(250);
+		expect(parse({ KEETANET_LOCAL_NODE_NETWORK: 'main', KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'bootstrap-only', KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS: '0' }, { KEETANET_LOCAL_NODE_SEED: SEED }).bootstrapMinIntervalMilliseconds).toBe(0);
+		expect(parse({ KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS: String(MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS) }).bootstrapMinIntervalMilliseconds).toBe(MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS);
+	});
+
+	test.each(['-1', '1.5', '1e3', '01', ' 5', String(MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS + 1), 'second'])('refuses %j', function(value) {
+		expect(problemOf({ KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS: value })).toEqual({ kind: 'invalid', variable: 'KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS', expected: `a whole number of milliseconds from 0 to ${String(MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS)}`, value });
+	});
+
+	test('is carried to the node\'s bootstrap client', function() {
+		const node = localNodeConfig(parse({ KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS: '750' }), { storageDriver: new MemoryLedgerStorage(), kv: null, log: new lib.Log() });
+		expect(bootstrapPacingOf(node)).toBe(750);
 	});
 });
 

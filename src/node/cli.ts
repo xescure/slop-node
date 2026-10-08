@@ -3,7 +3,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { assertNever } from '../util/assert-never.js';
 import { NODE_VERSION } from '../version.js';
 import { logUnhandledRejections, noteRejectionsHandledLate } from './background-failures.js';
-import { ConfigError, formatManualPeer, GENESIS_VARIABLES, getConfigFromEnv, localNodeConfig, MANUAL_PEER_FORM, manualPeerOf, MAX_FEE_SEED_ACCOUNTS, NODE_VARIABLES, TRUSTED_ACCOUNT_VARIABLE } from './config.js';
+import { ConfigError, DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, formatManualPeer, GENESIS_VARIABLES, getConfigFromEnv, localNodeConfig, MANUAL_PEER_FORM, manualPeerOf, MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, MAX_FEE_SEED_ACCOUNTS, NODE_VARIABLES, TRUSTED_ACCOUNT_VARIABLE } from './config.js';
 import type { ConfigVariable, Environment, EnvironmentConfig, LogSettings, NetworkSelection } from './config.js';
 import { LocalNodeError } from './errors.js';
 import { describeOperationalFailure, operationalFailureOf } from './failure.js';
@@ -62,6 +62,7 @@ const VARIABLE_HELP: Readonly<Record<ConfigVariable, string>> = {
 	KEETANET_LOCAL_NODE_PREFER_UPDATES: 'http or websocket: how peers send it staples (websocket)',
 	KEETANET_LOCAL_NODE_MANUAL_PEERS: `the peers it dials, separated by commas, each ${MANUAL_PEER_FORM}, as a node prints on its "peer:" line (none; auto is not supported)`,
 	KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: 'the API URLs of representatives it catches up from besides its peers, without dialing them, separated by commas (none)',
+	KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS: `the milliseconds each representative it catches up from is left without a request between two, from 0 to ${String(MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS)} (${String(DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS)} on Keeta's networks, 0 on local)`,
 	KEETANET_LOCAL_NODE_MAX_PEER_SOCKETS: `the most sockets peers and listeners hold open on ${P2P_PATH} at once, from 1 to ${String(MAX_PEER_LIMIT)} (${String(DEFAULT_PEER_LIMITS.sockets)})`,
 	KEETANET_LOCAL_NODE_MAX_POSTED_MESSAGES: `the most messages peers post over HTTP that it handles at once, from 1 to ${String(MAX_PEER_LIMIT)} (${String(DEFAULT_PEER_LIMITS.postedMessages)})`,
 	KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE: 'true lets the node vote for TOKEN_ADMIN_MODIFY_BALANCE (false)',
@@ -182,7 +183,7 @@ async function startupSummary(config: EnvironmentConfig, storage: OpenedStorage,
 		`ledger write mode: ${config.ledgerWriteMode}\n`,
 		`storage: ${storage.kind}\n`,
 		`manual peers: ${String(config.manualPeers.length)}\n`,
-		`bootstrap peers: ${String(config.bootstrapPeers.length)}\n`,
+		`bootstrap peers: ${String(config.bootstrapPeers.length)}, each left ${String(config.bootstrapMinIntervalMilliseconds)} ms between requests\n`,
 		`api: ${node.config.endpoints?.api ?? 'not served'}\n`,
 		`peer: ${await ownPeer(node)}\n`
 	].join(''));

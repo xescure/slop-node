@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { SimulatedNode, SimulatedPeer } from '../testing/simulated-peer.js';
 import type { LiveTraffic, SimulatedPeerOptions, SimulatedStaple } from '../testing/simulated-peer.js';
 import { advanceClock, freezeClock } from '../testing/network.js';
-import { DEEP_SCAN_PERIOD_MILLISECONDS, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, bootstrapPeer } from './bootstrap-pass.js';
+import { DEEP_SCAN_PERIOD_MILLISECONDS, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, bootstrapPeer, completes } from './bootstrap-pass.js';
 import type { PassOutcome, PeerIO, PeerOutcome, PeerProgress } from './bootstrap-pass.js';
 import { BLOOM_CAPACITY } from './bootstrap-window.js';
 
@@ -39,10 +39,6 @@ function steady(perSecond: number): LiveTraffic {
 	return({ perSecond, voterSkew: function(): number {
 		return(0);
 	} });
-}
-
-function completes(outcome: PassOutcome): boolean {
-	return(outcome.kind !== 'bounded');
 }
 
 /** A deterministic source of filter seeds, so that a run names the same staples by mistake each time. */

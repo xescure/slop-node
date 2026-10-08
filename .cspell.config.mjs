@@ -36,6 +36,9 @@ export default {
 		'plpgsql',
 		'pkey',
 		'cmdline',
+		// The name of a Postgres socket, and a file of /proc.
+		'pgsql',
+		'smaps',
 		// Names in upstream's API: a route segment and a switch statistic.
 		'clearstats',
 		'ungreeted',

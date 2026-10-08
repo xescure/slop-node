@@ -10,7 +10,7 @@ import type { JSONSerializableObject } from '@keetanetwork/keetanet-client/lib/u
 import { P2PInternals } from '../upstream/internals.js';
 import { assertNever } from '../util/assert-never.js';
 import type { AssertNever } from '../util/assert-never.js';
-import { bootstrapFrom } from './bootstrap-peers.js';
+import { bootstrapFrom, paceBootstrap } from './bootstrap-peers.js';
 import { computeFeeFromBlocksFor, parseFeeSchedule } from './fees.js';
 import type { FeeAccount, FeePolicy } from './fees.js';
 import type { LimitedLocalNodeConfig } from './local.js';
@@ -55,6 +55,7 @@ export const NODE_VARIABLES = [
 	'KEETANET_LOCAL_NODE_PREFER_UPDATES',
 	'KEETANET_LOCAL_NODE_MANUAL_PEERS',
 	'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS',
+	'KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS',
 	'KEETANET_LOCAL_NODE_MAX_PEER_SOCKETS',
 	'KEETANET_LOCAL_NODE_MAX_POSTED_MESSAGES',
 	'KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE'
@@ -255,6 +256,8 @@ export type EnvironmentConfig = {
 	readonly manualPeers: readonly ManualPeer[];
 	/** The API endpoints of representatives the node bootstraps from without dialing them. */
 	readonly bootstrapPeers: readonly string[];
+	/** How long each peer the node bootstraps from is left without a request between two of them; 0 leaves them as they come. */
+	readonly bootstrapMinIntervalMilliseconds: number;
 	readonly peerLimits: PeerLimits;
 	readonly fee: FeePolicy;
 	/** Off by default, as upstream has it [Keeta TS] index.js:68983. */
@@ -273,6 +276,18 @@ const DEFAULT_PREFER_UPDATES: P2PUpdateOptions = 'websocket';
  * [Keeta TS] index.js:71367.
  */
 const LOCAL_NETWORK_ALIAS: Networks = 'test';
+
+/**
+ * The pacing of bootstrap requests on Keeta's networks, whose representatives
+ * serve everyone: a page takes a representative a few seconds to answer, so
+ * a second's rest between requests keeps one node's catch-up to well under
+ * one request at a time on each. On network 0 the representatives are the
+ * operator's own, so requests are not paced unless asked.
+ */
+export const DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS = 1000;
+
+/** A pass over a peer ends after two minutes (src/node/bootstrap-pass.ts), so a longer rest would leave it a request or two. */
+export const MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS = 60_000;
 
 /** A seed is 32 bytes [Keeta TS] index.js:61735, written in hexadecimal. */
 const SEED = /^[0-9a-f]{64}$/i;
@@ -743,6 +758,24 @@ export function formatManualPeer(peer: ManualPeer): string {
 	return(`${peer.key.publicKeyString.get()}@${fields.join('|')}`);
 }
 
+function parseBootstrapMinInterval(text: string): number {
+	if (!DECIMAL.test(text) || Number(text) > MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS) {
+		throw(invalid('KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS', `a whole number of milliseconds from 0 to ${String(MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS)}`, text));
+	}
+	return(Number(text));
+}
+
+function defaultBootstrapMinInterval(network: NetworkSelection): number {
+	switch (network.kind) {
+		case 'local':
+			return(0);
+		case 'known':
+			return(DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS);
+		default:
+			return(assertNever(network));
+	}
+}
+
 function parsePeerLimit(variable: ConfigVariable, text: string): number {
 	if (!DECIMAL.test(text) || Number(text) < 1 || Number(text) > MAX_PEER_LIMIT) {
 		throw(invalid(variable, `a whole number from 1 to ${String(MAX_PEER_LIMIT)}`, text));
@@ -970,6 +1003,7 @@ export function getConfigFromEnv(environment: Environment): EnvironmentConfig {
 			return(parseManualPeers(text, representative));
 		}, []),
 		bootstrapPeers: reader.read('KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS', parseBootstrapPeers, []),
+		bootstrapMinIntervalMilliseconds: reader.read('KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS', parseBootstrapMinInterval, defaultBootstrapMinInterval(network)),
 		peerLimits: readPeerLimits(reader),
 		fee: readFeePolicy(reader),
 		enableTokenAdminModifyBalance: reader.read('KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE', function(text: string): boolean {
@@ -1051,6 +1085,7 @@ export function localNodeConfig(config: EnvironmentConfig, resources: NodeResour
 		retval.bootstrap = { kv };
 	}
 	bootstrapFrom(retval, config.bootstrapPeers);
+	paceBootstrap(retval, config.bootstrapMinIntervalMilliseconds);
 	const endpoints = configuredEndpoints(config.endpoints);
 	if (endpoints !== undefined) {
 		retval.endpoints = endpoints;

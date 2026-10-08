@@ -144,7 +144,8 @@ function earlier(left: Date, right: Date): Date {
 	return(new Date(Math.min(left.getTime(), right.getTime())));
 }
 
-function completes(outcome: PassOutcome): boolean {
+/** Whether the pass showed the node holds every staple it was to read: it did, unless it reached its bound first. */
+export function completes(outcome: PassOutcome): boolean {
 	switch (outcome.kind) {
 		case 'drained':
 		case 'caught-up':

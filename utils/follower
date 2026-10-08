@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Runs a node that follows the main network read-only, with its own Postgres,
+# in the background. "up" needs the PostgreSQL server binaries, which
+# "devenv shell" provides.
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+# The follower runs the built node, so both are brought up to date first.
+make --no-print-directory -s -C "$root" dist build/parity/.done
+exec node "$root/build/parity/parity/follower.js" "$@"

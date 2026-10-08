@@ -15,6 +15,18 @@ export type BootstrapNode = ConstructorParameters<typeof DeclaredBootstrapClient
  */
 const configuredEndpoints = new WeakMap<NodeConfig, readonly string[]>();
 
+const configuredPacing = new WeakMap<NodeConfig, number>();
+
+/** Makes the node leave each peer it bootstraps from that long without a request between two of them. */
+export function paceBootstrap(config: NodeConfig, minIntervalMilliseconds: number): void {
+	configuredPacing.set(config, minIntervalMilliseconds);
+}
+
+/** The interval given for the configuration by paceBootstrap; without one, requests are not paced. */
+export function bootstrapPacingOf(config: NodeConfig): number {
+	return(configuredPacing.get(config) ?? 0);
+}
+
 /** Makes the node bootstrap from these API endpoints too, besides the peers it knows. */
 export function bootstrapFrom(config: NodeConfig, endpoints: readonly string[]): void {
 	configuredEndpoints.set(config, [...endpoints]);

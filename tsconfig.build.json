@@ -5,6 +5,7 @@
 		"src/testing/**",
 		"src/conformance/**",
 		"src/devnet/**",
+		"src/parity/**",
 		"src/**/suite/**"
 	]
 }

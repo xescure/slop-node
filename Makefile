@@ -89,10 +89,10 @@ node_modules: node_modules/.patched
 # removing dist removes it too; without the stamp the directory may be partial,
 # which an incremental build would not notice, so it starts from scratch. The
 # prerequisites are the sources tsconfig.build.json compiles: it leaves out the
-# tests, src/testing, src/conformance, src/devnet and the storage suites, and
-# nothing it compiles imports them. The command's entry, the package's bin,
+# tests, src/testing, src/conformance, src/devnet, src/parity and the storage
+# suites, and nothing it compiles imports them. The command's entry, the package's bin,
 # runs as a program of its own.
-dist/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts' -not -path 'src/testing/*' -not -path 'src/conformance/*' -not -path 'src/devnet/*' -not -path '*/suite/*') tsconfig.json tsconfig.build.json node_modules/.patched
+dist/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts' -not -path 'src/testing/*' -not -path 'src/conformance/*' -not -path 'src/devnet/*' -not -path 'src/parity/*' -not -path '*/suite/*') tsconfig.json tsconfig.build.json node_modules/.patched
 	@[ -e dist/.done ] || rm -f dist/.tsbuildinfo
 	npm run tsc -- -p tsconfig.build.json
 	chmod +x dist/main.js
@@ -114,10 +114,17 @@ build/devnet/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts'
 	npm run tsc -- -p tsconfig.devnet.json
 	@touch build/devnet/.done
 
+# utils/follower runs the follower's command, a tool beside the node rather
+# than part of it, so it is built apart from the distribution like the devnet's.
+build/parity/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts') tsconfig.json tsconfig.parity.json node_modules/.patched
+	@[ -e build/parity/.done ] || rm -f build/parity/.tsbuildinfo
+	npm run tsc -- -p tsconfig.parity.json
+	@touch build/parity/.done
+
 # The type checks cover the tests that the builds exclude, so they must not
 # write the build info that the builds read. Asked for together, the corpus is
 # regenerated before the tests read it.
-test: dist/.done build/utils/.done build/devnet/.done | $(filter conformance,$(MAKECMDGOALS))
+test: dist/.done build/utils/.done build/devnet/.done build/parity/.done | $(filter conformance,$(MAKECMDGOALS))
 	npm run tsc -- --noEmit --incremental false
 	npm run tsc -- --noEmit --incremental false -p utils
 	npm run vitest -- run --config .vitest.config.js --project unit --project devnet $(SLOP_NODE_TEST_EXTRA_ARGS)

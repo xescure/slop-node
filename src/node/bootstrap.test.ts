@@ -238,6 +238,31 @@ describe('a bootstrap client', function() {
 		expect(servedCounts(recording.pages.slice(before))).toEqual([0]);
 	});
 
+	test('logs what each pass that added staples did, and passes that added none only at debug level', async function() {
+		const peer = await representative();
+		const recording = await startRecordingPeer(peer.apiURL);
+		const late = await joiner({ bootstrapFrom: [recording.apiURL] });
+		await addAll(peer.node, await sendsFrom(peer.network, 0, 3));
+		const info = vi.spyOn(late.node.log, 'info');
+		const debug = vi.spyOn(late.node.log, 'debug');
+		const client = clientOf(late.node);
+
+		await client.update(2);
+		const requests = recording.pages.length;
+		advanceClock(1000);
+		await client.update(2);
+
+		const lines = function(calls: readonly unknown[][]): string[] {
+			return(calls.map(function(call): string {
+				return(call.map(String).join(' '));
+			}).filter(function(line): boolean {
+				return(line.includes('Bootstrap pass over'));
+			}));
+		};
+		expect(lines(info.mock.calls)).toEqual([`BOOTSTRAP Bootstrap pass over ${recording.apiURL}: drained after ${String(requests)} requests, 4 staples added, 0 held already`]);
+		expect(lines(debug.mock.calls)).toEqual([`BOOTSTRAP Bootstrap pass over ${recording.apiURL}: drained after ${String(recording.pages.length - requests)} requests, 0 staples added, 0 held already`]);
+	});
+
 	test('keeps trying the peers that fail, and catches up on the others meanwhile', async function() {
 		const peer = await representative();
 		const failing = await startFailingPeer();
@@ -568,6 +593,29 @@ describe('a node configured from its environment', function() {
 			throw(new Error('no staple was made'));
 		}
 		await expect(follower.node.ledger.add(next)).rejects.toThrow('except for bootstrapping');
+	});
+
+	test('leaves the peer the interval it is configured with between the end of one request and the start of the next', async function() {
+		const interval = 150;
+		const { peer } = await peerOfSDKNetwork();
+		const recording = await startRecordingPeer(peer.apiURL);
+		const environment = await sdkNodes.environmentFor('memory', {
+			KEETANET_LOCAL_NODE_SEED_INDEX: '1',
+			KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: recording.apiURL,
+			KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS: String(interval)
+		});
+		const follower = await sdkNodes.start(environment);
+
+		await caughtUp(follower);
+
+		expect(await heldBlocksHashes(follower.node)).toEqual(await heldBlocksHashes(peer.node));
+		const pages = recording.pages;
+		expect(pages.length).toBeGreaterThan(2);
+		const rests = pages.slice(1).map(function(page, index): number {
+			return(page.received - requireAt(pages, index).answered);
+		});
+		// The node's timer may fire up to a millisecond early on the monotonic clock, which it truncates to milliseconds.
+		expect(Math.min(...rests)).toBeGreaterThanOrEqual(interval - 1);
 	});
 
 	test('resumes from where it reached on each peer after a restart, when it keeps its state in Postgres', async function() {
