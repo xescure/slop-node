@@ -178,9 +178,16 @@ export class NamedStaples {
 		this.#held.delete(key);
 	}
 
-	/** Names, as far as there is room, what another names too: what the peer sent from its start, which it may list from a later one again, and what the node held. */
-	carry(other: NamedStaples): void {
-		for (const [key, bytes] of [...other.#received, ...other.#held]) {
+	/**
+	 * Names, as far as there is room, what another names too, the peer may
+	 * list from a later start again, by the staple's key (stapleKey): what
+	 * the peer sent from its start, and then what the node held.
+	 */
+	carry(other: NamedStaples, mayListAgain: (key: string) => boolean): void {
+		const carried = [...other.#received, ...other.#held].filter(function([key]): boolean {
+			return(mayListAgain(key));
+		});
+		for (const [key, bytes] of carried) {
 			if (this.size >= BLOOM_CAPACITY) {
 				break;
 			}

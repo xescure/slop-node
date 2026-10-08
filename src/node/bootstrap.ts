@@ -9,11 +9,12 @@ import type { ClassSurface } from '../util/class-surface.js';
 import { BootstrapCursors, KVRetryStore } from './bootstrap-cursors.js';
 import { PageError, PageFetcher } from './bootstrap-page.js';
 import { PeerPacer } from './bootstrap-pacing.js';
-import { DEEP_SCAN_PERIOD_MILLISECONDS, bootstrapPeer, completes } from './bootstrap-pass.js';
-import type { PassAnswer, PassOutcome, PassRequest, PeerIO } from './bootstrap-pass.js';
+import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, VOTE_KEY_TOLERANCE_MILLISECONDS, bootstrapPeer, completes } from './bootstrap-pass.js';
+import type { PassAnswer, PassEvent, PassOutcome, PassRequest, PeerIO } from './bootstrap-pass.js';
 import { bootstrapPacingOf, bootstrapSources } from './bootstrap-peers.js';
 import type { BootstrapNode } from './bootstrap-peers.js';
 import { RetryQueue } from './bootstrap-retry.js';
+import { MAX_NAMED } from './bootstrap-window.js';
 import type { Added, Offered, QueuedStaple } from './bootstrap-retry.js';
 import { nextUpdateDelay, updatePeers } from './bootstrap-update.js';
 import type { PeerResult, UpdateIO } from './bootstrap-update.js';
@@ -143,6 +144,9 @@ export class BootstrapClient {
 	#completeCount = 0;
 	/** How the last update's passes ended, which says whether the next starts at once. */
 	#lastResults: readonly PeerResult[] = [];
+	/** Where a pass over each peer last ended for naming too many staples from one start, to tell a peer it stays stuck on. */
+	readonly #crowdedAt = new Map<string, number>();
+	readonly #answers = new Map<string, LongestAnswer>();
 
 	/**
 	 * With a period, an update runs at once and then that many milliseconds
@@ -294,7 +298,13 @@ export class BootstrapClient {
 	/** The update's passes over the peer, those over a peer it has no progress on starting from the moment given. */
 	async #catchUp(endpoint: string, limit: number, fetcher: PageFetcher, from: Date): Promise<PeerResult> {
 		const tally: PassTally = { requests: 0, added: 0, held: 0, queued: 0 };
+		let answers = this.#answers.get(endpoint);
+		if (answers === undefined) {
+			answers = new LongestAnswer();
+			this.#answers.set(endpoint, answers);
+		}
 		const io: PeerIO<VoteStaple> = {
+			answers,
 			page: (request) => {
 				tally.requests++;
 				return(this.#page(fetcher, endpoint, request));
@@ -318,6 +328,9 @@ export class BootstrapClient {
 			},
 			saturated: () => {
 				return(Promise.resolve(this.#retries.saturated()));
+			},
+			report: (event) => {
+				this.#reportPass(endpoint, event);
 			},
 			readProgress: () => {
 				return(this.#cursors.read(endpoint));
@@ -386,6 +399,31 @@ export class BootstrapClient {
 			await this.#tell(each);
 		}
 		return({ kind: 'added' });
+	}
+
+	/**
+	 * What a pass found of a peer: that it keys votes later than a pass
+	 * allows, which the node hears of once, as its cursor keeps it; and a
+	 * pass that ended naming too many staples from one start, logged when it
+	 * ends so at the same start again, as the passes over the peer then make
+	 * no progress until the peer's pages reach past it (src/node/bootstrap-pass.ts).
+	 */
+	#reportPass(endpoint: string, event: PassEvent): void {
+		switch (event.kind) {
+			case 'late-votes':
+				this.#node.log.warn(LOG_SOURCE, `Bootstrap from ${endpoint}: the peer lists staples twice, as one keyed by votes does, and listed from ${event.start.toISOString()} staple ${event.staple}, none of whose votes was made within ${String(VOTE_KEY_TOLERANCE_MILLISECONDS)} ms before it or later: it keys votes later than they were made, and passes over it now move on only by what holds whatever later moment it keys them at`);
+				return;
+			case 'crowded': {
+				const start = event.start.getTime();
+				if (this.#crowdedAt.get(endpoint) === start) {
+					this.#node.log.warn(LOG_SOURCE, `Bootstrap from ${endpoint}: passes again named ${String(MAX_NAMED)} staples from ${event.start.toISOString()} without a page shown to read past it; they stay there until the peer's pages do`);
+				}
+				this.#crowdedAt.set(endpoint, start);
+				return;
+			}
+			default:
+				assertNever(event);
+		}
 	}
 
 	/** A staple the network applied that this node's ledger still refuses: the two diverge on it. */

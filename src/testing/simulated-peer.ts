@@ -123,20 +123,33 @@ export type SimulatedPeerOptions = {
  * it was made: the peer reads the votes made at or after the start, in that
  * order, so many at a time, and lists the staple of each vote it read, once
  * per read [Keeta TS] index.js:69655-69676, in no order of its own within a
- * read; a staple whose votes two reads share is listed twice. Its time for a
- * request runs out after so many reads, once it has a staple to send
- * [Keeta TS] index.js:69641-69647, and each read takes so long.
+ * read; a staple whose votes two reads share is listed twice. A read holds
+ * so many votes, or, as a representative's storage returns them, up to so
+ * many more or fewer. Its time for a request runs out after so many reads,
+ * once it has a staple to send [Keeta TS] index.js:69641-69647, and each read
+ * takes so long.
  */
 export type SimulatedKeying =
 	| { readonly kind: 'applied' }
-	| { readonly kind: 'votes'; readonly votesPerRead: number; readonly readsAtMost: number; readonly readMilliseconds: number };
+	| { readonly kind: 'votes'; readonly votesPerRead: number; readonly readsAtMost: number; readonly readMilliseconds: number; readonly keyedAt?: VoteKey; readonly readsVaryBy?: number };
 
-/** A vote as a peer keyed by votes holds it: the moment it was made, and the staple it is in. */
-type SimulatedVote = { readonly made: number; readonly vote: number; readonly staple: SimulatedStaple };
+/**
+ * Where a peer keyed by votes keys a vote of a staple, by its index among
+ * the staple's votes: the moment it was made, unless a peer keys it a little
+ * off, or, outside what a pass allows, at when it received it.
+ */
+export type VoteKey = (made: number, staple: number, vote: number) => number;
+
+/** A vote as a peer keyed by votes holds it: its key, the moment it was made, and the staple it is in. */
+type SimulatedVote = { readonly key: number; readonly made: number; readonly vote: number; readonly staple: SimulatedStaple };
+
+function keyedWhenMade(made: number): number {
+	return(made);
+}
 
 function compareVotes(left: SimulatedVote, right: SimulatedVote): number {
-	if (left.made !== right.made) {
-		return(left.made - right.made);
+	if (left.key !== right.key) {
+		return(left.key - right.key);
 	}
 	if (left.staple.id !== right.staple.id) {
 		return(left.staple.id - right.staple.id);
@@ -177,6 +190,7 @@ export class SimulatedPeer {
 	/** The votes of the staples applied, in the order made, for a peer keyed by votes. */
 	readonly #votes: SimulatedVote[] = [];
 	readonly #keying: SimulatedKeying;
+	readonly #voteKey: VoteKey;
 	readonly #clockOffset: number;
 	readonly #latency: number;
 	readonly #answersAtMost: number;
@@ -197,6 +211,10 @@ export class SimulatedPeer {
 		this.#answersAtMost = options.answersAtMost ?? Number.POSITIVE_INFINITY;
 		this.#readsAtMost = options.readsAtMost ?? Number.POSITIVE_INFINITY;
 		this.#keying = options.keying ?? { kind: 'applied' };
+		this.#voteKey = keyedWhenMade;
+		if (this.#keying.kind === 'votes' && this.#keying.keyedAt !== undefined) {
+			this.#voteKey = this.#keying.keyedAt;
+		}
 	}
 
 	/** Every staple the peer has applied, in the order applied. */
@@ -241,7 +259,7 @@ export class SimulatedPeer {
 		}
 		this.#applied.splice(at, 0, staple);
 		stampsOf(staple).forEach((made, vote) => {
-			const entry: SimulatedVote = { made, vote, staple };
+			const entry: SimulatedVote = { key: this.#voteKey(made, staple.id, vote), made, vote, staple };
 			let place = this.#votes.length;
 			while (place > 0 && compareVotes(this.#votes[place - 1] ?? entry, entry) > 0) {
 				place--;
@@ -300,15 +318,17 @@ export class SimulatedPeer {
 		return({ kind: 'page', staples });
 	}
 
-	/** The staples of the votes made at or after the start, read as a representative reads them. */
+	/** The staples of the votes keyed at or after the start, read as a representative reads them, up to the limit, or the peer's own if lower. */
 	#listVoted(request: PassRequest, filter: BloomFilter | undefined, keying: SimulatedKeying & { readonly kind: 'votes' }): SimulatedStaple[] {
 		const staples: SimulatedStaple[] = [];
 		const start = request.start.getTime();
+		const limit = Math.min(request.limit, this.#answersAtMost);
 		let at = this.#firstVoteAtOrAfter(start);
 		let reads = 0;
-		while (staples.length < request.limit && at < this.#votes.length) {
+		while (staples.length < limit && at < this.#votes.length) {
 			// [Keeta TS] index.js:69655-69659
-			const size = Math.min(keying.votesPerRead, (request.limit - staples.length) * 32);
+			const vary = keying.readsVaryBy ?? 0;
+			const size = Math.min(keying.votesPerRead + scrambled(at, reads) % (2 * vary + 1) - vary, (limit - staples.length) * 32);
 			const read = this.#votes.slice(at, at + size);
 			const listed = [...new Set(read.map(function(vote): SimulatedStaple {
 				return(vote.staple);
@@ -318,7 +338,7 @@ export class SimulatedPeer {
 			at += size;
 			reads++;
 			for (const staple of listed) {
-				if (staples.length >= request.limit) {
+				if (staples.length >= limit) {
 					break;
 				}
 				if (!this.#named(filter, staple)) {
@@ -338,7 +358,7 @@ export class SimulatedPeer {
 		let high = this.#votes.length;
 		while (low < high) {
 			const middle = Math.floor((low + high) / 2);
-			if ((this.#votes[middle]?.made ?? moment) < moment) {
+			if ((this.#votes[middle]?.key ?? moment) < moment) {
 				low = middle + 1;
 			} else {
 				high = middle;

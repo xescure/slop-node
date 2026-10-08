@@ -11,7 +11,8 @@ const PROGRESS: PeerProgress = {
 	deepScanFrom: new Date(0),
 	nextDeepScan: new Date(Date.UTC(2026, 9, 8, 20)),
 	deepScan: undefined,
-	heldSince: new Date(Date.UTC(2026, 9, 8, 19, 14))
+	heldSince: new Date(Date.UTC(2026, 9, 8, 19, 14)),
+	keying: 'votes'
 };
 
 describe('the bootstrap cursors', function() {
@@ -31,9 +32,22 @@ describe('the bootstrap cursors', function() {
 		const stored = { reached: PROGRESS.reached.getTime(), caughtUp: false, deepScanFrom: 0, nextDeepScan: PROGRESS.nextDeepScan.getTime(), deepScan: null };
 
 		await kv.set(BOOTSTRAP_CURSOR_ARENA, ENDPOINT, stored);
-		expect(await cursors.read(ENDPOINT)).toEqual({ ...PROGRESS, heldSince: undefined });
+		expect(await cursors.read(ENDPOINT)).toEqual({ ...PROGRESS, heldSince: undefined, keying: 'unknown' });
 
 		await kv.set(BOOTSTRAP_CURSOR_ARENA, ENDPOINT, { ...stored, heldSince: 'yesterday' });
+		expect(await cursors.read(ENDPOINT)).toBeUndefined();
+	});
+
+	test('keep how the peer keys its staples, and refuse a value that names no way', async function() {
+		const kv = new KVInternals.KVStorageProviderMemory();
+		const cursors = new BootstrapCursors(kv);
+
+		for (const keying of ['unknown', 'votes', 'applied', 'late-votes'] as const) {
+			await cursors.write(ENDPOINT, { ...PROGRESS, keying });
+			expect((await cursors.read(ENDPOINT))?.keying).toBe(keying);
+		}
+
+		await kv.set(BOOTSTRAP_CURSOR_ARENA, ENDPOINT, { ...(await kv.get(BOOTSTRAP_CURSOR_ARENA, ENDPOINT) as object), keying: 'sideways' });
 		expect(await cursors.read(ENDPOINT)).toBeUndefined();
 	});
 });

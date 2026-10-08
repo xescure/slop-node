@@ -78,10 +78,48 @@ export const VOTE_KEY_TOLERANCE_MILLISECONDS = 1000;
 /**
  * The most votes a peer reads at a time for a request
  * [Keeta TS] index.js:69655-69659, and so the most staples it lists for one
- * read: a page cut at its limit may have listed only some of the staples of
- * its last read, which are among this many last.
+ * read: a page cut within a read may have listed only some of the staples of
+ * that read, which are among this many last.
  */
 const MAX_VOTES_PER_READ = 200;
+
+/**
+ * What a peer has shown, by what it listed, of how it keys its staples
+ * (see Pass).
+ */
+export type PeerKeying =
+	/** Nothing yet: as this node does, or as the representatives do. */
+	| 'unknown'
+	/** It listed a staple twice in one answer, which only a peer keyed by votes does. */
+	| 'votes'
+	/** It listed from a start a staple none of whose votes was made at or after the tolerance before it, which only a peer keyed as this node is does. */
+	| 'applied'
+	/** It did both: it keys votes later than the tolerance after they were made. */
+	| 'late-votes';
+
+/**
+ * The most staples a peer has listed in one answer since the node began
+ * reading it: a limit of the peer's own, below the one asked for, is at
+ * least that, as long as the peer does not lower it while the node runs.
+ */
+export class LongestAnswer {
+	#longest = 0;
+
+	get longest(): number {
+		return(this.#longest);
+	}
+
+	saw(length: number): void {
+		this.#longest = Math.max(this.#longest, length);
+	}
+}
+
+/** What a pass reports of a peer, for the node to log. */
+export type PassEvent =
+	/** The peer was first seen to key votes later than VOTE_KEY_TOLERANCE_MILLISECONDS after they were made, listing this staple from the start given. */
+	| { readonly kind: 'late-votes'; readonly start: Date; readonly staple: string }
+	/** A pass named MAX_NAMED staples from the start given with nothing to show that its pages read past it, and ended there. */
+	| { readonly kind: 'crowded'; readonly start: Date };
 
 /** Seeds a filter takes: integers its hash functions read exactly. */
 const SEED_LIMIT = 2 ** 31;
@@ -129,6 +167,7 @@ export type PeerProgress = {
 	 * when about that moment itself, as once caught up.
 	 */
 	readonly heldSince: Date | undefined;
+	readonly keying: PeerKeying;
 };
 
 /** How a pass reaches the peer and the node. */
@@ -142,6 +181,9 @@ export type PeerIO<Staple extends PassStaple> = {
 	retry(): Promise<void>;
 	/** Whether the queue stopped a pass from where the last reached, and none of its staples has left it since. */
 	saturated(): Promise<boolean>;
+	report(event: PassEvent): void;
+	/** Kept for as long as the node reads the peer. */
+	readonly answers: LongestAnswer;
 	readProgress(): Promise<PeerProgress | undefined>;
 	writeProgress(progress: PeerProgress): Promise<void>;
 };
@@ -222,7 +264,7 @@ function floorOf(now: number): Date {
 }
 
 function firstProgress(now: number, stagger: number, from: Date): PeerProgress {
-	return({ reached: from, caughtUp: false, deepScanFrom: from, nextDeepScan: new Date(now + DEEP_SCAN_PERIOD_MILLISECONDS + stagger), deepScan: undefined, heldSince: undefined });
+	return({ reached: from, caughtUp: false, deepScanFrom: from, nextDeepScan: new Date(now + DEEP_SCAN_PERIOD_MILLISECONDS + stagger), deepScan: undefined, heldSince: undefined, keying: 'unknown' });
 }
 
 /**
@@ -253,24 +295,27 @@ function withDeepScanBegun(progress: PeerProgress, now: number, saturated: boole
 /** What a page's staples were proven to reach: the start moves to that moment, which every staple of the page from that index on is at or after. */
 type Reach = { readonly start: number; readonly from: number };
 
-/** What the node made of each staple of a page, and whether it held any already and added any. */
+/** What the node made of each staple of a page, and whether it held any before the page and added any. */
 type Taken = { readonly outcomes: readonly Added[]; readonly held: boolean; readonly added: boolean };
 
-/** A page asked for from the start, with the filter and limit it was asked with, which the node has taken. */
-type Listed<Staple extends PassStaple> = { readonly staples: readonly Staple[]; readonly filter: Filter; readonly limit: number; readonly taken: Taken };
-
 /**
- * The staples of a page that a peer listed for reads it listed in full: all
- * of a page shorter than its limit, which the peer cuts short only between
- * reads [Keeta TS] index.js:69641-69647, and of a page cut at its limit, all
- * but those its last read may have listed.
+ * What a page from a start shows of how far the peer read for it: which of
+ * its staples it listed for reads it listed in full, as the peer keys its
+ * staples as far as the pass knows.
  */
-function wholeReadsOf<Staple extends PassStaple>(page: readonly Staple[], limit: number): readonly Staple[] {
-	if (page.length < limit) {
-		return(page);
-	}
-	return(page.slice(0, Math.max(0, page.length - MAX_VOTES_PER_READ)));
-}
+type Evidence<Staple extends PassStaple> = {
+	readonly page: readonly Staple[];
+	readonly start: number;
+	/** As the passes know it when the evidence is weighed, which only ever moves towards late-votes, so what was counted when the page came stays sound. */
+	readonly keying: KeyingRecord;
+	/** The staples of the page before this index were listed by reads it listed in full. */
+	readonly wholeBelow: number;
+	/** Every read of the page that held a key before this moment was listed in full, as the votes the peer holds show (countedReach). */
+	readonly countedTo: number;
+};
+
+/** A page asked for from the start, what it shows, and the filter it was asked with, which the node has taken. */
+type Listed<Staple extends PassStaple> = { readonly staples: readonly Staple[]; readonly evidence: Evidence<Staple>; readonly filter: Filter; readonly taken: Taken };
 
 function stampsOf(staple: PassStaple): number[] {
 	return(staple.votes.map(function(vote): number {
@@ -279,39 +324,238 @@ function stampsOf(staple: PassStaple): number[] {
 }
 
 /**
- * The latest moment a page from the start that lists the staple is shown to
- * have read up to by its votes, if one was made within the tolerance of the
- * start or later: the tolerance before the first such vote. A peer keyed by
- * votes lists the staple only for a vote it read, keyed at or after the
- * start, and so made at or after the tolerance before it; every such vote was
- * made at least the tolerance after this moment, so is keyed at or after it.
+ * The latest moment a page that lists the staple, from a peer keyed by votes,
+ * is shown to have read up to by it: the tolerance before its first vote.
+ * The peer keys none of its votes earlier, so whichever it listed the staple
+ * for, it read a key at or after this moment.
  */
-function shownReach(staple: PassStaple, start: number): number | undefined {
-	const since = stampsOf(staple).filter(function(stamp): boolean {
-		return(stamp >= start - VOTE_KEY_TOLERANCE_MILLISECONDS);
-	});
-	if (since.length === 0) {
-		return(undefined);
+function reachOf(staple: PassStaple): number {
+	return(Math.min(...stampsOf(staple)) - VOTE_KEY_TOLERANCE_MILLISECONDS);
+}
+
+/** Whether the answer lists a staple twice: once for each of two reads holding one of its votes, as only a peer keyed by votes does. */
+function listsTwice(staples: readonly PassStaple[]): boolean {
+	return(new Set(staples.map(stapleKey)).size < staples.length);
+}
+
+/** The first staple of the answer from the start none of whose votes was made at or after the tolerance before it, which a peer keyed by votes within the tolerance never lists. */
+function listedForEarlierVotes<Staple extends PassStaple>(staples: readonly Staple[], start: number): Staple | undefined {
+	return(staples.find(function(staple): boolean {
+		return(stampsOf(staple).every(function(stamp): boolean {
+			return(stamp < start - VOTE_KEY_TOLERANCE_MILLISECONDS);
+		}));
+	}));
+}
+
+function notKeyedAsThisNode(keying: PeerKeying): PeerKeying {
+	switch (keying) {
+		case 'unknown':
+		case 'votes':
+			return('votes');
+		case 'applied':
+		case 'late-votes':
+			return('late-votes');
+		default:
+			return(assertNever(keying));
 	}
-	return(Math.min(...since) - VOTE_KEY_TOLERANCE_MILLISECONDS);
+}
+
+function notKeyedByVotesInTime(keying: PeerKeying): PeerKeying {
+	switch (keying) {
+		case 'unknown':
+		case 'applied':
+			return('applied');
+		case 'votes':
+		case 'late-votes':
+			return('late-votes');
+		default:
+			return(assertNever(keying));
+	}
 }
 
 /**
- * Whether a staple of a page from the start shows, when an answer from the
- * moment lists it, that the page reached the moment: none of its votes was
- * made within the tolerance of the moments between.
+ * What the passes over a peer learn of how it keys its staples from every
+ * answer, kept with its progress, and reported once it keys votes late.
  */
-function shows(staple: PassStaple, start: number, moment: number): boolean {
-	const reach = shownReach(staple, start);
-	return(reach === undefined || moment <= reach);
+class KeyingRecord {
+	#current: PeerKeying;
+	readonly #changed: (keying: PeerKeying) => Promise<void>;
+	readonly #report: (event: PassEvent) => void;
+
+	constructor(current: PeerKeying, changed: (keying: PeerKeying) => Promise<void>, report: (event: PassEvent) => void) {
+		this.#current = current;
+		this.#changed = changed;
+		this.#report = report;
+	}
+
+	get current(): PeerKeying {
+		return(this.#current);
+	}
+
+	async observe(staples: readonly PassStaple[], start: number): Promise<void> {
+		let next = this.#current;
+		if (listsTwice(staples)) {
+			next = notKeyedAsThisNode(next);
+		}
+		const forEarlier = listedForEarlierVotes(staples, start);
+		if (forEarlier !== undefined) {
+			next = notKeyedByVotesInTime(next);
+		}
+		if (next === this.#current) {
+			return;
+		}
+		this.#current = next;
+		await this.#changed(next);
+		if (next === 'late-votes') {
+			this.#report({ kind: 'late-votes', start: new Date(start), staple: (forEarlier ?? staples[0])?.blocksHash.toString() ?? '' });
+		}
+	}
 }
 
-/** Whether a staple of the page may show the page reached some moment past the start: one whose votes do not all say it cannot. */
-function mayShowPast(page: readonly PassStaple[], start: number): boolean {
-	return(page.some(function(staple): boolean {
-		const reach = shownReach(staple, start);
-		return(reach === undefined || reach > start);
-	}));
+/**
+ * The staples a pass was listed by the peer, by their keys (stapleKey), with
+ * when their votes were made: votes the peer held when it answered each
+ * later request. A peer holds one staple per set of blocks, so two keys are
+ * two staples and their votes are distinct. A pass reads a bounded part of
+ * a peer, so it keeps them all.
+ */
+class KnownVotes {
+	readonly #stamps = new Map<string, readonly number[]>();
+
+	learn(staples: readonly PassStaple[]): void {
+		for (const staple of staples) {
+			this.#stamps.set(stapleKey(staple), stampsOf(staple));
+		}
+	}
+
+	/** Whether a vote of the staple was made at or after the moment, or, for a staple the peer did not list, nothing is known of it. */
+	mayBeMadeSince(key: string, moment: number): boolean {
+		return(this.#stamps.get(key)?.some(function(stamp): boolean {
+			return(stamp >= moment);
+		}) ?? true);
+	}
+
+	/** The moment of the vote that many before the latest made from the moment given up to the bound, if there are that many. */
+	countBack(count: number, from: number, bound: number): number | undefined {
+		const before: number[] = [];
+		for (const stamps of this.#stamps.values()) {
+			for (const stamp of stamps) {
+				if (stamp >= from && stamp < bound) {
+					before.push(stamp);
+				}
+			}
+		}
+		if (before.length < count) {
+			return(undefined);
+		}
+		return(before.sort(function(left, right): number {
+			return(right - left);
+		})[count - 1]);
+	}
+}
+
+/**
+ * The index below which a page's staples were listed by reads it listed in
+ * full. A peer stops between reads when its time for a request runs out
+ * [Keeta TS] index.js:69641-69647, but within one when it reaches the limit,
+ * the one asked for or a lower one of its own: so all of a page shorter than
+ * the limit asked for and than the longest answer the peer gave before,
+ * which no limit of its own cut, and of any other page, all but its
+ * last MAX_VOTES_PER_READ staples, and every staple up to the first listing
+ * of a staple it listed twice, which the read listing it again followed.
+ */
+function wholeBelowOf(page: readonly PassStaple[], limit: number, longest: number): number {
+	if (page.length < limit && page.length < longest) {
+		return(page.length);
+	}
+	let below = Math.max(0, page.length - MAX_VOTES_PER_READ);
+	const first = new Map<string, number>();
+	page.forEach(function(staple, index): void {
+		const key = stapleKey(staple);
+		const at = first.get(key);
+		if (at === undefined) {
+			first.set(key, index);
+		} else {
+			below = Math.max(below, at + 1);
+		}
+	});
+	return(below);
+}
+
+/**
+ * The latest moment before which every read of a page that may have been
+ * cut within its last read was listed in full, shown by the votes the peer
+ * holds, or nothing. The last read held a vote of the page's last staple,
+ * keyed at or after the tolerance before its first vote, and at most
+ * MAX_VOTES_PER_READ votes in all, which run on in key order; so it began
+ * after any moment with that many votes the peer holds keyed between it and
+ * that vote: those made from the tolerance after it up to twice the tolerance
+ * before the staple's first vote.
+ */
+function countedReach(page: readonly PassStaple[], start: number, known: KnownVotes): number {
+	const last = page.at(-1);
+	if (last === undefined) {
+		return(Number.NEGATIVE_INFINITY);
+	}
+	// A vote made before the tolerance after the start shows no moment past it.
+	const stamp = known.countBack(MAX_VOTES_PER_READ, start + VOTE_KEY_TOLERANCE_MILLISECONDS, reachOf(last) - VOTE_KEY_TOLERANCE_MILLISECONDS);
+	if (stamp === undefined) {
+		return(Number.NEGATIVE_INFINITY);
+	}
+	return(stamp - VOTE_KEY_TOLERANCE_MILLISECONDS);
+}
+
+/**
+ * Whether the staple at the index of the page shows, once an answer from the
+ * moment lists it, that the page read every key before the moment (see Pass).
+ */
+function shows(evidence: Evidence<PassStaple>, index: number, moment: number): boolean {
+	const staple = evidence.page[index];
+	if (staple === undefined) {
+		return(false);
+	}
+	const whole = index < evidence.wholeBelow;
+	const keying = evidence.keying.current;
+	switch (keying) {
+		case 'applied':
+			return(true);
+		case 'late-votes':
+			return(whole && moment <= reachOf(staple));
+		case 'unknown':
+		case 'votes':
+			return((whole || moment <= evidence.countedTo) && moment <= reachOf(staple));
+		default:
+			return(assertNever(keying));
+	}
+}
+
+/**
+ * The latest moment past the start the page's votes show it read up to, and
+ * the staple that shows it, the one whose first vote was made earliest among
+ * those that do, which a peer keyed by votes lists first from there; nothing
+ * when none shows one.
+ */
+function shownTarget(evidence: Evidence<PassStaple>): { readonly at: number; readonly index: number } | undefined {
+	let target: { readonly at: number; readonly index: number; readonly reach: number } | undefined;
+	evidence.page.forEach(function(staple, index): void {
+		const reach = reachOf(staple);
+		let at = reach;
+		if (index >= evidence.wholeBelow && evidence.keying.current !== 'applied') {
+			at = Math.min(at, evidence.countedTo);
+		}
+		if (at <= evidence.start || !shows(evidence, index, at)) {
+			return;
+		}
+		if (target === undefined || at > target.at || (at === target.at && reach < target.reach)) {
+			target = { at, index, reach };
+		}
+	});
+	return(target);
+}
+
+/** Whether a staple of the page may show the page reached some moment past the start. */
+function mayShowPast(evidence: Evidence<PassStaple>): boolean {
+	return(evidence.keying.current === 'applied' || shownTarget(evidence) !== undefined);
 }
 
 /** Whether a vote of the staple was made within the tolerance of the moments from the start up to the moment. */
@@ -319,18 +563,6 @@ function madeBetween(staple: PassStaple, start: number, moment: number): boolean
 	return(stampsOf(staple).some(function(stamp): boolean {
 		return(stamp >= start - VOTE_KEY_TOLERANCE_MILLISECONDS && stamp < moment + VOTE_KEY_TOLERANCE_MILLISECONDS);
 	}));
-}
-
-/** The staple of the page that shows the latest moment the page reached past the start, by its votes, and that moment; nothing when none shows one. */
-function shownTarget<Staple extends PassStaple>(page: readonly Staple[], start: number): { readonly at: number; readonly staple: Staple } | undefined {
-	let target: { readonly at: number; readonly staple: Staple } | undefined;
-	for (const staple of page) {
-		const at = shownReach(staple, start);
-		if (at !== undefined && at > start && (target === undefined || at > target.at)) {
-			target = { at, staple };
-		}
-	}
-	return(target);
 }
 
 /**
@@ -345,17 +577,31 @@ function shownTarget<Staple extends PassStaple>(page: readonly Staple[], start: 
  * - this node keys each staple once, at the moment it applied it, and lists
  *   staples in the order of their keys (CONTRACT D8);
  * - the main network's representatives key each vote at the moment it was
- *   made, as the vote says, to within VOTE_KEY_TOLERANCE_MILLISECONDS: a
- *   staple has a key per vote, may be listed once per read holding one of
- *   them, and is listed in no order within a read.
+ *   made, as the vote says, to within VOTE_KEY_TOLERANCE_MILLISECONDS either
+ *   way: a staple has a key per vote, is listed once per read holding one of
+ *   them, and in no order within a read.
  * Either way, a page lists every staple not named with a key among those
  * read, which run from the start up to a key the pass does not learn, and an
- * empty page shows the peer had no staple not named from the start on. A
- * peer stops between reads when its time runs out, but within one when it
- * reaches the limit, which the node asks for no more than the 1000 a peer
- * allows (src/node/bootstrap.ts): so the staples of a page that count are
- * those of reads it listed in full, all of a page shorter than its limit
- * and all but the last MAX_VOTES_PER_READ of one that is not (wholeReadsOf).
+ * empty page shows the peer had no staple not named from the start on.
+ *
+ * A peer stops between reads when its time runs out, but within a read when
+ * it reaches the limit: the one asked for, or a lower one of its own, which
+ * the pass does not know. So a page counts only for the reads it listed in
+ * full (wholeBelowOf): all of it when it is shorter than the limit asked for
+ * and than the longest answer the peer gave before (LongestAnswer), since a
+ * limit of the peer's own is at least that, and otherwise the staples before the last
+ * MAX_VOTES_PER_READ, and those up to the first listing of a staple it
+ * listed twice, which a later read listed again. Beyond those, its last read
+ * began after any moment that has MAX_VOTES_PER_READ votes the peer holds
+ * keyed between it and the last staple's first vote (countedReach), so every
+ * read of a key before that moment was listed in full too.
+ *
+ * The pass learns which way the peer keys from what it lists (PeerKeying): a
+ * staple listed twice in one answer comes only from a peer keyed by votes,
+ * and a staple listed from a start none of whose votes was made at or after
+ * the tolerance before it only from one keyed as this node is, or from one
+ * that keys votes later than the tolerance after they were made, as it would
+ * keying them when it received them. One that does both keys votes late.
  *
  * Progress is made by exclusion: the next request asks from the same start,
  * with a filter that names everything sent from it as well as what the node
@@ -374,36 +620,38 @@ function shownTarget<Staple extends PassStaple>(page: readonly Staple[], start: 
  * A filter names a fixed number of staples, and a peer that runs out of time
  * spends it on the staples the filter names as well, which it reads before
  * it leaves them out [Keeta TS] index.js:69686-69690, so the start moves on,
- * but only to a moment the page is shown to have read up to. An answer from
- * that moment, with any filter, that lists a staple of the page none of
- * whose votes was made within the tolerance of the moments from the start
- * up to it shows that:
- * - from this node, the staple's one key is at or after the moment, and the
- *   page, listing it, listed every staple not named keyed before it;
- * - from a representative, the page listed the staple, in a read it listed
- *   in full, for a vote keyed at or after the start, which, made outside
- *   those moments, is keyed at or after the moment, so the page read, and
- *   listed what it read of, every key before it.
- * Either way the node holds or has queued every staple keyed from the start
- * up to the moment but those the page's filter named, and the staple counts
- * only from the reads the page listed in full. A staple listed only
- * for a vote made earlier shows nothing: from a representative, its other
- * votes may lie past what the page read.
+ * but only to a moment the page is shown to have read up to: from the start
+ * S to T only on an answer from T, with any filter, that lists a staple x of
+ * the page that shows T (shows), which, as far as the pass knows how the
+ * peer keys, means:
+ * - keyed as this node is, x's one key is at or after T, and the page,
+ *   listing x, listed every staple not named keyed before it, wherever the
+ *   page was cut;
+ * - keyed by votes, every vote of x was made at least the tolerance after
+ *   T, so is keyed at or after T, and the page listed x for one of them in a
+ *   read before which every read was listed in full: x is in the reads the
+ *   page listed in full, or T is before the moment the page's votes show its
+ *   reads were listed in full up to;
+ * - not known, both;
+ * - keyed by votes late, the second, but only with x in reads the page
+ *   listed in full: that argument needs no vote keyed less than the
+ *   tolerance after it was made, which such a peer breaks, but only that
+ *   none is keyed more than the tolerance before.
+ * Either way the node holds or has queued every staple keyed from S up to T
+ * but those the page's filter named.
  *
- * The page's votes say where to look: a staple whose first vote made at or
- * after the tolerance before the start was made at m is shown, by an answer
- * that lists it, to reach the tolerance before m. So once short pages call
+ * The page's votes say where to look: x is shown, by an answer that lists
+ * it, to reach the tolerance before its first vote. So once short pages call
  * for the start to move, the next page is asked for from the latest such
- * moment of the page, with a filter that names the page but that staple:
- * when it lists the staple, the start moves there and the answer is the
- * next page, taken like any other; a representative lists it whenever it
- * reads its key, so a catch-up from one asks about one request per page.
- * When it does not, as from this node serving staples whose votes were made
- * long before it applied them, the answer is set aside, and probes ask for
- * one staple from later moments with the page's own filter, galloping up
- * from the start and then bisecting, until one lists a staple of the page
- * that shows the moment and leaves few enough staples of the page from it
- * on to name.
+ * moment of the page, with a filter that names the page but x: when it lists
+ * x, the start moves there and the answer is the next page, taken like any
+ * other; a representative lists x whenever it reads its key, so a catch-up
+ * from one asks about one request per page. When it does not, as from this
+ * node serving staples whose votes were made long before it applied them,
+ * the answer is set aside, and probes ask for one staple from later moments
+ * with the page's own filter, galloping up from the start and then
+ * bisecting, until one lists a staple of the page that shows the moment and
+ * leaves few enough staples of the page from it on to name.
  *
  * The start moves on after short pages, the second of them in a row and on,
  * once the filter names staples the peer sent from it; one short page is
@@ -433,12 +681,14 @@ function shownTarget<Staple extends PassStaple>(page: readonly Staple[], start: 
  * moment than a filter and a page hold, no page reaches past them; the
  * filter then names all of them at a higher rate, and once a page reaches
  * past that moment the start moves on, as far as the page shows, or a
- * millisecond. Such a conclusion is
- * checked with further filters, each with a seed of its own, until the rates
- * multiply to ACCEPTED_ERROR_RATE: with each, a page from the start must list
- * first the first staple from the moment concluded, list a staple that shows
- * it read up to that moment, and list no staple the node lacked with a vote
- * made about then.
+ * millisecond. Such a conclusion is checked with further filters, each with
+ * a seed of its own, until the rates multiply to ACCEPTED_ERROR_RATE: with
+ * each, a page from the start must show it read up to that moment and list
+ * no staple the node lacked with a vote made about then, from a peer keyed
+ * by votes, and list first the first staple from the moment, from one keyed
+ * as this node is. A peer that keys votes late gives no such check, as a
+ * staple the node lacked may have its votes made anywhere before; a pass
+ * that names MAX_NAMED staples from one start ends there, and reports it.
  *
  * A staple the peer applies during the pass at a moment the pass has moved
  * past is left to the next pass, which starts the margin before this one
@@ -454,6 +704,8 @@ class Pass<Staple extends PassStaple> {
 	/** Whether the node took the staples it holds from the start on lately, as it does catching up, rather than about when the peer applied them. */
 	readonly #tracksHeld: boolean;
 	readonly #use: QueueUse;
+	readonly #keying: KeyingRecord;
+	readonly #known = new KnownVotes();
 	#named = new NamedStaples();
 	#start: number;
 	#limit: number;
@@ -465,21 +717,21 @@ class Pass<Staple extends PassStaple> {
 	/** When, on the node's clock, it first asked for staples from the start. */
 	#askedSince: number | undefined;
 
-	/** The end is at or after the horizon: the pass stops reading once its start reaches it. */
-	constructor(io: PeerIO<Staple>, start: Date, horizon: Date, end: Date, options: PassOptions, held: { readonly tracked: boolean; readonly since: Date | undefined }, use: QueueUse, moved: (start: Date, heldSince: Date | undefined) => Promise<void>) {
+	constructor(io: PeerIO<Staple>, setup: PassSetup, options: PassOptions) {
 		this.#io = io;
-		this.#start = start.getTime();
-		this.#horizon = horizon.getTime();
-		this.#end = end.getTime();
+		this.#start = setup.start.getTime();
+		this.#horizon = setup.horizon.getTime();
+		this.#end = setup.end.getTime();
 		this.#limit = options.limit;
 		this.#seed = options.seed ?? function(): number {
 			return(randomInt(SEED_LIMIT));
 		};
-		this.#tracksHeld = held.tracked;
-		this.#heldSince = held.since?.getTime();
+		this.#tracksHeld = setup.held.tracked;
+		this.#heldSince = setup.held.since?.getTime();
 		this.#askedSince = this.#heldSince;
-		this.#use = use;
-		this.#moved = moved;
+		this.#use = setup.use;
+		this.#keying = setup.keying;
+		this.#moved = setup.moved;
 	}
 
 	async run(): Promise<PassOutcome> {
@@ -501,9 +753,8 @@ class Pass<Staple extends PassStaple> {
 					continue;
 				}
 			}
-			const { staples: page, filter } = listed;
+			const { staples: page, evidence, filter } = listed;
 			const held = listed.taken.held;
-			const whole = wholeReadsOf(page, listed.limit);
 			if (page.length === 0) {
 				if (await this.#confirm(undefined, filter.errorRate)) {
 					return({ kind: 'drained' });
@@ -516,23 +767,24 @@ class Pass<Staple extends PassStaple> {
 			} else {
 				shortPages = 0;
 			}
-			if (probesHorizonAfter(shortPages) && await this.#reachesHorizon(whole, filter)) {
+			if (probesHorizonAfter(shortPages) && await this.#reachesHorizon(evidence, filter)) {
 				return({ kind: 'caught-up' });
 			}
 			const fits = this.#named.size + page.length <= BLOOM_CAPACITY;
-			const early = fits && shortPages >= 2 && this.#named.received > 0;
+			// A page cut by the peer's own limit read no further for the staples the filter names, so it calls for no early move.
+			const early = fits && shortPages >= 2 && this.#named.received > 0 && evidence.wholeBelow === page.length;
 			if (fits && !early) {
 				this.#named.receive(page);
 				continue;
 			}
 			if (filter.errorRate <= ACCEPTED_ERROR_RATE) {
-				next = await this.#moveAsShown(page, whole, held);
+				next = await this.#moveAsShown(evidence, held);
 				if (next !== undefined) {
 					continue;
 				}
 				let reach: Reach | undefined;
-				if (mayShowPast(whole, this.#start)) {
-					reach = await this.#reach(whole, filter.serialized, early);
+				if (mayShowPast(evidence)) {
+					reach = await this.#reach(evidence, filter.serialized, early);
 				}
 				if (reach !== undefined) {
 					await this.#moveTo(reach, page, held);
@@ -545,11 +797,12 @@ class Pass<Staple extends PassStaple> {
 			}
 			// Nothing proves the page reached past the start, as when more staples share its moment than a filter holds: the filter names them all, at a higher error rate, until a page reaches past that moment.
 			if (this.#named.received + page.length > MAX_NAMED) {
+				this.#io.report({ kind: 'crowded', start: new Date(this.#start) });
 				return({ kind: 'bounded', reached: new Date(this.#start) });
 			}
 			this.#named.receive(page);
 			if (filter.errorRate > ACCEPTED_ERROR_RATE) {
-				await this.#passMoment(page, whole, filter, held);
+				await this.#passMoment(evidence, filter, held);
 			}
 		}
 	}
@@ -562,13 +815,11 @@ class Pass<Staple extends PassStaple> {
 	async #list(): Promise<Listed<Staple> | undefined> {
 		const filter = this.#named.filter(this.#seed());
 		this.#askedSince ??= Date.now();
-		const limit = this.#limit;
-		const staples = await this.#request(this.#start, limit, filter.serialized);
-		if (staples === undefined) {
-			this.#limit = Math.ceil(limit / 2);
+		const answer = await this.#request(this.#start, this.#limit, filter.serialized);
+		if (answer === undefined) {
 			return(undefined);
 		}
-		return({ staples, filter, limit, taken: await this.#takeAll(staples) });
+		return({ ...answer, filter, taken: await this.#takeAll(answer.staples) });
 	}
 
 	/**
@@ -612,21 +863,51 @@ class Pass<Staple extends PassStaple> {
 		}
 	}
 
-	/** The page, or nothing when it was too large and fewer staples can be asked for. */
-	async #request(start: number, limit: number, bloomFilter: string | undefined): Promise<readonly Staple[] | undefined> {
+	/**
+	 * The answer from the moment, and what it shows of how far the peer read
+	 * for it, which the pass learns how the peer keys from first; nothing when
+	 * it was too large, and fewer staples are asked for from then on.
+	 */
+	async #request(start: number, limit: number, bloomFilter: string | undefined): Promise<{ readonly staples: readonly Staple[]; readonly evidence: Evidence<Staple> } | undefined> {
 		this.#requests++;
 		const answer = await this.#io.page({ start: new Date(start), limit, bloomFilter });
 		switch (answer.kind) {
 			case 'page':
-				return(answer.staples);
+				break;
 			case 'too-large':
 				if (limit === 1) {
 					throw(new Error('the peer holds a staple larger than a page may be'));
 				}
+				this.#limit = Math.min(this.#limit, Math.ceil(limit / 2));
 				return(undefined);
 			default:
 				return(assertNever(answer));
 		}
+		const staples = answer.staples;
+		await this.#keying.observe(staples, start);
+		this.#known.learn(staples);
+		const evidence: Evidence<Staple> = {
+			page: staples,
+			start,
+			keying: this.#keying,
+			wholeBelow: wholeBelowOf(staples, limit, this.#io.answers.longest),
+			countedTo: Number.NEGATIVE_INFINITY
+		};
+		this.#io.answers.saw(staples.length);
+		switch (this.#keying.current) {
+			case 'unknown':
+			case 'votes':
+				if (evidence.wholeBelow < staples.length) {
+					return({ staples, evidence: { ...evidence, countedTo: countedReach(staples, start, this.#known) } });
+				}
+				break;
+			case 'applied':
+			case 'late-votes':
+				break;
+			default:
+				return(assertNever(this.#keying.current));
+		}
+		return({ staples, evidence });
 	}
 
 	/**
@@ -635,7 +916,7 @@ class Pass<Staple extends PassStaple> {
 	 * that sends blocks the node holds with other votes does not, and the
 	 * filter names those votes from then on.
 	 */
-	async #take(page: readonly Staple[], named: NamedStaples = this.#named): Promise<Taken> {
+	async #take(page: readonly Staple[], named: NamedStaples = this.#named, resent?: string): Promise<Taken> {
 		const sent = page.find(function(staple) {
 			return(named.names(staple));
 		});
@@ -643,15 +924,22 @@ class Pass<Staple extends PassStaple> {
 			throw(new Error(`the peer sent staple ${sent.blocksHash.toString()}, which the filter named, so it does not leave out what a filter names`));
 		}
 		const outcomes: Added[] = [];
+		const listed = new Set<string>();
+		let held = false;
 		for (const staple of page) {
-			outcomes.push(await this.#io.add(staple, this.#use));
+			const added = await this.#io.add(staple, this.#use);
+			outcomes.push(added);
+			// A peer keyed by votes lists a staple again for another read in the same page, and one asked for again lists the staple that shows a move, which say nothing of what else the node held before.
+			const key = stapleKey(staple);
+			held ||= added === 'held' && !listed.has(key) && key !== resent;
+			listed.add(key);
 		}
-		return({ outcomes, held: outcomes.includes('held'), added: outcomes.includes('added') });
+		return({ outcomes, held, added: outcomes.includes('added') });
 	}
 
 	/** Takes the staples, and offers the ledger again those it refused once any was added. */
-	async #takeAll(page: readonly Staple[], named?: NamedStaples): Promise<Taken> {
-		const taken = await this.#take(page, named);
+	async #takeAll(page: readonly Staple[], named?: NamedStaples, resent?: string): Promise<Taken> {
+		const taken = await this.#take(page, named, resent);
 		if (taken.added) {
 			await this.#io.retry();
 		}
@@ -664,16 +952,17 @@ class Pass<Staple extends PassStaple> {
 	 * the staple that says so, and answers that page; nothing when it does
 	 * not, and the answer is set aside. The next page's filter names the
 	 * page's staples the peer may list from there but that one, and, as far
-	 * as there is room, when the
-	 * page repeated staples the node held, those it holds from there, and
-	 * those named for the start.
+	 * as there is room, when the page repeated staples the node held, those
+	 * it holds from there, and those named for the start.
 	 */
-	async #moveAsShown(page: readonly Staple[], whole: readonly Staple[], held: boolean): Promise<Listed<Staple> | undefined> {
-		const target = shownTarget(whole, this.#start);
-		if (target === undefined) {
+	async #moveAsShown(evidence: Evidence<Staple>, held: boolean): Promise<Listed<Staple> | undefined> {
+		const target = shownTarget(evidence);
+		const page = evidence.page;
+		const shownStaple = page[target?.index ?? -1];
+		if (target === undefined || shownStaple === undefined) {
 			return(undefined);
 		}
-		const shownKey = stapleKey(target.staple);
+		const shownKey = stapleKey(shownStaple);
 		// The peer may list from there again the staples of the page whose votes were made about then or later and, from this node, those last in the page.
 		const tail = Math.floor(page.length * EARLY_REACH_SHARE);
 		const named = new NamedStaples();
@@ -689,29 +978,30 @@ class Pass<Staple extends PassStaple> {
 			}
 			await this.#holdInto(named, target.at, heldSince);
 		}
-		named.carry(this.#named);
-		named.forget(target.staple);
+		// Of what the peer sent from the start, a peer keyed by votes lists from there again only the staples with a vote made about then or later; one keyed as this node is lists those that sort after the moment, which those votes tell only of staples it applied about when they were made.
+		const known = this.#known;
+		const keying = this.#keying.current;
+		named.carry(this.#named, function(key): boolean {
+			return(keying === 'applied' || known.mayBeMadeSince(key, target.at - VOTE_KEY_TOLERANCE_MILLISECONDS));
+		});
+		named.forget(shownStaple);
 		const filter = named.filter(this.#seed());
 		const asked = Date.now();
-		const limit = this.#limit;
-		const staples = await this.#request(target.at, limit, filter.serialized);
-		if (staples === undefined) {
-			this.#limit = Math.ceil(limit / 2);
+		const answer = await this.#request(target.at, this.#limit, filter.serialized);
+		if (answer === undefined) {
 			return(undefined);
 		}
-		const start = this.#start;
-		const at = target.at;
-		const shown = staples.some(function(staple): boolean {
-			return(stapleKey(staple) === shownKey && shows(staple, start, at));
+		const listedAgain = answer.staples.some(function(staple): boolean {
+			return(stapleKey(staple) === shownKey);
 		});
-		if (!shown) {
+		if (!listedAgain) {
 			return(undefined);
 		}
-		const taken = await this.#takeAll(staples, named);
-		named.receive(staples);
+		const taken = await this.#takeAll(answer.staples, named, shownKey);
+		named.receive(answer.staples);
 		this.#named = named;
-		await this.#advance(at, asked);
-		return({ staples, filter, limit, taken });
+		await this.#advance(target.at, asked);
+		return({ ...answer, filter, taken });
 	}
 
 	/** The start moves on to the moment given, the node having first asked from there at the moment given on its own clock. */
@@ -755,24 +1045,24 @@ class Pass<Staple extends PassStaple> {
 	 * made about the start shows no moment past it: the page moves past it
 	 * once it lists staples after it.
 	 */
-	async #passMoment(page: readonly Staple[], whole: readonly Staple[], filter: Filter, held: boolean): Promise<void> {
-		const next = shownTarget(whole, this.#start)?.at ?? this.#start + 1;
+	async #passMoment(evidence: Evidence<Staple>, filter: Filter, held: boolean): Promise<void> {
+		const next = shownTarget(evidence)?.at ?? this.#start + 1;
 		// From this node, the staple that shows the moment may come after others whose votes were made about then.
-		const from = await this.#probe(next, filter.serialized, whole, this.#limit);
+		const from = await this.#probe(next, filter.serialized, evidence, this.#limit);
 		if (from !== undefined && await this.#confirm(next, filter.errorRate)) {
-			await this.#moveTo({ start: next, from }, page, held);
+			await this.#moveTo({ start: next, from }, evidence.page, held);
 		}
 	}
 
 	/** Whether the node holds or has queued every staple before the horizon: shown once the start has moved past it, or by the page, with no staple not named before it, reaching it. */
-	async #reachesHorizon(page: readonly Staple[], filter: Filter): Promise<boolean> {
+	async #reachesHorizon(evidence: Evidence<Staple>, filter: Filter): Promise<boolean> {
 		if (this.#start >= this.#horizon) {
 			return(true);
 		}
 		if (filter.errorRate > ACCEPTED_ERROR_RATE) {
 			return(false);
 		}
-		return(await this.#probe(this.#horizon, filter.serialized, page) !== undefined);
+		return(await this.#probe(this.#horizon, filter.serialized, evidence) !== undefined);
 	}
 
 	/**
@@ -783,11 +1073,7 @@ class Pass<Staple extends PassStaple> {
 	 * finds is taken, and the conclusion is not drawn.
 	 *
 	 * Up to the end, a further filter holds when the peer lists no staple from
-	 * the start. Up to a moment, it holds when a page from the start lists
-	 * first the staple listed first from the moment, which this node's order
-	 * requires, lists a staple that shows it read up to the moment, and lists
-	 * no staple the node lacked with a vote made about the moments between,
-	 * which a representative's requires.
+	 * the start. Up to a moment, see #confirmUpTo.
 	 */
 	async #confirm(to: number | undefined, errorRate: number): Promise<boolean> {
 		let uncertainty = errorRate;
@@ -811,33 +1097,70 @@ class Pass<Staple extends PassStaple> {
 		return(true);
 	}
 
+	/**
+	 * Whether a further filter holds up to the moment: a page from the start
+	 * lists first the staple listed first from the moment, which this node's
+	 * order requires, and shows it read up to the moment and lists no staple
+	 * the node lacked with a vote made about the moments between, which a
+	 * representative's requires, each as far as the pass knows how the peer
+	 * keys. A peer that keys votes late gives no such check.
+	 */
 	async #confirmUpTo(to: number, filter: Filter): Promise<boolean> {
-		const beyond = await this.#first(to, filter.serialized);
-		const limit = this.#limit;
-		const listed = await this.#request(this.#start, limit, filter.serialized);
-		if (listed === undefined) {
-			this.#limit = Math.ceil(limit / 2);
+		const keying = this.#keying.current;
+		let byOrder: boolean;
+		let byVotes: boolean;
+		switch (keying) {
+			case 'unknown':
+				byOrder = true;
+				byVotes = true;
+				break;
+			case 'applied':
+				byOrder = true;
+				byVotes = false;
+				break;
+			case 'votes':
+				byOrder = false;
+				byVotes = true;
+				break;
+			case 'late-votes':
+				return(false);
+			default:
+				return(assertNever(keying));
+		}
+		let beyond: Staple | undefined;
+		if (byOrder) {
+			beyond = await this.#first(to, filter.serialized);
+		}
+		const answer = await this.#request(this.#start, this.#limit, filter.serialized);
+		if (answer === undefined) {
 			return(false);
 		}
+		const { staples: listed, evidence } = answer;
 		const [first] = listed;
 		if (first === undefined) {
 			// Applied between the two requests, if anything was: the next page brings it.
-			return(beyond === undefined);
+			return(!byOrder || beyond === undefined);
 		}
 		const { outcomes } = await this.#takeAll(listed);
 		this.#named.receive(listed);
 		const start = this.#start;
+		if (byOrder && (beyond === undefined || stapleKey(first) !== stapleKey(beyond))) {
+			return(false);
+		}
+		if (!byVotes) {
+			return(true);
+		}
 		const lacked = listed.some(function(staple, index): boolean {
 			return(outcomes[index] !== 'held' && madeBetween(staple, start, to));
 		});
-		const reads = wholeReadsOf(listed, limit).some(function(staple): boolean {
-			return(shows(staple, start, to));
+		const reads = listed.some(function(_staple, index): boolean {
+			return(shows(evidence, index, to));
 		});
-		return(beyond !== undefined && stapleKey(first) === stapleKey(beyond) && reads && !lacked);
+		return(reads && !lacked);
 	}
 
 	async #first(at: number, bloomFilter: string | undefined): Promise<Staple | undefined> {
-		return((await this.#request(at, 1, bloomFilter))?.[0]);
+		return((await this.#request(at, 1, bloomFilter))?.staples[0]);
 	}
 
 	/**
@@ -845,7 +1168,8 @@ class Pass<Staple extends PassStaple> {
 	 * the page from it on few enough to name, or, early, after a short page
 	 * that fits the filter, at most the share of it EARLY_REACH_SHARE leaves.
 	 */
-	async #reach(page: readonly Staple[], bloomFilter: string | undefined, early: boolean): Promise<Reach | undefined> {
+	async #reach(evidence: Evidence<Staple>, bloomFilter: string | undefined, early: boolean): Promise<Reach | undefined> {
+		const page = evidence.page;
 		// At least one staple of the page precedes the moment, so that those sent before the page do too and can be let go.
 		let enough = Math.max(1, page.length - Math.max(1, BLOOM_CAPACITY - this.#limit));
 		if (early) {
@@ -868,7 +1192,7 @@ class Pass<Staple extends PassStaple> {
 			if (at <= reached) {
 				break;
 			}
-			const from = await this.#probe(at, bloomFilter, page);
+			const from = await this.#probe(at, bloomFilter, evidence);
 			if (from === undefined) {
 				unreached = at;
 				continue;
@@ -887,18 +1211,14 @@ class Pass<Staple extends PassStaple> {
 	 * lists from the moment, of as many as asked for, and that shows the page
 	 * reached the moment, if one does.
 	 */
-	async #probe(at: number, bloomFilter: string | undefined, page: readonly Staple[], limit = 1): Promise<number | undefined> {
-		const listed = await this.#request(at, limit, bloomFilter);
-		if (listed === undefined) {
-			this.#limit = Math.ceil(this.#limit / 2);
+	async #probe(moment: number, bloomFilter: string | undefined, evidence: Evidence<Staple>, limit = 1): Promise<number | undefined> {
+		const answer = await this.#request(moment, limit, bloomFilter);
+		if (answer === undefined) {
 			return(undefined);
 		}
-		const start = this.#start;
-		const shown = new Set(listed.filter(function(staple): boolean {
-			return(shows(staple, start, at));
-		}).map(stapleKey));
-		const index = page.findIndex(function(staple): boolean {
-			return(shown.has(stapleKey(staple)));
+		const listed = new Set(answer.staples.map(stapleKey));
+		const index = evidence.page.findIndex(function(staple, at): boolean {
+			return(listed.has(stapleKey(staple)) && shows(evidence, at, moment));
 		});
 		if (index < 0) {
 			return(undefined);
@@ -906,6 +1226,18 @@ class Pass<Staple extends PassStaple> {
 		return(index);
 	}
 }
+
+/** Where a pass starts and ends, how it takes what it is sent, and what it shares with the other pass over the peer. */
+type PassSetup = {
+	readonly start: Date;
+	readonly horizon: Date;
+	/** At or after the horizon: the pass stops reading once its start reaches it. */
+	readonly end: Date;
+	readonly held: { readonly tracked: boolean; readonly since: Date | undefined };
+	readonly use: QueueUse;
+	readonly keying: KeyingRecord;
+	readonly moved: (start: Date, heldSince: Date | undefined) => Promise<void>;
+};
 
 function heldSinceOf(moment: number | undefined): Date | undefined {
 	if (moment === undefined) {
@@ -956,6 +1288,9 @@ function probesHorizonAfter(shortPages: number): boolean {
  * reached, as staples needing one a pass missed fill it, begins a deep
  * re-scan at once, which has a share of the queue of its own, and reads
  * that staple again.
+ *
+ * Both passes learn how the peer keys its staples from its answers, and the
+ * node keeps that with its progress.
  */
 export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple>, options: PassOptions): Promise<PeerOutcome> {
 	const began = Date.now();
@@ -972,20 +1307,43 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 		await written;
 	};
 	await written;
-	const live = new Pass(io, progress.reached, floor, new Date(began), options, { tracked: true, since: progress.heldSince }, 'live', function(start, heldSince) {
+	const keying = new KeyingRecord(progress.keying, function(learned) {
 		return(record(function(current) {
-			return({ ...current, reached: earlier(start, floor), heldSince });
+			return({ ...current, keying: learned });
 		}));
+	}, function(event) {
+		io.report(event);
 	});
+	const live = new Pass(io, {
+		start: progress.reached,
+		horizon: floor,
+		end: new Date(began),
+		held: { tracked: true, since: progress.heldSince },
+		use: 'live',
+		keying,
+		moved: function(start, heldSince) {
+			return(record(function(current) {
+				return({ ...current, reached: earlier(start, floor), heldSince });
+			}));
+		}
+	}, options);
 	const deepScan = progress.deepScan;
 	let deep: Pass<Staple> | undefined;
 	if (deepScan !== undefined) {
-		// The node took the staples a deep re-scan reads again about when the peer applied them.
-		deep = new Pass(io, deepScan.reached, deepScan.horizon, deepScan.horizon, options, { tracked: false, since: undefined }, 'deep', function(start) {
-			return(record(function(current) {
-				return({ ...current, deepScan: { reached: start, horizon: deepScan.horizon } });
-			}));
-		});
+		deep = new Pass(io, {
+			start: deepScan.reached,
+			horizon: deepScan.horizon,
+			end: deepScan.horizon,
+			// The node took the staples a deep re-scan reads again about when the peer applied them.
+			held: { tracked: false, since: undefined },
+			use: 'deep',
+			keying,
+			moved: function(start) {
+				return(record(function(current) {
+					return({ ...current, deepScan: { reached: start, horizon: deepScan.horizon } });
+				}));
+			}
+		}, options);
 	}
 	const [liveResult, deepResult] = await Promise.allSettled([live.run(), deep?.run()]);
 	// Whatever the passes did, the staples they queued, and those queued before, are offered again, which also makes room in a queue that was full.

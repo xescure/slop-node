@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { SimulatedNode, SimulatedPeer } from '../testing/simulated-peer.js';
 import type { SimulatedPeerOptions, SimulatedStaple } from '../testing/simulated-peer.js';
 import { advanceClock, freezeClock } from '../testing/network.js';
-import { DEEP_SCAN_DEPTH_MILLISECONDS, DEEP_SCAN_PERIOD_MILLISECONDS, MAX_PASS_MILLISECONDS, bootstrapPeer, completes } from './bootstrap-pass.js';
-import type { PassAnswer, PassOptions, PassRequest, PeerIO, PeerOutcome, PeerProgress } from './bootstrap-pass.js';
+import { DEEP_SCAN_DEPTH_MILLISECONDS, DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, MAX_PASS_MILLISECONDS, bootstrapPeer, completes } from './bootstrap-pass.js';
+import type { PassAnswer, PassEvent, PassOptions, PassRequest, PeerIO, PeerOutcome, PeerProgress } from './bootstrap-pass.js';
 import { BOOTSTRAP_MARGIN_MILLISECONDS, MAX_NAMED } from './bootstrap-window.js';
 
 const NOW = Date.UTC(2026, 9, 7, 12);
@@ -34,6 +34,8 @@ class Harness {
 	readonly requests: Recorded[] = [];
 	readonly written: PeerProgress[] = [];
 	readonly heldFrom: number[] = [];
+	readonly events: PassEvent[] = [];
+	readonly answers = new LongestAnswer();
 	progress: PeerProgress | undefined;
 	readonly #answer: (request: PassRequest) => Promise<PassAnswer<SimulatedStaple>>;
 
@@ -43,6 +45,7 @@ class Harness {
 
 	get io(): PeerIO<SimulatedStaple> {
 		return({
+			answers: this.answers,
 			page: async (request) => {
 				const answer = await this.#answer(request);
 				let served = 0;
@@ -64,6 +67,9 @@ class Harness {
 			},
 			saturated: function() {
 				return(Promise.resolve(false));
+			},
+			report: (event) => {
+				this.events.push(event);
 			},
 			readProgress: () => {
 				return(Promise.resolve(this.progress));
@@ -280,6 +286,50 @@ describe('a pass over a peer', function() {
 		})).toBe(true);
 	});
 
+	/*
+	 * A peer keyed by votes lists the staples of a read in no order, so the
+	 * staple it lists first from a moment says nothing of those before it; a
+	 * pass that knows the peer is keyed so checks the move past the moment
+	 * by the page's votes alone.
+	 */
+	test('passes more staples at one moment than a filter and a page hold on a peer keyed by votes that keeps applying staples', async function() {
+		freezeClock(new Date(NOW));
+		// Reads of 200 votes split the four votes of staples made close together, which the peer then lists twice in a page.
+		const peer = new SimulatedPeer({ keying: { kind: 'votes', votesPerRead: 200, readsAtMost: Number.POSITIVE_INFINITY, readMilliseconds: 0 } });
+		const moment = NOW - HOUR;
+		function voted(at: number): readonly number[] {
+			return([at - 300, at - 200, at - 100, at]);
+		}
+		for (let index = 0; index < 500; index++) {
+			const at = moment - HOUR + index * SECOND;
+			peer.applyVoted(at, at, [], voted(at));
+		}
+		for (let index = 0; index < 2500; index++) {
+			peer.applyVoted(moment, moment, [], [moment, moment, moment, moment]);
+		}
+		for (let index = 0; index < 2000; index++) {
+			const at = moment + SECOND + index * 10;
+			peer.applyVoted(at, at, [], voted(at));
+		}
+		peer.goLive({ perSecond: 20, voterSkew: function(): number {
+			return(0);
+		} });
+		const harness = new Harness(function(request) {
+			return(peer.page(request));
+		});
+
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(live).toEqual({ kind: 'caught-up' });
+		expect(harness.progress?.keying).toBe('votes');
+		// The first check of the move past the moment holds: it took 20 requests, two failed checks among them, when the staple listed first had to match too.
+		expect(harness.requests.length).toBeLessThanOrEqual(12);
+		expect(peer.staples.filter(function(staple): boolean {
+			return(staple.moment < NOW - BOOTSTRAP_MARGIN_MILLISECONDS && !harness.node.holds(staple));
+		})).toEqual([]);
+		expect(harness.events).toEqual([]);
+	});
+
 	test('takes a staple on blocks the node holds with other votes as held, and names those votes from then on', async function() {
 		freezeClock(new Date(NOW));
 		const peer = peerWith(10);
@@ -387,7 +437,7 @@ describe('a pass over a peer', function() {
 		expect(await bootstrapPeer(harness.io, passOptions(1000))).toEqual(liveOnly({ kind: 'bounded', reached: EPOCH }));
 
 		expect(harness.requests.length).toBeLessThanOrEqual(MAX_PASS_MILLISECONDS / MINUTE + 1);
-		expect(harness.progress).toEqual({ reached: EPOCH, caughtUp: false, deepScanFrom: EPOCH, nextDeepScan: new Date(NOW + DEEP_SCAN_PERIOD_MILLISECONDS), deepScan: undefined });
+		expect(harness.progress).toEqual({ reached: EPOCH, caughtUp: false, deepScanFrom: EPOCH, nextDeepScan: new Date(NOW + DEEP_SCAN_PERIOD_MILLISECONDS), deepScan: undefined, keying: 'unknown' });
 	});
 
 	test('records, once it drains the peer, that the next pass starts the margin before this one began', async function() {
@@ -403,7 +453,7 @@ describe('a pass over a peer', function() {
 
 		const firstFloor = new Date(NOW - BOOTSTRAP_MARGIN_MILLISECONDS);
 		expect(harness.requests[2]?.start).toEqual(firstFloor);
-		expect(harness.progress).toEqual({ reached: new Date(NOW + 50 + MINUTE - BOOTSTRAP_MARGIN_MILLISECONDS), caughtUp: true, deepScanFrom: EPOCH, nextDeepScan: new Date(NOW + DEEP_SCAN_PERIOD_MILLISECONDS), deepScan: undefined });
+		expect(harness.progress).toEqual({ reached: new Date(NOW + 50 + MINUTE - BOOTSTRAP_MARGIN_MILLISECONDS), caughtUp: true, deepScanFrom: EPOCH, nextDeepScan: new Date(NOW + DEEP_SCAN_PERIOD_MILLISECONDS), deepScan: undefined, keying: 'unknown' });
 	});
 });
 
@@ -412,7 +462,7 @@ describe('deep re-scans of a peer', function() {
 		vi.useRealTimers();
 	});
 
-	const caughtUp: PeerProgress = { reached: new Date(NOW - BOOTSTRAP_MARGIN_MILLISECONDS), caughtUp: true, deepScanFrom: new Date(NOW - 2 * DEEP_SCAN_DEPTH_MILLISECONDS), nextDeepScan: new Date(NOW), deepScan: undefined, heldSince: undefined };
+	const caughtUp: PeerProgress = { reached: new Date(NOW - BOOTSTRAP_MARGIN_MILLISECONDS), caughtUp: true, deepScanFrom: new Date(NOW - 2 * DEEP_SCAN_DEPTH_MILLISECONDS), nextDeepScan: new Date(NOW), deepScan: undefined, heldSince: undefined, keying: 'unknown' };
 
 	test('begin once due, from where the passes since the last began started, alongside the pass from where it reached', async function() {
 		freezeClock(new Date(NOW));

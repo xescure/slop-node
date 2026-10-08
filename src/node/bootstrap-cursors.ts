@@ -1,7 +1,7 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { KVStorageProvider } from '@keetanetwork/keetanet-client/lib/kv/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
-import type { DeepScan, PeerProgress } from './bootstrap-pass.js';
+import type { DeepScan, PeerKeying, PeerProgress } from './bootstrap-pass.js';
 import type { QueuedStaple, RetryStore } from './bootstrap-retry.js';
 
 const lib = KeetaNet.lib;
@@ -30,6 +30,7 @@ type StoredProgress = {
 	readonly nextDeepScan: number;
 	readonly deepScan: { readonly reached: number; readonly horizon: number } | null;
 	readonly heldSince: number | null;
+	readonly keying: PeerKeying;
 };
 
 function isWholeNumber(value: unknown): value is number {
@@ -62,6 +63,18 @@ function heldSinceOf(value: unknown): Date | undefined | false {
 	return(new Date(value));
 }
 
+const EVERY_KEYING: readonly PeerKeying[] = ['unknown', 'votes', 'applied', 'late-votes'];
+
+/** How the peer keys its staples as stored, unknown when the node did not record it, as before it did, or false when the value is not one. */
+function keyingOf(value: unknown): PeerKeying | false {
+	if (value === undefined) {
+		return('unknown');
+	}
+	return(EVERY_KEYING.find(function(keying): boolean {
+		return(keying === value);
+	}) ?? false);
+}
+
 function progressOf(value: unknown): PeerProgress | undefined {
 	if (!isRecord(value)) {
 		return(undefined);
@@ -69,10 +82,11 @@ function progressOf(value: unknown): PeerProgress | undefined {
 	const { reached, caughtUp, deepScanFrom, nextDeepScan } = value;
 	const deepScan = deepScanOf(value['deepScan']);
 	const heldSince = heldSinceOf(value['heldSince']);
-	if (!isWholeNumber(reached) || typeof caughtUp !== 'boolean' || !isWholeNumber(deepScanFrom) || !isWholeNumber(nextDeepScan) || deepScan === false || heldSince === false) {
+	const keying = keyingOf(value['keying']);
+	if (!isWholeNumber(reached) || typeof caughtUp !== 'boolean' || !isWholeNumber(deepScanFrom) || !isWholeNumber(nextDeepScan) || deepScan === false || heldSince === false || keying === false) {
 		return(undefined);
 	}
-	return({ reached: new Date(reached), caughtUp, deepScanFrom: new Date(deepScanFrom), nextDeepScan: new Date(nextDeepScan), deepScan, heldSince });
+	return({ reached: new Date(reached), caughtUp, deepScanFrom: new Date(deepScanFrom), nextDeepScan: new Date(nextDeepScan), deepScan, heldSince, keying });
 }
 
 function storedDeepScan(deepScan: DeepScan | undefined): StoredProgress['deepScan'] {
@@ -102,7 +116,8 @@ export class BootstrapCursors {
 			deepScanFrom: progress.deepScanFrom.getTime(),
 			nextDeepScan: progress.nextDeepScan.getTime(),
 			deepScan: storedDeepScan(progress.deepScan),
-			heldSince: progress.heldSince?.getTime() ?? null
+			heldSince: progress.heldSince?.getTime() ?? null,
+			keying: progress.keying
 		};
 		await this.#kv.set(BOOTSTRAP_CURSOR_ARENA, endpoint, stored);
 	}

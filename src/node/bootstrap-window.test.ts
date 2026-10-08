@@ -3,7 +3,7 @@ import { describe, expect, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { BloomFilter } from '@keetanetwork/keetanet-client/lib/utils/bloom.js';
 import { pageURL } from './bootstrap-page.js';
-import { ACCEPTED_ERROR_RATE, BLOOM_CAPACITY, BLOOM_ERROR_RATE, MAX_NAMED, NamedStaples } from './bootstrap-window.js';
+import { ACCEPTED_ERROR_RATE, BLOOM_CAPACITY, BLOOM_ERROR_RATE, MAX_NAMED, NamedStaples, stapleKey } from './bootstrap-window.js';
 import type { NamedStaple } from './bootstrap-window.js';
 
 const lib = KeetaNet.lib;
@@ -133,6 +133,22 @@ describe('the staples a filter names', function() {
 		})).toEqual([false, false, false, false, true, true]);
 	});
 
+	test('carry of what another received only what the peer may list again, and what it held', function() {
+		const named = new NamedStaples();
+		const held = stapleNamed('held');
+		const behind = stapleNamed('behind');
+		const ahead = stapleNamed('ahead');
+		named.hold([held]);
+		named.receive([behind, ahead]);
+		const following = new NamedStaples();
+		following.carry(named, function(key): boolean {
+			return(key !== stapleKey(behind));
+		});
+		expect([held, behind, ahead].map(function(staple): boolean {
+			return(following.names(staple));
+		})).toEqual([true, false, true]);
+	});
+
 	test('carry, as far as there is room, what another names, after what they name already', function() {
 		const named = new NamedStaples();
 		const held = stapleNamed('held');
@@ -142,7 +158,9 @@ describe('the staples a filter names', function() {
 		const page = staplesNamed('page', BLOOM_CAPACITY - 1);
 		const following = new NamedStaples();
 		following.receive(page);
-		following.carry(named);
+		following.carry(named, function(): boolean {
+			return(true);
+		});
 		expect([earlier, held].map(function(staple): boolean {
 			return(following.names(staple));
 		})).toEqual([true, false]);
