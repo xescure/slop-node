@@ -6,7 +6,7 @@ import { DEEP_SCAN_PERIOD_MILLISECONDS, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS
 import type { PassOptions, PassOutcome, PeerIO, PeerOutcome, PeerProgress } from './bootstrap-pass.js';
 import { REPORT_REFUSED_AFTER_MILLISECONDS, RetryQueueFull } from './bootstrap-retry.js';
 import type { QueueBounds, RetryQueue } from './bootstrap-retry.js';
-import { updatePeers } from './bootstrap-update.js';
+import { nextUpdateDelay, updatePeers } from './bootstrap-update.js';
 import type { PeerResult } from './bootstrap-update.js';
 import { BLOOM_CAPACITY } from './bootstrap-window.js';
 
@@ -137,6 +137,26 @@ class Scenario {
 		throw(new Error(`no pass completed within ${String(updates)} updates`));
 	}
 
+	/**
+	 * Updates as the client schedules them (nextUpdateDelay) until a pass
+	 * completes, and answers how long that took and how much of it the node
+	 * spent waiting between updates.
+	 */
+	async onScheduleUntilComplete(updates: number): Promise<{ readonly took: number; readonly waited: number }> {
+		const began = Date.now();
+		let waited = 0;
+		for (let update = 0; update < updates; update++) {
+			const { live } = await this.update();
+			if (completes(live)) {
+				return({ took: Date.now() - began, waited });
+			}
+			const delay = nextUpdateDelay([resultOf(live)], PERIOD);
+			advanceClock(delay);
+			waited += delay;
+		}
+		throw(new Error(`no pass completed within ${String(updates)} updates`));
+	}
+
 	/** Updates on the period for that long. */
 	async periodically(duration: number): Promise<void> {
 		for (let waited = 0; waited < duration; waited += PERIOD) {
@@ -194,6 +214,13 @@ class Scenario {
 	}
 }
 
+function resultOf(outcome: PassOutcome): PeerResult {
+	if (completes(outcome)) {
+		return('completed');
+	}
+	return('bounded');
+}
+
 function noSkew(): number {
 	return(0);
 }
@@ -240,10 +267,7 @@ class SimulatedNetwork {
 			}
 		}, this.#peers.size, async function(name, from): Promise<PeerResult> {
 			const { live } = await bootstrapPeer(follower.io(peerNamed(name)), follower.options(from));
-			if (completes(live)) {
-				return('completed');
-			}
-			return('bounded');
+			return(resultOf(live));
 		});
 		return([...this.#peers.keys()].map(function(name): PeerResult {
 			return(results.get(name) ?? 'failed');
@@ -432,6 +456,36 @@ describe('bootstrapping against a simulated peer', { timeout: 120_000 }, functio
 		}, 0);
 		expect(requests).toBeLessThan(4 * count / reads);
 		scenario.expectEveryUpdateBounded();
+	});
+
+	/*
+	 * A main network representative answers a page of about 140 staples in
+	 * about 2.8 s, and the node rests 1 s before its next request to it, so
+	 * a catch-up runs pass after pass, each ended by its bound in time.
+	 */
+	test('catches up pass after pass with no wait between them while the peer is ahead, as long as its passes take', async function() {
+		freezeClock(new Date(NOW));
+		const latency = 3800;
+		const scenario = new Scenario({ latency, answersAtMost: 140 });
+		const count = 5000;
+		liveHistory(scenario.peer, count, 10, NOW - HOUR);
+
+		const { took, waited } = await scenario.onScheduleUntilComplete(20);
+
+		expect(scenario.missing()).toEqual([]);
+		const bounded = scenario.updates.length - 1;
+		expect(bounded).toBeGreaterThan(3);
+		expect(waited).toBe(0);
+		const passes = scenario.updates.reduce(function(sum, update): number {
+			return(sum + update.elapsed);
+		}, 0);
+		expect(took).toBe(passes);
+		// Waiting the period after each bounded pass would have taken a third as long again.
+		expect(took + bounded * PERIOD).toBeGreaterThan(1.3 * took);
+		for (const update of scenario.updates) {
+			// A request under way when the bound falls is answered.
+			expect(update.elapsed).toBeLessThanOrEqual(MAX_PASS_MILLISECONDS + latency);
+		}
 	});
 
 	test('holds every staple of a peer that holds blocks the node holds with other votes', async function() {

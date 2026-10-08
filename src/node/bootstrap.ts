@@ -15,7 +15,7 @@ import { bootstrapPacingOf, bootstrapSources } from './bootstrap-peers.js';
 import type { BootstrapNode } from './bootstrap-peers.js';
 import { RetryQueue } from './bootstrap-retry.js';
 import type { Added, Offered, QueuedStaple } from './bootstrap-retry.js';
-import { updatePeers } from './bootstrap-update.js';
+import { nextUpdateDelay, updatePeers } from './bootstrap-update.js';
 import type { PeerResult, UpdateIO } from './bootstrap-update.js';
 
 export type { BootstrapConfig } from '@keetanetwork/keetanet-client/lib/bootstrap.js';
@@ -112,7 +112,8 @@ function pageLimit(limit: number): number {
  * to hold or have queued every staple the peer had applied before the
  * margin before the pass began. A deep re-scan of the peer, when one is
  * under way, runs alongside. A pass is bounded in requests and time, and
- * one that reaches its bound is continued on the next update; a peer that
+ * one that reaches its bound is continued on the next update, which a
+ * client updating on a period then begins at once; a peer that
  * fails is logged and tried again on the next update. Neither holds up any
  * other peer for longer. Requests to a peer are paced as the node's
  * configuration asks (paceBootstrap), the pause counting towards the pass's
@@ -140,11 +141,14 @@ export class BootstrapClient {
 	#timer: NodeJS.Timeout | undefined;
 	#lastUpdate: Date | undefined;
 	#completeCount = 0;
+	/** How the last update's passes ended, which says whether the next starts at once. */
+	#lastResults: readonly PeerResult[] = [];
 
 	/**
 	 * With a period, an update runs at once and then that many milliseconds
-	 * after each one ends, until the client is stopped; without one, only
-	 * when update() is called. Cursors are kept in the store given, or in
+	 * after each one ends, or at once after one whose pass over some peer
+	 * ended at its bound (nextUpdateDelay), until the client is stopped;
+	 * without one, only when update() is called. Cursors are kept in the store given, or in
 	 * memory.
 	 */
 	constructor(node: BootstrapNode, config: BootstrapConfig = {}) {
@@ -204,7 +208,7 @@ export class BootstrapClient {
 		return(run);
 	}
 
-	/** Updates now, and again that many milliseconds after each update ends, whether or not it succeeded, until stopped. */
+	/** Updates now, and again after each update ends, whether or not it succeeded, until stopped. */
 	#updateEvery(period: number): void {
 		const scheduleNext = (): void => {
 			if (this.#stopping.signal.aborted) {
@@ -213,7 +217,7 @@ export class BootstrapClient {
 			this.#timer = setTimeout(() => {
 				this.#timer = undefined;
 				this.#updateEvery(period);
-			}, period);
+			}, nextUpdateDelay(this.#lastResults, period));
 		};
 		this.update().then(scheduleNext, (error: unknown) => {
 			this.#node.log.error(LOG_SOURCE, 'A scheduled bootstrap update failed:', error);
@@ -222,6 +226,7 @@ export class BootstrapClient {
 	}
 
 	async #updateNow(limit: number): Promise<UpdateResult> {
+		this.#lastResults = [];
 		if (this.#stopping.signal.aborted) {
 			return({ complete: false });
 		}
@@ -253,6 +258,7 @@ export class BootstrapClient {
 			const results = await updatePeers(sources, io, MAX_CONCURRENT_PASSES, (endpoint, from) => {
 				return(this.#catchUpLogged(endpoint, limit, fetcher, from));
 			});
+			this.#lastResults = [...results.values()];
 			const complete = sources.every(function(endpoint): boolean {
 				return(results.get(endpoint) === 'completed');
 			}) && !this.#stopping.signal.aborted;

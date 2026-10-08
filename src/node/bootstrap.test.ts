@@ -21,6 +21,7 @@ import type { ServingNode, StorageUnderTest } from '../testing/sdk.js';
 import { BootstrapClient } from './bootstrap.js';
 import { BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RETRY_ARENA, BootstrapCursors } from './bootstrap-cursors.js';
 import { bootstrapFrom, bootstrapSources } from './bootstrap-peers.js';
+import { MAX_PASS_MILLISECONDS } from './bootstrap-pass.js';
 import { REPORT_REFUSED_AFTER_MILLISECONDS } from './bootstrap-retry.js';
 import { BOOTSTRAP_MARGIN_MILLISECONDS } from './bootstrap-window.js';
 import type { LocalNode } from './local.js';
@@ -521,6 +522,47 @@ describe('a bootstrap client', function() {
 		await retried;
 
 		expect(errors).toHaveBeenCalledWith('BOOTSTRAP', 'A scheduled bootstrap update failed:', new Error('the update failed'));
+	});
+
+	test('starts its next update at once after a pass that ended at its bound, rather than wait its period', async function() {
+		const peer = await representative();
+		await addAll(peer.node, await sendsFrom(peer.network, 0, 2));
+		let answered = 0;
+		const recording = await startRecordingPeer(peer.apiURL, { beforeAnswer: function(): void {
+			answered++;
+			// The first page takes all the time a pass has.
+			if (answered === 1) {
+				advanceClock(MAX_PASS_MILLISECONDS);
+			}
+		} });
+		const late = await joiner({ bootstrapFrom: [recording.apiURL] });
+		const results: { complete: boolean }[] = [];
+		let endSecond: (() => void) | undefined;
+		const second = new Promise<void>(function(resolve) {
+			endSecond = resolve;
+		});
+		class RecordingClient extends BootstrapClient {
+			override async update(limit?: number): Promise<{ complete: boolean }> {
+				const result = await super.update(limit);
+				results.push(result);
+				if (results.length === 2) {
+					endSecond?.();
+				}
+				return(result);
+			}
+		}
+
+		// The period is far longer than the test may take.
+		const client = new RecordingClient(late.node, { period: 60 * 60_000 });
+		onTestFinished(function() {
+			return(client.stop());
+		});
+		await second;
+
+		expect(results).toEqual([{ complete: false }, { complete: true }]);
+		expect(recording.pages[0]?.start).toBe(EPOCH);
+		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
+		expect(await client.stats()).toMatchObject({ completeCount: 1 });
 	});
 
 	test('refuses a page larger than a representative sends', async function() {

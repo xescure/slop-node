@@ -122,6 +122,8 @@ export type RecordingPeerOptions = {
 	readonly filter?: FilterHandling;
 	/** Pads every answer to a request for more staples than this past the size the node accepts for a page. */
 	readonly padAboveLimit?: number;
+	/** Runs as each answer is about to be sent, as the time a slow representative takes would pass. */
+	readonly beforeAnswer?: () => void;
 };
 
 function padding(query: URLSearchParams, padAboveLimit: number | undefined): string {
@@ -143,6 +145,7 @@ export async function startRecordingPeer(apiURL: string, options: RecordingPeerO
 		const received = performance.now();
 		forward(target, request, options.filter ?? 'passed-on').then(function(answer): void {
 			const query = new URL(request.url ?? '/', target).searchParams;
+			options.beforeAnswer?.();
 			response.writeHead(answer.status, { 'content-type': answer.contentType ?? 'application/json' });
 			response.end(answer.body + padding(query, options.padAboveLimit));
 			pages.push({ start: query.get('start'), limit: query.get('limit'), bloomFilter: bloomFilterOf(query), status: answer.status, served: servedStaples(answer.body), received, answered: performance.now() });

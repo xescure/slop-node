@@ -19,6 +19,23 @@ export type UpdateIO = {
 	writeCaughtUp(horizon: Date): Promise<void>;
 };
 
+/**
+ * How long after an update ends the next one starts: at once when a pass
+ * over some peer ended at its bound, since that peer is still ahead of the
+ * node and waiting would leave the catch-up idle (its requests stay paced,
+ * so the peer sees the same load); otherwise after the period. A failed
+ * pass waits the period, so that a failing peer is not asked again in a
+ * loop, and an update that ends at a bound lasts as long as that bound.
+ */
+export function nextUpdateDelay(results: Iterable<PeerResult>, period: number): number {
+	for (const result of results) {
+		if (result === 'bounded') {
+			return(0);
+		}
+	}
+	return(period);
+}
+
 /** An update's passes over the peer, those over a peer the node has no progress on starting from the moment given. */
 export type CatchUp = (peer: string, from: Date) => Promise<PeerResult>;
 

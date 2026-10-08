@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { PeerProgress } from './bootstrap-pass.js';
-import { updatePeers } from './bootstrap-update.js';
+import { nextUpdateDelay, updatePeers } from './bootstrap-update.js';
 import type { PeerResult, UpdateIO } from './bootstrap-update.js';
 
 const EPOCH = new Date(0);
@@ -137,5 +137,17 @@ describe('an update over every peer', function() {
 			return(run.peer === 'rep3');
 		})?.from).toBe(HORIZON.getTime());
 		expect(harness.progress.get('rep1')?.reached).toEqual(new Date(1000));
+	});
+
+	test('starts the next update at once while a pass ended at its bound, and after the period otherwise', function() {
+		const period = 60_000;
+
+		expect(nextUpdateDelay(['bounded'], period)).toBe(0);
+		expect(nextUpdateDelay(['completed', 'failed', 'bounded'], period)).toBe(0);
+		expect(nextUpdateDelay(['completed', 'completed'], period)).toBe(period);
+		expect(nextUpdateDelay(['completed', 'failed'], period)).toBe(period);
+		expect(nextUpdateDelay(['failed'], period)).toBe(period);
+		// No pass ran: the peers could not be found, or the update failed.
+		expect(nextUpdateDelay([], period)).toBe(period);
 	});
 });
