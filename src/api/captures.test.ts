@@ -145,6 +145,7 @@ const VERDICTS: Readonly<Record<string, Verdict>> = {
 	'ledger-account-unknown.json': replayed(),
 	'ledger-accounts-malformed.json': USER_LATER,
 	'ledger-accounts.json': USER_LATER,
+	'ledger-block-both.json': replayed(),
 	'ledger-block-empty-side.json': replayed(),
 	'ledger-block-invalid-side.json': replayed(),
 	'ledger-block-malformed.json': replayed('error-id'),

@@ -261,6 +261,8 @@ def capture(parameters, directory, selected):
 
 	c.get("ledger-block", [*ledger, "block", p.user_head])
 	c.get("ledger-block-side", [*ledger, "block", p.user_head], {"side": "side"})
+	# The client asks for "both" as it recovers an account [Keeta TS] index.js:59349-59351.
+	c.get("ledger-block-both", [*ledger, "block", p.user_head], {"side": "both"})
 	c.get("ledger-block-unknown", [*ledger, "block", UNKNOWN_HASH])
 	c.get("ledger-block-malformed", [*ledger, "block", MALFORMED_HASH])
 	c.get("ledger-block-invalid-side", [*ledger, "block", p.user_head], {"side": "neither"})
