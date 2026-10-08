@@ -4,7 +4,6 @@ import type { Express, NextFunction, Request as ExpressRequest, Response as Expr
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { LocalNode as DeclaredLocalNode, LocalNodeConfig } from '@keetanetwork/keetanet-client/lib/node/local.js';
-import type { P2PPeer } from '@keetanetwork/keetanet-client/lib/p2p.js';
 import { answerError, ERROR_STATUS, newErrorID } from '../api/errors.js';
 import type { ErrorBody } from '../api/errors.js';
 import { API_ROUTES, invokeRoute } from '../api/index.js';
@@ -229,7 +228,6 @@ export class LocalNode extends ClientNode {
 	readonly #connections: SwitchConnections;
 	readonly #messages: SwitchMessages;
 	readonly #switchStore: SwitchStore;
-	readonly #checkIns: NodeJS.Timeout[] = [];
 	#bootstrap: BootstrapClient | undefined;
 	#running = false;
 	readonly #peerLimits: PeerLimits;
@@ -390,26 +388,13 @@ export class LocalNode extends ClientNode {
 				}
 			}
 			for (const peer of this.config.manualPeers ?? []) {
-				this.#addManualPeer(peer);
+				this.switch.addManualPeer(peer);
 			}
 			this.#bootstrap = this.#startBootstrap();
 		} catch (error) {
 			this.#running = false;
 			throw(error);
 		}
-	}
-
-	/**
-	 * Checks in with the peer now, and again on the switch's period, as the
-	 * switch would on its own timer [Keeta TS] index.js:72622-72658: on the
-	 * node's timer, which stops before the switch does, each check-in joins
-	 * the work the switch is stopped only after [Keeta TS] index.js:72663-72683.
-	 */
-	#addManualPeer(peer: P2PPeer): void {
-		this.switch.addManualPeer(peer, false);
-		this.#checkIns.push(setInterval(() => {
-			this.switch.addManualPeer(peer, false);
-		}, this.switch.config.manualPeersCheckInFreq));
 	}
 
 	#openToPeers(): boolean {
@@ -457,17 +442,16 @@ export class LocalNode extends ClientNode {
 	}
 
 	/**
-	 * Stops checking in with manual peers and bootstrapping, then serving
-	 * peers and requests, waiting for the requests in flight, then stops the
-	 * node, and waits until its switch is done with every message peers
-	 * delivered, over a WebSocket or posted over HTTP, then with every
-	 * connection, and then with the node's store, so that the storage can be
-	 * closed after.
+	 * Stops bootstrapping, then serving peers and requests, waiting for the
+	 * requests in flight, then stops the node, whose switch stops checking in
+	 * with manual peers [Keeta TS] index.js:72663-72666, and waits until the
+	 * switch is done with every message peers delivered, over a WebSocket or
+	 * posted over HTTP, then with every connection, and then with the node's
+	 * store, so that the storage can be closed after. A check-in that its
+	 * timer started just before is neither awaited nor harmful: the closed
+	 * connections refuse its dial, and the detached store takes its writes.
 	 */
 	override async stop(): Promise<void> {
-		for (const checkIn of this.#checkIns.splice(0)) {
-			clearInterval(checkIn);
-		}
 		await this.#bootstrap?.stop();
 		const peers = this.#peers;
 		this.#peers = undefined;
