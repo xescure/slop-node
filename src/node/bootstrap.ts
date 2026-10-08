@@ -4,7 +4,6 @@ import type { BootstrapClient as DeclaredBootstrapClient, BootstrapConfig } from
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { KVInternals } from '../upstream/internals.js';
 import { assertNever } from '../util/assert-never.js';
-import { eachAtMost } from '../util/concurrency.js';
 import type { AssertNever } from '../util/assert-never.js';
 import type { ClassSurface } from '../util/class-surface.js';
 import { BootstrapCursors, KVRetryStore } from './bootstrap-cursors.js';
@@ -16,6 +15,8 @@ import { bootstrapPacingOf, bootstrapSources } from './bootstrap-peers.js';
 import type { BootstrapNode } from './bootstrap-peers.js';
 import { RetryQueue } from './bootstrap-retry.js';
 import type { Added, Offered, QueuedStaple } from './bootstrap-retry.js';
+import { updatePeers } from './bootstrap-update.js';
+import type { PeerResult, UpdateIO } from './bootstrap-update.js';
 
 export type { BootstrapConfig } from '@keetanetwork/keetanet-client/lib/bootstrap.js';
 
@@ -71,6 +72,13 @@ function refusalOf(error: unknown): string {
 	return(String(error).slice(0, MAX_REFUSAL_LENGTH));
 }
 
+function resultOf(outcome: PassOutcome): PeerResult {
+	if (completes(outcome)) {
+		return('completed');
+	}
+	return('bounded');
+}
+
 function positiveMilliseconds(name: string, value: number): number {
 	if (!Number.isFinite(value) || value <= 0) {
 		throw(new RangeError(`the bootstrap ${name} must be a positive number of milliseconds (it is ${String(value)})`));
@@ -95,9 +103,10 @@ function pageLimit(limit: number): number {
  * upstream's typings (lib/bootstrap.d.ts), whose bundle has no
  * implementation.
  *
- * An update makes one pass over each peer, a few peers at a time: it pages
- * through the peer's staples from where the node last reached on that peer
- * (src/node/bootstrap-pass.ts), adds each staple to the ledger as a
+ * An update makes one pass over each peer, a few peers at a time, or one
+ * at a time until a pass has completed (src/node/bootstrap-update.ts): it
+ * pages through the peer's staples from where the node last reached on that
+ * peer (src/node/bootstrap-pass.ts), adds each staple to the ledger as a
  * bootstrap, queuing for retry each the ledger refuses
  * (src/node/bootstrap-retry.ts), and is done with the peer once it is shown
  * to hold or have queued every staple the peer had applied before the
@@ -160,7 +169,7 @@ export class BootstrapClient {
 		}
 	}
 
-	/** Forgets where the node has reached on every peer, so that the next update reads each from the beginning. */
+	/** Forgets where the node has reached on every peer, so that the next update reads each from the beginning, one at a time until a pass completes. */
 	resetKV(): Promise<void> {
 		return(this.#enqueue(() => {
 			return(this.#cursors.clear());
@@ -225,11 +234,28 @@ export class BootstrapClient {
 			return({ complete: false });
 		}
 		const fetcher = new PageFetcher();
+		const cursors = this.#cursors;
+		const io: UpdateIO = {
+			readProgress: function(endpoint) {
+				return(cursors.read(endpoint));
+			},
+			writeProgress: function(endpoint, progress) {
+				return(cursors.write(endpoint, progress));
+			},
+			readCaughtUp: function() {
+				return(cursors.readCaughtUp());
+			},
+			writeCaughtUp: function(horizon) {
+				return(cursors.writeCaughtUp(horizon));
+			}
+		};
 		try {
-			const caughtUp = await eachAtMost(sources, MAX_CONCURRENT_PASSES, (endpoint) => {
-				return(this.#catchUpLogged(endpoint, limit, fetcher));
+			const results = await updatePeers(sources, io, MAX_CONCURRENT_PASSES, (endpoint, from) => {
+				return(this.#catchUpLogged(endpoint, limit, fetcher, from));
 			});
-			const complete = caughtUp.every(Boolean) && !this.#stopping.signal.aborted;
+			const complete = sources.every(function(endpoint): boolean {
+				return(results.get(endpoint) === 'completed');
+			}) && !this.#stopping.signal.aborted;
 			this.#record(complete);
 			return({ complete });
 		} finally {
@@ -246,21 +272,21 @@ export class BootstrapClient {
 		}
 	}
 
-	async #catchUpLogged(endpoint: string, limit: number, fetcher: PageFetcher): Promise<boolean> {
+	async #catchUpLogged(endpoint: string, limit: number, fetcher: PageFetcher, from: Date): Promise<PeerResult> {
 		try {
-			return(await this.#catchUp(endpoint, limit, fetcher));
+			return(await this.#catchUp(endpoint, limit, fetcher, from));
 		} catch (error: unknown) {
 			if (this.#stopping.signal.aborted) {
 				this.#node.log.debug(LOG_SOURCE, `Stopped bootstrapping from ${endpoint}`);
 			} else {
 				this.#node.log.warn(LOG_SOURCE, `Bootstrapping from ${endpoint} failed; it is tried again on the next update:`, error);
 			}
-			return(false);
+			return('failed');
 		}
 	}
 
-	/** The update's passes over the peer, which answer whether the node caught up on it. */
-	async #catchUp(endpoint: string, limit: number, fetcher: PageFetcher): Promise<boolean> {
+	/** The update's passes over the peer, those over a peer it has no progress on starting from the moment given. */
+	async #catchUp(endpoint: string, limit: number, fetcher: PageFetcher, from: Date): Promise<PeerResult> {
 		const tally: PassTally = { requests: 0, added: 0, held: 0, queued: 0 };
 		const io: PeerIO<VoteStaple> = {
 			page: (request) => {
@@ -291,7 +317,7 @@ export class BootstrapClient {
 				return(this.#cursors.write(endpoint, progress));
 			}
 		};
-		const { live: outcome } = await bootstrapPeer(io, { limit, stagger: staggerOf(endpoint) });
+		const { live: outcome } = await bootstrapPeer(io, { limit, stagger: staggerOf(endpoint), from });
 		const summary = `Bootstrap pass over ${endpoint}: ${describeOutcome(outcome)} after ${String(tally.requests)} requests, ${String(tally.added)} staples added, ${String(tally.held)} held already, ${String(tally.queued)} queued for retry (${String(await this.#retries.size())} in the queue)`;
 		// Once caught up, a pass every period adds nothing, which an operator need not read.
 		if (tally.added > 0 || tally.queued > 0 || !completes(outcome)) {
@@ -299,7 +325,7 @@ export class BootstrapClient {
 		} else {
 			this.#node.log.debug(LOG_SOURCE, summary);
 		}
-		return(completes(outcome));
+		return(resultOf(outcome));
 	}
 
 	async #page(fetcher: PageFetcher, endpoint: string, request: PassRequest): Promise<PassAnswer<VoteStaple>> {

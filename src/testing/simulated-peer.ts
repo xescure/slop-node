@@ -123,6 +123,7 @@ export class SimulatedPeer {
 	#lateCommits: LateCommits | undefined;
 	#forcedFalsePositive: number | undefined;
 	#requests = 0;
+	#served = 0;
 
 	constructor(options: SimulatedPeerOptions = {}) {
 		this.#clockOffset = options.clockOffset ?? 0;
@@ -139,6 +140,11 @@ export class SimulatedPeer {
 		return(this.#requests);
 	}
 
+	/** The staples the peer has sent in all, its answers to probes included: what it uploaded. */
+	get served(): number {
+		return(this.#served);
+	}
+
 	/** The peer's clock. */
 	now(): number {
 		return(Date.now() + this.#clockOffset);
@@ -147,6 +153,12 @@ export class SimulatedPeer {
 	/** Applies a staple with the timestamp given, at the moment given or now on the peer's clock, which a ledger accepts once it holds those it needs. */
 	apply(timestamp: number, moment: number = this.now(), needs: readonly number[] = []): SimulatedStaple {
 		return(this.#insert(simulatedStaple(this.#nextID++, moment, this.#nextSequence++, timestamp, needs)));
+	}
+
+	/** Applies, at the moment given on this peer's clock, the staple another peer applied: the same blocks with the same votes. */
+	applyAlso(staple: SimulatedStaple, moment: number): SimulatedStaple {
+		this.#nextID = Math.max(this.#nextID, staple.id + 1);
+		return(this.#insert(simulatedStaple(staple.id, moment, this.#nextSequence++, staple.timestamp().getTime(), staple.needs)));
 	}
 
 	#insert(staple: SimulatedStaple): SimulatedStaple {
@@ -204,6 +216,7 @@ export class SimulatedPeer {
 			}
 			staples.push(staple);
 		}
+		this.#served += staples.length;
 		return({ kind: 'page', staples });
 	}
 

@@ -14,6 +14,11 @@ const lib = KeetaNet.lib;
  */
 export const BOOTSTRAP_CURSOR_ARENA = 'bootstrapCursors';
 
+/** The arena that holds, under CAUGHT_UP_KEY, the horizon of the latest pass over any peer that completed (src/node/bootstrap-update.ts). */
+export const BOOTSTRAP_CAUGHT_UP_ARENA = 'bootstrapCaughtUp';
+
+const CAUGHT_UP_KEY = 'horizon';
+
 /** The arena that holds the staples the ledger refused, by the hash of their blocks, until they apply (src/node/bootstrap-retry.ts). */
 export const BOOTSTRAP_RETRY_ARENA = 'bootstrapRetries';
 
@@ -88,11 +93,25 @@ export class BootstrapCursors {
 		await this.#kv.set(BOOTSTRAP_CURSOR_ARENA, endpoint, stored);
 	}
 
-	/** Forgets every peer's progress; the staples queued for retry stay, as nothing reads them again. */
+	/** The horizon of the latest pass over any peer that completed, or nothing while none has. */
+	async readCaughtUp(): Promise<Date | undefined> {
+		const stored = await this.#kv.get(BOOTSTRAP_CAUGHT_UP_ARENA, CAUGHT_UP_KEY);
+		if (!isWholeNumber(stored)) {
+			return(undefined);
+		}
+		return(new Date(stored));
+	}
+
+	async writeCaughtUp(horizon: Date): Promise<void> {
+		await this.#kv.set(BOOTSTRAP_CAUGHT_UP_ARENA, CAUGHT_UP_KEY, horizon.getTime());
+	}
+
+	/** Forgets every peer's progress, and that any pass completed; the staples queued for retry stay, as nothing reads them again. */
 	async clear(): Promise<void> {
 		for (const endpoint of await this.#kv.list(BOOTSTRAP_CURSOR_ARENA)) {
 			await this.#kv.set(BOOTSTRAP_CURSOR_ARENA, endpoint, undefined);
 		}
+		await this.#kv.set(BOOTSTRAP_CAUGHT_UP_ARENA, CAUGHT_UP_KEY, undefined);
 	}
 }
 

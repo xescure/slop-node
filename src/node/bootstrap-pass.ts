@@ -122,6 +122,12 @@ export type PassOptions = {
 	 * so that the deep re-scans of several peers do not all fall at once.
 	 */
 	readonly stagger?: number;
+	/**
+	 * Where the passes over a peer the node has no progress on start: the
+	 * beginning of time, unless the node is known to hold everything before
+	 * (src/node/bootstrap-update.ts).
+	 */
+	readonly from?: Date;
 	readonly seed?: () => number;
 };
 
@@ -182,8 +188,8 @@ function floorOf(now: number): Date {
 	return(new Date(Math.max(0, now - BOOTSTRAP_MARGIN_MILLISECONDS)));
 }
 
-function firstProgress(now: number, stagger: number): PeerProgress {
-	return({ reached: EPOCH, caughtUp: false, deepScanFrom: EPOCH, nextDeepScan: new Date(now + DEEP_SCAN_PERIOD_MILLISECONDS + stagger), deepScan: undefined });
+function firstProgress(now: number, stagger: number, from: Date): PeerProgress {
+	return({ reached: from, caughtUp: false, deepScanFrom: from, nextDeepScan: new Date(now + DEEP_SCAN_PERIOD_MILLISECONDS + stagger), deepScan: undefined });
 }
 
 /**
@@ -621,7 +627,7 @@ function positionsOf(page: readonly NamedStaple[]): Map<string, number> {
 export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple>, options: PassOptions): Promise<PeerOutcome> {
 	const began = Date.now();
 	const floor = floorOf(began);
-	let progress = withDeepScanBegun(await io.readProgress() ?? firstProgress(began, options.stagger ?? 0), began);
+	let progress = withDeepScanBegun(await io.readProgress() ?? firstProgress(began, options.stagger ?? 0, options.from ?? EPOCH), began);
 	// Both passes record their progress, so each write follows the one before.
 	let written = io.writeProgress(progress);
 	const record = async (change: (current: PeerProgress) => PeerProgress): Promise<void> => {

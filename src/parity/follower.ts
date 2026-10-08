@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import pg from 'pg';
-import { BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RETRY_ARENA } from '../node/bootstrap-cursors.js';
+import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RETRY_ARENA } from '../node/bootstrap-cursors.js';
 import { assertNever } from '../util/assert-never.js';
 import { checkFollowerEnvironment, FOLLOWER_LISTEN_IP, followerDirectory, followerEnvironment, parseFollowerCommand, POSTGRES_PORT, POSTGRES_SOCKET_DIRECTORY, readOrCreateSeed } from './follower-config.js';
 import type { FollowerLog, FollowerSettings } from './follower-config.js';
@@ -506,6 +506,7 @@ async function ledgerProgress(directory: string): Promise<unknown> {
 		const staples = await client.query<{ count: string; newest_staple_time: Date | null; newest_moment: Date | null }>('SELECT count(*) AS count, max(staple_time) AS newest_staple_time, max(moment) AS newest_moment FROM staples');
 		const cursors = await client.query<{ key: string; value: unknown }>('SELECT key, value FROM kv_entries WHERE arena = $1 ORDER BY key', [BOOTSTRAP_CURSOR_ARENA]);
 		const size = await client.query<{ bytes: string }>('SELECT pg_database_size(current_database()) AS bytes');
+		const caughtUp = await client.query<{ value: unknown }>('SELECT value FROM kv_entries WHERE arena = $1', [BOOTSTRAP_CAUGHT_UP_ARENA]);
 		const queued = await client.query<{ code: string | null; count: string; oldest: string | null; reported: string }>(`
 			SELECT value->>'code' AS code, count(*) AS count, min((value->>'queuedAt')::bigint) AS oldest, count(*) FILTER (WHERE (value->>'reported')::boolean) AS reported
 			FROM kv_entries WHERE arena = $1 GROUP BY 1 ORDER BY 1`, [BOOTSTRAP_RETRY_ARENA]);
@@ -518,6 +519,7 @@ async function ledgerProgress(directory: string): Promise<unknown> {
 			cursors: Object.fromEntries(cursors.rows.map(function(cursor): [string, unknown] {
 				return([cursor.key, cursor.value]);
 			})),
+			caughtUpHorizon: caughtUp.rows[0]?.value ?? null,
 			retryQueue: queued.rows.map(function(group) {
 				let oldestQueuedAt: string | null = null;
 				if (group.oldest !== null) {

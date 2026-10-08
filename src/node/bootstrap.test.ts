@@ -342,6 +342,26 @@ describe('a bootstrap client', function() {
 		})).toEqual([`BOOTSTRAP bootstrap: staple refused for 60 min: LEDGER_INSUFFICIENT_VOTING_WEIGHT (staple ${send.blocksHash.toString()})`]);
 	});
 
+	test('reads one peer at a time while no pass has completed, then the others from where that pass completed, so that it downloads the history once', async function() {
+		const peer = await representative();
+		await addAll(peer.node, await sendsFrom(peer.network, 0, 4));
+		const first = await startRecordingPeer(peer.apiURL);
+		const second = await startRecordingPeer(peer.apiURL);
+		const late = await joiner({ bootstrapFrom: [first.apiURL, second.apiURL] });
+
+		expect(await clientOf(late.node).update(2)).toEqual({ complete: true });
+
+		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
+		expect(servedCounts(first.pages)).toEqual([2, 2, 1, 0]);
+		expect(second.pages[0]?.start).toBe(new Date(Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS).toISOString());
+		expect(Math.max(...servedCounts(second.pages))).toBe(0);
+		expect(Math.min(...first.pages.map(function(page): number {
+			return(page.received);
+		}))).toBeLessThan(Math.min(...second.pages.map(function(page): number {
+			return(page.received);
+		})));
+	});
+
 	test('keeps trying the peers that fail, and catches up on the others meanwhile', async function() {
 		const peer = await representative();
 		const failing = await startFailingPeer();

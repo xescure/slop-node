@@ -6,6 +6,8 @@ import { DEEP_SCAN_PERIOD_MILLISECONDS, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS
 import type { PassOptions, PassOutcome, PeerIO, PeerOutcome, PeerProgress } from './bootstrap-pass.js';
 import { REPORT_REFUSED_AFTER_MILLISECONDS, RetryQueueFull } from './bootstrap-retry.js';
 import type { QueueBounds, RetryQueue } from './bootstrap-retry.js';
+import { updatePeers } from './bootstrap-update.js';
+import type { PeerResult } from './bootstrap-update.js';
 import { BLOOM_CAPACITY } from './bootstrap-window.js';
 
 /*
@@ -91,8 +93,8 @@ class Follower {
 		});
 	}
 
-	options(): PassOptions {
-		return({ limit: LIMIT, seed: this.#seed });
+	options(from: Date = new Date(0)): PassOptions {
+		return({ limit: LIMIT, seed: this.#seed, from });
 	}
 }
 
@@ -198,6 +200,77 @@ function noSkew(): number {
 
 function noNeeds(): readonly number[] {
 	return([]);
+}
+
+/** Several peers a follower bootstraps from, by name, as an update over every peer reads them (src/node/bootstrap-update.ts). */
+class SimulatedNetwork {
+	readonly #follower: Follower;
+	readonly #peers: ReadonlyMap<string, SimulatedPeer>;
+	#caughtUp: Date | undefined;
+
+	constructor(follower: Follower, peers: ReadonlyMap<string, SimulatedPeer>) {
+		this.#follower = follower;
+		this.#peers = peers;
+	}
+
+	/** One update over every peer, which answers how each pass ended, in the peers' order. */
+	async update(): Promise<PeerResult[]> {
+		const follower = this.#follower;
+		const peerNamed = (name: string): SimulatedPeer => {
+			const peer = this.#peers.get(name);
+			if (peer === undefined) {
+				throw(new Error(`no peer is named ${name}`));
+			}
+			return(peer);
+		};
+		const results = await updatePeers([...this.#peers.keys()], {
+			readProgress: function(name) {
+				return(Promise.resolve(follower.progress.get(peerNamed(name))));
+			},
+			writeProgress: function(name, progress) {
+				follower.progress.set(peerNamed(name), progress);
+				return(Promise.resolve());
+			},
+			readCaughtUp: () => {
+				return(Promise.resolve(this.#caughtUp));
+			},
+			writeCaughtUp: (horizon) => {
+				this.#caughtUp = horizon;
+				return(Promise.resolve());
+			}
+		}, this.#peers.size, async function(name, from): Promise<PeerResult> {
+			const { live } = await bootstrapPeer(follower.io(peerNamed(name)), follower.options(from));
+			if (completes(live)) {
+				return('completed');
+			}
+			return('bounded');
+		});
+		return([...this.#peers.keys()].map(function(name): PeerResult {
+			return(results.get(name) ?? 'failed');
+		}));
+	}
+
+	/** The staples the peers sent in all. */
+	served(): number {
+		let served = 0;
+		for (const peer of this.#peers.values()) {
+			served += peer.served;
+		}
+		return(served);
+	}
+
+	/** The staples some peer holds and the node does not. */
+	missing(): readonly number[] {
+		const missing = new Set<number>();
+		for (const peer of this.#peers.values()) {
+			for (const staple of peer.staples) {
+				if (!this.#follower.node.holds(staple)) {
+					missing.add(staple.id);
+				}
+			}
+		}
+		return([...missing]);
+	}
 }
 
 /** History the peer applied as it was made, so many a second, ending at the moment given, each staple needing those named by ID. */
@@ -443,6 +516,40 @@ describe('bootstrapping against a simulated peer', { timeout: 120_000 }, functio
 		expect(scenario.missing()).toEqual([]);
 		expect(await scenario.follower.retries.size()).toBe(0);
 		expect(scenario.follower.retryStore.largest).toBe(bounds.staples);
+	});
+
+	test('downloads each staple about once in a first catch-up from four peers that hold the same history, then reads each peer on its own', async function() {
+		freezeClock(new Date(NOW));
+		const follower = new Follower();
+		const peers = new Map(['rep1', 'rep2', 'rep3', 'rep4'].map(function(name): [string, SimulatedPeer] {
+			return([name, new SimulatedPeer({ latency: LATENCY })]);
+		}));
+		const [first, ...others] = [...peers.values()];
+		if (first === undefined) {
+			throw(new Error('no peers'));
+		}
+		const count = 5000;
+		outOfOrderHistory(first, count, NOW - HOUR);
+		// Each representative applies the same staples at moments of its own.
+		others.forEach(function(peer, index): void {
+			for (const staple of first.staples) {
+				peer.applyAlso(staple, staple.moment + (index + 1) * 7);
+			}
+		});
+		const network = new SimulatedNetwork(follower, peers);
+
+		expect(await network.update()).toEqual(['completed', 'completed', 'completed', 'completed']);
+
+		expect(network.served()).toBeLessThan(1.1 * count);
+		expect(network.missing()).toEqual([]);
+		expect(await follower.retries.size()).toBe(0);
+
+		advanceClock(PERIOD);
+		const third = peers.get('rep3');
+		const onlyOnThird = third?.apply(Date.now(), Date.now());
+		expect(await network.update()).toEqual(['completed', 'completed', 'completed', 'completed']);
+		expect(onlyOnThird !== undefined && follower.node.holds(onlyOnThird)).toBe(true);
+		expect(network.missing()).toEqual([]);
 	});
 
 	/*
