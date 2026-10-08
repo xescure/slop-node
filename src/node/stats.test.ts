@@ -29,6 +29,51 @@ class InterruptedStore extends KVInternals.KVStorageProviderMemory {
 	}
 }
 
+type Deferred = { readonly promise: Promise<void>; readonly resolve: () => void };
+
+function deferred(): Deferred {
+	let resolve = function(): void {
+		// Replaced as the promise is made.
+	};
+	const promise = new Promise<void>(function(resolvePromise) {
+		resolve = resolvePromise;
+	});
+	return({ promise, resolve });
+}
+
+/** A store whose counter write fails, and whose xor write succeeds, each only once the test lets it. */
+class SlowStore extends KVInternals.KVStorageProviderMemory {
+	readonly #outage = new Error('connect ENOENT /tmp/postgres/socket');
+	readonly #failIncr = deferred();
+	readonly #finishXor = deferred();
+	readonly #xorStarted = deferred();
+	xorWritten = false;
+
+	failIncr(): void {
+		this.#failIncr.resolve();
+	}
+
+	finishXor(): void {
+		this.#finishXor.resolve();
+	}
+
+	get xorStarted(): Promise<void> {
+		return(this.#xorStarted.promise);
+	}
+
+	override async incr(): Promise<bigint> {
+		await this.#failIncr.promise;
+		throw(this.#outage);
+	}
+
+	override async xor(arena: null, key: string, change: BufferStorage): Promise<void> {
+		this.#xorStarted.resolve();
+		await this.#finishXor.promise;
+		await super.xor(arena, key, change);
+		this.xorWritten = true;
+	}
+}
+
 async function refusal(promise: Promise<unknown>): Promise<unknown> {
 	try {
 		await promise;
@@ -90,6 +135,31 @@ describe('the node\'s statistics', function() {
 		const fresh = new NodeStats({ kv: store });
 		expect(await fresh.get('ledger', 'staples')).toBe(2);
 		expect((await fresh.getXor(CHECKSUM_KEY)).toBigInt()).toBe(0b0001n);
+	});
+
+	test('a read waits for every write of a sync that failed, not only for the first to fail', async function() {
+		const store = new SlowStore();
+		const stats = new NodeStats({ kv: store });
+		stats.incr('ledger', 'staples', 1);
+		stats.xor(CHECKSUM_KEY, 0b0101n);
+		const syncing = refusal(stats.sync());
+		await store.xorStarted;
+
+		store.failIncr();
+		// Let the failed write's rejection travel as far as it will.
+		for (let turn = 0; turn < 20; turn++) {
+			await Promise.resolve();
+		}
+		let observedBeforeXor = false;
+		const reading = stats.getXor(CHECKSUM_KEY).then(function(checksum) {
+			observedBeforeXor = !store.xorWritten;
+			return(checksum);
+		});
+		store.finishXor();
+
+		expect((await reading).toBigInt()).toBe(0b0101n);
+		expect(observedBeforeXor).toBe(false);
+		expect(await syncing).toBeInstanceOf(Error);
 	});
 
 	test('a node keeps its statistics in them', async function() {

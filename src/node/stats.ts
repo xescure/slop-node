@@ -25,8 +25,10 @@ function ignoreFailure(): void {
  * changes that sync had taken are lost, the ledger checksum's among them.
  * Here each sync follows the one before it however that one ended, and a
  * change whose write failed is taken back, for the next sync to write. A
- * write that failed as it committed may then be applied twice, where the
- * store cannot tell whether it committed.
+ * write that failed as it committed is then applied twice, where the store
+ * cannot tell whether it committed: a counter is over-counted by that change,
+ * and an xor statistic loses it, because xor-ing the same change twice
+ * cancels it, which leaves the ledger checksum without that change.
  */
 export class NodeStats extends ClientStats {
 	readonly #kv: KVStorageProviderAPI;
@@ -43,7 +45,7 @@ export class NodeStats extends ClientStats {
 		const previous = this.#syncing;
 		const syncing = (async (): Promise<void> => {
 			await previous?.catch(ignoreFailure);
-			await Promise.all([
+			const writes = await Promise.allSettled([
 				...Object.entries(incrChanges).map(async ([key, change]): Promise<void> => {
 					try {
 						await this.#kv.incr('stats', key, change);
@@ -61,6 +63,12 @@ export class NodeStats extends ClientStats {
 					}
 				})
 			]);
+			// Every write has ended, and each failed one is back in the changes, before the first refusal is thrown.
+			for (const write of writes) {
+				if (write.status === 'rejected') {
+					throw(write.reason);
+				}
+			}
 		})();
 		this.#syncing = syncing;
 		try {
