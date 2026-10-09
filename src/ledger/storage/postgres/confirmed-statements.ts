@@ -380,12 +380,13 @@ export const removeHistoryRows: Statement<[Buffer[], string[]], { removed: Integ
 	)
 	SELECT count(*) AS removed FROM removed`);
 
-/** Adds the history rows of the staples and accounts given in pairs that are missing, under each staple's time. */
-export const addHistoryRows: Statement<[Buffer[], AccountID[]], { added: IntegerText }> = statement('add_history_rows', `
+/** Adds the history rows of the staples and accounts given in pairs that are missing, under each staple's time; every account a staple touches has a row. */
+export const addHistoryRows: Statement<[Buffer[], string[]], { added: IntegerText }> = statement('add_history_rows', `
 	WITH added AS (
 		INSERT INTO history (account_id, blocks_hash, staple_time)
-		SELECT wanted.account_id, wanted.blocks_hash, staples.staple_time
-		FROM unnest($1::bytea[], $2::bigint[]) AS wanted (blocks_hash, account_id)
+		SELECT accounts.id, wanted.blocks_hash, staples.staple_time
+		FROM unnest($1::bytea[], $2::text[]) AS wanted (blocks_hash, public_key)
+		JOIN accounts ON accounts.public_key = wanted.public_key
 		JOIN staples ON staples.blocks_hash = wanted.blocks_hash
 		ON CONFLICT DO NOTHING
 		RETURNING 1

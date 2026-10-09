@@ -331,18 +331,18 @@ const CHECKSUM_HEX_DIGITS = 64;
 const REINDEX_BATCH_STAPLES = 200;
 
 /** The history rows a batch of staples should have, and those of accounts the staples touch but do not list. */
-function historyChangesOf(rows: readonly ReindexedStaple[], context: EffectContext): { listed: Map<Buffer, GenericAccount[]>; unlisted: Map<Buffer, string[]> } {
-	const listed = new Map<Buffer, GenericAccount[]>();
+function historyChangesOf(rows: readonly ReindexedStaple[], context: EffectContext): { listed: Map<Buffer, string[]>; unlisted: Map<Buffer, string[]> } {
+	const listed = new Map<Buffer, string[]>();
 	const unlisted = new Map<Buffer, string[]>();
 	for (const row of rows) {
 		const blocks = row.blocks.map(decodeBlock);
 		const effects = LedgerInternals.computeEffectOfBlocks(blocks, context);
 		const keys = historyAccountsOf(blocks, effects);
-		const listedAccounts: GenericAccount[] = [];
+		const listedAccounts: string[] = [];
 		const unlistedKeys: string[] = [];
 		for (const account of effects.touched) {
 			if (keys.has(toAccountKey(account))) {
-				listedAccounts.push(account);
+				listedAccounts.push(account.publicKeyString.get());
 			} else {
 				unlistedKeys.push(account.publicKeyString.get());
 			}
@@ -741,59 +741,44 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * lists it under: removes the rows of the accounts a staple touches but
 	 * is not listed under, and adds the missing rows of those it is. A
 	 * database written under an earlier rule needs this once. It reads the
-	 * staples in batches, each rewritten in a transaction of its own, so
-	 * it may be stopped and run again; it is meant to run while no node
-	 * writes to the database. The progress hears the totals after each
-	 * batch.
+	 * staples in batches and works out each batch's rows outside any
+	 * transaction, then rewrites them in a transaction of its own, so it may
+	 * be stopped and run again; it is meant to run while no node writes to
+	 * the database. The progress hears the totals after each batch.
 	 */
 	async reindexHistory(context: EffectContext, progress: (done: HistoryReindex) => void = ignoreOutcome): Promise<HistoryReindex> {
 		let done: HistoryReindex = { staples: 0, removed: 0, added: 0 };
 		let after = 0n;
 		for (;;) {
+			const { pool } = await this.#pool.connection();
+			const rows = (await pool.query<ReindexedStaple>({ name: staplesToReindex.name, text: staplesToReindex.text, values: [toNumeric(after), REINDEX_BATCH_STAPLES] })).rows;
+			const last = rows.at(-1);
+			if (last === undefined) {
+				return(done);
+			}
+			const { listed, unlisted } = historyChangesOf(rows, context);
 			const transaction = await this.beginTransaction({ identifier: `reindex-history-after-${String(after)}`, readOnly: false });
-			let batch: { readonly last: bigint; readonly done: HistoryReindex } | undefined;
+			let counts: { readonly removed: number; readonly added: number };
 			try {
-				batch = await this.#reindexBatch(transaction, context, after, done);
+				counts = await this.#rewriteHistory(transaction, listed, unlisted);
 			} catch (error: unknown) {
 				await transaction.abort();
 				throw(error);
 			}
 			await transaction.commit();
-			if (batch === undefined) {
-				return(done);
-			}
-			after = batch.last;
-			done = batch.done;
+			after = fromInteger(last.sequence);
+			done = { staples: done.staples + rows.length, removed: done.removed + counts.removed, added: done.added + counts.added };
 			progress(done);
 		}
 	}
 
-	async #reindexBatch(transaction: PostgresTransaction, context: EffectContext, after: bigint, before: HistoryReindex): Promise<{ readonly last: bigint; readonly done: HistoryReindex } | undefined> {
-		const rows = await transaction.run(staplesToReindex, [toNumeric(after), REINDEX_BATCH_STAPLES]);
-		const last = rows.at(-1);
-		if (last === undefined) {
-			return(undefined);
-		}
-		const { listed, unlisted } = historyChangesOf(rows, context);
+	async #rewriteHistory(transaction: PostgresTransaction, listed: ReadonlyMap<Buffer, readonly string[]>, unlisted: ReadonlyMap<Buffer, readonly string[]>): Promise<{ readonly removed: number; readonly added: number }> {
 		const removed = onlyRow(await transaction.run(removeHistoryRows, pairsOf(unlisted)));
-		const [listedStaples, listedAccounts] = pairsOf(listed);
-		const ids = await this.#intern(transaction, new Map(listedAccounts.map(function(account): [string, AccountKeyAlgorithm] {
-			return([account.publicKeyString.get(), account.keyType]);
-		})));
-		const added = onlyRow(await transaction.run(addHistoryRows, [listedStaples, listedAccounts.map(function(account): AccountID {
-			return(idOf(ids, account));
-		})]));
+		const added = onlyRow(await transaction.run(addHistoryRows, pairsOf(listed)));
 		if (removed === undefined || added === undefined) {
 			throw(new Error('internal error: a history count returned no row'));
 		}
-		return({
-			last: fromInteger(last.sequence),
-			done: {
-				staples: before.staples + rows.length,
-				removed: before.removed + Number(fromInteger(removed.removed)),
-				added: before.added + Number(fromInteger(added.added))
-			}
-		});
+		return({ removed: Number(fromInteger(removed.removed)), added: Number(fromInteger(added.added)) });
 	}
 
 	async beginTransaction(options: TransactionOptions): Promise<PostgresTransaction> {
