@@ -176,6 +176,7 @@ describe('the follower\'s command line', function() {
 		expect(parseFollowerCommand(['reset-cursors'], home)).toEqual({ kind: 'reset-cursors', directory: defaultFollowerDirectory(home) });
 		expect(parseFollowerCommand(['reset-cursors', '--directory', '/srv/follower'], home)).toEqual({ kind: 'reset-cursors', directory: '/srv/follower' });
 		expect(parseFollowerCommand(['reindex-history'], home)).toEqual({ kind: 'reindex-history', directory: defaultFollowerDirectory(home) });
+		expect(parseFollowerCommand(['restage'], home)).toEqual({ kind: 'restage', directory: defaultFollowerDirectory(home) });
 		expect(parseFollowerCommand(['logs'], home)).toEqual({ kind: 'logs', directory: defaultFollowerDirectory(home), log: 'node', lines: 50, follow: false });
 		expect(parseFollowerCommand(['logs', '--postgres', '--lines', '10', '--follow'], home)).toEqual({ kind: 'logs', directory: defaultFollowerDirectory(home), log: 'postgres', lines: 10, follow: true });
 	});

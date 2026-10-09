@@ -307,7 +307,7 @@ function groupedBy<Row>(rows: readonly Row[], keyOf: (row: Row) => Buffer): Map<
  * is decoded at its own validity, so a temporary one is not refused as
  * expired.
  */
-async function heldStaplesOf(pool: pg.Pool, rows: readonly { blocks_hash: Buffer; staple_time: Date; bytes: Buffer | null }[]): Promise<HeldStaple[]> {
+export async function heldStaplesOf(pool: pg.Pool, rows: readonly { blocks_hash: Buffer; staple_time: Date; bytes: Buffer | null }[]): Promise<HeldStaple[]> {
 	const missing = rows.filter(function(row): boolean {
 		return(row.bytes === null);
 	}).map(function(row): Buffer {

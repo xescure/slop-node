@@ -13,7 +13,9 @@ import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
 import type { HistoryReindex } from '../ledger/storage/postgres/driver.js';
 import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RETRY_ARENA } from '../node/bootstrap-cursors.js';
 import { assertNever } from '../util/assert-never.js';
-import { checkFollowerEnvironment, FOLLOWER_DATABASE, FOLLOWER_LISTEN_IP, FOLLOWER_POSTGRES_USER, FOLLOWER_SETTINGS_FILE, followerDatabaseURL, followerDirectory, followerEnvironment, parseFollowerCommand, POSTGRES_PORT, POSTGRES_SOCKET_DIRECTORY, readFollowerSettings, readOrCreateSeed } from './follower-config.js';
+import { restage } from './restage.js';
+import type { Restaged } from './restage.js';
+import { checkFollowerEnvironment, FOLLOWER_DATABASE, FOLLOWER_LISTEN_IP, FOLLOWER_POSTGRES_USER, FOLLOWER_SETTINGS_FILE, followerDatabaseURL, followerDatabaseURLOf, followerDirectory, followerEnvironment, parseFollowerCommand, POSTGRES_PORT, POSTGRES_SOCKET_DIRECTORY, readFollowerSettings, readOrCreateSeed } from './follower-config.js';
 import type { FollowerLog, FollowerSettings } from './follower-config.js';
 
 /** The built node, which utils/follower builds before it runs this. */
@@ -96,6 +98,9 @@ const USAGE = [
 	'  reindex-history',
 	'          with the node down, list each staple it holds in the history of the accounts this build',
 	'          lists it under',
+	'  restage with the node down, move every staple the ledger holds, has deferred or queued into the',
+	'          bootstrap stage of a new database, with where the bootstrap reached, so that the node adds',
+	'          them again in the order of their votes; the database before is kept under another name',
 	'',
 	'The directory holds the seed, the database, the logs and the settings (~/.local/share/slop-node-follower).',
 	'"up" needs the PostgreSQL server binaries, which "devenv shell" provides.',
@@ -550,6 +555,63 @@ async function reindexHistory(directory: string): Promise<ExitCode> {
 	return(0);
 }
 
+/** The database a restage fills, before it takes the follower's database's name. */
+const RESTAGED_DATABASE = `${FOLLOWER_DATABASE}_restaged`;
+
+/** How many staples a restage stages between two progress lines. */
+const RESTAGE_PROGRESS_STAPLES = 20_000;
+
+/** The name the follower's database is kept under once a restage replaces it: when, to the second. */
+function databaseBeforeRestage(at: Date): string {
+	return(`${FOLLOWER_DATABASE}_before_restage_${at.toISOString().replace(/[^0-9]/g, '').slice(0, 14)}`);
+}
+
+/**
+ * Stages every staple the follower's ledger holds, has deferred or queued
+ * into a new database, with where the bootstrap reached on each
+ * representative and its ranges, and gives that database the follower's
+ * database's name, keeping the one before under another. The node on it
+ * adds the staples again in the order of their votes, reading from the
+ * representatives only what it had not read (src/node/bootstrap-stage.ts).
+ * Nothing is lost on a failure: the new database takes the name only once
+ * the stage holds as many staples as were read.
+ */
+async function restageFollower(directory: string): Promise<ExitCode> {
+	const done = await withNodeDown(directory, async function() {
+		await withDatabase('postgres', directory, async function(client) {
+			await client.query(`DROP DATABASE IF EXISTS ${RESTAGED_DATABASE}`);
+			await client.query(`CREATE DATABASE ${RESTAGED_DATABASE}`);
+		});
+		const storage = new PostgresLedgerStorage({ kind: 'connection-string', connectionString: followerDatabaseURLOf(directory, RESTAGED_DATABASE) });
+		const source = new pg.Pool({ connectionString: followerDatabaseURL(directory), max: 1 });
+		const target = new pg.Pool({ connectionString: followerDatabaseURLOf(directory, RESTAGED_DATABASE), max: 1 });
+		let restaged: Restaged;
+		try {
+			let reported = 0;
+			restaged = await restage(source, storage.bootstrapStage(), target, function(progress) {
+				if (progress.staged.staples - reported >= RESTAGE_PROGRESS_STAPLES) {
+					reported = progress.staged.staples;
+					process.stdout.write(`staged ${String(progress.staged.staples)} staples (${String(progress.held)} held, ${String(progress.deferred)} deferred, ${String(progress.queued)} queued)\n`);
+				}
+			});
+		} finally {
+			await Promise.all([storage.destroy(), source.end(), target.end()]);
+		}
+		const before = databaseBeforeRestage(new Date());
+		await withDatabase('postgres', directory, async function(client) {
+			await client.query(`ALTER DATABASE ${FOLLOWER_DATABASE} RENAME TO ${before}`);
+			await client.query(`ALTER DATABASE ${RESTAGED_DATABASE} RENAME TO ${FOLLOWER_DATABASE}`);
+		});
+		return({ restaged, before });
+	});
+	if (done === undefined) {
+		return(1);
+	}
+	const { restaged, before } = done;
+	process.stdout.write(`restaged ${directory}: ${String(restaged.staged.staples)} staples (${String(Math.round(restaged.staged.bytes / KIB_PER_MIB / KIB_PER_MIB))} MiB) staged of ${String(restaged.held)} held, ${String(restaged.deferred)} deferred and ${String(restaged.queued)} queued; the database before is kept as ${before}\n`);
+	return(0);
+}
+
 type Memory = { readonly rssMiB: number; readonly pssMiB: number };
 
 const KIB_PER_MIB = 1024;
@@ -601,9 +663,9 @@ async function directoryBytes(path: string): Promise<number> {
 	return(total);
 }
 
-const PASS_LINE = /Bootstrap pass over (\S+): (.*) after (\d+) requests, (\d+) staples added, (\d+) held already(?:, (\d+) queued for retry)?/;
+const PASS_LINE = /Bootstrap pass over (\S+): (.*) after (\d+) requests, (\d+) staples added, (\d+) held already(?:, (\d+) queued for retry)?(?:, (\d+) staged)?/;
 
-type PassTotals = { passes: number; bounded: number; requests: number; added: number; held: number; queued: number; lastOutcome: string };
+type PassTotals = { passes: number; bounded: number; requests: number; added: number; held: number; queued: number; staged: number; lastOutcome: string };
 
 /** What the node's log says of its bootstrap passes, which it logs at INFO when they add staples or reach their bound. */
 function bootstrapLogOf(log: string): { readonly perPeer: Record<string, PassTotals>; readonly problems: number; readonly lastProblems: readonly string[] } {
@@ -612,8 +674,8 @@ function bootstrapLogOf(log: string): { readonly perPeer: Record<string, PassTot
 	for (const line of log.split('\n')) {
 		const pass = PASS_LINE.exec(line);
 		if (pass !== null) {
-			const [, endpoint = '', outcome = '', requests = '0', added = '0', held = '0', queued = '0'] = pass;
-			const totals = perPeer[endpoint] ??= { passes: 0, bounded: 0, requests: 0, added: 0, held: 0, queued: 0, lastOutcome: '' };
+			const [, endpoint = '', outcome = '', requests = '0', added = '0', held = '0', queued = '0', staged = '0'] = pass;
+			const totals = perPeer[endpoint] ??= { passes: 0, bounded: 0, requests: 0, added: 0, held: 0, queued: 0, staged: 0, lastOutcome: '' };
 			totals.passes++;
 			if (outcome.startsWith('reached')) {
 				totals.bounded++;
@@ -622,6 +684,7 @@ function bootstrapLogOf(log: string): { readonly perPeer: Record<string, PassTot
 			totals.added += Number(added);
 			totals.held += Number(held);
 			totals.queued += Number(queued);
+			totals.staged += Number(staged);
 			totals.lastOutcome = outcome;
 			continue;
 		}
@@ -664,6 +727,7 @@ async function ledgerProgress(directory: string): Promise<unknown> {
 		const cursors = await client.query<{ key: string; value: unknown }>('SELECT key, value FROM kv_entries WHERE arena = $1 ORDER BY key', [BOOTSTRAP_CURSOR_ARENA]);
 		const size = await client.query<{ bytes: string }>('SELECT pg_database_size(current_database()) AS bytes');
 		const deferred = await client.query<{ count: string }>('SELECT count(*) AS count FROM deferred_staples');
+		const staged = await client.query<{ count: string; bytes: string; earliest: Date | null }>('SELECT count(*) AS count, COALESCE(sum(octet_length(bytes)), 0) AS bytes, min(first_vote_from) AS earliest FROM bootstrap_stage');
 		const caughtUp = await client.query<{ value: unknown }>('SELECT value FROM kv_entries WHERE arena = $1', [BOOTSTRAP_CAUGHT_UP_ARENA]);
 		const ranges = await client.query<{ value: unknown }>('SELECT value FROM kv_entries WHERE arena = $1', [BOOTSTRAP_RANGES_ARENA]);
 		const queued = await client.query<{ code: string | null; count: string; oldest: string | null; reported: string }>(`
@@ -673,6 +737,11 @@ async function ledgerProgress(directory: string): Promise<unknown> {
 		return({
 			staples: Number(row?.count ?? 0),
 			deferredStaples: Number(deferred.rows[0]?.count ?? 0),
+			stage: {
+				staples: Number(staged.rows[0]?.count ?? 0),
+				MiB: Math.round(Number(staged.rows[0]?.bytes ?? 0) / KIB_PER_MIB / KIB_PER_MIB),
+				earliestVote: staged.rows[0]?.earliest ?? null
+			},
 			newestStapleTime: row?.newest_staple_time ?? null,
 			newestMoment: row?.newest_moment ?? null,
 			databaseMiB: Math.round(Number(size.rows[0]?.bytes ?? 0) / KIB_PER_MIB / KIB_PER_MIB),
@@ -783,6 +852,8 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
 				return(await resetCursors(followerDirectory(command.directory, tmpdir())));
 			case 'reindex-history':
 				return(await reindexHistory(followerDirectory(command.directory, tmpdir())));
+			case 'restage':
+				return(await restageFollower(followerDirectory(command.directory, tmpdir())));
 			default:
 				return(assertNever(command));
 		}

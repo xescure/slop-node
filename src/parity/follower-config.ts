@@ -32,7 +32,12 @@ export const FOLLOWER_SETTINGS_FILE = 'follower.json';
 
 /** The follower's database, reached through the socket in its directory. */
 export function followerDatabaseURL(directory: string): string {
-	return(`postgresql://${FOLLOWER_POSTGRES_USER}@${encodeURIComponent(join(directory, POSTGRES_SOCKET_DIRECTORY))}:${String(POSTGRES_PORT)}/${FOLLOWER_DATABASE}`);
+	return(followerDatabaseURLOf(directory, FOLLOWER_DATABASE));
+}
+
+/** Another database of the follower's cluster, as its own is reached. */
+export function followerDatabaseURLOf(directory: string, database: string): string {
+	return(`postgresql://${FOLLOWER_POSTGRES_USER}@${encodeURIComponent(join(directory, POSTGRES_SOCKET_DIRECTORY))}:${String(POSTGRES_PORT)}/${database}`);
 }
 
 /** What a Unix-domain socket path may take: sun_path is 108 bytes on Linux, one of them the terminating NUL. */
@@ -98,6 +103,13 @@ export type FollowerCommand =
 	| { readonly kind: 'reset-cursors'; readonly directory: string }
 	/** List each staple the ledger holds in the history of the accounts this build lists it under, with the node down. */
 	| { readonly kind: 'reindex-history'; readonly directory: string }
+	/**
+	 * With the node down, stage every staple the ledger holds, has deferred or
+	 * queued into a new database, with the bootstrap's progress and ranges, so
+	 * that the node adds them again in the order of their votes; the database
+	 * before is kept under another name.
+	 */
+	| { readonly kind: 'restage'; readonly directory: string }
 	| { readonly kind: 'logs'; readonly directory: string; readonly log: FollowerLog; readonly lines: number; readonly follow: boolean };
 
 export function defaultFollowerDirectory(home: string): string {
@@ -320,6 +332,7 @@ export function parseFollowerCommand(argv: readonly string[], home: string): Fol
 		case 'status':
 		case 'reset-cursors':
 		case 'reindex-history':
+		case 'restage':
 			options = optionsOf(rest, ['--directory'], []);
 			break;
 		default:
@@ -338,6 +351,7 @@ export function parseFollowerCommand(argv: readonly string[], home: string): Fol
 		case 'status':
 		case 'reset-cursors':
 		case 'reindex-history':
+		case 'restage':
 			return({ kind: name, directory });
 		default:
 			return(assertNever(name));
