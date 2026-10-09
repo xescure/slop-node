@@ -53,6 +53,9 @@ help:
 	@echo "  conformance    - Regenerates the vote-decision corpus, and the mainnet"
 	@echo "                   head state, shadow-vote exceptions and edge-case"
 	@echo "                   outcomes in conformance/"
+	@echo "  parity         - Compares the running follower with the main network's"
+	@echo "                   representatives and prints the parity report; it reads"
+	@echo "                   from them, so it is not part of test"
 	@echo "  reference      - Extracts the reference tree for the pinned keetanet-client"
 	@echo "  reference-diff - Diffs the reference trees of two versions"
 	@echo "                   Specify FROM=<version> TO=<version>"
@@ -114,8 +117,9 @@ build/devnet/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts'
 	npm run tsc -- -p tsconfig.devnet.json
 	@touch build/devnet/.done
 
-# utils/follower runs the follower's command, a tool beside the node rather
-# than part of it, so it is built apart from the distribution like the devnet's.
+# utils/follower and utils/parity run the follower's and the parity tools'
+# commands, tools beside the node rather than part of it, so they are built
+# apart from the distribution like the devnet's.
 build/parity/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts') tsconfig.json tsconfig.parity.json node_modules/.patched
 	@[ -e build/parity/.done ] || rm -f build/parity/.tsbuildinfo
 	npm run tsc -- -p tsconfig.parity.json
@@ -141,6 +145,11 @@ devnet-test: dist/.done build/devnet/.done
 # checks they are current.
 conformance: node_modules/.patched
 	SLOP_NODE_UPDATE_CONFORMANCE=1 npm run vitest -- run --config .vitest.config.js src/conformance/corpus.test.ts src/conformance/mainnet/head.memory.test.ts
+
+# The parity report reads from the main network's representatives and needs
+# the follower running, so it is never part of test.
+parity: build/parity/.done
+	node build/parity/parity/parity.js report
 
 # git grep exits 1 when nothing matches and 128 when it fails, and only the
 # first means the tree is clean.
@@ -204,6 +213,6 @@ clean:
 distclean: clean
 	rm -rf node_modules .nvmrc reference
 
-.PHONY: all help test devnet-test conformance do-lint reference reference-diff reference-diff-usage clean distclean
+.PHONY: all help test devnet-test conformance parity do-lint reference reference-diff reference-diff-usage clean distclean
 
 endif

@@ -5,6 +5,7 @@
 		"tsBuildInfoFile": "./build/parity/.tsbuildinfo"
 	},
 	"include": [
-		"src/parity/follower.ts"
+		"src/parity/follower.ts",
+		"src/parity/parity.ts"
 	]
 }

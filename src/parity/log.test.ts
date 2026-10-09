@@ -1,0 +1,77 @@
+import { appendFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, test } from 'vitest';
+import { ParityLog, parityLogPath } from './log.js';
+import type { ChecksumRecord, ParityRecord, SweepRecord } from './log.js';
+
+const REPRESENTATIVE = 'https://rep1.example/api';
+const ACCOUNT = 'keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai';
+
+const CHECKSUM: ChecksumRecord = {
+	kind: 'checksum',
+	at: '2026-10-09T06:00:00.000Z',
+	representative: REPRESENTATIVE,
+	gapMilliseconds: 10_000,
+	completedPass: null,
+	follower: { kind: 'read', first: { checksum: '0xAB', blockCount: 7 }, second: { checksum: '0xAB', blockCount: 7 } },
+	representativeWindow: { kind: 'unanswered', error: 'refused' },
+	verdict: { kind: 'not-comparable-yet', reasons: ['no-completed-pass', 'representative-unanswered'] }
+};
+
+const FAILED_CHECKSUM: ChecksumRecord = {
+	...CHECKSUM,
+	completedPass: '2026-10-09T05:00:00.000Z',
+	verdict: {
+		kind: 'fail',
+		bisect: {
+			followerBlockCount: 7,
+			representativeBlockCount: 8,
+			sweep: { cursor: { lap: 0, afterRowID: '41' }, firstDivergence: { account: ACCOUNT, field: 'balances[0].balance', staple: 'AB'.repeat(32) } }
+		}
+	}
+};
+
+const SWEEPS: readonly SweepRecord[] = [
+	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 0, outcome: { kind: 'match', head: 'CD'.repeat(32), staple: null } },
+	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 0, outcome: { kind: 'diverged', divergence: { account: ACCOUNT, field: 'representative', staple: null }, follower: { representative: null }, representative: { representative: ACCOUNT } } },
+	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 1, outcome: { kind: 'skipped', reason: 'moving', side: 'follower', detail: 'its state changed' } },
+	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 1, outcome: { kind: 'skipped', reason: 'unanswered', detail: '500' } }
+];
+
+const directories: string[] = [];
+
+async function scratchLog(): Promise<ParityLog> {
+	const directory = await mkdtemp(join(tmpdir(), 'slop-parity-log-'));
+	directories.push(directory);
+	return(new ParityLog(parityLogPath(directory)));
+}
+
+afterEach(async function() {
+	await Promise.all(directories.splice(0).map(function(directory) {
+		return(rm(directory, { recursive: true, force: true }));
+	}));
+});
+
+describe('the parity log', function() {
+	test('holds no record before one is appended', async function() {
+		expect(await (await scratchLog()).read()).toEqual({ records: [], unreadableLines: 0 });
+	});
+
+	test('reads back every kind of record it was given, in order', async function() {
+		const log = await scratchLog();
+		const records: readonly ParityRecord[] = [CHECKSUM, ...SWEEPS, FAILED_CHECKSUM];
+		await log.append(records.slice(0, 2));
+		await log.append(records.slice(2));
+
+		expect(await log.read()).toEqual({ records, unreadableLines: 0 });
+	});
+
+	test('counts a line cut short, or one it does not know, apart from the records', async function() {
+		const log = await scratchLog();
+		await log.append([CHECKSUM]);
+		await appendFile(log.path, `${JSON.stringify({ ...CHECKSUM, kind: 'other' })}\n${JSON.stringify(FAILED_CHECKSUM).slice(0, 40)}`);
+
+		expect(await log.read()).toEqual({ records: [CHECKSUM], unreadableLines: 2 });
+	});
+});

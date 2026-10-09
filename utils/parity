@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Compares the follower (utils/follower) with the main network's
+# representatives, reading from them with paced GET requests only.
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+make --no-print-directory -s -C "$root" build/parity/.done
+exec node "$root/build/parity/parity/parity.js" "$@"
