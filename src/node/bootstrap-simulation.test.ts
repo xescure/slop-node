@@ -1261,7 +1261,7 @@ describe('reading the history it lacks in ranges, one per peer, while far behind
 
 	const NAMES: readonly string[] = ['rep1', 'rep2', 'rep3', 'rep4'];
 
-	const KEYED_AS_A_REPRESENTATIVE: SimulatedKeying = { kind: 'votes', votesPerRead: 20, readsAtMost: 10, readMilliseconds: 450, readsVaryBy: 5 };
+	const KEYED_AS_A_REPRESENTATIVE: Extract<SimulatedKeying, { readonly kind: 'votes' }> = { kind: 'votes', votesPerRead: 20, readsAtMost: 10, readMilliseconds: 450, readsVaryBy: 5 };
 
 	/** Where the node holds every staple before, on the first peer, in the scenarios that start there: two days back. */
 	const HELD_UP_TO = NOW - 2 * DAY;
@@ -1365,12 +1365,12 @@ describe('reading the history it lacks in ranges, one per peer, while far behind
 		}) });
 	}
 
-	/** The first catch-up of a node holding the history up to two days back, from the peers named, and how many staples a minute it took. */
-	async function catchUpFrom(names: readonly string[], history: History): Promise<{ readonly perMinute: number; readonly missing: readonly number[]; readonly network: SimulatedNetwork }> {
+	/** The first catch-up of a node holding the history up to two days back, or the moment given, from the peers named, and how many staples a minute it took. */
+	async function catchUpFrom(names: readonly string[], history: History, setup: { readonly heldUpTo?: number; readonly bounds?: QueueBounds } = {}): Promise<{ readonly perMinute: number; readonly missing: readonly number[]; readonly network: SimulatedNetwork }> {
 		freezeClock(new Date(NOW));
 		const peers = representatives(names, history);
-		const network = new SimulatedNetwork(new Follower(), peers);
-		await heldUpTo(network, peers, HELD_UP_TO);
+		const network = new SimulatedNetwork(new Follower(setup.bounds), peers);
+		await heldUpTo(network, peers, setup.heldUpTo ?? HELD_UP_TO);
 		const took = await untilCaughtUp(network, 500);
 		return({ perMinute: history.made.length / (took / MINUTE), missing: missingFrom(network, peers), network });
 	}
@@ -1402,6 +1402,171 @@ describe('reading the history it lacks in ranges, one per peer, while far behind
 
 		expect(four.missing).toEqual([]);
 		expect(four.perMinute / one.perMinute).toBeGreaterThan(2.5);
+	});
+
+	test('reads a dense stretch at the start of the earliest range with every peer, while the ranges read ahead wait on it for room in the retry queue, about as fast as all of them read', async function() {
+		// Eight days the node lacks, laid out in ranges of two; nine thousand staples made in the first four hours, three thousand over the rest.
+		const lacksFrom = NOW - 8 * DAY;
+		const burstEnds = lacksFrom + 4 * HOUR;
+		const burst = Array.from({ length: 9000 }, function(_ignored, index): number {
+			return(lacksFrom + 10 * MINUTE + Math.floor(index * (burstEnds - lacksFrom - 10 * MINUTE) / 9000));
+		});
+		const spread = Array.from({ length: 3000 }, function(_ignored, index): number {
+			return(lacksFrom + Math.floor((index + 0.5) * (NOW - HOUR - lacksFrom) / 3000));
+		});
+		const made = [...burst, ...spread].sort(function(left, right): number {
+			return(left - right);
+		});
+		const lastOfBurst = made.lastIndexOf(burst.at(-1) ?? 0);
+		// Every fourth staple read ahead needs the burst's last, as weight; every twenty-fifth of the burst one made a hundred and one later.
+		const history: History = { made, needs: function(index): readonly number[] {
+			const madeAt = made[index] ?? 0;
+			if (madeAt > lacksFrom + 2 * DAY && index % 4 === 0) {
+				return([lastOfBurst]);
+			}
+			if (madeAt < burstEnds && index % 25 === 0 && index + 101 <= lastOfBurst) {
+				return([index + 101]);
+			}
+			return([]);
+		} };
+		const bounds: QueueBounds = { staples: 100, bytes: 1024 * 1024 };
+		// The first catch-up from the peers named: how long until the node held the burst, and then everything.
+		const catchUp = async function(names: readonly string[]): Promise<{ readonly burstTook: number; readonly missing: readonly number[]; readonly network: SimulatedNetwork }> {
+			freezeClock(new Date(NOW));
+			const peers = representatives(names, history);
+			const network = new SimulatedNetwork(new Follower(bounds), peers);
+			await heldUpTo(network, peers, lacksFrom);
+			const ofBurst = [...peers.values()][0]?.staples.filter(function(staple): boolean {
+				return(staple.timestamp().getTime() < burstEnds);
+			}) ?? [];
+			const began = Date.now();
+			let burstTook: number | undefined;
+			for (let update = 0; update < 500 && burstTook === undefined; update++) {
+				const results = await network.update();
+				if (ofBurst.every(function(staple): boolean {
+					return(network.follower.node.holds(staple));
+				})) {
+					burstTook = Date.now() - began;
+				}
+				advanceClock(nextUpdateDelay(results, PERIOD));
+			}
+			await untilCaughtUp(network, 500);
+			return({ burstTook: burstTook ?? Number.POSITIVE_INFINITY, missing: missingFrom(network, peers), network });
+		};
+
+		const one = await catchUp(['rep1']);
+		const four = await catchUp(NAMES);
+
+		expect(one.missing).toEqual([]);
+		expect(four.missing).toEqual([]);
+		expect(await four.network.follower.retries.size()).toBe(0);
+		expect(four.network.rangeRuns.some(function(run): boolean {
+			return(run.result === 'throttled');
+		})).toBe(true);
+		expect(four.network.rangeEvents.some(function(event): boolean {
+			return(event.kind === 'split' && event.taken.reached.getTime() < burstEnds);
+		})).toBe(true);
+		expect(one.burstTook / four.burstTook).toBeGreaterThan(2.5);
+	});
+
+	/**
+	 * Eight days the node lacks, laid out in ranges of two: four thousand
+	 * staples made in the first two hours, whose votes were made over 50 s,
+	 * so that any moment among them lies between the votes of a few dozen,
+	 * and a thousand over the rest; peers keyed by votes, each keying every
+	 * vote up to the tolerance off, so that a part of a range taken on starts
+	 * among staples the peer reading the rest keys apart. Answers the network
+	 * of a node holding the history before, and where the burst ends.
+	 */
+	async function splitAmongVotes(): Promise<{ readonly network: SimulatedNetwork; readonly peers: ReadonlyMap<string, SimulatedPeer>; readonly burstEnds: number }> {
+		freezeClock(new Date(NOW));
+		const lacksFrom = NOW - 8 * DAY;
+		const burstEnds = lacksFrom + 2 * HOUR;
+		const burst = Array.from({ length: 4000 }, function(_ignored, index): readonly number[] {
+			const madeAt = lacksFrom + 5 * MINUTE + Math.floor(index * (burstEnds - lacksFrom - 5 * MINUTE) / 4000);
+			return([madeAt - 50 * SECOND, madeAt - 20 * SECOND + (index % 7) * SECOND, madeAt - 2 * SECOND, madeAt]);
+		});
+		const spread = Array.from({ length: 1000 }, function(_ignored, index): readonly number[] {
+			const madeAt = lacksFrom + Math.floor((index + 0.5) * (NOW - HOUR - lacksFrom) / 1000);
+			return([madeAt - 900, madeAt]);
+		});
+		const stamped = [...burst, ...spread].sort(function(left, right): number {
+			return(Math.max(...left) - Math.max(...right));
+		});
+		const tolerance = VOTE_KEY_TOLERANCE_MILLISECONDS;
+		const peers = representatives(NAMES, {
+			made: stamped.map(function(stamps): number {
+				return(Math.max(...stamps));
+			}),
+			votes: new Map(stamped.map(function(stamps, index): [number, readonly number[]] {
+				return([index, stamps]);
+			}))
+		}, function(name): SimulatedPeerOptions {
+			const salt = NAMES.indexOf(name) * 1009;
+			return({ keying: { ...KEYED_AS_A_REPRESENTATIVE, keyedAt: function(made, staple, vote): number {
+				return(made + (staple * 7919 + vote * 104_729 + salt) % (2 * tolerance + 1) - tolerance);
+			} } });
+		});
+		const network = new SimulatedNetwork(new Follower(), peers);
+		await heldUpTo(network, peers, lacksFrom);
+		return({ network, peers, burstEnds });
+	}
+
+	/** Where a peer took on part of a range among the staples made before the moment, by the end the rest of that range then had. */
+	function splitsBefore(events: readonly RangeEvent[], moment: number): number[] {
+		return(events.flatMap(function(event): number[] {
+			if (event.kind !== 'split' || event.left.end.getTime() >= moment) {
+				return([]);
+			}
+			return([event.left.end.getTime()]);
+		}));
+	}
+
+	test('holds every staple whose votes lie on both sides of where a peer took on part of another\'s range, from peers that key each vote up to the tolerance off', async function() {
+		const { network, peers, burstEnds } = await splitAmongVotes();
+
+		await untilCaughtUp(network, 300);
+
+		const splits = splitsBefore(network.rangeEvents, burstEnds);
+		expect(splits.length).toBeGreaterThan(0);
+		const [first] = peers.values();
+		for (const split of splits) {
+			expect(first?.staples.filter(function(staple): boolean {
+				const stamps = staple.votes.map(function(vote): number {
+					return(vote.validityFrom.getTime());
+				});
+				return(Math.min(...stamps) < split && Math.max(...stamps) >= split);
+			}).length).toBeGreaterThan(10);
+		}
+		expect(missingFrom(network, peers)).toEqual([]);
+	});
+
+	test('resumes, after a restart, the parts of a range a peer took on and the rest, and holds every staple', async function() {
+		const setup = await splitAmongVotes();
+		const { peers, burstEnds } = setup;
+		let network = setup.network;
+		for (let update = 0; update < 100 && splitsBefore(network.rangeEvents, burstEnds).length === 0; update++) {
+			advanceClock(nextUpdateDelay(await network.update(), PERIOD));
+		}
+		// Both parts of the latest split among the burst are left to read when the node stops.
+		const split = network.rangeEvents.filter(function(event): boolean {
+			return(event.kind === 'split' && event.left.end.getTime() < burstEnds);
+		}).at(-1);
+		const pieces = [split].flatMap(function(event): number[] {
+			if (event?.kind !== 'split') {
+				return([]);
+			}
+			return([event.left.id, event.taken.id]);
+		});
+		expect(network.layout?.ranges.filter(function(range): boolean {
+			return(pieces.includes(range.id));
+		})).toHaveLength(2);
+
+		network = network.restarted();
+		await untilCaughtUp(network, 300);
+
+		expect(kindsBesidesSplits(network.rangeEvents)).toEqual(['read']);
+		expect(missingFrom(network, peers)).toEqual([]);
 	});
 
 	test('holds every staple whose dependencies a range before brings, the ranges read ahead filling only part of the shared retry queue', async function() {
