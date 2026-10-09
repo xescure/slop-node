@@ -199,21 +199,6 @@ const PRIMING_FLOOR = 8;
 /** How many more held staples passes name after each pass the peer did not give up on. */
 const PRIMING_STEP = 8;
 
-/**
- * How many staples the node must hold from a start on, besides those the
- * pass was sent, for a request from there to carry a filter: past what it
- * holds, a filter names only what the pass itself was sent, which moving the
- * start on leaves behind.
- */
-const HELD_AHEAD_WORTH_A_FILTER = 8;
-
-/**
- * How far behind the node's clock the votes of a page must all be for the
- * pass to count as catching up from far behind, where the peer has far more
- * ahead than a page and what it sends again costs less than a filter.
- */
-const CATCH_UP_LAG_MILLISECONDS: number = 24 * 60 * 60_000;
-
 /** Seeds a filter takes: integers its hash functions read exactly. */
 const SEED_LIMIT = 2 ** 31;
 
@@ -525,11 +510,6 @@ class KnownVotes {
 		}
 	}
 
-	/** Whether the peer listed the staple to the pass. */
-	listed(key: string): boolean {
-		return(this.#stamps.has(key));
-	}
-
 	/** Whether a vote of the staple was made at or after the moment, or, for a staple the peer did not list, nothing is known of it. */
 	mayBeMadeSince(key: string, moment: number): boolean {
 		return(this.#stamps.get(key)?.some(function(stamp): boolean {
@@ -815,12 +795,6 @@ class Pass<Staple extends PassStaple> {
 	#requests = 0;
 	/** How far the start last moved, from which probes look next. */
 	#step = FIRST_STEP_MILLISECONDS;
-	/** Whether the node holds fewer than HELD_AHEAD_WORTH_A_FILTER staples from the start on, as last looked at. */
-	#pastHeld = false;
-	/** Whether the request under way, or the last, carries no filter. */
-	#asksUnfiltered = false;
-	/** Whether the last page that listed staples had none with a vote made within CATCH_UP_LAG_MILLISECONDS of the node's clock. */
-	#farBehind = false;
 
 	constructor(io: PeerIO<Staple>, setup: PassSetup, options: PassOptions) {
 		this.#io = io;
@@ -857,12 +831,6 @@ class Pass<Staple extends PassStaple> {
 			}
 			const { staples: page, evidence, filter } = listed;
 			const held = listed.taken.held;
-			// A page with nothing new to the node shows the start is not past what it holds, and only a filter lets a page come back empty.
-			if (this.#pastHeld && !listed.taken.outcomes.some(function(outcome): boolean {
-				return(outcome !== 'held');
-			})) {
-				this.#pastHeld = false;
-			}
 			if (page.length === 0) {
 				if (await this.#confirm(undefined, filter.errorRate)) {
 					return({ kind: 'drained' });
@@ -879,7 +847,7 @@ class Pass<Staple extends PassStaple> {
 				return({ kind: 'caught-up' });
 			}
 			// Read with no filter, the peer sends the same page from the same start again, so only a move makes progress.
-			const fits = !this.#asksUnfiltered && this.#named.size + page.length <= BLOOM_CAPACITY;
+			const fits = !this.#io.priming.unfiltered && this.#named.size + page.length <= BLOOM_CAPACITY;
 			// A page cut by the peer's own limit read no further for the staples the filter names, so it calls for no early move.
 			const early = fits && shortPages >= 2 && this.#named.received > 0 && evidence.wholeBelow === page.length;
 			if (fits && !early) {
@@ -916,17 +884,9 @@ class Pass<Staple extends PassStaple> {
 		}
 	}
 
-	/**
-	 * The filter naming those staples, or none, which names nothing by
-	 * mistake: once the peer is read without one (PrimingWindow), and while
-	 * the pass catches up from far behind past what the node holds, where a
-	 * filter names little the peer would send again but costs it the time to
-	 * test every staple it reads [Keeta TS] index.js:69686-69690, which bounds
-	 * how much a page holds.
-	 */
+	/** The filter naming those staples, or none once the peer is read without one (PrimingWindow), which names nothing by mistake. */
 	#filterOf(named: NamedStaples): Filter {
-		this.#asksUnfiltered = this.#io.priming.unfiltered || (this.#pastHeld && this.#farBehind);
-		if (this.#asksUnfiltered) {
+		if (this.#io.priming.unfiltered) {
 			return(UNFILTERED);
 		}
 		return(named.filter(this.#seed()));
@@ -956,28 +916,19 @@ class Pass<Staple extends PassStaple> {
 	 * its order, which the peer would send all the same.
 	 */
 	async #hold(first?: NamedStaple): Promise<void> {
-		this.#pastHeld = await this.#holdInto(this.#named, this.#start, first) < HELD_AHEAD_WORTH_A_FILTER;
+		await this.#holdInto(this.#named, this.#start, first);
 	}
 
-	/**
-	 * Names, for the start given, what the node holds from there, as #hold
-	 * does for the current one, as many as the peer's priming window allows,
-	 * and answers how many it found that the peer has not listed to the pass,
-	 * or that there was no room to look.
-	 */
-	async #holdInto(named: NamedStaples, start: number, first?: NamedStaple): Promise<number> {
+	/** Names, for the start given, what the node holds from there, as #hold does for the current one, as many as the peer's priming window allows. */
+	async #holdInto(named: NamedStaples, start: number, first?: NamedStaple): Promise<void> {
 		const room = Math.min(BLOOM_CAPACITY - named.size, this.#io.priming.size);
 		if (room <= 0) {
-			return(Number.POSITIVE_INFINITY);
+			return;
 		}
 		const held = await this.#io.held(new Date(start), room);
-		const known = this.#known;
-		const unlisted = held.filter(function(staple): boolean {
-			return(!known.listed(stapleKey(staple)));
-		}).length;
 		if (first === undefined) {
 			named.hold(held);
-			return(unlisted);
+			return;
 		}
 		const key = stapleKey(first);
 		const at = held.findIndex(function(staple): boolean {
@@ -986,7 +937,6 @@ class Pass<Staple extends PassStaple> {
 		if (at >= 0) {
 			named.hold(held.slice(at));
 		}
-		return(unlisted);
 	}
 
 	/**
@@ -1012,10 +962,6 @@ class Pass<Staple extends PassStaple> {
 				return(assertNever(answer));
 		}
 		const staples = answer.staples;
-		if (staples.length > 0) {
-			const latest = Math.max(...staples.flatMap(stampsOf));
-			this.#farBehind = latest < Date.now() - CATCH_UP_LAG_MILLISECONDS;
-		}
 		await this.#keying.observe(staples, start);
 		this.#known.learn(staples);
 		const evidence: Evidence<Staple> = {
@@ -1050,7 +996,6 @@ class Pass<Staple extends PassStaple> {
 		const narrowed = this.#io.priming.gaveUp();
 		switch (narrowed) {
 			case 'unfiltered':
-				this.#asksUnfiltered = true;
 				return(await this.#request(start, limit, undefined));
 			case 'halved':
 				throw(new Error(`${reason}; the next pass names at most ${String(this.#io.priming.size)} staples the node holds ahead of its start`));
@@ -1067,7 +1012,7 @@ class Pass<Staple extends PassStaple> {
 	 */
 	async #take(page: readonly Staple[], named: NamedStaples = this.#named, resent?: string): Promise<Taken> {
 		// A request sent with no filter named nothing, which the peer then sends all the same.
-		const unfiltered = this.#asksUnfiltered;
+		const unfiltered = this.#io.priming.unfiltered;
 		const sent = page.find(function(staple) {
 			return(!unfiltered && named.names(staple));
 		});
@@ -1122,8 +1067,8 @@ class Pass<Staple extends PassStaple> {
 				return(stamp >= target.at - VOTE_KEY_TOLERANCE_MILLISECONDS);
 			})));
 		}));
-		if (held || !this.#pastHeld) {
-			this.#pastHeld = await this.#holdInto(named, target.at) < HELD_AHEAD_WORTH_A_FILTER;
+		if (held) {
+			await this.#holdInto(named, target.at);
 		}
 		// Of what the peer sent from the start, a peer keyed by votes lists from there again only the staples with a vote made about then or later; one keyed by when it applied them lists those that sort after the moment, which those votes tell only of staples it applied about when they were made.
 		const known = this.#known;

@@ -1026,37 +1026,6 @@ describe('bootstrapping against a peer keyed by votes, as the main network\'s re
 		expect(scenario.follower.priming(scenario.peer)).toMatchObject({ unfiltered: false });
 	});
 
-	/*
-	 * A representative tests every staple it reads against the filter it is
-	 * sent, so a request with one reads less within its time: on the main
-	 * network one answered at once without the node's filter, where with it
-	 * pages held a handful of staples new to the node. Past what the node
-	 * holds, a filter names little the peer would send again.
-	 */
-	test('reads with no filter past the history it holds, at many times the staples a request and a minute', async function() {
-		freezeClock(new Date(NOW));
-		const count = 6000;
-		const held = 1000;
-		const scenario = new Scenario({ ...REPRESENTATIVE, keying: { kind: 'votes', votesPerRead: 20, readsAtMost: 10, readMilliseconds: 450, filteredReadMilliseconds: 1800, readsVaryBy: 5 } });
-		// A month behind, as a node catching up on the main network is.
-		liveHistory(scenario.peer, count, 1, NOW - 30 * DAY);
-		for (const staple of scenario.peer.staples.slice(0, held)) {
-			await scenario.node.add(staple);
-		}
-		scenario.from = new Date(stapleAt(scenario.peer, held - 10).timestamp().getTime() - MINUTE);
-
-		const { took } = await scenario.onScheduleUntilComplete(200);
-
-		expect(scenario.missing()).toEqual([]);
-		const perRequest = (count - held) / requestsOf(scenario);
-		const perMinute = (count - held) / (took / MINUTE);
-		// With a filter on every request it was 509 requests, 9.8 staples each, 96 a minute; reads here take four times as long under a filter.
-		expect(perRequest).toBeGreaterThan(30);
-		expect(perMinute).toBeGreaterThan(250);
-		// What the peer sent again past what the node held: the staples a move from a start shared with the page before.
-		expect(scenario.peer.served).toBeLessThan(1.25 * (count - held));
-	});
-
 	/** Staples made one a second over the hour before, each with four votes within a second, from a peer keyed by votes as given. */
 	function votedHistory(options: SimulatedPeerOptions, count: number, spacing: number): Scenario {
 		const scenario = new Scenario(options);
