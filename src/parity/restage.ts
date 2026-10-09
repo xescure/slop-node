@@ -1,15 +1,18 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import type pg from 'pg';
-import type { BootstrapStage, StagedCounts } from '../ledger/storage/stage.js';
+import type { BootstrapStage, StagedCounts, StagedStaple } from '../ledger/storage/stage.js';
 import { BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RETRY_ARENA } from '../node/bootstrap-cursors.js';
 import { stagedOf } from '../node/bootstrap-stage.js';
 import { heldStaplesOf } from './follower-store.js';
 
 const lib = KeetaNet.lib;
 
-/** How many staples a restage reads, decodes and stages at a time. */
-const RESTAGE_BATCH = 1000;
+/**
+ * How many staples a restage reads and stages at a time. Each is decoded on
+ * its own and dropped before the next, as a decoded staple of the main
+ * network takes up to about forty times its bytes.
+ */
+const RESTAGE_BATCH = 200;
 
 /**
  * The arenas of the bootstrap's state that a restage keeps: where it reached
@@ -55,8 +58,8 @@ function arrayBufferOf(bytes: Buffer): ArrayBuffer {
  * staple it could not read back is found here, while the database it came
  * from is whole.
  */
-function readBack(bytes: ArrayBuffer): VoteStaple {
-	return(new lib.Vote.Staple(bytes));
+function readBack(bytes: ArrayBuffer): StagedStaple {
+	return(stagedOf(new lib.Vote.Staple(bytes)));
 }
 
 /**
@@ -69,11 +72,11 @@ function readBack(bytes: ArrayBuffer): VoteStaple {
 export async function restage(source: pg.Pool, stage: BootstrapStage, target: pg.Pool, progress: (done: Restaged) => void): Promise<Restaged> {
 	const keys = new Set<string>();
 	let done: Restaged = { held: 0, deferred: 0, queued: 0, staged: { staples: 0, bytes: 0 }, distinct: 0 };
-	const stageAll = async function(staples: readonly VoteStaple[]): Promise<StagedCounts> {
+	const stageAll = async function(staples: readonly StagedStaple[]): Promise<StagedCounts> {
 		for (const staple of staples) {
-			keys.add(staple.blocksHash.toString());
+			keys.add(staple.key);
 		}
-		const kept = await stage.put(staples.map(stagedOf));
+		const kept = await stage.put(staples);
 		return({ staples: done.staged.staples + kept.staples, bytes: done.staged.bytes + kept.bytes });
 	};
 	let sequence = '0';
@@ -83,9 +86,18 @@ export async function restage(source: pg.Pool, stage: BootstrapStage, target: pg
 		if (last === undefined) {
 			break;
 		}
-		const held = (await heldStaplesOf(source, rows)).map(function({ staple }): VoteStaple {
-			return(readBack(staple.toBytes()));
-		});
+		const held: StagedStaple[] = [];
+		for (const row of rows) {
+			if (row.bytes === null) {
+				const [rebuilt] = await heldStaplesOf(source, [row]);
+				if (rebuilt === undefined) {
+					throw(new Error(`the staple ${row.blocks_hash.toString('hex')} could not be rebuilt`));
+				}
+				held.push(readBack(rebuilt.staple.toBytes()));
+			} else {
+				held.push(readBack(arrayBufferOf(row.bytes)));
+			}
+		}
 		done = { ...done, held: done.held + held.length, staged: await stageAll(held), distinct: keys.size };
 		progress(done);
 		sequence = last.sequence;
@@ -97,14 +109,14 @@ export async function restage(source: pg.Pool, stage: BootstrapStage, target: pg
 		if (last === undefined) {
 			break;
 		}
-		const deferred = rows.map(function(row): VoteStaple {
+		const deferred = rows.map(function(row): StagedStaple {
 			return(readBack(arrayBufferOf(row.bytes)));
 		});
 		done = { ...done, deferred: done.deferred + deferred.length, staged: await stageAll(deferred), distinct: keys.size };
 		progress(done);
 		after = last.blocks_hash;
 	}
-	const queued = (await source.query<{ key: string; staple: string | null }>(QUEUED_STAPLES, [BOOTSTRAP_RETRY_ARENA])).rows.map(function(row): VoteStaple {
+	const queued = (await source.query<{ key: string; staple: string | null }>(QUEUED_STAPLES, [BOOTSTRAP_RETRY_ARENA])).rows.map(function(row): StagedStaple {
 		if (row.staple === null) {
 			throw(new Error(`the queued staple ${row.key} holds no bytes`));
 		}
