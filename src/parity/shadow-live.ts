@@ -22,6 +22,17 @@ export type ShadowLiveSetup = {
 	readonly storage: () => LedgerStorageAPI;
 	/** Staples read from the follower at a time. */
 	readonly batchStaples?: number;
+	/** Told after each batch how far the replay has come. */
+	readonly progress?: (progress: ShadowLiveProgress) => void;
+};
+
+export type ShadowLiveProgress = {
+	readonly replayed: number;
+	readonly total: number;
+	/** Staples refused for want of voting weight that have not been applied yet. */
+	readonly waiting: number;
+	/** The moment of the last staple replayed. */
+	readonly reached: string;
 };
 
 /** Enough staples to keep the reads few, and few enough that a batch's bytes are a few megabytes. */
@@ -143,8 +154,13 @@ export async function shadowVoteLive(setup: ShadowLiveSetup): Promise<ShadowLive
 				});
 				replayed++;
 			}
+			// The follower runs gc as it adds, which applies the staples deferred until the blocks they build on came.
+			await atMoment(last.staple.timestamp(), function() {
+				return(drainDeferral(ledger));
+			});
 			await adds.retry();
 			after = { stapleTime: last.stapleTime, blocksHash: keyOf(last.staple) };
+			setup.progress?.({ replayed, total, waiting: adds.waiting().length, reached: last.stapleTime.toISOString() });
 		}
 		const drainAt = window.at(-1)?.timestamp() ?? end;
 		await atMoment(drainAt, function() {

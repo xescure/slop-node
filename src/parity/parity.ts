@@ -2,11 +2,15 @@
 import { readFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { gunzipSync } from 'node:zlib';
-import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { setTimeout as delay } from 'node:timers/promises';
+import { gunzipSync } from 'node:zlib';
+import pg from 'pg';
+import * as KeetaNet from '@keetanetwork/keetanet-client';
+import type { LedgerStorageAPI } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
+import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
 import { PeerPacer } from '../node/bootstrap-pacing.js';
+import { startCluster, sweepAbandonedClusters } from '../testing/postgres.js';
 import { assertNever } from '../util/assert-never.js';
 import { capturedBehaviors, sampleAPI } from './api-diff.js';
 import { httpSource, pacedSource } from './api-source.js';
@@ -16,8 +20,9 @@ import { FOLLOWER_LISTEN_IP, followerDatabaseURL, followerDirectory, MAINNET_REP
 import { openFollowerStore } from './follower-store.js';
 import type { FollowerStore } from './follower-store.js';
 import { ParityLog, parityLogPath } from './log.js';
+import type { ShadowLiveRecord } from './log.js';
 import { lockParity, parseParityCommand } from './parity-command.js';
-import type { ParityCommand } from './parity-command.js';
+import type { ParityCommand, ShadowStorage } from './parity-command.js';
 import { runParity, sweepPointerOf } from './report.js';
 import type { ParityReport } from './report.js';
 import { shadowVoteLive } from './shadow-live.js';
@@ -51,6 +56,8 @@ const USAGE = [
 	'            within its reach, as a representative asked about them then would; it reads only the',
 	'            follower\'s database',
 	'            --window <n>       how many staples to vote on (1000)',
+	'            --storage <kind>   where the offline ledger is kept: postgres, a cluster started for the run',
+	'                               and removed after it, or memory (postgres)',
 	'  report    check the checksum and compare a sweep sample and an API diff sample, then print the',
 	'            parity report as JSON, with the latest shadow votes from the log; exits 1 when a signal fails',
 	'            --sample <n>       how many accounts the sweep sample compares (16)',
@@ -83,6 +90,39 @@ async function edgeCaseStaples(): Promise<readonly string[]> {
 	}).map(function(line): string {
 		return(new KeetaNet.lib.Vote.Staple(Buffer.from(line, 'base64')).blocksHash.toString());
 	}));
+}
+
+type OfflineStorage = { readonly storage: () => LedgerStorageAPI; readonly close: () => Promise<void> };
+
+/** The offline ledger's storage: in memory, or in a database of a cluster started for it and removed after it. */
+async function offlineStorage(kind: ShadowStorage): Promise<OfflineStorage> {
+	switch (kind) {
+		case 'memory':
+			return({ storage: () => new MemoryLedgerStorage(), close: () => Promise.resolve() });
+		case 'postgres': {
+			await sweepAbandonedClusters();
+			const cluster = await startCluster();
+			const maintenance = new pg.Client({ host: cluster.socketDirectory, port: cluster.port, user: cluster.user, database: 'postgres' });
+			try {
+				await maintenance.connect();
+				await maintenance.query('CREATE DATABASE shadow');
+				await maintenance.end();
+			} catch (error: unknown) {
+				await cluster.stop();
+				throw(error);
+			}
+			const storage = new PostgresLedgerStorage({ kind: 'connection-string', connectionString: `postgresql://${cluster.user}@${encodeURIComponent(cluster.socketDirectory)}:${String(cluster.port)}/shadow` });
+			return({
+				storage: () => storage,
+				async close(): Promise<void> {
+					await storage.destroy();
+					await cluster.stop();
+				}
+			});
+		}
+		default:
+			return(assertNever(kind));
+	}
 }
 
 type Tools = {
@@ -140,7 +180,21 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 			return(0);
 		}
 		case 'shadow': {
-			const record = await shadowVoteLive({ store: tools.store, windowStaples: command.windowStaples, storage: () => new MemoryLedgerStorage() });
+			const offline = await offlineStorage(command.storage);
+			let record: ShadowLiveRecord;
+			try {
+				record = await shadowVoteLive({
+					store: tools.store,
+					windowStaples: command.windowStaples,
+					storage: offline.storage,
+					progress(progress) {
+						const heapMebibytes = Math.round(process.memoryUsage().heapUsed / 1_048_576);
+						process.stderr.write(`replayed ${String(progress.replayed)} of ${String(progress.total)} staples, to ${progress.reached}; ${String(progress.waiting)} waiting for voting weight; heap ${String(heapMebibytes)} MiB\n`);
+					}
+				});
+			} finally {
+				await offline.close();
+			}
 			await tools.log.append([record]);
 			process.stdout.write(`${JSON.stringify(record, null, '\t')}\n`);
 			return(0);

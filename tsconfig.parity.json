@@ -2,7 +2,10 @@
 	"extends": "./tsconfig.json",
 	"compilerOptions": {
 		"outDir": "./build/parity",
-		"tsBuildInfoFile": "./build/parity/.tsbuildinfo"
+		"tsBuildInfoFile": "./build/parity/.tsbuildinfo",
+		// The shadow votes' offline ledger runs in a cluster the test support
+		// starts, which declares what it gives the tests in vitest's types.
+		"types": ["node", "vitest"]
 	},
 	"include": [
 		"src/parity/follower.ts",

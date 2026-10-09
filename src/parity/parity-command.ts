@@ -8,7 +8,7 @@ export type ParityCommand =
 	| { readonly kind: 'checksum'; readonly directory: string; readonly gapMilliseconds: number }
 	| { readonly kind: 'sweep'; readonly directory: string; readonly accounts: number }
 	| { readonly kind: 'api-diff'; readonly directory: string; readonly samplesPerStratum: number; readonly seed: string | undefined }
-	| { readonly kind: 'shadow'; readonly directory: string; readonly windowStaples: number }
+	| { readonly kind: 'shadow'; readonly directory: string; readonly windowStaples: number; readonly storage: ShadowStorage }
 	| { readonly kind: 'report'; readonly directory: string; readonly sampleAccounts: number; readonly apiSamples: number; readonly gapMilliseconds: number };
 
 export const DEFAULT_SWEEP_ACCOUNTS = 100;
@@ -18,6 +18,16 @@ export const DEFAULT_REPORT_SAMPLE_ACCOUNTS = 16;
 
 /** Requests of each stratum an API diff compares: by the rule of three, a divergence rate below 6% at 95% for each. */
 export const DEFAULT_API_SAMPLES = 50;
+
+/**
+ * Where the offline ledger of shadow votes keeps its state. Replaying the
+ * follower's history into the memory driver outgrew a 3 GiB heap at 16,000
+ * of 53,600 staples, so by default it is kept in a cluster of its own,
+ * started for the run and removed after it.
+ */
+export type ShadowStorage = 'postgres' | 'memory';
+
+const SHADOW_STORAGES: readonly ShadowStorage[] = ['postgres', 'memory'];
 
 /** The staples shadow-voted on: the newest of the follower's reach, enough to hold every kind of staple a day of the main network carries. */
 export const DEFAULT_SHADOW_WINDOW = 1000;
@@ -46,7 +56,7 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 			valued = ['--directory', '--samples', '--seed'];
 			break;
 		case 'shadow':
-			valued = ['--directory', '--window'];
+			valued = ['--directory', '--window', '--storage'];
 			break;
 		case 'report':
 			valued = ['--directory', '--sample', '--api-samples', '--gap-ms'];
@@ -82,10 +92,14 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 		}
 		case 'shadow': {
 			const windowStaples = setting(options, '--window', Number.MAX_SAFE_INTEGER, DEFAULT_SHADOW_WINDOW);
-			if (windowStaples === undefined) {
+			const named = options.get('--storage') ?? 'postgres';
+			const storage = SHADOW_STORAGES.find(function(known): boolean {
+				return(known === named);
+			});
+			if (windowStaples === undefined || storage === undefined) {
 				return(undefined);
 			}
-			return({ kind: name, directory, windowStaples });
+			return({ kind: name, directory, windowStaples, storage });
 		}
 		case 'report': {
 			const sampleAccounts = setting(options, '--sample', Number.MAX_SAFE_INTEGER, DEFAULT_REPORT_SAMPLE_ACCOUNTS);

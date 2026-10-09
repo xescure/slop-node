@@ -11,8 +11,9 @@ describe('the parity command line', function() {
 	test('names each command with its defaults', function() {
 		expect(parseParityCommand(['checksum'], HOME)).toEqual({ kind: 'checksum', directory: DIRECTORY, gapMilliseconds: 10_000 });
 		expect(parseParityCommand(['sweep'], HOME)).toEqual({ kind: 'sweep', directory: DIRECTORY, accounts: 100 });
-		expect(parseParityCommand(['shadow'], HOME)).toEqual({ kind: 'shadow', directory: DIRECTORY, windowStaples: 1000 });
-		expect(parseParityCommand(['shadow', '--window', '50'], HOME)).toEqual({ kind: 'shadow', directory: DIRECTORY, windowStaples: 50 });
+		expect(parseParityCommand(['shadow'], HOME)).toEqual({ kind: 'shadow', directory: DIRECTORY, windowStaples: 1000, storage: 'postgres' });
+		expect(parseParityCommand(['shadow', '--window', '50', '--storage', 'memory'], HOME)).toEqual({ kind: 'shadow', directory: DIRECTORY, windowStaples: 50, storage: 'memory' });
+		expect(parseParityCommand(['shadow', '--storage', 'disk'], HOME)).toBeUndefined();
 		expect(parseParityCommand(['api-diff'], HOME)).toEqual({ kind: 'api-diff', directory: DIRECTORY, samplesPerStratum: 50, seed: undefined });
 		expect(parseParityCommand(['report'], HOME)).toEqual({ kind: 'report', directory: DIRECTORY, sampleAccounts: 16, apiSamples: 2, gapMilliseconds: 10_000 });
 	});
