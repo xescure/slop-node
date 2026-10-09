@@ -341,6 +341,14 @@ function failureOf(result: PromiseRejectedResult): Error {
 }
 
 /** The horizon of a pass that begins at the moment given: the margin before. */
+/** A moment that stays where it is, as a pass reads its horizon and end. */
+function fixed(moment: Date): () => number {
+	const at = moment.getTime();
+	return(function(): number {
+		return(at);
+	});
+}
+
 function floorOf(now: number): Date {
 	return(new Date(Math.max(0, now - BOOTSTRAP_MARGIN_MILLISECONDS)));
 }
@@ -786,8 +794,9 @@ function madeBetween(staple: PassStaple, start: number, moment: number): boolean
 class Pass<Staple extends PassStaple> {
 	readonly #io: PeerIO<Staple>;
 	readonly #began = Date.now();
-	readonly #horizon: number;
-	readonly #end: number;
+	readonly #horizon: () => number;
+	readonly #end: () => number;
+	readonly #until: number;
 	readonly #seed: () => number;
 	readonly #moved: (start: Date) => Promise<void>;
 	readonly #use: QueueUse;
@@ -803,8 +812,9 @@ class Pass<Staple extends PassStaple> {
 	constructor(io: PeerIO<Staple>, setup: PassSetup, options: PassOptions) {
 		this.#io = io;
 		this.#start = setup.start.getTime();
-		this.#horizon = setup.horizon.getTime();
-		this.#end = setup.end.getTime();
+		this.#horizon = setup.horizon;
+		this.#end = setup.end;
+		this.#until = setup.until;
 		this.#limit = options.limit;
 		this.#seed = options.seed ?? function(): number {
 			return(randomInt(SEED_LIMIT));
@@ -819,7 +829,7 @@ class Pass<Staple extends PassStaple> {
 		let shortPages = 0;
 		let next: Listed<Staple> | undefined;
 		for (;;) {
-			if (this.#start >= this.#end) {
+			if (this.#start >= this.#end()) {
 				return({ kind: 'caught-up' });
 			}
 			if (this.#exhausted()) {
@@ -897,7 +907,8 @@ class Pass<Staple extends PassStaple> {
 	}
 
 	#exhausted(): boolean {
-		return(this.#requests >= MAX_PASS_REQUESTS || Date.now() - this.#began >= MAX_PASS_MILLISECONDS);
+		const now = Date.now();
+		return(this.#requests >= MAX_PASS_REQUESTS || now - this.#began >= MAX_PASS_MILLISECONDS || now >= this.#until);
 	}
 
 	/** A page from the start, taken, or nothing when it was too large, and fewer staples are asked for from then on. */
@@ -1157,20 +1168,20 @@ class Pass<Staple extends PassStaple> {
 	 * little.
 	 */
 	async #reachesHorizon(evidence: Evidence<Staple>, filter: Filter): Promise<boolean> {
-		if (this.#start >= this.#horizon) {
+		const horizon = this.#horizon();
+		if (this.#start >= horizon) {
 			return(true);
 		}
 		if (filter.errorRate > ACCEPTED_ERROR_RATE) {
 			return(false);
 		}
-		const horizon = this.#horizon;
 		const mayShow = evidence.page.some(function(_staple, index): boolean {
 			return(shows(evidence, index, horizon));
 		});
-		if (!mayShow && this.#end === this.#horizon && evidence.keying.current !== 'unknown') {
+		if (!mayShow && this.#end() === horizon && evidence.keying.current !== 'unknown') {
 			return(false);
 		}
-		return(await this.#probe(this.#horizon, filter.serialized, evidence) !== undefined);
+		return(await this.#probe(horizon, filter.serialized, evidence) !== undefined);
 	}
 
 	/**
@@ -1338,9 +1349,12 @@ class Pass<Staple extends PassStaple> {
 /** Where a pass starts and ends, how it takes what it is sent, and what it shares with the other pass over the peer. */
 type PassSetup = {
 	readonly start: Date;
-	readonly horizon: Date;
-	/** At or after the horizon: the pass stops reading once its start reaches it. */
-	readonly end: Date;
+	/** As it stands when the pass checks it; a pass over a range whose end moves earlier as another peer takes on part of it reads the new one. */
+	readonly horizon: () => number;
+	/** At or after the horizon: the pass stops reading once its start reaches it, as it stands then. */
+	readonly end: () => number;
+	/** When the pass reaches its bound at the latest, besides MAX_PASS_MILLISECONDS after it began. */
+	readonly until: number;
 	readonly use: QueueUse;
 	readonly keying: KeyingRecord;
 	readonly moved: (start: Date) => Promise<void>;
@@ -1416,8 +1430,9 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 	});
 	const live = new Pass(io, {
 		start: progress.reached,
-		horizon: floor,
-		end: new Date(began),
+		horizon: fixed(floor),
+		end: fixed(new Date(began)),
+		until: Number.POSITIVE_INFINITY,
 		use: 'live',
 		keying,
 		moved: function(start) {
@@ -1431,8 +1446,9 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 	if (deepScan !== undefined) {
 		deep = new Pass(io, {
 			start: deepScan.reached,
-			horizon: deepScan.horizon,
-			end: deepScan.horizon,
+			horizon: fixed(deepScan.horizon),
+			end: fixed(deepScan.horizon),
+			until: Number.POSITIVE_INFINITY,
 			use: 'deep',
 			keying,
 			moved: function(start) {
@@ -1476,7 +1492,10 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 export type RangeSetup = {
 	/** Where the node holds or has queued every staple the range's peers keyed from where it began. */
 	readonly reached: Date;
-	readonly end: Date;
+	/** The range's end as it stands, which moves earlier when another peer takes on the later part of what is left of it. */
+	readonly end: () => Date;
+	/** When the update the pass runs in ends: a pass begun late in it, by a peer that took on another range, reaches its bound by then, as the others do. */
+	readonly until: Date;
 	readonly use: QueueUse;
 	readonly moved: (start: Date) => Promise<void>;
 };
@@ -1486,7 +1505,11 @@ export type RangeSetup = {
  * range reached with the range's end as its horizon and its end, which
  * completes once it is shown to hold or have queued every staple the peer
  * keyed before the end, as any pass is (see Pass), and records where it
- * reached through the setup, not in the peer's progress. The node keeps
+ * reached through the setup, not in the peer's progress. The end is read
+ * anew each time the pass checks it: what shows the pass reached an end
+ * shows it reached every earlier one, so a pass whose end moved earlier
+ * completes once it reaches the new one, or at once when it reached past it
+ * already. The node keeps
  * what the pass learns of how the peer keys in the peer's progress, which
  * it begins as from the moment PassOptions.from gives when it has none.
  */
@@ -1503,7 +1526,10 @@ export async function bootstrapRange<Staple extends PassStaple>(io: PeerIO<Stapl
 	}, function(event) {
 		io.report(event);
 	});
-	const pass = new Pass(io, { start: range.reached, horizon: range.end, end: range.end, use: range.use, keying, moved: range.moved }, options);
+	const end = function(): number {
+		return(range.end().getTime());
+	};
+	const pass = new Pass(io, { start: range.reached, horizon: end, end, until: range.until.getTime(), use: range.use, keying, moved: range.moved }, options);
 	const [result] = await Promise.allSettled([pass.run()]);
 	// As after the passes over a peer, the staples queued are offered again whatever the pass did.
 	const [retried] = await Promise.allSettled([io.retry()]);

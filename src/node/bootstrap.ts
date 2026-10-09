@@ -72,7 +72,7 @@ type UpdateResult = { complete: boolean };
 type PassTally = Record<'requests' | Added, number>;
 
 function describeRange(outcome: PassOutcome, task: RangeTask): string {
-	const range = `the range from ${task.reached.toISOString()} to ${task.end.toISOString()}`;
+	const range = `the range from ${task.reached.toISOString()} to ${task.end().toISOString()}`;
 	switch (outcome.kind) {
 		case 'drained':
 		case 'caught-up':
@@ -454,10 +454,10 @@ export class BootstrapClient {
 				return('stopped');
 			}
 			if (error instanceof RetryQueueFull) {
-				this.#node.log.info(LOG_SOURCE, `Bootstrap pass over ${endpoint} waits for room in the retry queue, in the range from ${task.reached.toISOString()} to ${task.end.toISOString()}: ${error.message}`);
+				this.#node.log.info(LOG_SOURCE, `Bootstrap pass over ${endpoint} waits for room in the retry queue, in the range from ${task.reached.toISOString()} to ${task.end().toISOString()}: ${error.message}`);
 				return('throttled');
 			}
-			this.#node.log.warn(LOG_SOURCE, `Bootstrapping from ${endpoint} in the range from ${task.reached.toISOString()} to ${task.end.toISOString()} failed; it is tried again on the next update:`, error);
+			this.#node.log.warn(LOG_SOURCE, `Bootstrapping from ${endpoint} in the range from ${task.reached.toISOString()} to ${task.end().toISOString()} failed; it is tried again on the next update:`, error);
 			return('failed');
 		}
 	}
@@ -602,6 +602,9 @@ export class BootstrapClient {
 		switch (event.kind) {
 			case 'laid-out':
 				this.#node.log.info(LOG_SOURCE, `Bootstrap: the node lacks the history from ${event.layout.from.toISOString()} to ${event.layout.end.toISOString()}, which its ${String(event.layout.ranges.length)} peers now read in as many ranges, side by side`);
+				return;
+			case 'split':
+				this.#node.log.info(LOG_SOURCE, `Bootstrap from ${event.peer}: takes on the range from ${event.taken.reached.toISOString()} to ${event.taken.end.toISOString()}, the later part of the one ${event.left.peer ?? 'no peer'} reads, which reached ${event.left.reached.toISOString()} and now ends at ${event.left.end.toISOString()}`);
 				return;
 			case 'benched':
 				this.#node.log.warn(LOG_SOURCE, `Bootstrap from ${event.peer}: its passes over a range failed too often in a row, so another peer reads the range, and it reads none until ${event.until.toISOString()}`);

@@ -85,19 +85,35 @@ type StoredLayout = {
 	readonly from: number;
 	readonly end: number;
 	readonly deepScanPeer: string;
-	readonly ranges: { readonly reached: number; readonly end: number; readonly peer: string | null }[];
+	readonly ranges: { readonly id: number; readonly reached: number; readonly end: number; readonly peer: string | null; readonly spent: number; readonly advanced: number }[];
 	readonly standings: Readonly<Record<string, { readonly failures: number; readonly benchedUntil: number | null }>>;
+	readonly fullQueueUpdates: number;
+	readonly nextID: number;
 };
 
-function rangeOf(value: unknown): BootstrapRange | undefined {
+/** A count as stored, none when an earlier build did not store it, or false when the value is not one. */
+function countOf(value: unknown): number | false {
+	if (value === undefined) {
+		return(0);
+	}
+	if (!isWholeNumber(value)) {
+		return(false);
+	}
+	return(value);
+}
+
+/** A range as stored, but for its ID, which an earlier build did not store, nor its pace. */
+function rangeOf(value: unknown): (Omit<BootstrapRange, 'id'> & { readonly id: number | undefined }) | undefined {
 	if (!isRecord(value)) {
 		return(undefined);
 	}
-	const { reached, end, peer } = value;
-	if (!isWholeNumber(reached) || !isWholeNumber(end) || (peer !== null && typeof peer !== 'string')) {
+	const { id, reached, end, peer } = value;
+	const spent = countOf(value['spent']);
+	const advanced = countOf(value['advanced']);
+	if ((id !== undefined && !isWholeNumber(id)) || !isWholeNumber(reached) || !isWholeNumber(end) || (peer !== null && typeof peer !== 'string') || spent === false || advanced === false) {
 		return(undefined);
 	}
-	return({ reached: new Date(reached), end: new Date(end), peer: peer ?? undefined });
+	return({ id, reached: new Date(reached), end: new Date(end), peer: peer ?? undefined, pace: { spent, advanced } });
 }
 
 function standingOf(value: unknown): RangeStanding | undefined {
@@ -115,20 +131,27 @@ function standingOf(value: unknown): RangeStanding | undefined {
 	return({ failures, benchedUntil: until });
 }
 
-/** The layout as stored, or nothing when the node did not write it, as a cursor's. */
+/**
+ * The layout as stored, or nothing when the node did not write it, as a
+ * cursor's. The ranges an earlier build stored without IDs are named after
+ * the largest ID stored, in order, so that each still has its own, and the
+ * next ID follows the largest.
+ */
 export function layoutOf(value: unknown): RangeLayout | undefined {
 	if (!isRecord(value)) {
 		return(undefined);
 	}
 	const { from, end, deepScanPeer, ranges, standings } = value;
-	if (!isWholeNumber(from) || !isWholeNumber(end) || typeof deepScanPeer !== 'string' || !Array.isArray(ranges) || !isRecord(standings)) {
+	const fullQueueUpdates = countOf(value['fullQueueUpdates']);
+	const storedNextID = countOf(value['nextID']);
+	if (!isWholeNumber(from) || !isWholeNumber(end) || typeof deepScanPeer !== 'string' || !Array.isArray(ranges) || !isRecord(standings) || fullQueueUpdates === false || storedNextID === false) {
 		return(undefined);
 	}
 	const read = ranges.map(rangeOf);
 	const readStandings = Object.entries(standings).map(function([peer, standing]): [string, RangeStanding | undefined] {
 		return([peer, standingOf(standing)]);
 	});
-	const everyRange = read.filter(function(range): range is BootstrapRange {
+	const everyRange = read.filter(function(range): range is NonNullable<typeof range> {
 		return(range !== undefined);
 	});
 	const everyStanding = readStandings.filter(function(entry): entry is [string, RangeStanding] {
@@ -137,7 +160,24 @@ export function layoutOf(value: unknown): RangeLayout | undefined {
 	if (everyRange.length !== read.length || everyStanding.length !== readStandings.length) {
 		return(undefined);
 	}
-	return({ from: new Date(from), end: new Date(end), deepScanPeer, ranges: everyRange, standings: Object.fromEntries(everyStanding) });
+	let unnamed = Math.max(-1, ...everyRange.map(function(range): number {
+		return(range.id ?? -1);
+	}));
+	const named = everyRange.map(function(range): BootstrapRange {
+		let id = range.id;
+		if (id === undefined) {
+			unnamed++;
+			id = unnamed;
+		}
+		return({ ...range, id });
+	});
+	if (new Set(named.map(function(range): number {
+		return(range.id);
+	})).size !== named.length) {
+		return(undefined);
+	}
+	const nextID = Math.max(storedNextID, unnamed + 1);
+	return({ from: new Date(from), end: new Date(end), deepScanPeer, ranges: named, standings: Object.fromEntries(everyStanding), fullQueueUpdates, nextID });
 }
 
 function storedLayout(layout: RangeLayout): StoredLayout {
@@ -146,11 +186,13 @@ function storedLayout(layout: RangeLayout): StoredLayout {
 		end: layout.end.getTime(),
 		deepScanPeer: layout.deepScanPeer,
 		ranges: layout.ranges.map(function(range) {
-			return({ reached: range.reached.getTime(), end: range.end.getTime(), peer: range.peer ?? null });
+			return({ id: range.id, reached: range.reached.getTime(), end: range.end.getTime(), peer: range.peer ?? null, spent: range.pace.spent, advanced: range.pace.advanced });
 		}),
 		standings: Object.fromEntries(Object.entries(layout.standings).map(function([peer, standing]) {
 			return([peer, { failures: standing.failures, benchedUntil: standing.benchedUntil?.getTime() ?? null }]);
-		}))
+		})),
+		fullQueueUpdates: layout.fullQueueUpdates,
+		nextID: layout.nextID
 	});
 }
 

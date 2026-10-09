@@ -1,5 +1,5 @@
 import { assertNever } from '../util/assert-never.js';
-import { VOTE_KEY_TOLERANCE_MILLISECONDS, completes } from './bootstrap-pass.js';
+import { MAX_PASS_MILLISECONDS, VOTE_KEY_TOLERANCE_MILLISECONDS, completes } from './bootstrap-pass.js';
 import type { PassOutcome, RangeSetup } from './bootstrap-pass.js';
 import type { QueueUse } from './bootstrap-retry.js';
 import type { PeerResult, UpdateIO } from './bootstrap-update.js';
@@ -23,6 +23,15 @@ export const FAR_BEHIND_MILLISECONDS: number = 24 * 60 * 60_000;
 export const RANGE_OVERLAP_MILLISECONDS: number = VOTE_KEY_TOLERANCE_MILLISECONDS + VOTE_SLOP_MILLISECONDS;
 
 /**
+ * How far past where the earliest range reached a range starts for it to
+ * count as read ahead: its staples need those of the history before it,
+ * which only the ranges before it bring, so it adds to the retry queue no
+ * more than a share of its own, and waits while the queue is full. Nearer,
+ * a range reads on from about where the earliest stands, as one pass would.
+ */
+export const FAR_AHEAD_MILLISECONDS: number = 24 * 60 * 60_000;
+
+/**
  * How much of a range must be left for a peer that has none to take on
  * half of it: enough that the half taken on is at least twice the overlap it
  * reads again. A few minutes of dense history take a peer longer than an
@@ -36,8 +45,38 @@ const FAILURES_BEFORE_BENCHING = 3;
 /** How long a peer that left its range for failing reads none. */
 const BENCH_MILLISECONDS: number = 30 * 60_000;
 
+/**
+ * The updates in a row that may read ranges while the retry queue is full
+ * before one reads the peers from where they last reached instead, which
+ * begins the deep re-scans that read again what the queued staples need
+ * (src/node/bootstrap-pass.ts), should a filter have named it by mistake.
+ */
+const FULL_QUEUE_UPDATES_BEFORE_DEEP_SCAN = 4;
+
+/**
+ * How much reading and how much history a range's pace counts besides what
+ * its passes measured, so that a range not read yet counts as read about as
+ * fast as time passes, and a few seconds of reading outweigh that.
+ */
+const PACE_PRIOR_MILLISECONDS = 1000;
+
+/**
+ * How long the last pass over a range read, and how far it moved where the
+ * range reached, which tells how long what is left takes: the history is
+ * denser in some stretches than in others, so the last pass tells more of
+ * what comes next than every pass before it.
+ */
+export type RangePace = {
+	readonly spent: number;
+	readonly advanced: number;
+};
+
+const UNREAD: RangePace = { spent: 0, advanced: 0 };
+
 /** A stretch of history one peer at a time reads. */
 export type BootstrapRange = {
+	/** Names the range across splits and restarts, for the passes over it to record where they reached. */
+	readonly id: number;
 	/**
 	 * The node holds or has queued every staple the peers that read the range
 	 * keyed from where it began up to this moment, but those a filter named
@@ -48,6 +87,8 @@ export type BootstrapRange = {
 	readonly end: Date;
 	/** The peer that reads it, if one does. */
 	readonly peer: string | undefined;
+	/** The pace of the last pass over it, or, for one split off another and not read yet, over that one, the pass under way then included. */
+	readonly pace: RangePace;
 };
 
 /** How a peer has fared reading ranges: the passes that failed in a row, and until when it reads none. */
@@ -67,6 +108,10 @@ export type RangeLayout = {
 	/** The ranges not read yet, in order. */
 	readonly ranges: readonly BootstrapRange[];
 	readonly standings: Readonly<Record<string, RangeStanding>>;
+	/** The updates in a row that read ranges while the retry queue was full. */
+	readonly fullQueueUpdates: number;
+	/** The ID the next range split off another takes: none is used twice, so a pass over a range read and dropped never finds another under its ID. */
+	readonly nextID: number;
 };
 
 /** How a pass over a range ended. */
@@ -90,6 +135,8 @@ export type ReadRange = (peer: string, task: RangeTask) => Promise<RangeResult>;
 /** What the node hears of its ranges. */
 export type RangeEvent =
 	| { readonly kind: 'laid-out'; readonly layout: RangeLayout }
+	/** The peer took on the later part of what was left of a range, which now ends where the part taken on begins, less the overlap. */
+	| { readonly kind: 'split'; readonly peer: string; readonly left: BootstrapRange; readonly taken: BootstrapRange }
 	/** The peer left its range for failing, and reads none until then. */
 	| { readonly kind: 'benched'; readonly peer: string; readonly until: Date }
 	/** Every range was read: the peers move on to the end less the overlap. */
@@ -99,9 +146,9 @@ export type RangeEvent =
 export type RangeIO = Pick<UpdateIO, 'readProgress' | 'writeProgress'> & {
 	readLayout(): Promise<RangeLayout | undefined>;
 	writeLayout(layout: RangeLayout | undefined): Promise<void>;
-	/** Whether the retry queue stopped a pass from where the last reached, or over the earliest range (RetryQueue.saturated). */
+	/** Whether the retry queue stopped a pass from where the last reached, or over a range near the earliest (RetryQueue.saturated). */
 	saturated(): Promise<boolean>;
-	/** Whether the retry queue has room for a staple a pass over a range read ahead of the earliest refuses. */
+	/** Whether the retry queue has room for a staple a pass over a range read ahead refuses. */
 	roomAhead(): Promise<boolean>;
 	report(event: RangeEvent): void;
 };
@@ -127,45 +174,61 @@ function overlapBefore(moment: Date): Date {
 
 /** The range left for another peer, which starts the overlap before where its peer reached, as the two key a vote within twice the tolerance of each other. */
 function handedOver(range: BootstrapRange): BootstrapRange {
-	return({ reached: overlapBefore(range.reached), end: range.end, peer: undefined });
+	return({ ...range, reached: overlapBefore(range.reached), peer: undefined });
 }
 
 function isBenched(layout: RangeLayout, peer: string, now: number): boolean {
 	return((layout.standings[peer]?.benchedUntil?.getTime() ?? 0) > now);
 }
 
-/**
- * The layout with a peer reading each range it can: the ranges whose peer
- * is gone or benched are left for another, a peer with no range takes one no
- * peer reads, the earliest first, and the earliest is read whatever else
- * is, by the peer reading the latest if no other is free; then each peer
- * still free takes on half of what is left of the range with the most left.
- * A benched peer reads ranges again only once every peer is benched.
- */
-export function assigned(layout: RangeLayout, peers: readonly string[], now: number): RangeLayout {
-	let readers = peers.filter(function(peer): boolean {
+/** The peers that read ranges: those not benched, or every one once all are. */
+function readersOf(layout: RangeLayout, peers: readonly string[], now: number): string[] {
+	const readers = peers.filter(function(peer): boolean {
 		return(!isBenched(layout, peer, now));
 	});
 	if (readers.length === 0) {
-		readers = [...peers];
+		return([...peers]);
 	}
+	return(readers);
+}
+
+/** Where a range starts being read ahead of the earliest: FAR_AHEAD_MILLISECONDS past where the earliest reached. */
+export function frontOf(layout: RangeLayout): number {
+	return((layout.ranges[0]?.reached.getTime() ?? 0) + FAR_AHEAD_MILLISECONDS);
+}
+
+/** Which ranges an update reads: those near the earliest, and, unless the passes over them wait for room in the queue, those read ahead. */
+type Throttle = { readonly front: number; readonly aheadRuns: boolean };
+
+function runs(range: BootstrapRange, throttle: Throttle): boolean {
+	return(throttle.aheadRuns || range.reached.getTime() < throttle.front);
+}
+
+function useOf(range: BootstrapRange, front: number): QueueUse {
+	if (range.reached.getTime() < front) {
+		return('live');
+	}
+	return('ahead');
+}
+
+/**
+ * The layout with each range whose peer is gone or benched left for
+ * another, and the earliest read whatever else is: when it has no peer and
+ * every peer has a range it reads, the peer of the latest leaves that one
+ * for it. The peers with none take ranges on as the update runs (Schedule).
+ */
+export function assigned(layout: RangeLayout, peers: readonly string[], now: number, throttle: Throttle = { front: Number.POSITIVE_INFINITY, aheadRuns: true }): RangeLayout {
+	const readers = readersOf(layout, peers, now);
 	const ranges = layout.ranges.map(function(range): BootstrapRange {
 		if (range.peer !== undefined && !readers.includes(range.peer)) {
 			return(handedOver(range));
 		}
 		return(range);
 	});
-	const free = readers.filter(function(peer): boolean {
-		return(!ranges.some(function(range): boolean {
-			return(range.peer === peer);
+	const busy = readers.every(function(peer): boolean {
+		return(ranges.some(function(range): boolean {
+			return(range.peer === peer && runs(range, throttle));
 		}));
-	});
-	ranges.forEach(function(range, index): void {
-		const peer = free[0];
-		if (range.peer === undefined && peer !== undefined) {
-			ranges[index] = { ...range, peer };
-			free.shift();
-		}
 	});
 	const first = ranges[0];
 	let latest = ranges.length - 1;
@@ -173,34 +236,11 @@ export function assigned(layout: RangeLayout, peers: readonly string[], now: num
 		latest--;
 	}
 	const taken = ranges[latest];
-	if (first !== undefined && first.peer === undefined && latest > 0 && taken !== undefined) {
+	if (first !== undefined && first.peer === undefined && busy && latest > 0 && taken !== undefined) {
 		ranges[0] = { ...first, peer: taken.peer };
 		ranges[latest] = handedOver(taken);
 	}
-	for (const peer of free) {
-		const widest = widestOf(ranges);
-		const range = ranges[widest];
-		if (range === undefined || range.end.getTime() - range.reached.getTime() < SPLIT_MILLISECONDS) {
-			break;
-		}
-		const middle = range.reached.getTime() + Math.floor((range.end.getTime() - range.reached.getTime()) / 2);
-		ranges.splice(widest, 1, { ...range, end: new Date(middle) }, { reached: overlapBefore(new Date(middle)), end: range.end, peer });
-	}
 	return({ ...layout, ranges });
-}
-
-/** The index of the range with the most left to read. */
-function widestOf(ranges: readonly BootstrapRange[]): number {
-	let widest = -1;
-	let most = Number.NEGATIVE_INFINITY;
-	ranges.forEach(function(range, index): void {
-		const left = range.end.getTime() - range.reached.getTime();
-		if (left > most) {
-			most = left;
-			widest = index;
-		}
-	});
-	return(widest);
 }
 
 /**
@@ -232,9 +272,9 @@ async function laidOut(peers: readonly string[], io: RangeIO): Promise<RangeLayo
 		if (index < peers.length - 1) {
 			rangeEnd = Math.floor(from + (index + 1) * span);
 		}
-		return({ reached: overlapBefore(new Date(Math.floor(from + index * span))), end: new Date(rangeEnd), peer: undefined });
+		return({ id: index, reached: overlapBefore(new Date(Math.floor(from + index * span))), end: new Date(rangeEnd), peer: undefined, pace: UNREAD });
 	});
-	const layout: RangeLayout = { from: new Date(from), end: new Date(end), deepScanPeer, ranges, standings: {} };
+	const layout: RangeLayout = { from: new Date(from), end: new Date(end), deepScanPeer, ranges, standings: {}, fullQueueUpdates: 0, nextID: ranges.length };
 	io.report({ kind: 'laid-out', layout });
 	return(layout);
 }
@@ -270,9 +310,6 @@ async function movedOn(layout: RangeLayout, peers: readonly string[], io: RangeI
 	io.report({ kind: 'read', layout });
 }
 
-/** A pass an update runs: over the range at that index of the layout, by its peer, adding to the queue as the use says. */
-type Run = { readonly index: number; readonly peer: string; readonly use: QueueUse };
-
 function standingAfter(standing: RangeStanding | undefined, result: RangeResult): RangeStanding {
 	const current = standing ?? { failures: 0, benchedUntil: undefined };
 	switch (result) {
@@ -289,28 +326,6 @@ function standingAfter(standing: RangeStanding | undefined, result: RangeResult)
 	}
 }
 
-/** The layout once the passes ended: the ranges read are dropped, and a peer whose passes failed too often in a row leaves its range and is benched. */
-function settled(layout: RangeLayout, ended: readonly (readonly [Run, RangeResult])[], now: number, io: RangeIO): RangeLayout {
-	const standings: Record<string, RangeStanding> = { ...layout.standings };
-	const ranges: (BootstrapRange | undefined)[] = [...layout.ranges];
-	for (const [run, result] of ended) {
-		let standing = standingAfter(standings[run.peer], result);
-		const range = ranges[run.index];
-		if (result === 'completed') {
-			ranges[run.index] = undefined;
-		} else if (standing.failures >= FAILURES_BEFORE_BENCHING && range !== undefined) {
-			const until = new Date(now + BENCH_MILLISECONDS);
-			standing = { failures: 0, benchedUntil: until };
-			ranges[run.index] = handedOver(range);
-			io.report({ kind: 'benched', peer: run.peer, until });
-		}
-		standings[run.peer] = standing;
-	}
-	return({ ...layout, standings, ranges: ranges.filter(function(range): range is BootstrapRange {
-		return(range !== undefined);
-	}) });
-}
-
 function peerResultOf(result: RangeResult): PeerResult {
 	switch (result) {
 		case 'completed':
@@ -325,65 +340,241 @@ function peerResultOf(result: RangeResult): PeerResult {
 	}
 }
 
-/** One update's passes over the ranges of the layout, each over its own peer, at once. */
-async function readRanges(layout: RangeLayout, peers: readonly string[], io: RangeIO, read: ReadRange): Promise<ReadonlyMap<string, PeerResult>> {
-	const now = Date.now();
-	let current = assigned(layout, peers, now);
-	// The passes record where they reached as they move on, so each write follows the one before.
-	let written = io.writeLayout(current);
-	const record = async (change: (layout: RangeLayout) => RangeLayout): Promise<void> => {
-		current = change(current);
-		const latest = current;
-		written = written.then(function() {
-			return(io.writeLayout(latest));
+/** The layout with the range of that ID changed as given, if it is still there. */
+function withRange(layout: RangeLayout, id: number, change: (range: BootstrapRange) => BootstrapRange): RangeLayout {
+	return({ ...layout, ranges: layout.ranges.map(function(range): BootstrapRange {
+		if (range.id === id) {
+			return(change(range));
+		}
+		return(range);
+	}) });
+}
+
+/** A pass under way over a range: when it began, and where the range had reached then. */
+type Running = { readonly since: number; readonly from: number };
+
+/**
+ * One update's passes over the ranges, each peer reading one range at a
+ * time, all side by side: a peer whose range is read, or that has none it
+ * may read, takes on another as long as the update lasts, MAX_PASS_MILLISECONDS
+ * from its start, by when every pass reaches its bound, so that none waits on
+ * one begun late; and the layout is written as each pass moves on and each
+ * range changes hands.
+ */
+class Schedule {
+	#layout: RangeLayout;
+	readonly #peers: readonly string[];
+	readonly #io: RangeIO;
+	/** Whether the ranges read ahead run: not while the queue is full, nor once a pass over one found no room. */
+	#aheadRuns: boolean;
+	readonly #running = new Map<number, Running>();
+	readonly #results = new Map<string, PeerResult>();
+	readonly #began: number = Date.now();
+	#written: Promise<void> = Promise.resolve();
+
+	constructor(layout: RangeLayout, peers: readonly string[], io: RangeIO, aheadRuns: boolean) {
+		this.#layout = layout;
+		this.#peers = peers;
+		this.#io = io;
+		this.#aheadRuns = aheadRuns;
+	}
+
+	async run(read: ReadRange): Promise<ReadonlyMap<string, PeerResult>> {
+		this.#layout = assigned(this.#layout, this.#peers, this.#began, this.#throttle());
+		await this.#write();
+		await Promise.all(readersOf(this.#layout, this.#peers, this.#began).map((peer) => {
+			return(this.#work(peer, read));
+		}));
+		if (this.#layout.ranges.length === 0) {
+			await movedOn(this.#layout, this.#peers, this.#io);
+		}
+		return(this.#results);
+	}
+
+	#throttle(): Throttle {
+		return({ front: frontOf(this.#layout), aheadRuns: this.#aheadRuns });
+	}
+
+	/** The layout as it now stands, written after every write asked for before. */
+	#write(): Promise<void> {
+		const latest = this.#layout;
+		this.#written = this.#written.then(() => {
+			return(this.#io.writeLayout(latest));
 		});
-		await written;
-	};
-	await written;
-	const roomAhead = await io.roomAhead();
-	const runs = current.ranges.flatMap(function(range, index): Run[] {
-		let use: QueueUse = 'ahead';
-		if (index === 0) {
-			use = 'live';
+		return(this.#written);
+	}
+
+	/** The peer's passes in this update: one after another while each reads its range, as long as the update lasts. */
+	async #work(peer: string, read: ReadRange): Promise<void> {
+		for (let first = true; first || Date.now() - this.#began < MAX_PASS_MILLISECONDS; first = false) {
+			const range = this.#claim(peer);
+			if (range === undefined) {
+				return;
+			}
+			await this.#write();
+			const use = useOf(range, frontOf(this.#layout));
+			const result = await this.#pass(peer, range, use, read);
+			this.#results.set(peer, peerResultOf(result));
+			// A pass over a range read ahead that found no room leaves the peer free for the ranges near the earliest, which the queue has room for.
+			if (result === 'throttled' && use === 'ahead') {
+				this.#aheadRuns = false;
+				continue;
+			}
+			if (result !== 'completed') {
+				return;
+			}
 		}
-		if (range.peer === undefined || (use === 'ahead' && !roomAhead)) {
-			return([]);
+	}
+
+	/**
+	 * The range the peer reads next: its own, when it may read it now; else
+	 * the earliest no peer reads that it may; else the later part of what is
+	 * left of the range that would take longest to read, split off it, if
+	 * that is longer than an update lasts. A peer that takes on another leaves
+	 * its own, which it may not read now, to whichever may later.
+	 */
+	#claim(peer: string): BootstrapRange | undefined {
+		const throttle = this.#throttle();
+		const ranges = this.#layout.ranges;
+		const own = ranges.find(function(range): boolean {
+			return(range.peer === peer);
+		});
+		if (own !== undefined && runs(own, throttle)) {
+			return(own);
 		}
-		return([{ index, peer: range.peer, use }]);
-	});
-	const from = overlapBefore(current.from);
-	const ended = await Promise.all(runs.map(async function(run): Promise<readonly [Run, RangeResult]> {
-		const range = current.ranges[run.index];
-		if (range === undefined) {
-			return([run, 'failed']);
+		const open = ranges.find(function(range): boolean {
+			return(range.peer === undefined && runs(range, throttle));
+		});
+		let taken: BootstrapRange | undefined;
+		if (open !== undefined) {
+			const claimed: BootstrapRange = { ...open, peer };
+			this.#layout = withRange(this.#layout, open.id, function(): BootstrapRange {
+				return(claimed);
+			});
+			taken = claimed;
+		} else {
+			taken = this.#split(peer, throttle);
 		}
-		const result = await read(run.peer, {
+		if (taken !== undefined && own !== undefined) {
+			this.#layout = withRange(this.#layout, own.id, handedOver);
+		}
+		return(taken);
+	}
+
+	/**
+	 * Splits the range that would take longest to read at the middle of what
+	 * is left of it, up to where ranges are read ahead when those wait: its
+	 * end moves there, and the peer takes on the rest, from the overlap before
+	 * it, at the same pace. Nothing when no range has SPLIT_MILLISECONDS left
+	 * to split.
+	 */
+	#split(peer: string, throttle: Throttle): BootstrapRange | undefined {
+		let cap = Number.POSITIVE_INFINITY;
+		if (!throttle.aheadRuns) {
+			cap = throttle.front;
+		}
+		const now = Date.now();
+		let slowest: BootstrapRange | undefined;
+		let longest = 0;
+		for (const range of this.#layout.ranges) {
+			const left = Math.min(range.end.getTime(), cap) - range.reached.getTime();
+			if (!runs(range, throttle) || left < SPLIT_MILLISECONDS) {
+				continue;
+			}
+			const takes = left * this.#readingPerHistory(range, now);
+			// A peer taking on part of a range spends a few requests before it moves on, which a range read before the update ends does not repay.
+			if (takes > longest && takes > MAX_PASS_MILLISECONDS) {
+				longest = takes;
+				slowest = range;
+			}
+		}
+		if (slowest === undefined) {
+			return(undefined);
+		}
+		const reached = slowest.reached.getTime();
+		const middle = new Date(reached + Math.floor((Math.min(slowest.end.getTime(), cap) - reached) / 2));
+		const id = this.#layout.nextID;
+		const piece: BootstrapRange = { id, reached: overlapBefore(middle), end: slowest.end, peer, pace: this.#paceOf(slowest, now) };
+		const left: BootstrapRange = { ...slowest, end: middle };
+		const at = this.#layout.ranges.indexOf(slowest);
+		const ranges = [...this.#layout.ranges];
+		ranges.splice(at, 1, left, piece);
+		this.#layout = { ...this.#layout, ranges, nextID: id + 1 };
+		this.#io.report({ kind: 'split', peer, left, taken: piece });
+		return(piece);
+	}
+
+	/** The pace of the passes over the range: the last, and the one under way. */
+	#paceOf(range: BootstrapRange, now: number): RangePace {
+		const running = this.#running.get(range.id);
+		if (running === undefined) {
+			return(range.pace);
+		}
+		return({ spent: range.pace.spent + now - running.since, advanced: range.pace.advanced + Math.max(0, range.reached.getTime() - running.from) });
+	}
+
+	/** How long the passes over the range read per millisecond of history they moved on. */
+	#readingPerHistory(range: BootstrapRange, now: number): number {
+		const { spent, advanced } = this.#paceOf(range, now);
+		return((spent + PACE_PRIOR_MILLISECONDS) / (advanced + PACE_PRIOR_MILLISECONDS));
+	}
+
+	/** A pass by the peer over the range, adding to the queue as the use says, which the layout then records as it ended: its pace, the range dropped once read, and the peer benched once it failed too often in a row. */
+	async #pass(peer: string, range: BootstrapRange, use: QueueUse, read: ReadRange): Promise<RangeResult> {
+		const id = range.id;
+		const since = Date.now();
+		const from = range.reached.getTime();
+		this.#running.set(id, { since, from });
+		const result = await read(peer, {
 			reached: range.reached,
-			end: range.end,
-			use: run.use,
-			from,
-			moved: function(start) {
-				return(record(function(latest) {
-					return({ ...latest, ranges: latest.ranges.map(function(each, index): BootstrapRange {
-						if (index === run.index) {
-							return({ ...each, reached: start });
-						}
-						return(each);
-					}) });
-				}));
+			end: () => {
+				return(this.#layout.ranges.find(function(each): boolean {
+					return(each.id === id);
+				})?.end ?? range.end);
+			},
+			until: new Date(this.#began + MAX_PASS_MILLISECONDS),
+			use,
+			from: overlapBefore(this.#layout.from),
+			moved: (start) => {
+				this.#layout = withRange(this.#layout, id, function(each): BootstrapRange {
+					return({ ...each, reached: start });
+				});
+				return(this.#write());
 			}
 		});
-		return([run, result]);
-	}));
-	await record(function(latest) {
-		return(settled(latest, ended, now, io));
-	});
-	if (current.ranges.length === 0) {
-		await movedOn(current, peers, io);
+		this.#running.delete(id);
+		const now = Date.now();
+		// A pass that failed or found no room read for less than its bound, which says little of the pace.
+		if (result === 'completed' || result === 'bounded') {
+			this.#layout = withRange(this.#layout, id, function(each): BootstrapRange {
+				return({ ...each, pace: { spent: now - since, advanced: Math.max(0, each.reached.getTime() - from) } });
+			});
+		}
+		this.#settle(peer, id, result, now);
+		await this.#write();
+		return(result);
 	}
-	return(new Map(ended.map(function([run, result]): [string, PeerResult] {
-		return([run.peer, peerResultOf(result)]);
-	})));
+
+	#settle(peer: string, id: number, result: RangeResult, now: number): void {
+		let standing = standingAfter(this.#layout.standings[peer], result);
+		let ranges = this.#layout.ranges;
+		if (result === 'completed') {
+			ranges = ranges.filter(function(range): boolean {
+				return(range.id !== id);
+			});
+		} else if (standing.failures >= FAILURES_BEFORE_BENCHING) {
+			const until = new Date(now + BENCH_MILLISECONDS);
+			standing = { failures: 0, benchedUntil: until };
+			ranges = ranges.map(function(range): BootstrapRange {
+				if (range.id === id) {
+					return(handedOver(range));
+				}
+				return(range);
+			});
+			this.#io.report({ kind: 'benched', peer, until });
+		}
+		this.#layout = { ...this.#layout, ranges, standings: { ...this.#layout.standings, [peer]: standing } };
+	}
 }
 
 /**
@@ -399,11 +590,9 @@ async function readRanges(layout: RangeLayout, peers: readonly string[], io: Ran
  * staple before the furthest moment it has reached on any peer. Once that is
  * past the beginning of time, and more than FAR_BEHIND_MILLISECONDS before
  * the horizon of a pass begun now, the stretch between the two is laid out
- * in one range per peer. While the passes from where the last reached are
- * stopped by a full retry queue, ranges are neither laid out nor read: those
- * passes then begin the deep re-scans that read again what the queued staples
- * need (src/node/bootstrap-pass.ts), and the ranges go on once the queue has
- * room again.
+ * in one range per peer. While the retry queue is full, no ranges are laid
+ * out; ranges laid out are read on as the queue allows (see The retry
+ * queue).
  *
  * A range. A pass over a range (bootstrapRange) is a pass from where the
  * range reached, with the range's end as its horizon and its end: it moves
@@ -451,8 +640,28 @@ async function readRanges(layout: RangeLayout, peers: readonly string[], io: Ran
  * recovers the staples a filter named by mistake, as the deep re-scans do
  * after any catch-up.
  *
+ * A split. A peer with no range it may read takes on the later part of
+ * another: of the ranges it may read, the one whose passes, at the pace they
+ * have read it so far, would take longest to read what is left of it. That
+ * range, [A, E) of its peer P, which has reached R, is split at M, the middle
+ * of [R, E): its end moves to M, and the peer takes on [M - overlap, E),
+ * which has reached M - overlap. Each piece is a range as any other: P's
+ * completes once a pass over it is shown to have reached M, as above, and the
+ * other once one is shown to have reached E. Between the two lies the
+ * overlap, as between any two ranges, so no staple with a vote falls between
+ * them. P's pass under way when its range is split reads the end anew each
+ * time it checks it, and what shows that it reached E shows that it reached
+ * M; it may have moved past M, or have added staples keyed after M from a
+ * page it read before it checked, which stays held, or queued, where the
+ * other peer finds it when it reads that stretch again: it adds nothing
+ * twice, and moves on as it would past staples it was sent and held. A range
+ * whose recorded reach is at or past its end is read: the move that got it
+ * there is the first of the three ways a pass shows its end. The layout
+ * records both pieces as the split is made, so a restart resumes them.
+ *
  * Until every range is read, the update is not complete, and no pass over a
- * peer from where it last reached, nor deep re-scan, runs; the layout and
+ * peer from where it last reached, nor deep re-scan, runs, but for the
+ * updates that yield to them while the queue is full; the layout and
  * where each range reached are kept, so that the node resumes them after a
  * restart. Once every range is read, each peer the node has progress on
  * moves on, and the updates after read the peers from where they last
@@ -462,38 +671,51 @@ async function readRanges(layout: RangeLayout, peers: readonly string[], io: Ran
  * The retry queue. Every pass adds to the node's one queue, as a staple may
  * need a staple of an earlier range, which only that range brings: it waits
  * queued meanwhile, and is offered again after each page that adds a staple.
- * The pass over the earliest range fills the queue up to the share of a pass
- * from where the last reached, nine tenths of it, and saturates it when it
- * finds no room, as such a pass does; the passes over the others fill at most
- * half the queue, and stop before a staple they refuse once it is that full,
- * skipping the updates after until it has room. So the earliest range, which
- * some peer always reads, has room for at least four tenths of the queue of
- * its own, which is where a pass from where the last reached would stand with
- * a queue that much smaller; as it brings what the others' staples need,
- * they leave the queue. A staple's dependencies have votes made before its
- * own, but for the slop a vote may be timestamped ahead of the clock, so a
- * range seldom needs a later one.
+ * The passes over the ranges that start within FAR_AHEAD_MILLISECONDS of
+ * where the earliest reached, the earliest among them, fill the queue up to
+ * the share of a pass from where the last reached, nine tenths of it, and
+ * saturate it when they find no room, as such a pass does; the passes over
+ * the ranges read further ahead fill at most half the queue, and stop before
+ * a staple they refuse once it is that full. While it is that full or
+ * saturated, the ranges read ahead wait, and the peers that would read them
+ * take on parts of the ranges near the earliest instead, split no later
+ * than FAR_AHEAD_MILLISECONDS past it, so that every peer reads the history
+ * the queued staples wait for. A staple's dependencies have votes made
+ * before its own, but for the slop a vote may be timestamped ahead of the
+ * clock, so a range seldom needs a later one. Should the queue stay
+ * saturated, every FULL_QUEUE_UPDATES_BEFORE_DEEP_SCAN updates in a row
+ * that read ranges are followed by one over every peer from where it last
+ * reached, which begins the deep re-scans that read again a staple a filter
+ * named by mistake that the queued ones need; the ranges go on after it.
  *
- * Peers. Each peer reads at most one range in an update, paced as its
- * requests always are. A peer whose passes over a range fail
- * FAILURES_BEFORE_BENCHING times in a row leaves its range, reads none for
- * BENCH_MILLISECONDS, and the range is read by another. A peer with no range
- * takes on one no peer reads, the earliest first, or else half of what is
- * left of the range with the most left (assigned), so that peers whose
- * ranges held little history help with the rest.
+ * Peers. Each peer reads one range at a time, paced as its requests always
+ * are, and one whose pass read its range takes on another as long as the
+ * update lasts, about as long as a pass may. A peer whose passes over a range
+ * fail FAILURES_BEFORE_BENCHING times in a row leaves its range, reads none
+ * for BENCH_MILLISECONDS, and the range is read by another. The earliest
+ * range is read whatever else is (assigned).
  */
 export async function updateRanges(peers: readonly string[], io: RangeIO, read: ReadRange): Promise<ReadonlyMap<string, PeerResult> | undefined> {
-	if (await io.saturated()) {
-		return(undefined);
-	}
+	const saturated = await io.saturated();
 	let layout = await io.readLayout();
 	if (layout !== undefined && layout.ranges.length === 0) {
 		await movedOn(layout, peers, io);
 		layout = undefined;
 	}
-	layout ??= await laidOut(peers, io);
+	if (layout === undefined && !saturated) {
+		layout = await laidOut(peers, io);
+	}
 	if (layout === undefined) {
 		return(undefined);
 	}
-	return(await readRanges(layout, peers, io, read));
+	let fullQueueUpdates = 0;
+	if (saturated) {
+		if (layout.fullQueueUpdates >= FULL_QUEUE_UPDATES_BEFORE_DEEP_SCAN) {
+			await io.writeLayout({ ...layout, fullQueueUpdates: 0 });
+			return(undefined);
+		}
+		fullQueueUpdates = layout.fullQueueUpdates + 1;
+	}
+	const aheadRuns = !saturated && await io.roomAhead();
+	return(await new Schedule({ ...layout, fullQueueUpdates }, peers, io, aheadRuns).run(read));
 }

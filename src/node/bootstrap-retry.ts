@@ -28,9 +28,9 @@ const DEEP_SCAN_SHARE = 1 / 10;
  * The share of the queue's bounds a pass over a range read ahead of the
  * earliest may fill (src/node/bootstrap-ranges.ts). Its staples may need
  * staples of the ranges before it, which only those bring, so it waits once
- * this much is queued; the pass over the earliest range, which reads on as a
- * pass from where the last reached does, keeps the rest of that pass's share
- * for the staples it reads before their dependencies.
+ * this much is queued; the passes over the earliest range and those near it,
+ * which read on as a pass from where the last reached does, keep the rest of
+ * that pass's share for the staples they read before their dependencies.
  */
 const AHEAD_SHARE = 1 / 2;
 
@@ -127,8 +127,9 @@ export type Added = 'added' | 'held' | 'queued';
 
 /**
  * Which pass adds a staple: one from where the last reached, or over the
- * earliest range, leaves the deep re-scans their share of the queue; one over
- * a range read ahead of the earliest fills at most AHEAD_SHARE of it.
+ * earliest range or one near it, leaves the deep re-scans their share of the
+ * queue; one over a range read ahead of the earliest fills at most
+ * AHEAD_SHARE of it.
  */
 export type QueueUse = 'live' | 'ahead' | 'deep';
 

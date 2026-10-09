@@ -58,13 +58,15 @@ describe('the bootstrap cursors', function() {
 			end: new Date(Date.UTC(2026, 9, 9, 3)),
 			deepScanPeer: ENDPOINT,
 			ranges: [
-				{ reached: new Date(Date.UTC(2025, 11, 31, 0, 2)), end: new Date(Date.UTC(2026, 2, 11)), peer: ENDPOINT },
-				{ reached: new Date(Date.UTC(2026, 2, 10, 23, 58, 59)), end: new Date(Date.UTC(2026, 9, 9, 3)), peer: undefined }
+				{ id: 4, reached: new Date(Date.UTC(2025, 11, 31, 0, 2)), end: new Date(Date.UTC(2026, 2, 11)), peer: ENDPOINT, pace: { spent: 120_000, advanced: 20_000 } },
+				{ id: 2, reached: new Date(Date.UTC(2026, 2, 10, 23, 58, 59)), end: new Date(Date.UTC(2026, 9, 9, 3)), peer: undefined, pace: { spent: 0, advanced: 0 } }
 			],
 			standings: {
 				[ENDPOINT]: { failures: 1, benchedUntil: undefined },
 				'https://other.example/api': { failures: 0, benchedUntil: new Date(Date.UTC(2026, 9, 9, 4)) }
-			}
+			},
+			fullQueueUpdates: 3,
+			nextID: 6
 		};
 
 		expect(await cursors.readLayout()).toBeUndefined();
@@ -74,11 +76,37 @@ describe('the bootstrap cursors', function() {
 
 		await kv.set(BOOTSTRAP_RANGES_ARENA, 'layout', { ...(await kv.get(BOOTSTRAP_RANGES_ARENA, 'layout') as object), ranges: [{ reached: -1, end: 0, peer: null }] });
 		expect(await cursors.readLayout()).toBeUndefined();
+		await kv.set(BOOTSTRAP_RANGES_ARENA, 'layout', { ...(await kv.get(BOOTSTRAP_RANGES_ARENA, 'layout') as object), ranges: [{ id: 1, reached: 0, end: 1, peer: null }, { id: 1, reached: 1, end: 2, peer: null }] });
+		expect(await cursors.readLayout()).toBeUndefined();
 
 		await cursors.writeLayout(layout);
 		await cursors.clear();
 		expect(await cursors.readLayout()).toBeUndefined();
 		expect(await cursors.read(ENDPOINT)).toBeUndefined();
+	});
+
+	test('read the ranges an earlier build kept, with no IDs, paces or count of updates with a full queue, as named in order, not read yet, and with none', async function() {
+		const kv = new KVInternals.KVStorageProviderMemory();
+		await kv.set(BOOTSTRAP_RANGES_ARENA, 'layout', {
+			from: 1000,
+			end: 9000,
+			deepScanPeer: ENDPOINT,
+			ranges: [{ reached: 2000, end: 4000, peer: ENDPOINT }, { reached: 4000, end: 9000, peer: null }],
+			standings: {}
+		});
+
+		expect(await new BootstrapCursors(kv).readLayout()).toEqual({
+			from: new Date(1000),
+			end: new Date(9000),
+			deepScanPeer: ENDPOINT,
+			ranges: [
+				{ id: 0, reached: new Date(2000), end: new Date(4000), peer: ENDPOINT, pace: { spent: 0, advanced: 0 } },
+				{ id: 1, reached: new Date(4000), end: new Date(9000), peer: undefined, pace: { spent: 0, advanced: 0 } }
+			],
+			standings: {},
+			fullQueueUpdates: 0,
+			nextID: 2
+		});
 	});
 });
 

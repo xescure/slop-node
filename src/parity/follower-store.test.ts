@@ -38,10 +38,12 @@ function layout(ranges: readonly { readonly reached: number; readonly end: numbe
 		from: new Date(1000),
 		end: new Date(9000),
 		deepScanPeer: PEER,
-		ranges: ranges.map(function(range) {
-			return({ reached: new Date(range.reached), end: new Date(range.end), peer: PEER });
+		ranges: ranges.map(function(range, id) {
+			return({ id, reached: new Date(range.reached), end: new Date(range.end), peer: PEER, pace: { spent: 0, advanced: 0 } });
 		}),
-		standings: {}
+		standings: {},
+		fullQueueUpdates: 0,
+		nextID: ranges.length
 	});
 }
 

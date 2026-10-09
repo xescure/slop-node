@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { freezeClock } from '../testing/network.js';
 import type { PeerProgress } from './bootstrap-pass.js';
-import { FAR_BEHIND_MILLISECONDS, RANGE_OVERLAP_MILLISECONDS, assigned, updateRanges } from './bootstrap-ranges.js';
-import type { RangeEvent, RangeIO, RangeLayout, RangeResult, RangeTask } from './bootstrap-ranges.js';
+import { FAR_AHEAD_MILLISECONDS, FAR_BEHIND_MILLISECONDS, RANGE_OVERLAP_MILLISECONDS, assigned, updateRanges } from './bootstrap-ranges.js';
+import type { BootstrapRange, RangeEvent, RangeIO, RangeLayout, RangeResult, RangeTask } from './bootstrap-ranges.js';
 import { BOOTSTRAP_MARGIN_MILLISECONDS } from './bootstrap-window.js';
 
 const NOW = Date.UTC(2026, 9, 9, 12);
@@ -11,6 +11,24 @@ const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 const END = NOW - BOOTSTRAP_MARGIN_MILLISECONDS;
 const PEERS: readonly string[] = ['rep1', 'rep2', 'rep3', 'rep4'];
+
+/** A range not read yet, as laid out, under that ID. */
+function rangeOf(id: number, reached: number, end: number, peer: string | undefined): BootstrapRange {
+	return({ id, reached: new Date(reached), end: new Date(end), peer, pace: { spent: 0, advanced: 0 } });
+}
+
+function kindsOf(events: readonly RangeEvent[]): string[] {
+	return(events.map(function(event): string {
+		return(event.kind);
+	}));
+}
+
+/** Lets the passes under way take their turns, as a peer answering does. */
+async function turns(count: number): Promise<void> {
+	for (let turn = 0; turn < count; turn++) {
+		await new Promise(setImmediate);
+	}
+}
 
 function progressAt(reached: number, deepScanFrom = 0): PeerProgress {
 	return({ reached: new Date(reached), caughtUp: false, deepScanFrom: new Date(deepScanFrom), nextDeepScan: new Date(NOW + HOUR), deepScan: undefined, keying: 'votes' });
@@ -170,20 +188,27 @@ describe('reading the history in ranges', function() {
 			return(Promise.resolve('bounded'));
 		};
 		await harness.update();
-		const second = harness.layout?.ranges[1];
+		const second = harness.layout?.ranges.find(function(range): boolean {
+			return(range.id === 1);
+		});
 		await harness.update();
 		await harness.update();
+		const secondNow = function(): BootstrapRange | undefined {
+			return(harness.layout?.ranges.find(function(range): boolean {
+				return(range.id === 1);
+			}));
+		};
 
-		expect(harness.ranges()[1]).toEqual([undefined, (second?.reached.getTime() ?? 0) - RANGE_OVERLAP_MILLISECONDS, second?.end.getTime()]);
+		expect(secondNow()).toMatchObject({ peer: undefined, reached: new Date((second?.reached.getTime() ?? 0) - RANGE_OVERLAP_MILLISECONDS), end: second?.end });
 		expect(harness.events.at(-1)).toEqual({ kind: 'benched', peer: 'rep2', until: new Date(NOW + 30 * MINUTE) });
 		expect(harness.layout?.standings['rep4']).toEqual({ failures: 0, benchedUntil: undefined });
 
-		// The range waits for a peer: none is free, and it is not the earliest.
+		// The range waits for a peer: none is free, and it is not the earliest; the peer whose range read ahead found no room reads part of the earliest.
 		await harness.update();
-		expect(harness.ranges()[1]?.[0]).toBeUndefined();
-		expect(harness.tasks.slice(-3).map(function({ peer }): string {
-			return(peer);
-		})).toEqual(['rep1', 'rep3', 'rep4']);
+		expect(secondNow()?.peer).toBeUndefined();
+		expect(harness.tasks.slice(-3).map(function({ peer, task }): [string, string] {
+			return([peer, task.use]);
+		})).toEqual([['rep1', 'live'], ['rep3', 'ahead'], ['rep4', 'live']]);
 	});
 
 	test('reads the earliest range whatever else is read, by the peer of the latest when no other is free', function() {
@@ -192,11 +217,13 @@ describe('reading the history in ranges', function() {
 			end: new Date(END),
 			deepScanPeer: 'rep1',
 			ranges: [
-				{ reached: new Date(NOW - 9 * DAY), end: new Date(NOW - 6 * DAY), peer: 'rep1' },
-				{ reached: new Date(NOW - 6 * DAY), end: new Date(NOW - 3 * DAY), peer: 'rep2' },
-				{ reached: new Date(NOW - 3 * DAY), end: new Date(END), peer: 'rep3' }
+				rangeOf(0, NOW - 9 * DAY, NOW - 6 * DAY, 'rep1'),
+				rangeOf(1, NOW - 6 * DAY, NOW - 3 * DAY, 'rep2'),
+				rangeOf(2, NOW - 3 * DAY, END, 'rep3')
 			],
-			standings: { rep1: { failures: 0, benchedUntil: new Date(NOW + MINUTE) } }
+			standings: { rep1: { failures: 0, benchedUntil: new Date(NOW + MINUTE) } },
+			fullQueueUpdates: 0,
+			nextID: 3
 		};
 
 		expect(assigned(layout, ['rep1', 'rep2', 'rep3'], NOW).ranges.map(function(range): [string | undefined, number] {
@@ -212,41 +239,147 @@ describe('reading the history in ranges', function() {
 		})).toEqual(['rep1', 'rep2', 'rep3']);
 	});
 
-	test('gives a free peer half of what is left of the range with the most left, as long as that half is several overlaps long', function() {
+	test('gives a free peer half of what is left of the range with the most left, as long as that half is several overlaps long', async function() {
+		freezeClock(new Date(NOW));
 		const reached = NOW - 2 * DAY;
-		const layout: RangeLayout = {
+		const harness = new Harness();
+		harness.layout = {
 			from: new Date(NOW - 9 * DAY),
 			end: new Date(END),
 			deepScanPeer: 'rep1',
-			ranges: [
-				{ reached: new Date(NOW - 5 * DAY), end: new Date(NOW - 4 * DAY), peer: 'rep1' },
-				{ reached: new Date(reached), end: new Date(END), peer: 'rep2' }
-			],
-			standings: {}
+			ranges: [rangeOf(0, NOW - 5 * DAY, NOW - 4 * DAY, 'rep1'), rangeOf(1, reached, END, 'rep2')],
+			standings: {},
+			fullQueueUpdates: 0,
+			nextID: 3
 		};
 		const middle = reached + Math.floor((END - reached) / 2);
 
-		expect(assigned(layout, ['rep1', 'rep2', 'rep3'], NOW).ranges.map(function(range): [string | undefined, number, number] {
-			return([range.peer, range.reached.getTime(), range.end.getTime()]);
-		})).toEqual([
+		await harness.update(['rep1', 'rep2', 'rep3']);
+
+		expect(harness.ranges()).toEqual([
 			['rep1', NOW - 5 * DAY, NOW - 4 * DAY],
 			['rep2', reached, middle],
 			['rep3', middle - RANGE_OVERLAP_MILLISECONDS, END]
 		]);
-		const short: RangeLayout = { ...layout, ranges: [{ reached: new Date(END - 3 * RANGE_OVERLAP_MILLISECONDS), end: new Date(END), peer: 'rep1' }] };
-		expect(assigned(short, ['rep1', 'rep2'], NOW).ranges).toEqual(short.ranges);
+		expect(harness.events).toMatchObject([{ kind: 'split', peer: 'rep3', left: { peer: 'rep2', end: new Date(middle) }, taken: { id: 3, peer: 'rep3' } }]);
+
+		const short = new Harness();
+		short.layout = { ...harness.layout, ranges: [rangeOf(0, END - 3 * RANGE_OVERLAP_MILLISECONDS, END, 'rep1')] };
+		await short.update(['rep1', 'rep2']);
+		expect(short.ranges()).toEqual([['rep1', END - 3 * RANGE_OVERLAP_MILLISECONDS, END]]);
 	});
 
-	test('reads no range ahead of the earliest while the retry queue has no room for them', async function() {
+	test('splits the range its passes would take longest to read what is left of at the pace they read it, not the widest', async function() {
+		freezeClock(new Date(NOW));
+		const harness = new Harness();
+		const dense = { ...rangeOf(0, NOW - 9 * DAY, NOW - 8 * DAY, 'rep1'), pace: { spent: 10 * MINUTE, advanced: MINUTE } };
+		const sparse = { ...rangeOf(1, NOW - 8 * DAY, END, 'rep2'), pace: { spent: MINUTE, advanced: 3 * DAY } };
+		harness.layout = { from: new Date(NOW - 9 * DAY), end: new Date(END), deepScanPeer: 'rep1', ranges: [dense, sparse], standings: {}, fullQueueUpdates: 0, nextID: 2 };
+
+		await harness.update(['rep1', 'rep2', 'rep3']);
+
+		const middle = NOW - 9 * DAY + 12 * HOUR;
+		expect(harness.ranges().slice(0, 2)).toEqual([
+			['rep1', NOW - 9 * DAY, middle],
+			['rep3', middle - RANGE_OVERLAP_MILLISECONDS, NOW - 8 * DAY]
+		]);
+		expect(harness.events).toMatchObject([{ kind: 'split', taken: { pace: dense.pace } }]);
+	});
+
+	test('takes on, once its range is read, the later half of another within the same update, whose pass stops at its new end', async function() {
+		freezeClock(new Date(NOW));
+		const harness = new Harness();
+		const reached = NOW - 9 * DAY;
+		harness.layout = {
+			from: new Date(reached),
+			end: new Date(END),
+			deepScanPeer: 'rep1',
+			ranges: [rangeOf(0, reached, NOW - 5 * DAY, 'rep1'), rangeOf(1, NOW - 5 * DAY, END, 'rep2')],
+			standings: {},
+			fullQueueUpdates: 0,
+			nextID: 3
+		};
+		const ends: number[] = [];
+		let completed = false;
+		harness.script = async function(peer, task): Promise<RangeResult> {
+			if (peer === 'rep2' && !completed) {
+				completed = true;
+				return('completed');
+			}
+			if (peer === 'rep1') {
+				ends.push(task.end().getTime());
+				await turns(20);
+				ends.push(task.end().getTime());
+			}
+			return('bounded');
+		};
+
+		await harness.update(['rep1', 'rep2']);
+
+		const middle = reached + Math.floor((NOW - 5 * DAY - reached) / 2);
+		expect(ends).toEqual([NOW - 5 * DAY, middle]);
+		expect(harness.tasks.map(function({ peer, task }): [string, number, number] {
+			return([peer, task.reached.getTime(), task.end().getTime()]);
+		})).toEqual([
+			['rep1', reached, middle],
+			['rep2', NOW - 5 * DAY, END],
+			['rep2', middle - RANGE_OVERLAP_MILLISECONDS, NOW - 5 * DAY]
+		]);
+		expect(harness.ranges()).toEqual([
+			['rep1', reached, middle],
+			['rep2', middle - RANGE_OVERLAP_MILLISECONDS, NOW - 5 * DAY]
+		]);
+	});
+
+	test('reads no range ahead of the earliest while the retry queue has no room for them, whose peers take on parts of the first day of the earliest instead', async function() {
 		freezeClock(new Date(NOW));
 		const harness = new Harness();
 		harness.progress.set('rep1', progressAt(NOW - 9 * DAY));
 		harness.hasRoomAhead = false;
 
-		expect(await harness.update()).toEqual(new Map([['rep1', 'bounded']]));
-		expect(harness.tasks.map(function({ peer, task }): [string, string] {
-			return([peer, task.use]);
-		})).toEqual([['rep1', 'live']]);
+		expect(await harness.update()).toEqual(new Map(PEERS.map(function(peer): [string, 'bounded'] {
+			return([peer, 'bounded']);
+		})));
+		const earliest = harness.layout?.ranges[0]?.reached.getTime() ?? 0;
+		expect(harness.tasks.map(function({ peer, task }): [string, string, boolean] {
+			return([peer, task.use, task.reached.getTime() < earliest + FAR_AHEAD_MILLISECONDS]);
+		})).toEqual(PEERS.map(function(peer): [string, string, boolean] {
+			return([peer, 'live', true]);
+		}));
+		expect(kindsOf(harness.events)).toEqual(['laid-out', 'split', 'split', 'split']);
+		expect(harness.ranges().filter(function([, reached]): boolean {
+			return(reached >= earliest + FAR_AHEAD_MILLISECONDS);
+		}).map(function([peer]): string | undefined {
+			return(peer);
+		})).toEqual([undefined, undefined, undefined]);
+	});
+
+	test('reads, while the retry queue is full, only the ranges within a day of the earliest, and every fifth update the peers from where they last reached', async function() {
+		freezeClock(new Date(NOW));
+		const harness = new Harness();
+		harness.progress.set('rep1', progressAt(NOW - 9 * DAY));
+		await harness.update();
+		harness.isSaturated = true;
+		harness.tasks.length = 0;
+
+		for (let update = 1; update <= 4; update++) {
+			expect(await harness.update()).toBeDefined();
+			expect(harness.layout?.fullQueueUpdates).toBe(update);
+		}
+		const earliest = harness.layout?.ranges[0]?.reached.getTime() ?? 0;
+		expect(harness.tasks.every(function({ task }): boolean {
+			return(task.use === 'live' && task.reached.getTime() < earliest + FAR_AHEAD_MILLISECONDS);
+		})).toBe(true);
+		expect(new Set(harness.tasks.map(function({ peer }): string {
+			return(peer);
+		}))).toEqual(new Set(PEERS));
+
+		expect(await harness.update()).toBeUndefined();
+		expect(harness.layout?.fullQueueUpdates).toBe(0);
+		expect(await harness.update()).toBeDefined();
+		harness.isSaturated = false;
+		await harness.update();
+		expect(harness.layout?.fullQueueUpdates).toBe(0);
 	});
 
 	test('moves every peer it has progress on to the end of the ranges less the overlap once every range is read, the peer it had reached furthest on keeping its next deep re-scan back to where they began', async function() {
@@ -271,8 +404,8 @@ describe('reading the history in ranges', function() {
 			rep2: [reached, from - 5 * DAY],
 			rep3: [reached, reached]
 		});
-		expect(harness.events.map(function(event): string {
-			return(event.kind);
+		expect(kindsOf(harness.events).filter(function(kind): boolean {
+			return(kind !== 'split');
 		})).toEqual(['laid-out', 'read']);
 	});
 });

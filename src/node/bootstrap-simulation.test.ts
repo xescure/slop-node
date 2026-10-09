@@ -1348,6 +1348,15 @@ describe('reading the history it lacks in ranges, one per peer, while far behind
 		return([...missing]);
 	}
 
+	/** What the node heard of its ranges, but the splits, which the peers' pace decides. */
+	function kindsBesidesSplits(events: readonly RangeEvent[]): string[] {
+		return(events.map(function(event): string {
+			return(event.kind);
+		}).filter(function(kind): boolean {
+			return(kind !== 'split');
+		}));
+	}
+
 	/** Staples made one after another from the moment the node holds everything before, up to an hour ago: more than a representative reads in a page in any stretch of its time budget. */
 	function denseHistory(count: number): History {
 		const spacing = (NOW - HOUR - HELD_UP_TO) / count;
@@ -1375,9 +1384,7 @@ describe('reading the history it lacks in ranges, one per peer, while far behind
 		expect(one.missing).toEqual([]);
 		expect(four.missing).toEqual([]);
 		expect(one.network.rangeEvents).toEqual([]);
-		expect(four.network.rangeEvents.map(function(event): string {
-			return(event.kind);
-		})).toEqual(['laid-out', 'read']);
+		expect(kindsBesidesSplits(four.network.rangeEvents)).toEqual(['laid-out', 'read']);
 		expect(four.perMinute / one.perMinute).toBeGreaterThan(3.3);
 	});
 
@@ -1506,8 +1513,6 @@ describe('reading the history it lacks in ranges, one per peer, while far behind
 		await untilCaughtUp(network, 300);
 
 		expect(missingFrom(network, peers)).toEqual([]);
-		expect(network.rangeEvents.map(function(event): string {
-			return(event.kind);
-		})).toEqual(['read']);
+		expect(kindsBesidesSplits(network.rangeEvents)).toEqual(['read']);
 	});
 });
