@@ -56,7 +56,9 @@ export default {
 		'tzdir',
 		'zoneinfo',
 		'nofile',
-		'devnet'
+		'devnet',
+		// A Postgres setting the follower's cluster runs with.
+		'autovacuum'
 	],
 	// Account strings are base32 public keys, not words, and a Unix socket
 	// directory as the host of a Postgres URL has each "/" written %2F.

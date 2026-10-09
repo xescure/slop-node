@@ -31,25 +31,39 @@ const DATABASE = 'follower';
 const PRIVATE_DIRECTORY = 0o700;
 
 /**
- * The cluster serves one node of modest load beside other work on the
- * machine, so its memory is kept small; the operating system's cache holds
- * the rest. A commit that is lost when the machine fails is fetched again
- * from the representatives, so commits do not wait for the disk, which
- * never corrupts the database.
+ * A catch-up writes each staple into the history of every account it
+ * touches, hundreds on the main network, so its index writes land on pages
+ * spread over gigabytes. With a small buffer pool each such page is read,
+ * evicted dirty and written again many times, and with frequent checkpoints
+ * nearly every change logs the whole page. A pool of 1 GiB keeps the pages
+ * being written in memory, checkpoints come at most every 30 minutes, and
+ * the whole pages they log are compressed; the cluster's memory stays about
+ * 1.3 GiB, beside a node of about 1 GiB. Commits do not wait for the disk: a
+ * crash loses only the last of them, the write-ahead log restores the
+ * database as of an earlier commit, and the catch-up cursors live in the same
+ * database, so none survives the staples it moved past, which are fetched
+ * again. Statement statistics are kept, to profile the node's queries against
+ * the real ledger.
  */
 const POSTGRES_SETTINGS: Readonly<Record<string, string>> = {
 	listen_addresses: '\'\'',
 	port: String(POSTGRES_PORT),
 	max_connections: '40',
-	shared_buffers: '\'64MB\'',
-	work_mem: '\'4MB\'',
-	maintenance_work_mem: '\'64MB\'',
-	effective_cache_size: '\'512MB\'',
+	shared_buffers: '\'1GB\'',
+	work_mem: '\'8MB\'',
+	maintenance_work_mem: '\'128MB\'',
+	autovacuum_work_mem: '\'64MB\'',
+	effective_cache_size: '\'3GB\'',
 	huge_pages: 'off',
 	synchronous_commit: 'off',
 	wal_level: 'minimal',
 	max_wal_senders: '0',
-	max_wal_size: '\'1GB\'',
+	checkpoint_timeout: '\'30min\'',
+	max_wal_size: '\'4GB\'',
+	min_wal_size: '\'1GB\'',
+	wal_compression: 'lz4',
+	shared_preload_libraries: '\'pg_stat_statements\'',
+	track_io_timing: 'on',
 	timezone: '\'UTC\''
 };
 
