@@ -1478,6 +1478,52 @@ describe('reading the history it lacks in ranges, one per peer, while far behind
 		expect(four.perMinute / one.perMinute).toBeGreaterThan(3.3);
 	});
 
+	/**
+	 * Four thousand staples over the two days the node lacks, read in ranges
+	 * of about a thousand: near the end of the first range, staples whose
+	 * voters have enough weight only until a delegation near the start of the
+	 * third moves it away from them, as the main network's staples voted
+	 * without its largest representative did; and in the last range, staples
+	 * whose voter has enough only once the delegation is added. Answers what
+	 * the node lacks once its ranges are read and its passes complete, adding
+	 * as told, and the staples voted before the move.
+	 */
+	async function weightMoveCatchUp(adding: Adding): Promise<{ readonly missing: readonly number[]; readonly beforeMove: readonly number[]; readonly network: SimulatedNetwork }> {
+		freezeClock(new Date(NOW));
+		const delegation = 2050;
+		const beforeMove = Array.from({ length: 91 }, function(_ignored, index): number {
+			return(900 + index);
+		});
+		const history: History = { ...denseHistory(4000), needs: function(index): readonly number[] {
+			if (index >= 3100 && index < 3300 && index % 10 === 0) {
+				return([delegation]);
+			}
+			return([]);
+		} };
+		const peers = representatives(NAMES, history);
+		const outweighed = new Map(beforeMove.map(function(id): [number, readonly number[]] {
+			return([id, [delegation]]);
+		}));
+		const network = new SimulatedNetwork(new Follower(undefined, freshKept(new SimulatedNode(new Set(), outweighed))), peers, { caughtUp: undefined, layout: undefined }, adding);
+		await heldUpTo(network, peers, HELD_UP_TO);
+		await untilCaughtUp(network, 300);
+		return({ missing: missingFrom(network, peers), beforeMove, network });
+	}
+
+	test('adds the history it read in ranges in the order of its votes, so that staples voted before voting weight moved are added before the move, which refuses them for good when each range is added as it is read', async function() {
+		const asRead = await weightMoveCatchUp('as-read');
+		const inOrder = await weightMoveCatchUp('in-order');
+
+		expect([...asRead.missing].sort(function(left, right): number {
+			return(left - right);
+		})).toEqual(asRead.beforeMove);
+		expect(await asRead.network.follower.retries.size()).toBe(asRead.beforeMove.length);
+		expect(inOrder.missing).toEqual([]);
+		expect(await inOrder.network.follower.retries.size()).toBe(0);
+		expect(await inOrder.network.follower.staging.isEmpty()).toBe(true);
+		expect(kindsBesidesSplits(inOrder.network.rangeEvents)).toEqual(['laid-out', 'read']);
+	});
+
 	test('reads a history that is dense in one stretch and sparse elsewhere faster from four peers, which take on parts of the range left the longest', async function() {
 		const sparse = denseHistory(6000).made;
 		const burst = Array.from({ length: 6000 }, function(_ignored, index): number {

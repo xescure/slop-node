@@ -605,17 +605,27 @@ export const SIMULATED_BALANCE_REFUSAL = 'LEDGER_INVALID_BALANCE';
  * holds one staple per set of blocks, adds none whose blocks it holds, and
  * refuses one until it holds those it needs: for want of its voters'
  * weight, which the staples it needs give, unless it is one of those that
- * spend a balance they credit.
+ * spend a balance they credit. It refuses for want of weight, too, a staple
+ * once it holds one that moves weight away from the staple's voters, as the
+ * ledger judges a staple by the weight it holds when it is added
+ * [Keeta TS] index.js:69761-69779: a staple voted before a delegation moved
+ * the weight is refused for good once the delegation is added before it.
  */
 export class SimulatedNode {
 	readonly #held = new Map<string, PassStaple>();
 	readonly #spending: ReadonlySet<number>;
+	readonly #outweighedBy: ReadonlyMap<number, readonly number[]>;
 	#resent = 0;
 	#refused = 0;
 
-	/** The staples, by ID, refused for a balance rather than for weight while they lack what they need. */
-	constructor(spending: ReadonlySet<number> = new Set()) {
+	/**
+	 * The staples, by ID, refused for a balance rather than for weight while
+	 * they lack what they need; and, by ID, the staples whose voters lose the
+	 * weight they need to the staples named, by ID.
+	 */
+	constructor(spending: ReadonlySet<number> = new Set(), outweighedBy: ReadonlyMap<number, readonly number[]> = new Map()) {
 		this.#spending = spending;
+		this.#outweighedBy = outweighedBy;
 	}
 
 	holds(staple: PassStaple): boolean {
@@ -662,6 +672,13 @@ export class SimulatedNode {
 		const lacking = staple.needs.some((id) => {
 			return(!this.#held.has(nameOf(id)));
 		});
+		const outweighed = (this.#outweighedBy.get(staple.id) ?? []).some((id) => {
+			return(this.#held.has(nameOf(id)));
+		});
+		if (outweighed) {
+			this.#refused++;
+			return(Promise.resolve({ kind: 'refused', code: SIMULATED_WEIGHT_REFUSAL }));
+		}
 		if (lacking) {
 			this.#refused++;
 			if (this.#spending.has(staple.id)) {
