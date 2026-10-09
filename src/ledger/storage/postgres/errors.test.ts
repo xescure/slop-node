@@ -37,7 +37,7 @@ type Statement = readonly [text: string, values: readonly unknown[]];
 /** A ledger with one row of each kind that two processes can race to insert. */
 const SETUP: readonly Statement[] = [
 	['INSERT INTO accounts (public_key, key_type) VALUES (\'keeta_probe\', 0)', []],
-	['INSERT INTO staples (blocks_hash, staple_time, moment) VALUES ($1, $2, $2)', [HASH, MOMENT]],
+	['INSERT INTO staples (blocks_hash, staple_time, moment, checksum) VALUES ($1, $2, $2, repeat(\'0\', 256)::bit(256))', [HASH, MOMENT]],
 	['INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position) VALUES ($1, \'main\', 1, $2, 1, \'\\x00\', $1, 0)', [HASH, PREVIOUS]],
 	['INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes) VALUES ($1, \'side\', 1, $1, 1, \'\\x00\')', [OTHER]],
 	['INSERT INTO votes (ledger, uid, blocks_hash, issuer_id, validity_from, validity_to, permanent, bytes) VALUES (\'main\', \'probe\', $1, 1, $2, $2, true, \'\\x00\')', [HASH, MOMENT]],
@@ -48,7 +48,7 @@ const SETUP: readonly Statement[] = [
 
 /** For each unique constraint, an insert that violates it. */
 const VIOLATIONS: Readonly<Record<string, Statement>> = {
-	staples_pkey: ['INSERT INTO staples (blocks_hash, staple_time, moment) VALUES ($1, $2, $2)', [HASH, MOMENT]],
+	staples_pkey: ['INSERT INTO staples (blocks_hash, staple_time, moment, checksum) VALUES ($1, $2, $2, repeat(\'0\', 256)::bit(256))', [HASH, MOMENT]],
 	blocks_pkey: ['INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes) VALUES ($1, \'side\', 1, $2, 1, \'\\x00\')', [HASH, THIRD]],
 	blocks_main_successor: ['INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position) VALUES ($1, \'main\', 1, $2, 1, \'\\x00\', $3, 1)', [THIRD, PREVIOUS, HASH]],
 	votes_main: ['INSERT INTO votes (ledger, uid, blocks_hash, issuer_id, validity_from, validity_to, permanent, bytes) VALUES (\'main\', \'probe\', $1, 1, $2, $2, true, \'\\x00\')', [HASH, MOMENT]],

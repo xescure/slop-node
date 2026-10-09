@@ -189,8 +189,11 @@ function representativeChecksumsOf(records: readonly ChecksumRecord[]): Represen
 }
 
 /**
- * The latest cross-check decides: a stored checksum equal to the fold, or
- * apart from it only by staples it explains, passes.
+ * The latest cross-check decides: the stored checksum is written with the
+ * staples it covers, so only one equal to the fold passes. A record of an
+ * earlier build, which kept it apart from the ledger, passed when the
+ * staples it named explained the difference; it fails now, since this
+ * build's next cross-check replaces it.
  */
 function crossCheckPartOf(records: readonly CrossCheckRecord[]): CrossCheckPart {
 	const latest = records.at(-1) ?? null;
@@ -199,9 +202,10 @@ function crossCheckPartOf(records: readonly CrossCheckRecord[]): CrossCheckPart 
 	}
 	switch (latest.outcome.kind) {
 		case 'equal':
+			return({ verdict: 'pass', runs: records.length, latest });
+		case 'differs':
 		case 'unsynced':
 		case 'lost-run':
-			return({ verdict: 'pass', runs: records.length, latest });
 		case 'unexplained':
 			return({ verdict: 'fail', runs: records.length, latest });
 		default:
@@ -559,7 +563,7 @@ export async function runParity(run: ParityRun): Promise<ParityReport> {
 			return(sweepPointerOf(run.log, run.cursorPath));
 		}
 	});
-	await run.log.append([await crossCheckChecksum({ follower: run.follower, store: run.store }), ...checksums.checksums, ...checksums.blockCounts]);
+	await run.log.append([await crossCheckChecksum({ store: run.store }), ...checksums.checksums, ...checksums.blockCounts]);
 	await sweepAccounts({ follower: run.follower, representatives: run.representatives, store: run.store, log: run.log, cursorPath: run.cursorPath, accounts: run.sampleAccounts, stopped: run.stopped });
 	await sampleAPI({ ...run.apiDiff, follower: run.follower, representatives: run.representatives, store: run.store, log: run.log, stopped: run.stopped });
 	const cursor = await readSweepCursor(run.cursorPath);

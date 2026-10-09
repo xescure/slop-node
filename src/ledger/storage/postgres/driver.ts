@@ -73,7 +73,7 @@ import {
 	totalWeight,
 	weightOf
 } from './confirmed-statements.js';
-import type { ACLColumns, AccountInfoColumns, CatchUpVoteColumns, CertificateColumns, ReindexedStaple } from './confirmed-statements.js';
+import type { ACLColumns, AccountInfoColumns, CatchUpVoteColumns, CertificateColumns, LedgerCountsColumns, ReindexedStaple } from './confirmed-statements.js';
 import { checkIn, checkOut } from './connection.js';
 import { mapDatabaseError } from './errors.js';
 import { MigratedPostgresPool } from './pool.js';
@@ -323,6 +323,9 @@ export type HistoryReindex = {
 	readonly removed: number;
 	readonly added: number;
 };
+
+/** A ledger checksum is a block hash's width, 256 bits. */
+const CHECKSUM_HEX_DIGITS = 64;
 
 /** The staples a reindex reads and rewrites in one transaction; one of the main network's largest touches about a thousand accounts. */
 const REINDEX_BATCH_STAPLES = 200;
@@ -1235,7 +1238,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	protected async countLedger(): Promise<LedgerCountsSnapshot> {
 		const { pool } = await this.#pool.connection();
 		const sent = Date.now();
-		const result = await pool.query<{ block_count: IntegerText; transaction_count: IntegerText; representative_count: IntegerText }>({ name: mainLedgerCounts.name, text: mainLedgerCounts.text });
+		const result = await pool.query<LedgerCountsColumns>({ name: mainLedgerCounts.name, text: mainLedgerCounts.text });
 		const received = Date.now();
 		const row = onlyRow(result.rows);
 		if (row === undefined) {
@@ -1247,7 +1250,8 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 			momentRange,
 			blockCount: Number(fromInteger(row.block_count)),
 			transactionCount: Number(fromInteger(row.transaction_count)),
-			representativeCount: Number(fromInteger(row.representative_count))
+			representativeCount: Number(fromInteger(row.representative_count)),
+			ledgerChecksum: BigInt(`0b${row.ledger_checksum ?? '0'}`)
 		});
 	}
 
@@ -1262,7 +1266,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 			await this.#assertExtendsMainChains(transaction, change);
 			const ids = await this.#intern(transaction, accountsNamedBy(change));
 			const blocksHash = hashBytes(change.staple.blocksHash);
-			await transaction.run(insertStaple, [blocksHash, change.staple.timestamp(), change.moment, Buffer.from(change.staple.toBytes())]);
+			await transaction.run(insertStaple, [blocksHash, change.staple.timestamp(), change.moment, Buffer.from(change.staple.toBytes()), change.checksum.toString(16).padStart(CHECKSUM_HEX_DIGITS, '0')]);
 			await this.#writeBlocks(transaction, change, ids, blocksHash);
 			await this.#writeVotes(transaction, change, ids, blocksHash);
 			await this.#writeAmounts(transaction, change, ids);

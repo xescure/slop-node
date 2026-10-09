@@ -10,10 +10,10 @@ import type {
 	LedgerStorageTransactionBase
 } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { AccountInfoForType, LedgerStatistics } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
+import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { VoteBlockHash, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerInternals, StatsPending } from '../../upstream/internals.js';
 import { assertNever } from '../../util/assert-never.js';
-import { SharedExclusiveGate } from '../../util/shared-exclusive-gate.js';
 import { blockHeightsOf, computeConfirmedStapleChange } from './confirmed.js';
 import type { ConfirmedStapleChange } from './confirmed.js';
 import { createLedgerError, describeError, isKeetaNetError } from './errors.js';
@@ -22,6 +22,22 @@ import type { BlockHashKey, StapleKey } from './keys.js';
 
 /** The options Ledger passes when it opens a transaction. */
 export type TransactionOptions = Parameters<LedgerStorageAPI['beginTransaction']>[0];
+
+/**
+ * The statistics a transaction gathers for its node, but for the ledger
+ * checksum, which the driver writes with the staples it covers (D19):
+ * Ledger.add folds each staple it adds into the transaction's statistics
+ * [Keeta TS] index.js:69413-69417, which reach the node's store only after
+ * the commit, and later still [Keeta TS] index.js:69001-69006, 71377-71383.
+ */
+class TransactionStatistics extends StatsPending {
+	override xor(key: string, change: Parameters<InstanceType<typeof StatsPending>['xor']>[1]): void {
+		if (key === LEDGER_CHECKSUM_KEY) {
+			return;
+		}
+		super.xor(key, change);
+	}
+}
 
 /**
  * What every driver transaction carries for upstream: the node, the moment the
@@ -43,7 +59,7 @@ export class LedgerDriverTransaction implements LedgerStorageTransactionBase {
 		this.moment = options.moment ?? new Date();
 		this.identifier = options.identifier;
 		this.readOnly = options.readOnly ?? true;
-		this.statsPending = new StatsPending();
+		this.statsPending = new TransactionStatistics();
 	}
 }
 
@@ -94,6 +110,13 @@ type AppliedStaple = {
  */
 export type LedgerCountsSnapshot = Pick<LedgerStatistics, 'momentRange' | 'blockCount' | 'transactionCount' | 'representativeCount'> & {
 	readonly moment: Date;
+	/** The XOR of the hash of every block on the main ledger (D19). */
+	readonly ledgerChecksum: bigint;
+};
+
+/** The ledger checksum, and the moment of the snapshot it describes with its range in milliseconds. */
+export type LedgerChecksum = Pick<LedgerCountsSnapshot, 'moment' | 'momentRange'> & {
+	readonly checksum: bigint;
 };
 
 /** The deferred staples one call removed, and whether more such staples remain. */
@@ -134,8 +157,6 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	readonly #retriedByGc = new WeakMap<Transaction, Set<StapleKey>>();
 	// The tail of the work queued on each transaction that may open isolated units; it never rejects.
 	readonly #exclusiveWork = new WeakMap<Transaction, Promise<void>>();
-	// Commits pass together; a reader between commits waits for them and holds new ones back.
-	readonly #commits = new SharedExclusiveGate();
 
 	/**
 	 * Called once, synchronously, by the Ledger constructor; Ledger.copy shares
@@ -412,24 +433,18 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	/** The counts stats() reports, as of one consistent snapshot of the main ledger. */
 	protected abstract countLedger(): Promise<LedgerCountsSnapshot>;
 
-	/**
-	 * Commits, and folds the transaction's statistics into its node before any
-	 * reader between commits can run, so that the ledger checksum, a node
-	 * statistic, always covers exactly the commits the stored ledger holds.
-	 * Ledger merges the statistics again once this returns, and then finds
-	 * nothing left to merge.
-	 * [Keeta TS] index.js:69001-69006, 74340-74350
-	 */
-	async commitTransaction(transaction: Transaction): Promise<void> {
-		await this.#commits.shared(async () => {
-			await this.commitStorage(transaction);
-			transaction.node?.stats.merge(transaction.statsPending);
-		});
+	commitTransaction(transaction: Transaction): Promise<void> {
+		return(this.commitStorage(transaction));
 	}
 
-	/** Runs reads that no commit lands in the middle of, such as the ledger's counts and its checksum. */
-	betweenCommits<Result>(read: () => Promise<Result>): Promise<Result> {
-		return(this.#commits.exclusive(read));
+	/**
+	 * The XOR of the hash of every block on the main ledger, which each
+	 * staple's write adds its blocks to (D19), read with the moment of the
+	 * snapshot that holds them, as the ledger's counts are.
+	 */
+	async ledgerChecksum(): Promise<LedgerChecksum> {
+		const { moment, momentRange, ledgerChecksum } = await this.countLedger();
+		return({ moment, momentRange, checksum: ledgerChecksum });
 	}
 
 	/** Makes the transaction's writes permanent and ends it. */
@@ -633,7 +648,6 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			try {
 				const applied = await this.#applyIsolated(transaction, staple, replay);
 				recordSettlement(transaction, applied);
-				foldIntoLedgerChecksum(transaction, applied);
 			} catch (error: unknown) {
 				config.log?.error(LOG_SOURCE, `retrying deferred staple ${stapleKey} failed; it stays deferred`, error);
 			}
@@ -714,20 +728,6 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 }
 
 /*
- * Ledger.add folds the staples adjust returns into the node's checksum, and
- * the transaction's statistics reach the node only on commit; staples that gc
- * applies are folded in the same way.
- * [Keeta TS] index.js:69413-69417, 69001-69006
- */
-function foldIntoLedgerChecksum(transaction: LedgerDriverTransaction, applied: readonly AppliedStaple[]): void {
-	for (const { staple } of applied) {
-		for (const block of staple.blocks) {
-			transaction.statsPending.xor(LEDGER_CHECKSUM_KEY, block.hash);
-		}
-	}
-}
-
-/*
  * Like the checksum, the settlement statistics reach the node only when the
  * transaction commits.
  * [Keeta TS] index.js:67593-67632, 69001-69006
@@ -751,4 +751,19 @@ function blocksWithExternalPrevious(staple: VoteStaple): Block[] {
 	return(staple.blocks.filter(function(block): boolean {
 		return(!inStaple.has(toBlockHashKey(block.previous)));
 	}));
+}
+
+/**
+ * A node's ledger checksum: its driver's, written with the staples it
+ * covers, or for a driver not built on this base, the statistic upstream's
+ * ledger keeps on the node [Keeta TS] index.js:69413-69417, with the moment
+ * of the ledger's counts.
+ */
+export async function nodeLedgerChecksum(node: Pick<Node, 'config' | 'ledger' | 'stats'>): Promise<LedgerChecksum> {
+	const storage = node.config.ledger.storageDriver;
+	if (storage instanceof LedgerStorageDriverBase) {
+		return(await storage.ledgerChecksum());
+	}
+	const [statistics, checksum] = await Promise.all([node.ledger.stats(), node.stats.getXor(LEDGER_CHECKSUM_KEY)]);
+	return({ moment: new Date(statistics.moment), momentRange: statistics.momentRange, checksum: checksum.toBigInt() });
 }

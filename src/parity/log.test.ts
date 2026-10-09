@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import { ParityLog, parityLogPath } from './log.js';
-import type { ChecksumRecord, ParityRecord, SweepRecord } from './log.js';
+import type { ChecksumRecord, CrossCheckRecord, ParityRecord, SweepRecord } from './log.js';
 
 const REPRESENTATIVE = 'https://rep1.example/api';
 const ACCOUNT = 'keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai';
@@ -39,6 +39,11 @@ const SWEEPS: readonly SweepRecord[] = [
 	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 1, outcome: { kind: 'skipped', reason: 'unanswered', detail: '500' } }
 ];
 
+const CROSS_CHECKS: readonly CrossCheckRecord[] = [
+	{ kind: 'cross-check', at: CHECKSUM.at, stored: '0x1', folded: '0x3', mainBlocks: 4, outcome: { kind: 'differs', offset: '0x2', staples: [{ sequence: '9', blocksHash: 'AB'.repeat(32), stored: '0x5', fold: '0x7' }] } },
+	{ kind: 'cross-check', at: CHECKSUM.at, stored: '0x1', folded: '0x3', mainBlocks: 4, outcome: { kind: 'lost-run', firstSequence: '1', lastSequence: '18', staples: 18, firstMoment: CHECKSUM.at, lastMoment: CHECKSUM.at } }
+];
+
 const directories: string[] = [];
 
 async function scratchLog(): Promise<ParityLog> {
@@ -60,7 +65,7 @@ describe('the parity log', function() {
 
 	test('reads back every kind of record it was given, in order', async function() {
 		const log = await scratchLog();
-		const records: readonly ParityRecord[] = [CHECKSUM, ...SWEEPS, FAILED_CHECKSUM];
+		const records: readonly ParityRecord[] = [CHECKSUM, ...SWEEPS, FAILED_CHECKSUM, ...CROSS_CHECKS];
 		await log.append(records.slice(0, 2));
 		await log.append(records.slice(2));
 

@@ -2,8 +2,6 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { renderStateDump } from '../conformance/mainnet/dump.js';
-import { PostgresKVStorage } from '../kv/postgres.js';
-import { LEDGER_CHECKSUM_KEY } from '../ledger/storage/base.js';
 import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
 import type { PostgresPoolSource } from '../ledger/storage/postgres/pool.js';
 import { eachStapleOnce } from '../util/each-staple-once.js';
@@ -22,18 +20,13 @@ function sourceOf(connectionString: string): PostgresPoolSource {
 	return({ kind: 'connection-string', connectionString });
 }
 
-/**
- * The ledger checksum a stopped node left in its database. A running node
- * may hold statistics it has not written there yet, so its own answer is
- * read from its API instead.
- */
+/** The ledger checksum a node's database holds, which is written with the staples it covers. */
 export async function storedChecksum(connectionString: string): Promise<bigint> {
-	const kv = new PostgresKVStorage(sourceOf(connectionString));
+	const storage = new PostgresLedgerStorage(sourceOf(connectionString));
 	try {
-		const stats = new lib.Stats({ kv });
-		return((await stats.getXor(LEDGER_CHECKSUM_KEY)).toBigInt());
+		return((await storage.ledgerChecksum()).checksum);
 	} finally {
-		await kv.destroy();
+		await storage.destroy();
 	}
 }
 

@@ -3,6 +3,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Ledger, LedgerStorageAPI } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import { nodeLedgerChecksum } from '../../ledger/storage/base.js';
 import { freezeClock } from '../../testing/network.js';
 import { mainnetNodeConfig } from './fixture.js';
 
@@ -116,7 +117,7 @@ export async function replayOn(node: Node, staples: readonly VoteStaple[], optio
 		deferred: ordered.filter(function(staple): boolean {
 			return(!applied.has(staple));
 		}),
-		ledgerChecksum: (await node.stats.getXor('ledgerChecksum')).toBigInt()
+		ledgerChecksum: (await nodeLedgerChecksum(node)).checksum
 	});
 }
 

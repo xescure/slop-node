@@ -71,9 +71,9 @@ describe('the parity report', function() {
 		});
 	});
 
-	test('passes the checksum when the stored checksum is explained and the block counts agree within the tolerance', function() {
+	test('passes the checksum when the stored checksum equals the fold and the block counts agree within the tolerance', function() {
 		const at = '2026-10-09T02:00:00.000Z';
-		const records = [crossCheck(at, { kind: 'unsynced', staples: [STAPLE] }), blockCount(at, { kind: 'pass' }), blockCount(at, { kind: 'pass' }, OTHER_REPRESENTATIVE)];
+		const records = [crossCheck(at, { kind: 'equal' }), blockCount(at, { kind: 'pass' }), blockCount(at, { kind: 'pass' }, OTHER_REPRESENTATIVE)];
 		expect(report(records).signals.checksum).toMatchObject({
 			verdict: 'pass',
 			crossCheck: { verdict: 'pass', runs: 1 },
@@ -81,7 +81,13 @@ describe('the parity report', function() {
 			confidence: { kind: 'not-sampled' },
 			firstDivergence: null
 		});
-		expect(report([crossCheck(at, { kind: 'lost-run', firstSequence: '1', lastSequence: '18', staples: 18, firstMoment: at, lastMoment: at }), blockCount(at, { kind: 'pass' })]).signals.checksum.verdict).toBe('pass');
+	});
+
+	test('fails the checksum on a cross-check an earlier build recorded, which a stop could leave short of the ledger', function() {
+		const at = '2026-10-09T02:00:00.000Z';
+		expect(report([crossCheck(at, { kind: 'unsynced', staples: [STAPLE] }), blockCount(at, { kind: 'pass' })]).signals.checksum.verdict).toBe('fail');
+		expect(report([crossCheck(at, { kind: 'lost-run', firstSequence: '1', lastSequence: '18', staples: 18, firstMoment: at, lastMoment: at }), blockCount(at, { kind: 'pass' })]).signals.checksum.verdict).toBe('fail');
+		expect(report([crossCheck(at, { kind: 'lost-run', firstSequence: '1', lastSequence: '18', staples: 18, firstMoment: at, lastMoment: at }), crossCheck(at, { kind: 'equal' }), blockCount(at, { kind: 'pass' })]).signals.checksum.verdict).toBe('pass');
 	});
 
 	test('is not comparable yet while the block counts are not, however the cross-check stands', function() {
@@ -94,10 +100,10 @@ describe('the parity report', function() {
 		});
 	});
 
-	test('fails on an unexplained stored checksum, or a block count beyond the tolerance in the latest run', function() {
+	test('fails on a stored checksum apart from the fold, or a block count beyond the tolerance in the latest run', function() {
 		const earlier = '2026-10-09T01:00:00.000Z';
 		const at = '2026-10-09T02:00:00.000Z';
-		expect(report([crossCheck(at, { kind: 'unexplained', offset: '0xABC' }), blockCount(at, { kind: 'pass' })]).signals.checksum).toMatchObject({
+		expect(report([crossCheck(at, { kind: 'differs', offset: '0xABC', staples: [{ sequence: '3', blocksHash: STAPLE, stored: '0x1', fold: '0xABD' }] }), blockCount(at, { kind: 'pass' })]).signals.checksum).toMatchObject({
 			verdict: 'fail',
 			firstDivergence: { at, representative: null, account: '', field: 'ledgerChecksum', staple: null }
 		});
@@ -243,7 +249,7 @@ describe('a parity run', function() {
 			accountCount: () => Promise.resolve(known.length),
 			accountsUpTo: () => Promise.resolve(known.length),
 			historyHolds: () => Promise.resolve(false),
-			checksumSnapshot: () => Promise.resolve({ stored: 0n, folded: 0n, mainBlocks: 0, staples: [] }),
+			checksumSnapshot: () => Promise.resolve({ stored: 0n, folded: 0n, mainBlocks: 0, mismatched: [] }),
 			quietAccounts: () => Promise.resolve([]),
 			stapleCountBefore: () => Promise.resolve(0),
 			staplesBefore: () => Promise.resolve([]),

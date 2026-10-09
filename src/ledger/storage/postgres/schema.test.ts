@@ -56,8 +56,8 @@ describe('the Postgres schema', function() {
 	test('a moment with a fraction of a millisecond is refused, and a whole millisecond is stored', async function() {
 		const pool = await ledgerPool();
 
-		const refused = await failureOf(pool.query('INSERT INTO staples (blocks_hash, staple_time, moment) VALUES ($1, $2, $2)', [HASH, '2026-10-07 12:00:00.0005+00']));
-		await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment) VALUES ($1, $2, $2)', [HASH, '2026-10-07 12:00:00.123+00']);
+		const refused = await failureOf(pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, checksum) VALUES ($1, $2, $2, repeat(\'0\', 256)::bit(256))', [HASH, '2026-10-07 12:00:00.0005+00']));
+		await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, checksum) VALUES ($1, $2, $2, repeat(\'0\', 256)::bit(256))', [HASH, '2026-10-07 12:00:00.123+00']);
 
 		expect(refused).toMatchObject({ code: '23514' });
 		const stored = await pool.query<{ moment: Date }>('SELECT moment FROM staples');

@@ -76,7 +76,7 @@ async function followerDatabase(state: { readonly caughtUp?: number; readonly la
 	}
 	const stapleTime = new Date('2025-12-01T00:00:00.000Z');
 	for (const staple of [STAPLE, OTHER_STAPLE]) {
-		await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment) VALUES ($1, $2, $2)', [Buffer.from(staple, 'hex'), stapleTime]);
+		await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, checksum) VALUES ($1, $2, $2, repeat(\'0\', 256)::bit(256))', [Buffer.from(staple, 'hex'), stapleTime]);
 	}
 	await pool.query('INSERT INTO history (account_id, blocks_hash, staple_time) SELECT id, $2, $3 FROM accounts WHERE public_key = $1', [ACCOUNTS[0], Buffer.from(STAPLE, 'hex'), stapleTime]);
 	const entries: [string, string, unknown][] = Object.entries(state.cursors ?? {}).map(function([peer, value]): [string, string, unknown] {
@@ -158,7 +158,7 @@ describe('the follower\'s store, read from its database', function() {
 		}
 	});
 
-	test('reads the stored checksum and the fold of the main blocks in one view, with the staples asked for in commit order', async function() {
+	test('reads the stored checksum and the fold of the main blocks in one view, with the staples whose own checksum is not the fold of their blocks', async function() {
 		const database = await followerDatabase({});
 		const pool = database.pool();
 		const hashes = ['11', '22', '33', '44'].map(function(byte): Buffer {
@@ -181,8 +181,9 @@ describe('the follower\'s store, read from its database', function() {
 			await pool.query(`INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position)
 				SELECT $1, $2::ledger_name, id, $1, 1, '\\x00', $3, $4 FROM accounts WHERE public_key = $5`, [hash, ledger, stapleHash, stapleAt, ACCOUNTS[0]]);
 		}
-		await pool.query('INSERT INTO kv_buffers (key, value) VALUES ($1, $2)', ['@buffer:ledgerChecksum', hashes[0]]);
-		await database.endPools();
+		// The first staple's checksum is its block's; the second's leaves out one of its two blocks.
+		await pool.query('UPDATE staples SET checksum = (\'x\' || $2)::bit(256) WHERE blocks_hash = $1', [staple('AB'), '11'.repeat(32)]);
+		await pool.query('UPDATE staples SET checksum = (\'x\' || $2)::bit(256) WHERE blocks_hash = $1', [staple('CD'), '22'.repeat(32)]);
 		const store = storeOf(database);
 		const fold = function(...bytes: readonly string[]): bigint {
 			return(bytes.reduce(function(value, byte): bigint {
@@ -190,17 +191,19 @@ describe('the follower\'s store, read from its database', function() {
 			}, 0n));
 		};
 
-		const newest = await store.checksumSnapshot({ kind: 'newest', count: 1 });
-		expect(newest).toEqual({ stored: fold('11'), folded: fold('11', '22', '33'), mainBlocks: 3, staples: [expect.objectContaining({ sequence: '2', blocksHash: OTHER_STAPLE, fold: fold('22', '33') })] });
-		const every = await store.checksumSnapshot({ kind: 'every' });
-		expect(every.staples.map(function(listed) {
-			return([listed.sequence, listed.blocksHash, listed.fold]);
-		})).toEqual([['1', STAPLE, fold('11')], ['2', OTHER_STAPLE, fold('22', '33')]]);
+		expect(await store.checksumSnapshot()).toEqual({
+			stored: fold('11', '22'),
+			folded: fold('11', '22', '33'),
+			mainBlocks: 3,
+			mismatched: [{ sequence: '2', blocksHash: OTHER_STAPLE, stored: fold('22'), fold: fold('22', '33') }]
+		});
+		await pool.query('UPDATE staples SET checksum = (\'x\' || $2)::bit(256) WHERE blocks_hash = $1', [staple('CD'), fold('22', '33').toString(16)]);
+		expect(await store.checksumSnapshot()).toEqual({ stored: fold('11', '22', '33'), folded: fold('11', '22', '33'), mainBlocks: 3, mismatched: [] });
 	});
 
 	test('reads a zero checksum and fold from a node that applied nothing', async function() {
 		const store = storeOf(await followerDatabase({}));
-		expect(await store.checksumSnapshot({ kind: 'newest', count: 4 })).toMatchObject({ stored: 0n, folded: 0n, mainBlocks: 0 });
+		expect(await store.checksumSnapshot()).toMatchObject({ stored: 0n, folded: 0n, mainBlocks: 0 });
 	});
 
 	test('draws quiet accounts of a kind with what their requests name, and the held blocks and staples', async function() {
@@ -212,7 +215,7 @@ describe('the follower\'s store, read from its database', function() {
 		const RECENT_STAPLE = 'EF'.repeat(32);
 		const BLOCK = '12'.repeat(32);
 		await pool.query('UPDATE accounts SET key_type = 3 WHERE public_key = ANY($1)', [[first, second]]);
-		await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment) VALUES ($1, $2, $2)', [Buffer.from(RECENT_STAPLE, 'hex'), recentTime]);
+		await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, checksum) VALUES ($1, $2, $2, repeat(\'0\', 256)::bit(256))', [Buffer.from(RECENT_STAPLE, 'hex'), recentTime]);
 		await pool.query('INSERT INTO history (account_id, blocks_hash, staple_time) SELECT id, $2, $3 FROM accounts WHERE public_key = $1', [second, Buffer.from(RECENT_STAPLE, 'hex'), recentTime]);
 		await pool.query(`INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position)
 			SELECT $1, 'main', id, $1, 1, '\\x0102', $3, 0 FROM accounts WHERE public_key = $2`, [Buffer.from(BLOCK, 'hex'), first, Buffer.from(STAPLE, 'hex')]);
@@ -262,7 +265,7 @@ describe('the follower\'s store, read from its database', function() {
 				bytes = null;
 			}
 			const key = Buffer.from(staple.blocksHash.toString(), 'hex');
-			await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, bytes) VALUES ($1, $2, $2, $3)', [key, staple.timestamp(), bytes]);
+			await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, bytes, checksum) VALUES ($1, $2, $2, $3, repeat(\'0\', 256)::bit(256))', [key, staple.timestamp(), bytes]);
 			for (const [position, block] of staple.blocks.entries()) {
 				await pool.query(`INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position)
 					SELECT $1, 'main', id, $2, 1, $3, $4, $5 FROM accounts WHERE public_key = $6`, [Buffer.from(block.hash.toString(), 'hex'), Buffer.from(block.previous.toString(), 'hex'), Buffer.from(block.toBytes()), key, position, issuer]);

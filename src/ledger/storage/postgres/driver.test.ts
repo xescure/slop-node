@@ -9,7 +9,7 @@ import type { TestNetwork } from '../../../testing/network.js';
 import { createDatabase } from '../../../testing/postgres.js';
 import type { TestDatabase } from '../../../testing/postgres.js';
 import { MemoryLedgerStorage } from '../memory/driver.js';
-import { blocksHashesOf, DEFAULT_WEIGHTS, GENESIS_MOMENT, headOf, requireAt } from '../suite/support.js';
+import { blocksHashesOf, checksumOf, DEFAULT_WEIGHTS, GENESIS_MOMENT, headOf, requireAt } from '../suite/support.js';
 import type { TransactionOptions } from '../base.js';
 import { catchUpVotes, catchUpVotesAfter } from './confirmed-statements.js';
 import { PostgresLedgerStorage } from './driver.js';
@@ -388,7 +388,7 @@ describe('the Postgres driver', function() {
 		await storage.abortTransaction(transaction);
 
 		const versions = await database.pool().query<{ version: number }>('SELECT version FROM schema_version ORDER BY version');
-		expect(versions.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }]);
+		expect(versions.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }]);
 	});
 
 	test('destroy ends a pool the driver opened and leaves an injected pool to its owner', async function() {
@@ -577,5 +577,24 @@ describe('the Postgres driver', function() {
 		expect(await historyOf(network.baseToken)).toEqual(listedBefore.token);
 		expect(await historyOf(recipient)).toEqual(listedBefore.recipient);
 		expect(await storage.reindexHistory(context)).toEqual({ staples: 2, removed: 0, added: 0 });
+	});
+
+	test('a node killed after its commits, before it writes its statistics, leaves a checksum covering every staple it committed', async function() {
+		const database = await ledgerDatabase();
+		freezeClock(GENESIS_MOMENT);
+		const network = await createTestNetwork({ representativeWeights: DEFAULT_WEIGHTS });
+		const killed = new PostgresLedgerStorage({ kind: 'connection-string', connectionString: database.connectionString });
+		const node = network.createNode(killed, requireAt(network.representatives, 0));
+		await node.ledger.add(network.genesis);
+		const sender = requireAt(network.users, 0);
+		const sent = await confirmedStaple([await sendBlock({ from: sender, previous: headOf(network.genesis, sender), to: requireAt(network.users, 1), amount: 1n, token: network.baseToken, network: network.network })], network.representatives);
+		await node.ledger.add(sent);
+		// The process ends here: its connections close, and its statistics are never written.
+		await killed.destroy();
+
+		const restarted = ownedStorageOn(database);
+		expect((await restarted.ledgerChecksum()).checksum).toBe(checksumOf([network.genesis, sent]));
+		const folded = await database.pool().query<{ fold: string }>('SELECT bit_xor((\'x\' || encode(hash, \'hex\'))::bit(256))::text AS fold FROM blocks WHERE ledger = \'main\'');
+		expect(BigInt(`0b${folded.rows[0]?.fold ?? ''}`)).toBe(checksumOf([network.genesis, sent]));
 	});
 });

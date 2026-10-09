@@ -44,7 +44,7 @@ const hashOf = function(label: string): string {
  */
 const seedMainLedger = async function(pool: pg.Pool): Promise<void> {
 	await pool.query('INSERT INTO accounts (public_key, key_type) VALUES ($1, 0)', [ACCOUNT]);
-	await pool.query(`INSERT INTO staples (blocks_hash, staple_time, moment) VALUES (${hashOf('main staple')}, $1, $1)`, [MOMENT]);
+	await pool.query(`INSERT INTO staples (blocks_hash, staple_time, moment, checksum) VALUES (${hashOf('main staple')}, $1, $1, repeat('0', 256)::bit(256))`, [MOMENT]);
 	await pool.query(`
 		INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position)
 		SELECT block.hash, 'main', accounts.id, block.previous, 1, '\\x00', ${hashOf('main staple')}, block.position

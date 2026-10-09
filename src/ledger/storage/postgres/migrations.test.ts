@@ -152,6 +152,44 @@ describe('applyMigrations', function() {
 		expect(history.rows).toEqual([{ staple_time: FIRST_START }]);
 	});
 
+	test('version 7 gives each staple the XOR of its blocks\' hashes, which the ledger checksum folds, and drops the statistic that held it', async function() {
+		const database = await freshDatabase();
+		const pool = database.pool();
+		const shipped = (await readdir(SCHEMA_MIGRATIONS)).sort();
+		const beforeChecksums: Record<string, Buffer> = {};
+		for (const file of shipped.filter(function(name) {
+			return(name < '0007');
+		})) {
+			beforeChecksums[file] = await readFile(new URL(file, SCHEMA_MIGRATIONS));
+		}
+		expect(await applyMigrations(pool, await migrationDirectory(beforeChecksums), clockAt(FIRST_START))).toBe(6);
+		const hash = function(label: string): string {
+			return(`sha256(convert_to('${label}', 'UTF8'))`);
+		};
+		await pool.query('INSERT INTO accounts (public_key, key_type) VALUES (\'keeta_migrated\', 0)');
+		for (const [staple, blocks] of [['first', ['a', 'b']], ['second', ['c']]] as const) {
+			await pool.query(`INSERT INTO staples (blocks_hash, staple_time, moment) VALUES (${hash(staple)}, $1, $1)`, [FIRST_START]);
+			for (const [position, block] of blocks.entries()) {
+				await pool.query(`INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position)
+					SELECT ${hash(block)}, 'main', id, ${hash(`before ${block}`)}, 1, '\\x00', ${hash(staple)}, $1 FROM accounts`, [position]);
+			}
+		}
+		await pool.query('INSERT INTO kv_buffers (key, value) VALUES (\'@buffer:ledgerChecksum\', \'\\x01\'), (\'@buffer:other\', \'\\x02\')');
+
+		expect(await applyMigrations(pool, SCHEMA_MIGRATIONS, clockAt(SECOND_START))).toBe(shipped.length);
+
+		const hashes = await pool.query<{ label: string; hash: Buffer }>(`SELECT label, sha256(convert_to(label, 'UTF8')) AS hash FROM unnest(ARRAY['a', 'b', 'c']) AS label`);
+		const bits = new Map(hashes.rows.map(function(row): [string, bigint] {
+			return([row.label, BigInt(`0x${row.hash.toString('hex')}`)]);
+		}));
+		const checksums = await pool.query<{ checksum: string }>(`SELECT checksum::text FROM staples ORDER BY blocks_hash = ${hash('second')}`);
+		expect(checksums.rows.map(function(row): bigint {
+			return(BigInt(`0b${row.checksum}`));
+		})).toEqual([(bits.get('a') ?? 0n) ^ (bits.get('b') ?? 0n), bits.get('c')]);
+		const buffers = await pool.query<{ key: string }>('SELECT key FROM kv_buffers ORDER BY key');
+		expect(buffers.rows).toEqual([{ key: '@buffer:other' }]);
+	});
+
 	test('a migration runs without the session\'s statement timeout, which the session gets back afterwards', async function() {
 		const database = await freshDatabase();
 		// One connection, so the setting read afterwards is the migrating session's.

@@ -53,6 +53,8 @@ export type ConfirmedStapleChange = {
 	readonly historyAccounts: ReadonlySet<AccountKey>;
 	/** Accounts that need a row, whether or not they had one: every account the staple touches or may create. */
 	readonly newAccounts: ReadonlySet<AccountKey>;
+	/** The staple's part of the ledger checksum: the XOR of its blocks' hashes (D19). */
+	readonly checksum: bigint;
 };
 
 type Mutable<Shape> = { -readonly [Field in keyof Shape]: Shape[Field] };
@@ -197,8 +199,18 @@ export async function computeConfirmedStapleChange(input: {
 		...collectAccountFields(effects),
 		idempotentKeys: collectIdempotentKeys(staple),
 		historyAccounts: historyAccountsOf(staple.blocks, effects),
-		newAccounts: toAccountKeys(effects.touched, effects.possibleNewAccounts)
+		newAccounts: toAccountKeys(effects.touched, effects.possibleNewAccounts),
+		checksum: stapleChecksumOf(staple)
 	});
+}
+
+/** The XOR of the hashes of the staple's blocks, which upstream folds into the ledger checksum [Keeta TS] index.js:69413-69417. */
+export function stapleChecksumOf(staple: VoteStaple): bigint {
+	let checksum = 0n;
+	for (const block of staple.blocks) {
+		checksum ^= block.hash.toBigInt();
+	}
+	return(checksum);
 }
 
 /** Upstream reports heights keyed by hash; every block of the staple must have one. */

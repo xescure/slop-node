@@ -32,6 +32,8 @@ export type StapleRow = {
 	readonly stapleTime: Date;
 	/** The node-local sequence of its first vote, which breaks ties between votes made in the same millisecond; its other votes take the next ones, in staple order. */
 	readonly firstVote: bigint;
+	/** Its part of the ledger checksum: the XOR of its blocks' hashes. */
+	readonly checksum: bigint;
 };
 
 export type BalanceRow = {

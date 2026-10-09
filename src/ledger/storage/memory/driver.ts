@@ -723,12 +723,17 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 				representativeCount++;
 			}
 		}
+		let ledgerChecksum = 0n;
+		for (const row of committed.staples.values()) {
+			ledgerChecksum ^= row.checksum;
+		}
 		return(Promise.resolve({
 			moment: new Date(),
 			momentRange: 0,
 			blockCount: committed.blocks.size,
 			transactionCount,
-			representativeCount
+			representativeCount,
+			ledgerChecksum
 		}));
 	}
 
@@ -1110,7 +1115,8 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 			votes,
 			bytes: staple.toBytes(),
 			stapleTime: staple.timestamp(),
-			firstVote: this.#takeVoteSequences(votes.size)
+			firstVote: this.#takeVoteSequences(votes.size),
+			checksum: change.checksum
 		});
 
 		for (const block of staple.blocks) {

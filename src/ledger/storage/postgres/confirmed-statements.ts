@@ -243,18 +243,28 @@ export const mainIdempotentHolder: Statement<[Buffer, Buffer | null], { block_ha
  * One statement, so one snapshot of the committed main ledger, without a
  * transaction (D19).
  */
-export const mainLedgerCounts: Statement<[], { block_count: IntegerText; transaction_count: IntegerText; representative_count: IntegerText }> = statement('main_ledger_counts', `
+export type LedgerCountsColumns = {
+	readonly block_count: IntegerText;
+	readonly transaction_count: IntegerText;
+	readonly representative_count: IntegerText;
+	/** The ledger checksum's 256 bits, as text; null without staples. */
+	readonly ledger_checksum: string | null;
+};
+
+export const mainLedgerCounts: Statement<[], LedgerCountsColumns> = statement('main_ledger_counts', `
 	SELECT
 		(SELECT count(*) FROM blocks WHERE ledger = 'main') AS block_count,
 		(SELECT COALESCE(sum(operation_count), 0) FROM blocks WHERE ledger = 'main') AS transaction_count,
-		(SELECT count(*) FROM weights WHERE weight > 0) AS representative_count`);
+		(SELECT count(*) FROM weights WHERE weight > 0) AS representative_count,
+		(SELECT bit_xor(checksum)::text FROM staples) AS ledger_checksum`);
 
 export const mainBlocksOrSuccessors: Statement<[Buffer[], Buffer[]], { hash: Buffer; previous: Buffer }> = statement('main_blocks_or_successors', `
 	SELECT hash, previous FROM blocks
 	WHERE ledger = 'main' AND (hash = ANY($1::bytea[]) OR previous = ANY($2::bytea[]))`);
 
-export const insertStaple: Statement<[Buffer, Date, Date, Buffer]> = statement('insert_staple', `
-	INSERT INTO staples (blocks_hash, staple_time, moment, bytes) VALUES ($1, $2, $3, $4)`);
+/** The checksum is given as 64 hexadecimal digits. */
+export const insertStaple: Statement<[Buffer, Date, Date, Buffer, string]> = statement('insert_staple', `
+	INSERT INTO staples (blocks_hash, staple_time, moment, bytes, checksum) VALUES ($1, $2, $3, $4, ('x' || $5)::bit(256))`);
 
 // A side copy of a block becomes the main block in place; a main block is never replaced.
 export const insertMainBlocks: Statement<[Buffer[], AccountID[], Buffer[], number[], Buffer[], number[], Buffer], { hash: Buffer }> = statement('insert_main_blocks', `

@@ -7,6 +7,7 @@ import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { Vote, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { advanceClock, createTestNetwork, freezeClock } from '../../../testing/network.js';
 import type { TestLedgerOptions, TestNetwork } from '../../../testing/network.js';
+import { nodeLedgerChecksum } from '../base.js';
 import type { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
 import { voteExpirySlopMilliseconds } from '../expiry.js';
 import { toStapleKey } from '../keys.js';
@@ -219,7 +220,7 @@ export class RecordingLog implements Logger {
 
 /** The checksum a node keeps over every block its ledger applied. */
 export async function ledgerChecksumOf(node: Node): Promise<bigint> {
-	return((await node.stats.getXor('ledgerChecksum')).toBigInt());
+	return((await nodeLedgerChecksum(node)).checksum);
 }
 
 /** The checksum of exactly these staples' blocks, each counted once. */

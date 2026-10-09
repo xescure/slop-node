@@ -119,23 +119,34 @@ export type BlockCountRecord = {
 	readonly verdict: BlockCountVerdict;
 };
 
+/** A main staple whose stored checksum is not the XOR of its blocks' hashes, both "0x" and uppercase hexadecimal. */
+export type MismatchedStapleRecord = {
+	readonly sequence: string;
+	readonly blocksHash: string;
+	readonly stored: string;
+	readonly fold: string;
+};
+
 /** How the follower's stored checksum stands against the XOR of the blocks on its main ledger. */
 export type CrossCheckOutcome =
 	| { readonly kind: 'equal' }
-	/** They differ by the blocks of these staples, committed after the statistic was last written: the node had not synced them yet. */
-	| { readonly kind: 'unsynced'; readonly staples: readonly string[] }
-	/**
-	 * They differ by exactly the blocks of a run of staples committed one
-	 * after another, whose statistics the node never wrote, as a node that
-	 * stops without syncing leaves them (src/node/stats.ts).
+	/** They differ by the offset; the staples listed are the first whose own stored checksum is not the fold of their blocks. */
+	| { readonly kind: 'differs'; readonly offset: string; readonly staples: readonly MismatchedStapleRecord[] }
+	/*
+	 * Recorded by builds that kept the checksum as a node statistic, written
+	 * apart from the ledger: the difference was made by the blocks of these
+	 * staples, which the node had not written yet; or by a run of staples
+	 * committed one after another whose part of the statistic a stop lost;
+	 * or by nothing that explained it.
 	 */
+	| { readonly kind: 'unsynced'; readonly staples: readonly string[] }
 	| { readonly kind: 'lost-run'; readonly firstSequence: string; readonly lastSequence: string; readonly staples: number; readonly firstMoment: string; readonly lastMoment: string }
 	| { readonly kind: 'unexplained'; readonly offset: string };
 
 export type CrossCheckRecord = {
 	readonly kind: 'cross-check';
 	readonly at: string;
-	/** The stored statistic and the XOR of every main block's hash, both "0x" and uppercase hexadecimal. */
+	/** The stored checksum and the XOR of every main block's hash, both "0x" and uppercase hexadecimal. */
 	readonly stored: string;
 	readonly folded: string;
 	readonly mainBlocks: number;
@@ -306,6 +317,17 @@ function blockCountRecordOf(value: Fields): BlockCountRecord | undefined {
 	return({ kind: 'block-count', at, representative, completedPass, follower, representativeWindow, toleranceBlocks, verdict });
 }
 
+function mismatchedStapleOf(value: unknown): MismatchedStapleRecord | undefined {
+	if (!isFields(value)) {
+		return(undefined);
+	}
+	const { sequence, blocksHash, stored, fold } = value;
+	if (!isString(sequence) || !isString(blocksHash) || !isString(stored) || !isString(fold)) {
+		return(undefined);
+	}
+	return({ sequence, blocksHash, stored, fold });
+}
+
 function crossCheckOutcomeOf(value: unknown): CrossCheckOutcome | undefined {
 	if (!isFields(value)) {
 		return(undefined);
@@ -313,6 +335,13 @@ function crossCheckOutcomeOf(value: unknown): CrossCheckOutcome | undefined {
 	switch (value['kind']) {
 		case 'equal':
 			return({ kind: 'equal' });
+		case 'differs': {
+			const staples = listOf(value['staples'], mismatchedStapleOf);
+			if (!isString(value['offset']) || staples === undefined) {
+				return(undefined);
+			}
+			return({ kind: 'differs', offset: value['offset'], staples });
+		}
 		case 'unsynced': {
 			const staples = listOf(value['staples'], function(staple): string | undefined {
 				if (!isString(staple)) {

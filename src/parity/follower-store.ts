@@ -4,7 +4,6 @@ import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RANGES_KEY, layoutOf, progressOf } from '../node/bootstrap-cursors.js';
 import type { PeerProgress } from '../node/bootstrap-pass.js';
 import type { RangeLayout } from '../node/bootstrap-ranges.js';
-import { LEDGER_CHECKSUM_KEY } from '../ledger/storage/base.js';
 import { assertNever } from '../util/assert-never.js';
 
 const lib = KeetaNet.lib;
@@ -29,28 +28,32 @@ export type KnownAccount = {
 	readonly newestStaple: Date | undefined;
 };
 
-/** A main staple, the order the follower committed it in, and the XOR of the hashes of its blocks. */
-export type StapleFold = {
+/** A main staple whose stored checksum is not the XOR of the hashes of its blocks. */
+export type MismatchedStaple = {
 	/** The staple's row in commit order, as decimal text. */
 	readonly sequence: string;
 	readonly blocksHash: string;
-	readonly moment: Date;
+	readonly stored: bigint;
 	readonly fold: bigint;
 };
 
-/** Which staples a checksum snapshot lists beside the totals. */
-export type SnapshotStaples = { readonly kind: 'newest'; readonly count: number } | { readonly kind: 'every' };
-
-/** The stored checksum and the XOR of the main ledger's blocks, read from one view of the database. */
+/**
+ * The ledger checksum as the follower stores it, the XOR of each main
+ * staple's checksum written with it, and the XOR of the main ledger's
+ * blocks, read from one view of the database, with the staples whose stored
+ * checksum is not the fold of their blocks when the two differ.
+ */
 export type ChecksumSnapshot = {
-	/** The ledger checksum statistic as stored, zero while none is. */
 	readonly stored: bigint;
 	/** The XOR of the hash of every block on the main ledger. */
 	readonly folded: bigint;
 	readonly mainBlocks: number;
-	/** The staples asked for, oldest first by commit order. */
-	readonly staples: readonly StapleFold[];
+	/** At most MISMATCHES_LISTED of them, oldest first by commit order; none when the totals are equal. */
+	readonly mismatched: readonly MismatchedStaple[];
 };
+
+/** The most staples a snapshot lists whose stored checksum is not the fold of their blocks. */
+export const MISMATCHES_LISTED = 20;
 
 /** Accounts the API diff draws on, by what makes them a risk. */
 export type AccountKind = 'token' | 'storage' | 'multisig' | 'certificates' | 'permissions';
@@ -96,7 +99,7 @@ export type FollowerStore = {
 	accountsUpTo(rowID: string): Promise<number>;
 	/** Whether the staple, by the hash of its blocks, is in the account's history on the follower's main ledger. */
 	historyHolds(account: string, blocksHash: string): Promise<boolean>;
-	checksumSnapshot(staples: SnapshotStaples): Promise<ChecksumSnapshot>;
+	checksumSnapshot(): Promise<ChecksumSnapshot>;
 	/**
 	 * Accounts of the kind with a staple in their history and none from the
 	 * moment on, at most the count of them, drawn in an order the seed fixes.
@@ -174,24 +177,25 @@ const HISTORY_HOLDS = `
 /*
  * A hash is 32 bytes, so it reads as a bit string of 256 bits, which
  * bit_xor folds. On the follower, folding 224,212 main blocks took 164 ms,
- * so the whole ledger is folded afresh each time rather than kept as a
- * running total that would need its own record of what it covers.
+ * so the whole ledger is folded afresh each time, apart from the checksum
+ * the node wrote with each staple.
  */
 function bitsOf(column: string): string {
 	return(`('x' || encode(${column}, 'hex'))::bit(256)`);
 }
 
-const STORED_CHECKSUM = 'SELECT value FROM kv_buffers WHERE key = $1';
+const STORED_CHECKSUM = 'SELECT bit_xor(checksum)::text AS stored FROM staples';
 
 const FOLDED_MAIN_BLOCKS = `SELECT count(*) AS blocks, bit_xor(${bitsOf('hash')})::text AS fold FROM blocks WHERE ledger = 'main'`;
 
-const STAPLE_FOLDS = `
-	SELECT s.sequence::text AS sequence, s.blocks_hash, s.moment, (SELECT bit_xor(${bitsOf('b.hash')}) FROM blocks b WHERE b.staple = s.blocks_hash)::text AS fold
-	FROM staples s`;
-
-const NEWEST_STAPLE_FOLDS = `${STAPLE_FOLDS} ORDER BY s.sequence DESC LIMIT $1`;
-
-const EVERY_STAPLE_FOLD = `${STAPLE_FOLDS} ORDER BY s.sequence`;
+const MISMATCHED_STAPLES = `
+	SELECT sequence, blocks_hash, stored, fold FROM (
+		SELECT s.sequence::text AS sequence, s.sequence AS position, s.blocks_hash, s.checksum::text AS stored, (SELECT bit_xor(${bitsOf('b.hash')}) FROM blocks b WHERE b.staple = s.blocks_hash)::text AS fold
+		FROM staples s
+	) AS staple
+	WHERE stored IS DISTINCT FROM fold
+	ORDER BY position
+	LIMIT $1`;
 
 /** A bit string as Postgres prints one, or zero for the fold of nothing. */
 function bigintOfBits(bits: string | null): bigint {
@@ -201,10 +205,10 @@ function bigintOfBits(bits: string | null): bigint {
 	return(BigInt(`0b${bits}`));
 }
 
-type StapleFoldRow = { sequence: string; blocks_hash: Buffer; moment: Date; fold: string | null };
+type MismatchedStapleRow = { sequence: string; blocks_hash: Buffer; stored: string | null; fold: string | null };
 
-function stapleFoldOf(row: StapleFoldRow): StapleFold {
-	return({ sequence: row.sequence, blocksHash: row.blocks_hash.toString('hex').toUpperCase(), moment: row.moment, fold: bigintOfBits(row.fold) });
+function mismatchedStapleOf(row: MismatchedStapleRow): MismatchedStaple {
+	return({ sequence: row.sequence, blocksHash: row.blocks_hash.toString('hex').toUpperCase(), stored: bigintOfBits(row.stored), fold: bigintOfBits(row.fold) });
 }
 
 /** Which accounts a kind is, as a condition on the accounts row "a". */
@@ -423,32 +427,16 @@ export function openFollowerStore(connectionString: string): FollowerStore {
 			const result = await pool.query<{ holds: boolean }>(HISTORY_HOLDS, [account, Buffer.from(blocksHash, 'hex')]);
 			return(result.rows[0]?.holds ?? false);
 		},
-		checksumSnapshot(staples: SnapshotStaples): Promise<ChecksumSnapshot> {
+		checksumSnapshot(): Promise<ChecksumSnapshot> {
 			return(inOneView(pool, async function(client): Promise<ChecksumSnapshot> {
-				const stored = await client.query<{ value: Buffer }>(STORED_CHECKSUM, [`@buffer:${LEDGER_CHECKSUM_KEY}`]);
+				const stored = bigintOfBits((await client.query<{ stored: string | null }>(STORED_CHECKSUM)).rows[0]?.stored ?? null);
 				const folded = await client.query<{ blocks: string; fold: string | null }>(FOLDED_MAIN_BLOCKS);
-				let rows: StapleFoldRow[];
-				switch (staples.kind) {
-					case 'newest':
-						rows = (await client.query<StapleFoldRow>(NEWEST_STAPLE_FOLDS, [staples.count])).rows.reverse();
-						break;
-					case 'every':
-						rows = (await client.query<StapleFoldRow>(EVERY_STAPLE_FOLD)).rows;
-						break;
-					default:
-						return(assertNever(staples));
+				const fold = bigintOfBits(folded.rows[0]?.fold ?? null);
+				let mismatched: readonly MismatchedStaple[] = [];
+				if (stored !== fold) {
+					mismatched = (await client.query<MismatchedStapleRow>(MISMATCHED_STAPLES, [MISMATCHES_LISTED])).rows.map(mismatchedStapleOf);
 				}
-				const value = stored.rows[0]?.value;
-				let storedValue = 0n;
-				if (value !== undefined && value.length > 0) {
-					storedValue = BigInt(`0x${value.toString('hex')}`);
-				}
-				return({
-					stored: storedValue,
-					folded: bigintOfBits(folded.rows[0]?.fold ?? null),
-					mainBlocks: Number(folded.rows[0]?.blocks ?? 0),
-					staples: rows.map(stapleFoldOf)
-				});
+				return({ stored, folded: fold, mainBlocks: Number(folded.rows[0]?.blocks ?? 0), mismatched });
 			}));
 		},
 		async quietAccounts(kind: AccountKind, quietBefore: Date, count: number, seed: string): Promise<readonly AccountCandidate[]> {

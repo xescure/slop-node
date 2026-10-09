@@ -489,7 +489,7 @@ export class DevnetNode {
 		}));
 	}
 
-	/** The ledger checksum the running node reports, or the one a stopped node left in its database. */
+	/** The ledger checksum the running node reports, or the one a stopped node's database holds. */
 	async checksum(): Promise<bigint> {
 		if (!this.running) {
 			return(await storedChecksum(this.databaseURL));

@@ -1,7 +1,7 @@
 import { getOK } from './api-source.js';
 import type { APISource } from './api-source.js';
-import type { ChecksumSnapshot, FollowerProgress, FollowerStore, SnapshotStaples, StapleFold } from './follower-store.js';
-import type { BlockCountNotComparableReason, BlockCountRecord, BlockCountVerdict, ChecksumReading, ChecksumRecord, ChecksumVerdict, ChecksumWindow, CrossCheckOutcome, CrossCheckRecord, NotComparableReason, SweepPointer } from './log.js';
+import type { ChecksumSnapshot, FollowerProgress, FollowerStore } from './follower-store.js';
+import type { BlockCountNotComparableReason, BlockCountRecord, BlockCountVerdict, ChecksumReading, ChecksumRecord, ChecksumVerdict, ChecksumWindow, CrossCheckOutcome, CrossCheckRecord, MismatchedStapleRecord, NotComparableReason, SweepPointer } from './log.js';
 
 /**
  * How long a representative's checksum and block count must hold still to
@@ -217,145 +217,37 @@ export async function compareChecksums(comparison: ChecksumComparison): Promise<
 	return({ checksums, blockCounts });
 }
 
-function bitLength(value: bigint): number {
-	return(value.toString(2).length);
-}
-
-/**
- * The indexes of vectors whose XOR is the target, or nothing when no set of
- * them makes it: Gaussian elimination over the field of two elements, each
- * reduced vector carrying the set of inputs it is the XOR of. With far fewer
- * vectors than the 256 bits of a hash, an unrelated target lies in their
- * span by chance with a probability below 2^(n - 256).
- */
-export function xorSubsetOf(vectors: readonly bigint[], target: bigint): readonly number[] | undefined {
-	const basis = new Map<number, { readonly vector: bigint; readonly made: bigint }>();
-	for (const [index, vector] of vectors.entries()) {
-		let rest = vector;
-		let made = 1n << BigInt(index);
-		while (rest !== 0n) {
-			const pivot = bitLength(rest);
-			const entry = basis.get(pivot);
-			if (entry === undefined) {
-				basis.set(pivot, { vector: rest, made });
-				break;
-			}
-			rest ^= entry.vector;
-			made ^= entry.made;
-		}
-	}
-	let rest = target;
-	let made = 0n;
-	while (rest !== 0n) {
-		const entry = basis.get(bitLength(rest));
-		if (entry === undefined) {
-			return(undefined);
-		}
-		rest ^= entry.vector;
-		made ^= entry.made;
-	}
-	return(vectors.flatMap(function(_vector, index): number[] {
-		if (((made >> BigInt(index)) & 1n) === 0n) {
-			return([]);
-		}
-		return([index]);
-	}));
-}
-
-/**
- * The longest run of staples whose loss the cross-check explains. The
- * follower writes its statistics whenever its API answers and when it
- * stops, so what a stop without that write loses is what it committed in
- * the minutes before, at most a few thousand blocks at the rate it follows.
- */
-export const MAX_LOST_RUN = 1000;
-
-/** The shortest run of consecutive staples, by commit order, whose blocks XOR to the offset, at most MAX_LOST_RUN long. */
-export function lostRunOf(staples: readonly StapleFold[], offset: bigint): { readonly first: number; readonly last: number } | undefined {
-	const prefixEnds = new Map<bigint, number>([[0n, 0]]);
-	let prefix = 0n;
-	for (const [index, staple] of staples.entries()) {
-		prefix ^= staple.fold;
-		const start = prefixEnds.get(prefix ^ offset);
-		if (start !== undefined && index + 1 - start <= MAX_LOST_RUN) {
-			return({ first: start, last: index });
-		}
-		prefixEnds.set(prefix, index + 1);
-	}
-	return(undefined);
-}
-
-/** The staples newest by commit order that a fresh snapshot lists, among which the node's unsynced ones are sought. */
-export const UNSYNCED_CANDIDATES = 32;
-
 export function hexOf(value: bigint): string {
 	return(`0x${value.toString(16).toUpperCase()}`);
 }
 
-/** What explains the difference between the stored checksum and the fold, as far as the staples listed show. */
+/** How the stored checksum stands against the fold, and the staples whose own checksum is not the fold of their blocks. */
 export function crossCheckOutcomeOf(snapshot: ChecksumSnapshot): CrossCheckOutcome {
 	const offset = snapshot.stored ^ snapshot.folded;
 	if (offset === 0n) {
 		return({ kind: 'equal' });
 	}
-	const newest = snapshot.staples.slice(-UNSYNCED_CANDIDATES);
-	const unsynced = xorSubsetOf(newest.map(function(staple): bigint {
-		return(staple.fold);
-	}), offset);
-	if (unsynced !== undefined) {
-		return({
-			kind: 'unsynced',
-			staples: unsynced.map(function(index): string {
-				return(newest[index]?.blocksHash ?? '');
-			})
-		});
-	}
-	const run = lostRunOf(snapshot.staples, offset);
-	const first = snapshot.staples[run?.first ?? -1];
-	const last = snapshot.staples[run?.last ?? -1];
-	if (run === undefined || first === undefined || last === undefined) {
-		return({ kind: 'unexplained', offset: hexOf(offset) });
-	}
 	return({
-		kind: 'lost-run',
-		firstSequence: first.sequence,
-		lastSequence: last.sequence,
-		staples: run.last - run.first + 1,
-		firstMoment: first.moment.toISOString(),
-		lastMoment: last.moment.toISOString()
+		kind: 'differs',
+		offset: hexOf(offset),
+		staples: snapshot.mismatched.map(function(staple): MismatchedStapleRecord {
+			return({ sequence: staple.sequence, blocksHash: staple.blocksHash, stored: hexOf(staple.stored), fold: hexOf(staple.fold) });
+		})
 	});
 }
 
 export type CrossCheck = {
-	readonly follower: APISource;
 	readonly store: Pick<FollowerStore, 'checksumSnapshot'>;
 };
 
 /**
  * Checks the follower's stored checksum against the XOR of the blocks its
- * main ledger holds. The node merges a staple's blocks into its statistics
- * as it commits them and writes them to its store at its next sync, which
- * every request of its API runs before answering (src/api/route.ts), so one
- * request first leaves unsynced only what it commits after that. A first
- * snapshot lists only the newest staples, which hold those; only a
- * difference they do not explain reads every staple, to find a run of them
- * whose statistics were never written.
+ * main ledger holds. The node writes each staple's part of the checksum in
+ * the transaction that writes its blocks (schema/CONTRACT.md, D19), so the
+ * two are equal in every view of its database, whenever the node stopped.
  */
 export async function crossCheckChecksum(check: CrossCheck): Promise<CrossCheckRecord> {
 	const at = new Date().toISOString();
-	const read = async function(staples: SnapshotStaples): Promise<ChecksumSnapshot> {
-		try {
-			await check.follower.get('/node/version');
-		} catch {
-			// The stored checksum is read all the same; whatever the node has not synced shows as a difference.
-		}
-		return(await check.store.checksumSnapshot(staples));
-	};
-	let snapshot = await read({ kind: 'newest', count: UNSYNCED_CANDIDATES });
-	let outcome = crossCheckOutcomeOf(snapshot);
-	if (outcome.kind === 'unexplained') {
-		snapshot = await read({ kind: 'every' });
-		outcome = crossCheckOutcomeOf(snapshot);
-	}
-	return({ kind: 'cross-check', at, stored: hexOf(snapshot.stored), folded: hexOf(snapshot.folded), mainBlocks: snapshot.mainBlocks, outcome });
+	const snapshot = await check.store.checksumSnapshot();
+	return({ kind: 'cross-check', at, stored: hexOf(snapshot.stored), folded: hexOf(snapshot.folded), mainBlocks: snapshot.mainBlocks, outcome: crossCheckOutcomeOf(snapshot) });
 }

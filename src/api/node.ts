@@ -2,7 +2,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { NodeKind } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { P2PPeer } from '@keetanetwork/keetanet-client/lib/p2p.js';
-import { LEDGER_CHECKSUM_KEY, LedgerStorageDriverBase } from '../ledger/storage/base.js';
+import { nodeLedgerChecksum } from '../ledger/storage/base.js';
 import { assertNever } from '../util/assert-never.js';
 import type { AssertNever } from '../util/assert-never.js';
 import { NODE_VERSION } from '../version.js';
@@ -78,23 +78,12 @@ function debugClearStats(): Promise<DeclaredResult<DeclaredNodeGroup['ledger']['
 }
 
 /**
- * The XOR of every block hash the ledger applied, which it keeps as a node
- * statistic [Keeta TS] index.js:69415, 74397-74411, with the moment of the
- * ledger's counts.
- * [node-lite] adapted from getLedgerChecksum, reading the statistic the
- * ledger writes.
+ * The XOR of every block hash the ledger applied [Keeta TS] index.js:69415,
+ * with the moment of the snapshot of the ledger it describes.
+ * [node-lite] adapted from getLedgerChecksum.
  */
 async function getLedgerChecksum(request: APIRequest): Promise<DeclaredResult<DeclaredNodeGroup['ledger']['checksum']['GET']>> {
-	const read = async function(): Promise<DeclaredResult<DeclaredNodeGroup['ledger']['checksum']['GET']>> {
-		const [statistics, checksum] = await Promise.all([request.node.ledger.stats(), request.node.stats.getXor(LEDGER_CHECKSUM_KEY)]);
-		return({ moment: new Date(statistics.moment), momentRange: statistics.momentRange, checksum: checksum.toBigInt() });
-	};
-	const storage = request.node.config.ledger.storageDriver;
-	// Only this node's own drivers can hold commits back; another driver's checksum may run ahead of its counts.
-	if (storage instanceof LedgerStorageDriverBase) {
-		return(await storage.betweenCommits(read));
-	}
-	return(await read());
+	return(await nodeLedgerChecksum(request.node));
 }
 
 /** [node-lite] adapted from getVersion. */

@@ -6,7 +6,7 @@ import type { Account } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { P2PConnection } from '@keetanetwork/keetanet-client/lib/p2p.js';
 import type { VoteBlockHash, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { renderStateDump } from '../conformance/mainnet/dump.js';
-import { LEDGER_CHECKSUM_KEY } from '../ledger/storage/base.js';
+import { nodeLedgerChecksum } from '../ledger/storage/base.js';
 import type { LedgerStorageDriverBase } from '../ledger/storage/base.js';
 import { formatManualPeer, getConfigFromEnv, localNodeConfig, manualPeerOf, publicOnly } from '../node/config.js';
 import type { Environment, LedgerWriteMode } from '../node/config.js';
@@ -429,7 +429,7 @@ export class ClusterMember {
 		if (listed.length >= STAPLE_LIMIT) {
 			throw(new Error(`member ${String(this.index)} holds more staples than one read lists`));
 		}
-		const checksum = (await node.stats.getXor(LEDGER_CHECKSUM_KEY)).toBigInt();
+		const { checksum } = await nodeLedgerChecksum(node);
 		return(await renderStateDump(node.ledger, eachStapleOnce(listed), checksum));
 	}
 

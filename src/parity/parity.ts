@@ -159,7 +159,7 @@ async function wait(milliseconds: number): Promise<void> {
 async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 	switch (command.kind) {
 		case 'checksum': {
-			const crossCheck = await crossCheckChecksum({ follower: tools.follower, store: tools.store });
+			const crossCheck = await crossCheckChecksum({ store: tools.store });
 			const comparison = await compareChecksums({
 				follower: tools.follower,
 				representatives: tools.representatives,
