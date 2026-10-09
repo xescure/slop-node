@@ -92,6 +92,8 @@ async function edgeCaseStaples(): Promise<readonly string[]> {
 	}));
 }
 
+const OFFLINE_TIMEOUT_MILLISECONDS = 600_000;
+
 type OfflineStorage = { readonly storage: () => LedgerStorageAPI; readonly close: () => Promise<void> };
 
 /** The offline ledger's storage: in memory, or in a database of a cluster started for it and removed after it. */
@@ -111,7 +113,17 @@ async function offlineStorage(kind: ShadowStorage): Promise<OfflineStorage> {
 				await cluster.stop();
 				throw(error);
 			}
-			const storage = new PostgresLedgerStorage({ kind: 'connection-string', connectionString: `postgresql://${cluster.user}@${encodeURIComponent(cluster.socketDirectory)}:${String(cluster.port)}/shadow` });
+			/*
+			 * The offline ledger is the cluster's only client, and a vote on a
+			 * staple of hundreds of operations computes its effects for many
+			 * seconds inside one transaction, so its sessions are not ended for
+			 * idling there, as a node's are to free locks for other writers.
+			 */
+			const storage = new PostgresLedgerStorage({
+				kind: 'connection-string',
+				connectionString: `postgresql://${cluster.user}@${encodeURIComponent(cluster.socketDirectory)}:${String(cluster.port)}/shadow`,
+				options: { statementTimeoutMillis: OFFLINE_TIMEOUT_MILLISECONDS, idleInTransactionTimeoutMillis: OFFLINE_TIMEOUT_MILLISECONDS }
+			});
 			return({
 				storage: () => storage,
 				async close(): Promise<void> {
@@ -257,6 +269,9 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
 		}
 	} catch (error: unknown) {
 		process.stderr.write(`utils/parity: ${messageOf(error)}\n`);
+		if (error instanceof Error && error.stack !== undefined) {
+			process.stderr.write(`${error.stack}\n`);
+		}
 		return(1);
 	}
 }
