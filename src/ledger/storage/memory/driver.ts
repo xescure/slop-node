@@ -1236,8 +1236,8 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	}
 
 	/*
-	 * Every touched account gets the staple in its history, and every account
-	 * the staple may have created gets a row.
+	 * The accounts of historyAccounts get the staple in their history, and
+	 * every account the staple touches or may have created gets a row (D18).
 	 */
 	#writeAccountsAndHistory(overlay: LedgerOverlay, change: ConfirmedStapleChange, staple: StapleKey): void {
 		for (const account of new Set([...change.newAccounts, ...change.historyAccounts])) {

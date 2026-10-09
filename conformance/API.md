@@ -52,9 +52,9 @@ The capture was made on 2026-10-07 between 08:44:15 and 08:44:54 UTC from `https
 
 A third run, on 2026-10-07 between 10:36:51 and 10:39:24 UTC, captured the requests that probe how the representative reads limits, sides, starts and ends, and where paging stops (the rows of the table below from the bootstrap with a `start` that is no date up to the ledger's history after its oldest staple). It made 26 requests in three passes while their list was settled; each file holds the answer to the last request of its name.
 
-A fourth run, on 2026-10-09 at 07:34:10 UTC, captured the state of a storage account, an answer about a kind of account the earlier runs held none of. A fifth, on 2026-10-09 between 08:47:15 and 08:47:17 UTC, captured a page of an account's history from a start that is no entry of it, which the parity tools had seen a representative refuse, with the bootstrap it takes that start from.
+A fourth run, on 2026-10-09 at 07:34:10 UTC, captured the state of a storage account, an answer about a kind of account the earlier runs held none of. A fifth, on 2026-10-09 between 08:47:15 and 08:47:17 UTC, captured a page of an account's history from a start that is no entry of it, which the parity tools had seen a representative refuse, with the bootstrap it takes that start from. A sixth, on 2026-10-09 between 15:18:20 and 15:18:24 UTC, captured which accounts' history lists a staple: a page of an account's history from one of the network's first staples, for an account the staple names only through a permission requirement and for one that signs it, with the bootstrap it takes those staples from (`schema/CONTRACT.md`, D18).
 
-The capture made 50 HTTP GET requests, the second run 3, the third 26, the fourth 1 and the fifth 3, one at a time with half a second between them, and nothing else: it published nothing, asked for no vote or quote and sent no peer message. `GET /api/node/ledger/clearstats` was not requested: it clears the representative's statistics, so it changes the representative's state although it is a GET.
+The capture made 50 HTTP GET requests, the second run 3, the third 26, the fourth 1, the fifth 3 and the sixth 5, its bootstrap twice while its rules were settled, one at a time with half a second between them, and nothing else: it published nothing, asked for no vote or quote and sent no peer message. `GET /api/node/ledger/clearstats` was not requested: it clears the representative's statistics, so it changes the representative's state although it is a GET.
 
 The requests name accounts, blocks and a token that `mainnet/head.state.jsonl` lists, chosen by fixed rules:
 
@@ -65,7 +65,7 @@ The requests name accounts, blocks and a token that `mainnet/head.state.jsonl` l
 - the storage account with a chain
 - the representative with the most weight
 
-Where a request needs a value only an earlier response holds, it takes it from there: the `start` of a second history page is the `nextKey` of the first, as the client pages [Keeta TS] index.js:58986-58995; the `end` of a range of the chain is the `nextKey` of the chain page that starts at the account's head block in the head; and the `start` of the last pages of the ledger's history is the hash of the blocks of the second staple a bootstrap from the epoch returns, the SHA3-256 of its blocks' hashes [Keeta TS] index.js:80126-80135, 78985.
+Where a request needs a value only an earlier response holds, it takes it from there: the `start` of a second history page is the `nextKey` of the first, as the client pages [Keeta TS] index.js:58986-58995; the `end` of a range of the chain is the `nextKey` of the chain page that starts at the account's head block in the head; and the `start` of the last pages of the ledger's history is the hash of the blocks of the second staple a bootstrap from the epoch returns, the SHA3-256 of its blocks' hashes [Keeta TS] index.js:80126-80135, 78985. The pages of the sixth run start from the first staple, among the first 25 a bootstrap from the epoch returns, that names the base token only as what its blocks send to accounts that are not storage; that creates an identifier and names the network address nowhere; and that a multisig signs, the page being that of the multisig's first signer.
 
 Some requests name values that do not exist or are malformed, or probe where pages stop. The representative answered them as follows:
 
@@ -92,6 +92,8 @@ Some requests name values that do not exist or are malformed, or probe where pag
 | the ledger's history after its third-oldest staple, with no `limit`, and with `limit=2` | 200 | the two oldest staples, and `nextKey` the last of them |
 | the ledger's history after its oldest staple | 200 | no staples, and `nextKey` the `start` |
 | an account's history from a `start` that is no entry of it: a well-formed hash no staple has, or a staple of which the account is no part | 500 | only `error` and a message naming an error ID |
+| the base token's history from a staple that only sends it, and the network address's from a staple that creates an identifier | 500 | only `error` and a message naming an error ID: neither staple is an entry of that history |
+| a multisig signer's history from a staple the multisig signs | 200 | the signer's entry before it, the staple that made it a signer |
 
 A representative lists an account's balances by token, the permissions a principal holds by entity, the permissions on an entity by principal, and the votes for a block by `$id`, each in the order of the strings' character codes.
 
@@ -127,6 +129,12 @@ The fifth run was:
 
 ```
 utils/capture-api-responses --only node-bootstrap-votes-fractional-limit,ledger-account-history-unknown-start,ledger-account-history-start-elsewhere conformance/mainnet/head.state.jsonl conformance/api/mainnet
+```
+
+The sixth run was:
+
+```
+utils/capture-api-responses --only node-bootstrap-votes-early,ledger-account-history-start-token-moved,ledger-account-history-start-network-required,ledger-account-history-start-multisig-member conformance/mainnet/head.state.jsonl conformance/api/mainnet
 ```
 
 The third run's requests, with the two they page from, are sent again by:

@@ -13,6 +13,7 @@ import type { TestNetwork } from '../../../testing/network.js';
 import {
 	confirmedStaple,
 	createMultisigBlock,
+	createStorageBlock,
 	createTokenBlock,
 	manageCertificateBlock,
 	modifyPermissionsBlock,
@@ -545,7 +546,7 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(await ledger.getIdempotentBlockHash(user, twice, 'main')).toBeNull();
 		});
 
-		test('history lists the staple for every touched account, newest first, exclusive start, a start outside an account\'s history refused', async function() {
+		test('history lists each staple under the accounts it involves, newest first, exclusive start, a start outside an account\'s history refused', async function() {
 			const { network, ledger } = await startNetwork();
 			const first = requireAt(network.users, 0);
 			const second = requireAt(network.users, 1);
@@ -591,6 +592,50 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(await refusalOf(unknown)).toBeInstanceOf(HistoryStartNotListed);
 			expect(await refusalOf(secondToThird)).toBeInstanceOf(HistoryStartNotListed);
 			expect(await ledger.getHistory(null, unknown.blocksHash)).toEqual([]);
+		});
+
+		test('history lists a staple under its signers and the accounts it has an effect on, not under an account a permission requirement only names', async function() {
+			const { network, ledger } = await startNetwork();
+			await ledger.add(network.genesis);
+			const owner = requireAt(network.users, 0);
+			const holder = requireAt(network.users, 1);
+			const cursor = new ChainCursor(network.genesis);
+			advanceClock(1000);
+			const createdToken = await createTokenBlock({ owner, previous: cursor.previous(owner), network: network.network });
+			const { token } = createdToken;
+			cursor.append(createdToken.block);
+			const minted = cursor.append(await tokenSupplyBlock({ owner, token, previous: cursor.previous(token), amount: 100n, network: network.network }));
+			const opened = cursor.append(await setInfoBlock({ account: token, signer: owner, previous: cursor.previous(token), network: network.network, name: 'LISTED', description: '', metadata: '', defaultPermission: new lib.Permissions(['ACCESS']) }));
+			const createdStorage = await createStorageBlock({ owner, previous: cursor.previous(owner), network: network.network });
+			const { storage } = createdStorage;
+			cursor.append(createdStorage.block);
+			// The network address is only the entity of the creations' requirements.
+			const created = await confirmedStaple([createdToken.block, minted, opened, createdStorage.block], network.representatives);
+			advanceClock(1000);
+			const issued = await confirmedStaple([cursor.append(await sendBlock({ from: token, signer: owner, previous: cursor.previous(token), to: holder, amount: 10n, token, network: network.network }))], network.representatives);
+			advanceClock(1000);
+			// The token is only the asset moved.
+			const moved = await confirmedStaple([cursor.append(await sendBlock({ from: holder, previous: cursor.previous(holder), to: owner, amount: 1n, token, network: network.network }))], network.representatives);
+			advanceClock(1000);
+			// The owner only signs the storage account's blocks, and the token and the holder are the principals of the grants.
+			const canHold = cursor.append(await modifyPermissionsBlock({ account: storage, signer: owner, previous: cursor.previous(storage), network: network.network, principal: token, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['STORAGE_CAN_HOLD']) }));
+			const mayDeposit = cursor.append(await modifyPermissionsBlock({ account: storage, signer: owner, previous: cursor.previous(storage), network: network.network, principal: holder, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['STORAGE_DEPOSIT']), target: token }));
+			const granted = await confirmedStaple([canHold, mayDeposit], network.representatives);
+			advanceClock(1000);
+			// The token is the principal of the storage account's STORAGE_CAN_HOLD requirement [Keeta TS] index.js:68476-68491.
+			const deposited = await confirmedStaple([cursor.append(await sendBlock({ from: holder, previous: cursor.previous(holder), to: storage, amount: 2n, token, network: network.network }))], network.representatives);
+			for (const staple of [created, issued, moved, granted, deposited]) {
+				advanceClock(1000);
+				await ledger.add(staple);
+			}
+
+			expect(blocksHashesOf(await ledger.getHistory(token, null))).toEqual(blocksHashesOf([deposited, granted, issued, created]));
+			expect(blocksHashesOf(await ledger.getHistory(network.networkAddress, null))).toEqual(blocksHashesOf([network.genesis]));
+			expect(blocksHashesOf(await ledger.getHistory(owner, null))).toEqual(blocksHashesOf([granted, moved, issued, created, network.genesis]));
+			expect(blocksHashesOf(await ledger.getHistory(holder, null))).toEqual(blocksHashesOf([deposited, granted, moved, issued, network.genesis]));
+			expect(blocksHashesOf(await ledger.getHistory(storage, null))).toEqual(blocksHashesOf([deposited, granted]));
+			// The base token is only the asset of genesis's sends and delegations' weight; its own blocks list it.
+			expect(blocksHashesOf(await ledger.getHistory(network.baseToken, null))).toEqual(blocksHashesOf([network.genesis]));
 		});
 
 		test('history orders staples by staple time, not by when they were applied', async function() {

@@ -1528,9 +1528,9 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	}
 
 	/*
-	 * Every touched account lists the staple in its history, under the
-	 * staple's own time (D8), and every account the staple may have created
-	 * is marked as involved (D18).
+	 * The accounts of historyAccounts list the staple in their history, under
+	 * the staple's own time (D8), and every account the staple touches or may
+	 * have created is marked as involved (D18).
 	 */
 	async #writeHistory(transaction: PostgresTransaction, change: ConfirmedStapleChange, ids: AccountIDs, blocksHash: Buffer): Promise<void> {
 		const involved = new Set<AccountKey>([...change.newAccounts, ...change.historyAccounts]);

@@ -49,9 +49,9 @@ export type ConfirmedStapleChange = {
 	readonly delegations: ReadonlyMap<AccountKey, Account>;
 	readonly certificateUpdates: readonly CertificateChange[];
 	readonly idempotentKeys: readonly IdempotentKeyClaim[];
-	/** Accounts whose history lists the staple. */
+	/** Accounts whose history lists the staple (D18). */
 	readonly historyAccounts: ReadonlySet<AccountKey>;
-	/** Accounts that need a row, whether or not they had one. */
+	/** Accounts that need a row, whether or not they had one: every account the staple touches or may create. */
 	readonly newAccounts: ReadonlySet<AccountKey>;
 };
 
@@ -123,12 +123,45 @@ function collectIdempotentKeys(staple: VoteStaple): IdempotentKeyClaim[] {
 	return(claims);
 }
 
-function toAccountKeys(accounts: Iterable<GenericAccount>): Set<AccountKey> {
+function toAccountKeys(...accountSets: readonly Iterable<GenericAccount>[]): Set<AccountKey> {
 	const keys = new Set<AccountKey>();
-	for (const account of accounts) {
-		keys.add(toAccountKey(account));
+	for (const accounts of accountSets) {
+		for (const account of accounts) {
+			keys.add(toAccountKey(account));
+		}
 	}
 	return(keys);
+}
+
+/**
+ * The accounts whose history lists a staple: every signer of its blocks,
+ * nested multisig signers included, and every account it has an effect on,
+ * the principal of a permission requirement among them. An account that
+ * only a requirement names as its entity or target, such as the token of a
+ * send or the network address of an identifier's creation, is touched
+ * [Keeta TS] index.js:68662-68665 but not listed, as the main network's
+ * representatives list history (D18).
+ * [Keeta TS] index.js:68700-68709, 68776-68781
+ */
+export function historyAccountsOf(blocks: readonly Block[], effects: Pick<ComputedEffectOfBlocks, 'accounts'>): Set<AccountKey> {
+	const listed = new Set<AccountKey>();
+	for (const block of blocks) {
+		const signers: Block['signer'][] = [block.signer];
+		for (let signer = signers.shift(); signer !== undefined; signer = signers.shift()) {
+			if (Array.isArray(signer)) {
+				listed.add(toAccountKey(signer[0]));
+				signers.push(...signer[1]);
+			} else {
+				listed.add(toAccountKey(signer));
+			}
+		}
+	}
+	for (const effect of Object.values(effects.accounts)) {
+		if (effect.type === 'ACCOUNT') {
+			listed.add(toAccountKey(effect.account));
+		}
+	}
+	return(listed);
 }
 
 /**
@@ -163,8 +196,8 @@ export async function computeConfirmedStapleChange(input: {
 		ledgerEffect,
 		...collectAccountFields(effects),
 		idempotentKeys: collectIdempotentKeys(staple),
-		historyAccounts: toAccountKeys(effects.touched),
-		newAccounts: toAccountKeys(effects.possibleNewAccounts)
+		historyAccounts: historyAccountsOf(staple.blocks, effects),
+		newAccounts: toAccountKeys(effects.touched, effects.possibleNewAccounts)
 	});
 }
 

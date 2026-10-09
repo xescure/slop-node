@@ -66,6 +66,12 @@ KEY_TYPE_NETWORK = 2
 KEY_TYPE_TOKEN = 3
 KEY_TYPE_STORAGE = 4
 KEY_TYPE_MULTISIG = 7
+# The operation types a block carries [Keeta TS] index.js:64636-64646.
+OPERATION_SEND = 0
+OPERATION_CREATE_IDENTIFIER = 4
+# Enough of the network's first staples to hold one of each kind the history
+# captures start from.
+EARLY_STAPLES_LIMIT = "25"
 
 
 def key_type(account):
@@ -232,6 +238,88 @@ def last_staple_id(name, body):
 	return hashlib.sha3_256(b"".join(bytes.fromhex(block["$hash"]) for block in blocks)).hexdigest().upper()
 
 
+def staple_id(staple):
+	"""The blocks hash of a staple, the SHA3-256 of its blocks' hashes [Keeta TS] index.js:80126-80135."""
+	return hashlib.sha3_256(b"".join(bytes.fromhex(block["$hash"]) for block in staple["blocks"])).hexdigest().upper()
+
+
+def signers_of(block):
+	"""Every account that signs the block, the signers of a multisig signer and the multisig among them."""
+	pending = [block["signer"]]
+	signers = []
+	while pending:
+		signer = pending.pop()
+		if isinstance(signer, str):
+			signers.append(signer)
+		else:
+			signers.append(signer[0])
+			pending.extend(signer[1])
+	return signers
+
+
+def mentions(staple):
+	"""Every account a staple's blocks name: their accounts, their signers and the accounts their operations name."""
+	named = set()
+	for block in staple["blocks"]:
+		named.add(block["account"])
+		named.update(signers_of(block))
+		for operation in block["operations"]:
+			named.update(value for value in operation.values() if isinstance(value, str) and value.startswith("keeta_"))
+	return named
+
+
+def early_staple(name, body, description, wanted):
+	"""
+	The blocks hash of the first staple of <name>'s bootstrap page that is
+	wanted, or None when <name> was not requested.
+	"""
+	if body is None:
+		return None
+	if not isinstance(body, dict) or not isinstance(body.get("voteStaples"), list):
+		fail(f"{name} has no staples")
+	for staple in body["voteStaples"]:
+		if wanted(staple):
+			return staple_id(staple)
+	fail(f"{name} has no {description}")
+
+
+def only_moves(token):
+	"""Whether a staple names the token only as what it sends, to accounts that are not storage."""
+	def wanted(staple):
+		for block in staple["blocks"]:
+			if token in (block["account"], *signers_of(block)):
+				return False
+			for operation in block["operations"]:
+				sent = operation["type"] == OPERATION_SEND and key_type(operation["to"]) != KEY_TYPE_STORAGE
+				if any(value == token and not (sent and field == "token") for field, value in operation.items()):
+					return False
+		return token in mentions(staple)
+	return wanted
+
+
+def only_requires(network):
+	"""Whether a staple creates an identifier and names the network address nowhere else."""
+	def wanted(staple):
+		creates = any(operation["type"] == OPERATION_CREATE_IDENTIFIER for block in staple["blocks"] for operation in block["operations"])
+		return creates and network not in mentions(staple)
+	return wanted
+
+
+def multisig_signed(staple):
+	return any(not isinstance(block["signer"], str) for block in staple["blocks"])
+
+
+def first_multisig_member(name, body):
+	"""The first account that signs for a multisig in <name>'s bootstrap page, or None when <name> was not requested."""
+	if body is None:
+		return None
+	for staple in body["voteStaples"]:
+		for block in staple["blocks"]:
+			if not isinstance(block["signer"], str):
+				return block["signer"][1][0]
+	fail(f"{name} has no block a multisig signs")
+
+
 def capture(parameters, directory, selected):
 	p = parameters
 	c = Capture(directory, selected)
@@ -305,6 +393,16 @@ def capture(parameters, directory, selected):
 	# returns second, holds no block of the user's, so it is no entry of the
 	# user's history.
 	c.get("ledger-account-history-start-elsewhere", [*account, p.user, "history"], {"start": last_staple_id("node-bootstrap-votes-fractional-limit", oldest), "limit": ACCOUNT_HISTORY_LIMIT})
+	# Which accounts' history lists a staple: a representative refuses a page
+	# from a staple of which the account is no entry. The staples are the
+	# first of each kind among the network's first staples.
+	early = c.get("node-bootstrap-votes-early", ["node", "bootstrap", "votes"], {"start": EPOCH, "limit": EARLY_STAPLES_LIMIT})
+	moved = early_staple("node-bootstrap-votes-early", early, f"staple that only moves {p.token}", only_moves(p.token))
+	c.get("ledger-account-history-start-token-moved", [*account, p.token, "history", "start", moved], {"limit": ACCOUNT_HISTORY_LIMIT})
+	created = early_staple("node-bootstrap-votes-early", early, f"staple that creates an identifier and names {p.network} nowhere", only_requires(p.network))
+	c.get("ledger-account-history-start-network-required", [*account, p.network, "history", "start", created], {"limit": ACCOUNT_HISTORY_LIMIT})
+	signed = early_staple("node-bootstrap-votes-early", early, "staple a multisig signs", multisig_signed)
+	c.get("ledger-account-history-start-multisig-member", [*account, first_multisig_member("node-bootstrap-votes-early", early), "history", "start", signed], {"limit": ACCOUNT_HISTORY_LIMIT})
 	c.get("ledger-account-history-limit-zero", [*account, p.user, "history"], {"limit": "0"})
 	c.get("ledger-account-history-limit-fractional", [*account, p.user, "history"], {"limit": "1.5"})
 	c.get("ledger-account-history-limit-below-one", [*account, p.user, "history"], {"limit": "0.5"})

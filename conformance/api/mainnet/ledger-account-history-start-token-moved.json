@@ -1,0 +1,17 @@
+{
+  "body": {
+    "error": true,
+    "message": "Internal error occurred (error ID: 306af7ab-68bc-402a-83ea-38ba20ce9c6c)"
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/account/keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg/history/start/AAD1A48A4AE1088E1BB46A76AC3ED8B044F7F2DA83D68E29AA0AF93B6DCE7911",
+    "query": {
+      "limit": "1"
+    }
+  },
+  "status": 500
+}

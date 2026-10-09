@@ -646,14 +646,14 @@ getVoteStaples: (transaction: any, voteBlockHashes: VoteBlockHash[], from: Ledge
 getHistory: (transaction: any, account: GenericAccount | null, start: VoteBlockHash | null, limit?: number) => Promise<VoteBlockHash[]>;
 ```
 
-- **Semantics.** The `blocksHash` of each main staple that touched the account, or of every main staple when `account` is `null`. A staple touches every account in the effects' `touched` set (D18). At most `limit` entries are returned; upstream always passes a number, which may not be an integer, and a driver returns the whole entries it allows (`1.5` gives one); the default is 25 [Keeta TS] index.js:69532. Every returned hash must resolve through `getVoteStaples(..., 'main')` [Keeta TS] index.js:69540-69548.
+- **Semantics.** The `blocksHash` of each main staple that touched the account, or of every main staple when `account` is `null`. A staple is listed under its signers and the accounts it has an effect on (D18). At most `limit` entries are returned; upstream always passes a number, which may not be an integer, and a driver returns the whole entries it allows (`1.5` gives one); the default is 25 [Keeta TS] index.js:69532. Every returned hash must resolve through `getVoteStaples(..., 'main')` [Keeta TS] index.js:69540-69548.
 - **Ordering and paging.** Newest first in history order (D8):
   - The key is the ordered pair (staple time, `blocksHash`), descending (provisional: confirmed by the live parity checks). The staple time is `VoteStaple.timestamp()` with no argument, as an integer count of milliseconds since the Unix epoch [Keeta TS] index.js:81070-81096, and `blocksHash` is compared as unsigned bytes.
   - `start` is exclusive.
   - With an `account`, a `start` that is unknown, or no entry of that account's history, is refused with an error that has no code, which the API answers as an internal failure, as the main network's representatives do (`conformance/API.md`, Mainnet captures). With `account` `null`, a `start` that is unknown gives `[]`.
 - **Selector.** Main only.
 - **Tested by**:
-  - `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, a start outside an account's history refused"`
+  - `confirmed.ts: "history lists each staple under the accounts it involves, newest first, exclusive start, a start outside an account's history refused"`
   - `confirmed.ts: "a fractional page size is rounded up for votes and down for history"`
   - `confirmed.ts: "history orders staples by staple time, not by when they were applied"`
   - `confirmed.ts: "history breaks staple-time ties by blocks hash, descending, and pages across a tie"`
@@ -919,7 +919,7 @@ Writes everything that one confirmed staple changes, all of it or none of it (se
 6. Delete side votes with the staple's `uid`s, then insert the staple's votes with `ledger = 'main'` in staple order, so that their row IDs, the catch-up key's sequence, follow it.
 7. Add each balance, supply and weight delta to its row, creating it at the delta (`ON CONFLICT ... DO UPDATE SET x = x + delta`); never clamp.
 8. Upsert delegations; delete or upsert ACL rows by `acls_scope`; merge account info with `COALESCE`, clearing the quorum only when the update carries it as `null`; add or delete certificates; insert the main idempotent keys.
-9. Set `first_staple` on accounts that have none, and insert one `history` row per touched account with the staple's time.
+9. Set `first_staple` on accounts that have none, and insert one `history` row per account of `historyAccounts` with the staple's time.
 
 The unique indexes back the checks of steps 1 and 2 against another process: `blocks_main_successor` admits one confirmed successor per previous, and `idempotent_keys_main` one main block per key.
 
@@ -1162,7 +1162,7 @@ The history key of a main staple is the ordered pair (staple time, `blocksHash`)
 - The client passes the previous page's `nextKey` as the next start [Keeta TS] index.js:58986-58990, and its fallback passes the last returned staple's ID [Keeta TS] index.js:58992-58994. Paging by the last returned staple works without duplicates only if `start` is exclusive.
 
 **Tested by**:
-- `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, a start outside an account's history refused"`
+- `confirmed.ts: "history lists each staple under the accounts it involves, newest first, exclusive start, a start outside an account's history refused"`
 - `confirmed.ts: "history orders staples by staple time, not by when they were applied"`
 - `confirmed.ts: "history breaks staple-time ties by blocks hash, descending, and pages across a tie"`
 - `confirmed.ts: "history orders by the mean vote time of a staple, not the earliest or any single representative's"`, where the votes of one staple carry different times
@@ -1321,13 +1321,18 @@ Sections 3.2 to 3.4, which also describe how the memory driver meets them.
 ### D18. Accounts and history fan-out
 
 - Every account in a staple's `touched` and `possibleNewAccounts` sets gets an account row.
-- The staple is appended to the history of every touched account.
+- The staple is appended to the history of every signer of its blocks, nested multisig signers included, and of every account with an `ACCOUNT` entry in its effects. That entry exists for each block's account, each account whose balance, info, delegation or certificates change, the principal of each granted permission, and the principal of each permission requirement.
+- An account that is only the entity or target of a permission requirement is touched but not listed: the token of a SEND or RECEIVE whose own chain, balance and supply the staple leaves alone, the network address of a CREATE_IDENTIFIER, the token a SEND_ON_BEHALF names.
 
-**Reason.** `touched` holds the signers, the accounts with effects, and the entities and targets of permission requirements [Keeta TS] index.js:68662-68665, 68704-68709. That is the set of accounts a staple involves.
+**Reason.**
+- `touched` holds the signers, every account with an `ACCOUNT` entry, and the entities and targets of permission requirements [Keeta TS] index.js:68662-68665, 68700-68709, 68776-68781. A requirement's principal gets an `ACCOUNT` entry when the requirement is recorded [Keeta TS] index.js:67994-68022, 68032-68033.
+- The bundle does not decide which accounts list a staple; the representatives' storage does. The main network's representatives answer a page of an account's history from a staple of which the account is no entry with an internal error, and from one of its entries with the page after it (`getHistory`). All four answer that way for:
+  - the base token from a staple that only moves it: an error;
+  - the network address from a staple that creates tokens: an error;
+  - the base token from a staple that sends it to a storage account, as the principal of the storage account's STORAGE_CAN_HOLD requirement [Keeta TS] index.js:68476-68491: a page;
+  - a signer of a multisig, the multisig, the principal of a granted permission, a block's account and a recipient: a page.
 
-No member reads account rows, so their creation is untested.
-
-**Tested by** `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, a start outside an account's history refused"`, which also checks that a delegation does not touch the representative it names.
+**Tested by** `confirmed.ts: "history lists each staple under the accounts it involves, newest first, exclusive start, a start outside an account's history refused"`, which also checks that a delegation does not touch the representative it names, `confirmed.ts: "history lists a staple under its signers and the accounts it has an effect on, not under an account a permission requirement only names"`, and the replayed captures of conformance/API.md. No member reads account rows, so their creation is untested.
 
 ### D19. Statistics
 
