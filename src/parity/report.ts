@@ -109,6 +109,8 @@ export type ShadowVotesSignal = {
 		readonly explained: Readonly<Partial<Record<ShadowRefusalReason, number>>>;
 		readonly unexplained: number;
 		readonly deferredInWindow: number;
+		readonly refusedForWeight: number;
+		readonly unappliedBeforeWindow: number;
 	} | null;
 	readonly firstDivergence: { readonly at: string; readonly staple: string; readonly code: string; readonly why: string } | null;
 };
@@ -443,7 +445,7 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], knownBehaviors: Read
 	return({ verdict, strata, counts, newBehaviors: behaviors, firstDivergence: null });
 }
 
-/** The latest run decides: a staple of its window refused without a classified explanation, or not applied at all, fails it. */
+/** The latest run decides: a staple of its window refused without a classified explanation, or a staple not applied at all, fails it. */
 function shadowVotesSignalOf(records: readonly ShadowLiveRecord[]): ShadowVotesSignal {
 	const latest = records.at(-1);
 	if (latest === undefined) {
@@ -462,7 +464,9 @@ function shadowVotesSignalOf(records: readonly ShadowLiveRecord[]): ShadowVotesS
 		voted: latest.voted,
 		explained,
 		unexplained: latest.unexplained.length,
-		deferredInWindow: latest.deferredInWindow.length
+		deferredInWindow: latest.deferredInWindow.length,
+		refusedForWeight: latest.refusedForWeight,
+		unappliedBeforeWindow: latest.unappliedBeforeWindow.length
 	};
 	const [refused] = latest.unexplained;
 	if (refused !== undefined) {
@@ -471,6 +475,10 @@ function shadowVotesSignalOf(records: readonly ShadowLiveRecord[]): ShadowVotesS
 	const [deferred] = latest.deferredInWindow;
 	if (deferred !== undefined) {
 		return({ verdict: 'fail', runs: records.length, latest: summary, firstDivergence: { at: latest.at, staple: deferred, code: 'deferred', why: 'the replay could not apply the staple' } });
+	}
+	const [unapplied] = latest.unappliedBeforeWindow;
+	if (unapplied !== undefined) {
+		return({ verdict: 'fail', runs: records.length, latest: summary, firstDivergence: { at: latest.at, staple: unapplied, code: 'LEDGER_INSUFFICIENT_VOTING_WEIGHT', why: 'the replay never applied the staple, which comes before the window' } });
 	}
 	let verdict: Verdict = 'not-comparable-yet';
 	if (latest.windowStaples > 0) {

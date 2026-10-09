@@ -11,31 +11,36 @@ import type { ShadowLiveStore } from './shadow-live.js';
 
 const HOUR = 60 * 60_000;
 
-/** The follower's store holding the staples, its reach two hours after the last of them. */
-function storeOf(staples: readonly VoteStaple[]): ShadowLiveStore {
-	const held: HeldStaple[] = replayOrder(staples).map(function(staple): HeldStaple {
+/** The follower's store serving the staples in the order given, its reach two hours after the last of them. */
+function servedInOrder(staples: readonly VoteStaple[]): ShadowLiveStore {
+	const held: HeldStaple[] = staples.map(function(staple): HeldStaple {
 		return({ staple, stapleTime: staple.timestamp() });
 	});
-	const lastMoment = held.at(-1)?.stapleTime.getTime() ?? 0;
-	const keyOf = function(entry: HeldStaple): StapleKey {
-		return({ stapleTime: entry.stapleTime, blocksHash: entry.staple.blocksHash.toString() });
-	};
-	const isAfter = function(entry: HeldStaple, after: StapleKey | undefined): boolean {
+	const lastMoment = Math.max(...held.map(function(entry): number {
+		return(entry.stapleTime.getTime());
+	}));
+	const positionAfter = function(after: StapleKey | undefined): number {
 		if (after === undefined) {
-			return(true);
+			return(0);
 		}
-		const key = keyOf(entry);
-		return(key.stapleTime.getTime() > after.stapleTime.getTime() || (key.stapleTime.getTime() === after.stapleTime.getTime() && key.blocksHash > after.blocksHash));
+		return(held.findIndex(function(entry): boolean {
+			return(entry.staple.blocksHash.toString() === after.blocksHash);
+		}) + 1);
 	};
 	return({
 		progress: () => Promise.resolve({ completedPass: undefined, heldBefore: new Date(lastMoment + 2 * HOUR) }),
 		stapleCountBefore: (before) => Promise.resolve(held.filter(function(entry) {
 			return(entry.stapleTime < before);
 		}).length),
-		staplesBefore: (before, after, count) => Promise.resolve(held.filter(function(entry) {
-			return(entry.stapleTime < before && isAfter(entry, after));
+		staplesBefore: (before, after, count) => Promise.resolve(held.slice(positionAfter(after)).filter(function(entry) {
+			return(entry.stapleTime < before);
 		}).slice(0, count))
 	});
+}
+
+/** The follower's store holding the staples in history order. */
+function storeOf(staples: readonly VoteStaple[]): ShadowLiveStore {
+	return(servedInOrder(replayOrder(staples)));
 }
 
 async function committedExceptions(): Promise<ReadonlyMap<string, string>> {
@@ -66,7 +71,7 @@ describe('shadow votes on the follower\'s history', function() {
 			return(inWindow.has(blocksHash));
 		});
 		expect(expected.length).toBeGreaterThan(0);
-		expect(record).toMatchObject({ kind: 'shadow-live', replayed: head.length, windowStaples: window, unexplained: [], deferredInWindow: [] });
+		expect(record).toMatchObject({ kind: 'shadow-live', replayed: head.length, windowStaples: window, unexplained: [], deferredInWindow: [], unappliedBeforeWindow: [] });
 		expect(record.windowTo).toBe(replayOrder(head).at(-1)?.timestamp().toISOString());
 		expect(new Map(record.explained.map(function(refusal) {
 			return([refusal.blocksHash, refusal.reason]);
@@ -105,6 +110,16 @@ describe('shadow votes on the follower\'s history', function() {
 			return(refusal.blocksHash);
 		})).toContain(dependent?.blocksHash.toString());
 		expect(record.deferredInWindow).toContain(dependent?.blocksHash.toString());
+	}, REPLAY_TIMEOUT_MILLISECONDS);
+
+	test('retry a staple refused for want of voting weight once the staples that give it come', async function() {
+		const head = replayOrder(await loadMainnetFixture('head')).slice(0, 200);
+		// The genesis staple gives the first representatives their weight; served late, the staples before it wait for it.
+		const rest = head.slice(1);
+		const late = [...rest.slice(0, 5), ...head.slice(0, 1), ...rest.slice(5)];
+		const record = await shadowVoteLive({ store: servedInOrder(late), windowStaples: 50, storage: () => new MemoryLedgerStorage(), batchStaples: 20 });
+		expect(record.refusedForWeight).toBeGreaterThan(0);
+		expect(record).toMatchObject({ replayed: 200, unappliedBeforeWindow: [], deferredInWindow: [] });
 	}, REPLAY_TIMEOUT_MILLISECONDS);
 
 	test('vote on nothing before the follower has read anything', async function() {

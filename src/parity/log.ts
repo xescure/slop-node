@@ -195,6 +195,10 @@ export type ShadowLiveRecord = {
 	readonly unexplained: readonly UnexplainedShadowRefusal[];
 	/** Staples of the window the replay could not apply. */
 	readonly deferredInWindow: readonly string[];
+	/** Staples refused at first for want of voting weight, and tried again as more were added. */
+	readonly refusedForWeight: number;
+	/** Staples before the window the replay never applied, which leave the window's ledger short of them. */
+	readonly unappliedBeforeWindow: readonly string[];
 };
 
 export type ParityRecord = ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | APIDiffRecord | ShadowLiveRecord;
@@ -555,10 +559,12 @@ function shadowLiveRecordOf(value: Fields): ShadowLiveRecord | undefined {
 	const explained = listOf(value['explained'], shadowRefusalOf);
 	const unexplained = listOf(value['unexplained'], unexplainedShadowRefusalOf);
 	const deferredInWindow = listOf(value['deferredInWindow'], textOf);
-	if (!isString(at) || !isCount(replayed) || !isCount(windowStaples) || !isStringOrNull(windowFrom) || !isStringOrNull(windowTo) || !isCount(voted) || explained === undefined || unexplained === undefined || deferredInWindow === undefined) {
+	const unappliedBeforeWindow = listOf(value['unappliedBeforeWindow'], textOf);
+	const { refusedForWeight } = value;
+	if (!isString(at) || !isCount(replayed) || !isCount(windowStaples) || !isStringOrNull(windowFrom) || !isStringOrNull(windowTo) || !isCount(voted) || !isCount(refusedForWeight) || explained === undefined || unexplained === undefined || deferredInWindow === undefined || unappliedBeforeWindow === undefined) {
 		return(undefined);
 	}
-	return({ kind: 'shadow-live', at, replayed, windowStaples, windowFrom, windowTo, voted, explained, unexplained, deferredInWindow });
+	return({ kind: 'shadow-live', at, replayed, windowStaples, windowFrom, windowTo, voted, explained, unexplained, deferredInWindow, refusedForWeight, unappliedBeforeWindow });
 }
 
 function sweepRecordOf(value: Fields): SweepRecord | undefined {

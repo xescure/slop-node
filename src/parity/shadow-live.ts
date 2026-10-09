@@ -38,6 +38,60 @@ function keyOf(staple: VoteStaple): string {
 	return(staple.blocksHash.toString());
 }
 
+/** The ledger's refusal of a staple whose votes are short of a quorum by the weights it holds so far. */
+function isWeightRefusal(error: unknown): boolean {
+	return(lib.Error.isInstance(error) && error.code === 'LEDGER_INSUFFICIENT_VOTING_WEIGHT');
+}
+
+/**
+ * Adds staples as the follower's bootstrap does: one refused for want of
+ * voting weight waits, and is tried again once more staples were added,
+ * since the staples that give its voters their weight may come later in
+ * the order of the staples' own moments than in the order mainnet applied
+ * them (src/node/bootstrap-pass.ts).
+ */
+class WeightedAdds {
+	readonly #ledger: Ledger;
+	readonly #waiting = new Map<string, VoteStaple>();
+	readonly refused = new Set<string>();
+
+	constructor(ledger: Ledger) {
+		this.#ledger = ledger;
+	}
+
+	async add(staple: VoteStaple): Promise<void> {
+		try {
+			await this.#ledger.add(staple);
+			this.#waiting.delete(keyOf(staple));
+		} catch (error: unknown) {
+			if (!isWeightRefusal(error)) {
+				throw(error);
+			}
+			this.refused.add(keyOf(staple));
+			this.#waiting.set(keyOf(staple), staple);
+		}
+	}
+
+	/** Tries every waiting staple again, each at its own moment, until a round adds none. */
+	async retry(): Promise<void> {
+		for (;;) {
+			const before = this.#waiting.size;
+			for (const staple of [...this.#waiting.values()]) {
+				await atMoment(staple.timestamp(), () => {
+					return(this.add(staple));
+				});
+			}
+			if (this.#waiting.size === 0 || this.#waiting.size === before) {
+				return;
+			}
+		}
+	}
+
+	waiting(): readonly string[] {
+		return([...this.#waiting.keys()]);
+	}
+}
+
 /**
  * Replays the follower's history from the first staple to the end of the
  * window into an offline ledger, a representative's of its own that votes
@@ -53,7 +107,7 @@ function keyOf(staple: VoteStaple): string {
 export async function shadowVoteLive(setup: ShadowLiveSetup): Promise<ShadowLiveRecord> {
 	const at = new Date().toISOString();
 	const { heldBefore } = await setup.store.progress();
-	const empty: ShadowLiveRecord = { kind: 'shadow-live', at, replayed: 0, windowStaples: 0, windowFrom: null, windowTo: null, voted: 0, explained: [], unexplained: [], deferredInWindow: [] };
+	const empty: ShadowLiveRecord = { kind: 'shadow-live', at, replayed: 0, windowStaples: 0, windowFrom: null, windowTo: null, voted: 0, explained: [], unexplained: [], deferredInWindow: [], refusedForWeight: 0, unappliedBeforeWindow: [] };
 	if (heldBefore === undefined) {
 		return(empty);
 	}
@@ -63,6 +117,7 @@ export async function shadowVoteLive(setup: ShadowLiveSetup): Promise<ShadowLive
 	const node = new lib.Node(mainnetNodeConfig(setup.storage()));
 	const { ledger } = node;
 	const voter = shadowVoter();
+	const adds = new WeightedAdds(ledger);
 	const window: VoteStaple[] = [];
 	let replayed = 0;
 	let after: StapleKey | undefined;
@@ -84,10 +139,11 @@ export async function shadowVoteLive(setup: ShadowLiveSetup): Promise<ShadowLive
 						window.push(staple);
 						await voter.beforeAdd(staple, ledger);
 					}
-					await ledger.add(staple);
+					await adds.add(staple);
 				});
 				replayed++;
 			}
+			await adds.retry();
 			after = { stapleTime: last.stapleTime, blocksHash: keyOf(last.staple) };
 		}
 		const drainAt = window.at(-1)?.timestamp() ?? end;
@@ -100,6 +156,10 @@ export async function shadowVoteLive(setup: ShadowLiveSetup): Promise<ShadowLive
 		const deferredInWindow = window.filter(function(staple): boolean {
 			return(stored.get(staple.blocksHash) === null);
 		}).map(keyOf);
+		const inWindow = new Set(window.map(keyOf));
+		const unappliedBeforeWindow = adds.waiting().filter(function(staple): boolean {
+			return(!inWindow.has(staple));
+		});
 		const explained: ShadowRefusal[] = [];
 		const unexplained: UnexplainedShadowRefusal[] = [];
 		for (const vote of voter.votes) {
@@ -131,7 +191,9 @@ export async function shadowVoteLive(setup: ShadowLiveSetup): Promise<ShadowLive
 			voted: voter.votes.length - explained.length - unexplained.length,
 			explained,
 			unexplained,
-			deferredInWindow
+			deferredInWindow,
+			refusedForWeight: adds.refused.size,
+			unappliedBeforeWindow
 		});
 	} finally {
 		/*
