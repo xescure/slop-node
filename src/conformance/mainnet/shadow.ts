@@ -9,8 +9,8 @@ import type { Permissions } from '@keetanetwork/keetanet-client/lib/permissions.
 import type { Vote, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerInternals } from '../../upstream/internals.js';
 import { assertNever } from '../../util/assert-never.js';
+import { compareText } from '../../util/compare-text.js';
 import { DRIVER_WRAPPING_CODE } from '../case.js';
-import { compareText } from './replay.js';
 
 /*
  * A representative that follows mainnet is also asked to vote on what it

@@ -1,5 +1,6 @@
 import pg from 'pg';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
+import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RANGES_KEY, layoutOf, progressOf } from '../node/bootstrap-cursors.js';
 import type { PeerProgress } from '../node/bootstrap-pass.js';
 import type { RangeLayout } from '../node/bootstrap-ranges.js';
@@ -76,6 +77,15 @@ export type HeldBlock = {
 	readonly bytes: Buffer;
 };
 
+/** A main staple and the time the follower's history keys it by. */
+export type HeldStaple = {
+	readonly staple: VoteStaple;
+	readonly stapleTime: Date;
+};
+
+/** Where a read of staples in history order resumes: after the staple at this time with this hash of its blocks. */
+export type StapleKey = { readonly stapleTime: Date; readonly blocksHash: string };
+
 /** What the parity tools read of the follower's own storage. */
 export type FollowerStore = {
 	progress(): Promise<FollowerProgress>;
@@ -96,6 +106,10 @@ export type FollowerStore = {
 	heldBlocks(fromHash: string, before: Date, count: number): Promise<readonly HeldBlock[]>;
 	/** The main blocks of those staples, by the hash of their blocks, that are before the moment. */
 	heldBlocksOfStaples(blocksHashes: readonly string[], before: Date): Promise<readonly HeldBlock[]>;
+	/** How many main staples there are before the moment. */
+	stapleCountBefore(before: Date): Promise<number>;
+	/** Main staples before the moment, oldest first by time and then by the hash of their blocks, after the key, at most the count of them. */
+	staplesBefore(before: Date, after: StapleKey | undefined, count: number): Promise<readonly HeldStaple[]>;
 	/** The time of each account's newest staple, none for an account without history. */
 	newestStaples(accounts: readonly string[]): Promise<ReadonlyMap<string, Date>>;
 	close(): Promise<void>;
@@ -254,6 +268,70 @@ const NEWEST_STAPLES = `
 	SELECT a.public_key, (SELECT max(h.staple_time) FROM history h WHERE h.account_id = a.id) AS newest_staple
 	FROM accounts a WHERE a.public_key = ANY($1::text[])`;
 
+const STAPLE_COUNT_BEFORE = 'SELECT count(*) AS count FROM staples WHERE staple_time < $1';
+
+/** The history index orders staples by time and hash, newest first, so it is read backwards. */
+const STAPLES_BEFORE = `
+	SELECT blocks_hash, staple_time, bytes FROM staples
+	WHERE staple_time < $1 AND (staple_time, blocks_hash) > ($2, $3)
+	ORDER BY staple_time, blocks_hash LIMIT $4`;
+
+const REBUILT_STAPLE_BLOCKS = `
+	SELECT staple, bytes FROM blocks WHERE ledger = 'main' AND staple = ANY($1::bytea[]) ORDER BY staple, staple_position`;
+
+// Votes were inserted in staple order, so their IDs keep it.
+const REBUILT_STAPLE_VOTES = `
+	SELECT blocks_hash, bytes, validity_from FROM votes WHERE ledger = 'main' AND blocks_hash = ANY($1::bytea[]) ORDER BY id`;
+
+/** Grouped by the hex of a column, in the order the rows came. */
+function groupedBy<Row>(rows: readonly Row[], keyOf: (row: Row) => Buffer): Map<string, Row[]> {
+	const groups = new Map<string, Row[]>();
+	for (const row of rows) {
+		const key = hexOfBytes(keyOf(row));
+		const group = groups.get(key) ?? [];
+		group.push(row);
+		groups.set(key, group);
+	}
+	return(groups);
+}
+
+/*
+ * A staple is read as the bytes it was received as; one stored before
+ * those were kept is rebuilt from its blocks and votes, as the follower's
+ * own driver rebuilds it (src/ledger/storage/postgres/driver.ts). A vote
+ * is decoded at its own validity, so a temporary one is not refused as
+ * expired.
+ */
+async function heldStaplesOf(pool: pg.Pool, rows: readonly { blocks_hash: Buffer; staple_time: Date; bytes: Buffer | null }[]): Promise<HeldStaple[]> {
+	const missing = rows.filter(function(row): boolean {
+		return(row.bytes === null);
+	}).map(function(row): Buffer {
+		return(row.blocks_hash);
+	});
+	let blocks = new Map<string, { staple: Buffer; bytes: Buffer }[]>();
+	let votes = new Map<string, { blocks_hash: Buffer; bytes: Buffer; validity_from: Date }[]>();
+	if (missing.length > 0) {
+		blocks = groupedBy((await pool.query<{ staple: Buffer; bytes: Buffer }>(REBUILT_STAPLE_BLOCKS, [missing])).rows, function(row): Buffer {
+			return(row.staple);
+		});
+		votes = groupedBy((await pool.query<{ blocks_hash: Buffer; bytes: Buffer; validity_from: Date }>(REBUILT_STAPLE_VOTES, [missing])).rows, function(row): Buffer {
+			return(row.blocks_hash);
+		});
+	}
+	return(rows.map(function(row): HeldStaple {
+		if (row.bytes !== null) {
+			return({ staple: new lib.Vote.Staple(row.bytes), stapleTime: row.staple_time });
+		}
+		const key = hexOfBytes(row.blocks_hash);
+		const staple = lib.Vote.Staple.fromVotesAndBlocks((votes.get(key) ?? []).map(function(vote) {
+			return(new lib.Vote(vote.bytes, { now: vote.validity_from }));
+		}), (blocks.get(key) ?? []).map(function(block) {
+			return(new lib.Block(block.bytes));
+		}));
+		return({ staple, stapleTime: row.staple_time });
+	}));
+}
+
 function hexOfBytes(bytes: Buffer): string {
 	return(bytes.toString('hex').toUpperCase());
 }
@@ -389,6 +467,15 @@ export function openFollowerStore(connectionString: string): FollowerStore {
 				return(Buffer.from(hash, 'hex'));
 			});
 			return((await pool.query<HeldBlockRow>(HELD_BLOCKS_OF_STAPLES, [keys, before])).rows.map(heldBlockOf));
+		},
+		async stapleCountBefore(before: Date): Promise<number> {
+			const result = await pool.query<{ count: string }>(STAPLE_COUNT_BEFORE, [before]);
+			return(Number(result.rows[0]?.count ?? 0));
+		},
+		async staplesBefore(before: Date, after: StapleKey | undefined, count: number): Promise<readonly HeldStaple[]> {
+			const from = after ?? { stapleTime: new Date(0), blocksHash: '' };
+			const rows = await pool.query<{ blocks_hash: Buffer; staple_time: Date; bytes: Buffer | null }>(STAPLES_BEFORE, [before, from.stapleTime, Buffer.from(from.blocksHash, 'hex'), count]);
+			return(await heldStaplesOf(pool, rows.rows));
 		},
 		async newestStaples(accounts: readonly string[]): Promise<ReadonlyMap<string, Date>> {
 			const result = await pool.query<{ public_key: string; newest_staple: Date | null }>(NEWEST_STAPLES, [accounts]);

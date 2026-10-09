@@ -1,11 +1,16 @@
 import { afterEach, describe, expect, inject, test } from 'vitest';
+import * as KeetaNet from '@keetanetwork/keetanet-client';
+import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RANGES_KEY } from '../node/bootstrap-cursors.js';
 import type { PeerProgress } from '../node/bootstrap-pass.js';
 import type { RangeLayout } from '../node/bootstrap-ranges.js';
+import { confirmedStaple, setRepresentativeBlock } from '../testing/blocks.js';
 import { createDatabase } from '../testing/postgres.js';
 import type { TestDatabase } from '../testing/postgres.js';
 import { heldBeforeOf, openFollowerStore, readOnlyPool } from './follower-store.js';
 import type { FollowerStore } from './follower-store.js';
+
+const lib = KeetaNet.lib;
 
 const PEER = 'https://rep1.example/api';
 const OTHER_PEER = 'https://rep2.example/api';
@@ -237,5 +242,57 @@ describe('the follower\'s store, read from its database', function() {
 		expect(await store.heldBlocksOfStaples([OTHER_STAPLE], quietBefore)).toEqual([]);
 
 		expect(await store.newestStaples([first, second, third])).toEqual(new Map([[first, quietTime], [second, recentTime]]));
+	});
+
+	test('reads the staples before a moment in history order, rebuilding one stored without its bytes', async function() {
+		const database = await followerDatabase({});
+		const pool = database.pool();
+		const signer = lib.Account.fromSeed('5e'.repeat(32), 0);
+		const issuer = signer.publicKeyString.get();
+		await pool.query('INSERT INTO accounts (public_key, key_type) VALUES ($1, 0)', [issuer]);
+		const made: VoteStaple[] = [];
+		for (const day of [1, 2, 3]) {
+			const block = await setRepresentativeBlock({ account: signer, representative: signer, previous: made.at(-1)?.blocks[0]?.hash ?? null, network: 0x5382n, date: new Date(Date.UTC(2025, 10, day)) });
+			made.push(await confirmedStaple([block], [signer]));
+		}
+		for (const [index, staple] of made.entries()) {
+			// The second staple was stored before staples kept their bytes.
+			let bytes: Buffer | null = Buffer.from(staple.toBytes());
+			if (index === 1) {
+				bytes = null;
+			}
+			const key = Buffer.from(staple.blocksHash.toString(), 'hex');
+			await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, bytes) VALUES ($1, $2, $2, $3)', [key, staple.timestamp(), bytes]);
+			for (const [position, block] of staple.blocks.entries()) {
+				await pool.query(`INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position)
+					SELECT $1, 'main', id, $2, 1, $3, $4, $5 FROM accounts WHERE public_key = $6`, [Buffer.from(block.hash.toString(), 'hex'), Buffer.from(block.previous.toString(), 'hex'), Buffer.from(block.toBytes()), key, position, issuer]);
+			}
+			for (const vote of staple.votes) {
+				await pool.query(`INSERT INTO votes (ledger, uid, blocks_hash, issuer_id, validity_from, validity_to, permanent, bytes)
+					SELECT 'main', $1, $2, id, $3, $4, $5, $6 FROM accounts WHERE public_key = $7`, [vote.$uid, key, vote.validityFrom, vote.validityTo, vote.$permanent, Buffer.from(vote.toBytes()), issuer]);
+			}
+		}
+		await database.endPools();
+		const store = storeOf(database);
+		const before = new Date(Date.UTC(2025, 10, 3));
+
+		// The staples the database starts with are later, in December.
+		expect(await store.stapleCountBefore(before)).toBe(2);
+		const read = await store.staplesBefore(before, undefined, 10);
+		const hexOf = function(staple: VoteStaple | undefined): string {
+			return(Buffer.from(staple?.toBytes() ?? new ArrayBuffer(0)).toString('hex'));
+		};
+		expect(read.map(function(entry) {
+			return([entry.staple.blocksHash.toString(), entry.stapleTime.getTime()]);
+		})).toEqual(made.slice(0, 2).map(function(staple) {
+			return([staple.blocksHash.toString(), staple.timestamp().getTime()]);
+		}));
+		expect(hexOf(read[1]?.staple)).toBe(hexOf(made[1]));
+		const [first] = read;
+		expect(first).toBeDefined();
+		const rest = await store.staplesBefore(before, { stapleTime: first?.stapleTime ?? before, blocksHash: first?.staple.blocksHash.toString() ?? '' }, 10);
+		expect(rest.map(function(entry) {
+			return(entry.staple.blocksHash.toString());
+		})).toEqual([made[1]?.blocksHash.toString()]);
 	});
 });

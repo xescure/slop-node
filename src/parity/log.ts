@@ -1,5 +1,7 @@
 import { appendFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { SHADOW_REFUSAL_REASONS } from '../conformance/mainnet/shadow.js';
+import type { ShadowRefusalReason } from '../conformance/mainnet/shadow.js';
 import { stratumOf } from './strata.js';
 import type { Stratum } from './strata.js';
 
@@ -162,7 +164,40 @@ export type APIDiffRecord = {
 	readonly outcome: APIDiffOutcome;
 };
 
-export type ParityRecord = ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | APIDiffRecord;
+/** A staple of the window the offline ledger refused to vote on, and the classified difference that explains it. */
+export type ShadowRefusal = {
+	readonly blocksHash: string;
+	readonly reason: ShadowRefusalReason;
+	readonly code: string;
+};
+
+/** A refusal no classified difference explains, or more than one does. */
+export type UnexplainedShadowRefusal = {
+	readonly blocksHash: string;
+	readonly code: string;
+	readonly message: string;
+	readonly why: string;
+};
+
+/** Shadow votes on a window of the follower's history, replayed from its first staple into an offline ledger. */
+export type ShadowLiveRecord = {
+	readonly kind: 'shadow-live';
+	readonly at: string;
+	/** Staples replayed, the window's among them. */
+	readonly replayed: number;
+	readonly windowStaples: number;
+	/** The moments of the window's first and last staples. */
+	readonly windowFrom: string | null;
+	readonly windowTo: string | null;
+	/** Staples of the window the offline ledger voted for. */
+	readonly voted: number;
+	readonly explained: readonly ShadowRefusal[];
+	readonly unexplained: readonly UnexplainedShadowRefusal[];
+	/** Staples of the window the replay could not apply. */
+	readonly deferredInWindow: readonly string[];
+};
+
+export type ParityRecord = ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | APIDiffRecord | ShadowLiveRecord;
 
 /** The records a log holds, and how many of its lines were not records, as the end of a line cut short by a crash. */
 export type ParityLogContents = {
@@ -481,16 +516,49 @@ function apiDiffRecordOf(value: Fields): APIDiffRecord | undefined {
 	const { at, representative, route, path } = value;
 	const stratum = stratumOf(value['stratum']);
 	const outcome = apiDiffOutcomeOf(value['outcome']);
-	const behaviours = listOf(value['behaviours'], function(behaviour): string | undefined {
-		if (!isString(behaviour)) {
-			return(undefined);
-		}
-		return(behaviour);
-	});
+	const behaviours = listOf(value['behaviours'], textOf);
 	if (!isString(at) || !isString(representative) || !isString(route) || !isString(path) || behaviours === undefined || stratum === undefined || outcome === undefined) {
 		return(undefined);
 	}
 	return({ kind: 'api-diff', at, representative, stratum, route, path, behaviours, outcome });
+}
+
+function textOf(value: unknown): string | undefined {
+	if (!isString(value)) {
+		return(undefined);
+	}
+	return(value);
+}
+
+function shadowRefusalOf(value: unknown): ShadowRefusal | undefined {
+	if (!isFields(value) || !isString(value['blocksHash']) || !isString(value['code'])) {
+		return(undefined);
+	}
+	const reason = SHADOW_REFUSAL_REASONS.find(function(known): boolean {
+		return(known === value['reason']);
+	});
+	if (reason === undefined) {
+		return(undefined);
+	}
+	return({ blocksHash: value['blocksHash'], reason, code: value['code'] });
+}
+
+function unexplainedShadowRefusalOf(value: unknown): UnexplainedShadowRefusal | undefined {
+	if (!isFields(value) || !isString(value['blocksHash']) || !isString(value['code']) || !isString(value['message']) || !isString(value['why'])) {
+		return(undefined);
+	}
+	return({ blocksHash: value['blocksHash'], code: value['code'], message: value['message'], why: value['why'] });
+}
+
+function shadowLiveRecordOf(value: Fields): ShadowLiveRecord | undefined {
+	const { at, replayed, windowStaples, windowFrom, windowTo, voted } = value;
+	const explained = listOf(value['explained'], shadowRefusalOf);
+	const unexplained = listOf(value['unexplained'], unexplainedShadowRefusalOf);
+	const deferredInWindow = listOf(value['deferredInWindow'], textOf);
+	if (!isString(at) || !isCount(replayed) || !isCount(windowStaples) || !isStringOrNull(windowFrom) || !isStringOrNull(windowTo) || !isCount(voted) || explained === undefined || unexplained === undefined || deferredInWindow === undefined) {
+		return(undefined);
+	}
+	return({ kind: 'shadow-live', at, replayed, windowStaples, windowFrom, windowTo, voted, explained, unexplained, deferredInWindow });
 }
 
 function sweepRecordOf(value: Fields): SweepRecord | undefined {
@@ -524,6 +592,8 @@ export function parityRecordOf(line: string): ParityRecord | undefined {
 			return(sweepRecordOf(value));
 		case 'api-diff':
 			return(apiDiffRecordOf(value));
+		case 'shadow-live':
+			return(shadowLiveRecordOf(value));
 		default:
 			return(undefined);
 	}

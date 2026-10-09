@@ -4,9 +4,9 @@ import { CAPTURE_DIRECTORY, jsonFiles, readCapture, requestPathOf } from '../con
 import { isJSONObject } from '../conformance/api/document.js';
 import { normalizedAll } from '../conformance/api/normalize.js';
 import type { Normalization } from '../conformance/api/normalize.js';
-import { loadMainnetFixture, mainnetReplayRepresentative } from '../conformance/mainnet/fixture.js';
+import { loadMainnetFixture, mainnetNodeConfig, mainnetReplayRepresentative } from '../conformance/mainnet/fixture.js';
 import { REPLAY_TIMEOUT_MILLISECONDS } from '../conformance/mainnet/head-replay.js';
-import { mainnetNodeConfig, replayOn } from '../conformance/mainnet/replay.js';
+import { replayOn } from '../conformance/mainnet/replay.js';
 import { driverUnderTestNamed } from '../ledger/storage/suite/drivers.js';
 import { LocalNode } from '../node/local.js';
 import { request } from '../testing/local-node.js';

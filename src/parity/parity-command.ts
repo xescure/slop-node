@@ -8,6 +8,7 @@ export type ParityCommand =
 	| { readonly kind: 'checksum'; readonly directory: string; readonly gapMilliseconds: number }
 	| { readonly kind: 'sweep'; readonly directory: string; readonly accounts: number }
 	| { readonly kind: 'api-diff'; readonly directory: string; readonly samplesPerStratum: number; readonly seed: string | undefined }
+	| { readonly kind: 'shadow'; readonly directory: string; readonly windowStaples: number }
 	| { readonly kind: 'report'; readonly directory: string; readonly sampleAccounts: number; readonly apiSamples: number; readonly gapMilliseconds: number };
 
 export const DEFAULT_SWEEP_ACCOUNTS = 100;
@@ -17,6 +18,9 @@ export const DEFAULT_REPORT_SAMPLE_ACCOUNTS = 16;
 
 /** Requests of each stratum an API diff compares: by the rule of three, a divergence rate below 6% at 95% for each. */
 export const DEFAULT_API_SAMPLES = 50;
+
+/** The staples shadow-voted on: the newest of the follower's reach, enough to hold every kind of staple a day of the main network carries. */
+export const DEFAULT_SHADOW_WINDOW = 1000;
 
 /** The fresh API diff sample of a report: a couple of requests of each stratum, a minute or so at the representatives' pace. */
 export const DEFAULT_REPORT_API_SAMPLES = 2;
@@ -40,6 +44,9 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 			break;
 		case 'api-diff':
 			valued = ['--directory', '--samples', '--seed'];
+			break;
+		case 'shadow':
+			valued = ['--directory', '--window'];
 			break;
 		case 'report':
 			valued = ['--directory', '--sample', '--api-samples', '--gap-ms'];
@@ -72,6 +79,13 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 				return(undefined);
 			}
 			return({ kind: name, directory, samplesPerStratum, seed: options.get('--seed') });
+		}
+		case 'shadow': {
+			const windowStaples = setting(options, '--window', Number.MAX_SAFE_INTEGER, DEFAULT_SHADOW_WINDOW);
+			if (windowStaples === undefined) {
+				return(undefined);
+			}
+			return({ kind: name, directory, windowStaples });
 		}
 		case 'report': {
 			const sampleAccounts = setting(options, '--sample', Number.MAX_SAFE_INTEGER, DEFAULT_REPORT_SAMPLE_ACCOUNTS);

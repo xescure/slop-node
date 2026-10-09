@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { setTimeout as delay } from 'node:timers/promises';
+import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { PeerPacer } from '../node/bootstrap-pacing.js';
 import { assertNever } from '../util/assert-never.js';
 import { capturedBehaviours, sampleAPI } from './api-diff.js';
@@ -19,6 +20,7 @@ import { lockParity, parseParityCommand } from './parity-command.js';
 import type { ParityCommand } from './parity-command.js';
 import { runParity, sweepPointerOf } from './report.js';
 import type { ParityReport } from './report.js';
+import { shadowVoteLive } from './shadow-live.js';
 import { sweepAccounts, sweepCursorPath } from './sweep.js';
 
 /**
@@ -45,8 +47,12 @@ const USAGE = [
 	'            follower and to a representative, and compare the answers, stratum by stratum',
 	'            --samples <n>      how many requests of each stratum to compare (50)',
 	'            --seed <text>      fixes which requests are drawn (the time of the run)',
+	'  shadow    replay the follower\'s history into an offline ledger and shadow-vote on the newest staples',
+	'            within its reach, as a representative asked about them then would; it reads only the',
+	'            follower\'s database',
+	'            --window <n>       how many staples to vote on (1000)',
 	'  report    check the checksum and compare a sweep sample and an API diff sample, then print the',
-	'            parity report as JSON; exits 1 when a signal fails',
+	'            parity report as JSON, with the latest shadow votes from the log; exits 1 when a signal fails',
 	'            --sample <n>       how many accounts the sweep sample compares (16)',
 	'            --api-samples <n>  how many requests of each stratum the API diff sample compares (2)',
 	'            --gap-ms <ms>      as for checksum',
@@ -131,6 +137,12 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 				knownBehaviours: await capturedBehaviours(fileURLToPath(CAPTURE_DIRECTORY))
 			});
 			process.stdout.write(`${JSON.stringify(summary, null, '\t')}\n`);
+			return(0);
+		}
+		case 'shadow': {
+			const record = await shadowVoteLive({ store: tools.store, windowStaples: command.windowStaples, storage: () => new MemoryLedgerStorage() });
+			await tools.log.append([record]);
+			process.stdout.write(`${JSON.stringify(record, null, '\t')}\n`);
 			return(0);
 		}
 		case 'report': {

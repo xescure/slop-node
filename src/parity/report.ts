@@ -4,13 +4,14 @@ import type { APIDiffSetup } from './api-diff.js';
 import type { APISource } from './api-source.js';
 import { checksumsEqual, compareChecksums, crossCheckChecksum } from './checksum.js';
 import type { FollowerProgress, FollowerStore } from './follower-store.js';
-import type { APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, SweepCursor, SweepPointer, SweepRecord } from './log.js';
+import type { ShadowRefusalReason } from '../conformance/mainnet/shadow.js';
+import type { APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, ShadowLiveRecord, SweepCursor, SweepPointer, SweepRecord } from './log.js';
 import { STRATA } from './strata.js';
 import type { Stratum } from './strata.js';
 import { readSweepCursor, sweepAccounts } from './sweep.js';
 
-/** A signal's verdict; a signal whose tool does not exist yet reports so rather than passing. */
-export type Verdict = 'pass' | 'fail' | 'not-comparable-yet' | 'not-implemented';
+/** A signal's verdict. */
+export type Verdict = 'pass' | 'fail' | 'not-comparable-yet';
 
 /** What the comparisons support about how often a signal diverges. */
 export type ConfidenceBound =
@@ -32,18 +33,15 @@ export type FirstDivergence = Divergence & {
 	readonly representative: string | null;
 };
 
-/** A verdict of a signal or a part of one. */
-export type SignalVerdict = Exclude<Verdict, 'not-implemented'>;
-
 export type CrossCheckPart = {
-	readonly verdict: SignalVerdict;
+	readonly verdict: Verdict;
 	readonly runs: number;
 	/** The latest cross-check, which the verdict is of. */
 	readonly latest: CrossCheckRecord | null;
 };
 
 export type BlockCountPart = {
-	readonly verdict: SignalVerdict;
+	readonly verdict: Verdict;
 	readonly counts: { readonly comparisons: number; readonly comparable: number; readonly passed: number; readonly failed: number };
 	/** Why the latest comparisons did not count. */
 	readonly notComparableReasons: readonly BlockCountNotComparableReason[];
@@ -63,7 +61,7 @@ export type RepresentativeChecksums = {
 };
 
 export type ChecksumSignal = {
-	readonly verdict: SignalVerdict;
+	readonly verdict: Verdict;
 	/** The follower's stored checksum against the XOR of its main blocks. */
 	readonly crossCheck: CrossCheckPart;
 	/** The follower's block count against the representatives'. */
@@ -74,7 +72,7 @@ export type ChecksumSignal = {
 };
 
 export type SweepSignal = {
-	readonly verdict: Exclude<Verdict, 'not-implemented'>;
+	readonly verdict: Verdict;
 	readonly counts: {
 		readonly knownAccounts: number;
 		/** The lap the sweep is on, and how many accounts it has walked past in it. */
@@ -97,7 +95,23 @@ export type SweepSignal = {
 	readonly firstDivergence: FirstDivergence | null;
 };
 
-export type PendingSignal = { readonly verdict: 'not-implemented' };
+/** The latest shadow-vote run, the refusals of its window counted by the difference that explains them. */
+export type ShadowVotesSignal = {
+	readonly verdict: Verdict;
+	readonly runs: number;
+	readonly latest: {
+		readonly at: string;
+		readonly replayed: number;
+		readonly windowStaples: number;
+		readonly windowFrom: string | null;
+		readonly windowTo: string | null;
+		readonly voted: number;
+		readonly explained: Readonly<Partial<Record<ShadowRefusalReason, number>>>;
+		readonly unexplained: number;
+		readonly deferredInWindow: number;
+	} | null;
+	readonly firstDivergence: { readonly at: string; readonly staple: string; readonly code: string; readonly why: string } | null;
+};
 
 /** Each stratum's requests, each counted by its latest comparison. */
 export type APIDiffStratum = {
@@ -108,7 +122,7 @@ export type APIDiffStratum = {
 };
 
 export type APIDiffSignal = {
-	readonly verdict: SignalVerdict;
+	readonly verdict: Verdict;
 	readonly strata: readonly APIDiffStratum[];
 	readonly counts: {
 		readonly requestsCompared: number;
@@ -133,8 +147,7 @@ export type ParityReport = {
 		readonly checksum: ChecksumSignal;
 		readonly sweep: SweepSignal;
 		readonly apiDiff: APIDiffSignal;
-		/** Shadow votes on live history (P5), not implemented yet. */
-		readonly shadowVotes: PendingSignal;
+		readonly shadowVotes: ShadowVotesSignal;
 	};
 };
 
@@ -210,7 +223,7 @@ function blockCountPartOf(records: readonly BlockCountRecord[]): BlockCountPart 
 		}
 		return(record.verdict.reasons);
 	}))];
-	let verdict: SignalVerdict = 'not-comparable-yet';
+	let verdict: Verdict = 'not-comparable-yet';
 	if (latest.some(function(record): boolean {
 		return(record.verdict.kind === 'fail');
 	})) {
@@ -224,7 +237,7 @@ function blockCountPartOf(records: readonly BlockCountRecord[]): BlockCountPart 
 }
 
 /** A failing part fails the signal, and it passes only when both parts pass. */
-function combined(left: SignalVerdict, right: SignalVerdict): SignalVerdict {
+function combined(left: Verdict, right: Verdict): Verdict {
 	if (left === 'fail' || right === 'fail') {
 		return('fail');
 	}
@@ -423,11 +436,47 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], knownBehaviours: Rea
 	if (first?.outcome.kind === 'diverged') {
 		return({ verdict: 'fail', strata, counts, newBehaviours: behaviours, firstDivergence: { at: first.at, representative: first.representative, stratum: first.stratum, path: first.path, field: first.outcome.field } });
 	}
-	let verdict: SignalVerdict = 'not-comparable-yet';
+	let verdict: Verdict = 'not-comparable-yet';
 	if (latest.length > 0) {
 		verdict = 'pass';
 	}
 	return({ verdict, strata, counts, newBehaviours: behaviours, firstDivergence: null });
+}
+
+/** The latest run decides: a staple of its window refused without a classified explanation, or not applied at all, fails it. */
+function shadowVotesSignalOf(records: readonly ShadowLiveRecord[]): ShadowVotesSignal {
+	const latest = records.at(-1);
+	if (latest === undefined) {
+		return({ verdict: 'not-comparable-yet', runs: 0, latest: null, firstDivergence: null });
+	}
+	const explained: Partial<Record<ShadowRefusalReason, number>> = {};
+	for (const refusal of latest.explained) {
+		explained[refusal.reason] = (explained[refusal.reason] ?? 0) + 1;
+	}
+	const summary = {
+		at: latest.at,
+		replayed: latest.replayed,
+		windowStaples: latest.windowStaples,
+		windowFrom: latest.windowFrom,
+		windowTo: latest.windowTo,
+		voted: latest.voted,
+		explained,
+		unexplained: latest.unexplained.length,
+		deferredInWindow: latest.deferredInWindow.length
+	};
+	const [refused] = latest.unexplained;
+	if (refused !== undefined) {
+		return({ verdict: 'fail', runs: records.length, latest: summary, firstDivergence: { at: latest.at, staple: refused.blocksHash, code: refused.code, why: `${refused.message}: ${refused.why}` } });
+	}
+	const [deferred] = latest.deferredInWindow;
+	if (deferred !== undefined) {
+		return({ verdict: 'fail', runs: records.length, latest: summary, firstDivergence: { at: latest.at, staple: deferred, code: 'deferred', why: 'the replay could not apply the staple' } });
+	}
+	let verdict: Verdict = 'not-comparable-yet';
+	if (latest.windowStaples > 0) {
+		verdict = 'pass';
+	}
+	return({ verdict, runs: records.length, latest: summary, firstDivergence: null });
 }
 
 /** Where the sweep stands among the accounts the follower knows. */
@@ -456,7 +505,7 @@ export function parityReportOf(input: ReportInput): ParityReport {
 			checksum: checksumSignalOf(records),
 			sweep: sweepSignalOf(recordsOf(records, 'sweep'), input.sweep),
 			apiDiff: apiDiffSignalOf(recordsOf(records, 'api-diff'), input.knownBehaviours),
-			shadowVotes: { verdict: 'not-implemented' }
+			shadowVotes: shadowVotesSignalOf(recordsOf(records, 'shadow-live'))
 		}
 	});
 }

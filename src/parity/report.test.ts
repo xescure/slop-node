@@ -6,7 +6,7 @@ import { startFakeAPI } from '../testing/fake-api.js';
 import { httpSource } from './api-source.js';
 import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-store.js';
 import { ParityLog } from './log.js';
-import type { APIDiffOutcome, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, SweepOutcome, SweepRecord } from './log.js';
+import type { APIDiffOutcome, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, ShadowLiveRecord, SweepOutcome, SweepRecord } from './log.js';
 import { parityReportOf, runParity } from './report.js';
 import type { Stratum } from './strata.js';
 
@@ -66,7 +66,7 @@ describe('the parity report', function() {
 				checksum: { verdict: 'not-comparable-yet', firstDivergence: null },
 				sweep: { verdict: 'not-comparable-yet', firstDivergence: null, confidence: { kind: 'none' } },
 				apiDiff: { verdict: 'not-comparable-yet', firstDivergence: null, newBehaviours: [] },
-				shadowVotes: { verdict: 'not-implemented' }
+				shadowVotes: { verdict: 'not-comparable-yet', runs: 0, latest: null, firstDivergence: null }
 			}
 		});
 	});
@@ -148,6 +148,23 @@ describe('the parity report', function() {
 		expect(signal).toMatchObject({ verdict: 'fail', firstDivergence: { at: '2026-10-09T01:00:01.000Z', representative: REPRESENTATIVE, stratum: 'token', path, field: 'body.info' } });
 	});
 
+	test('gives shadow votes the verdict of the latest run, failing on a refusal no classified difference explains', function() {
+		const run = function(at: string, unexplained: ShadowLiveRecord['unexplained'], deferredInWindow: readonly string[] = []): ShadowLiveRecord {
+			return({ kind: 'shadow-live', at, replayed: 50, windowStaples: 10, windowFrom: at, windowTo: at, voted: 8 - unexplained.length, explained: [{ blocksHash: STAPLE, reason: 'self-requirement-return', code: 'LEDGER_INVALID_PERMISSIONS' }, { blocksHash: STAPLE, reason: 'self-requirement-return', code: 'LEDGER_INVALID_PERMISSIONS' }], unexplained, deferredInWindow });
+		};
+		const refusal = { blocksHash: STAPLE, code: 'LEDGER_PREVIOUS_NOT_SEEN', message: 'no previous', why: 'only a permission refusal is explained' };
+		const failed = run('2026-10-09T01:00:00.000Z', [refusal]);
+		const passed = run('2026-10-09T02:00:00.000Z', []);
+		expect(report([failed, passed]).signals.shadowVotes).toEqual({
+			verdict: 'pass',
+			runs: 2,
+			latest: { at: passed.at, replayed: 50, windowStaples: 10, windowFrom: passed.at, windowTo: passed.at, voted: 8, explained: { 'self-requirement-return': 2 }, unexplained: 0, deferredInWindow: 0 },
+			firstDivergence: null
+		});
+		expect(report([passed, failed]).signals.shadowVotes).toMatchObject({ verdict: 'fail', firstDivergence: { at: failed.at, staple: STAPLE, code: 'LEDGER_PREVIOUS_NOT_SEEN' } });
+		expect(report([run('2026-10-09T03:00:00.000Z', [], [STAPLE])]).signals.shadowVotes).toMatchObject({ verdict: 'fail', firstDivergence: { staple: STAPLE, code: 'deferred' } });
+	});
+
 	test('passes the sweep with the rule of three over the accounts compared when none diverges', function() {
 		const sweep = report([
 			swept('2026-10-09T01:00:00.000Z', ACCOUNT, MATCH),
@@ -227,6 +244,8 @@ describe('a parity run', function() {
 			historyHolds: () => Promise.resolve(false),
 			checksumSnapshot: () => Promise.resolve({ stored: 0n, folded: 0n, mainBlocks: 0, staples: [] }),
 			quietAccounts: () => Promise.resolve([]),
+			stapleCountBefore: () => Promise.resolve(0),
+			staplesBefore: () => Promise.resolve([]),
 			heldBlocks: () => Promise.resolve([]),
 			heldBlocksOfStaples: () => Promise.resolve([]),
 			newestStaples: () => Promise.resolve(new Map()),

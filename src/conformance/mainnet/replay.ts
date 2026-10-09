@@ -1,10 +1,10 @@
 import { vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Ledger, LedgerStorageAPI } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
-import type { Node, NodeConfig } from '@keetanetwork/keetanet-client/lib/node/index.js';
+import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { freezeClock } from '../../testing/network.js';
-import { MAINNET_NETWORK, mainnetLedgerSettings, mainnetReplayRepresentative, mainnetTrustedRoot } from './fixture.js';
+import { mainnetNodeConfig } from './fixture.js';
 
 const lib = KeetaNet.lib;
 
@@ -52,21 +52,6 @@ export function replayOrder<Staple extends Orderable>(staples: readonly Staple[]
 		}
 		return(compareText(left.blocksHash.toString(), right.blocksHash.toString()));
 	}));
-}
-
-/** A representative of the mainnet holding the replay key, its ledger on the storage. */
-export function mainnetNodeConfig(storage: LedgerStorageAPI): NodeConfig {
-	return({
-		kind: lib.Node.Kind.REPRESENTATIVE,
-		// A log without targets discards everything.
-		log: new lib.Log(),
-		initialTrustedAccount: mainnetTrustedRoot(),
-		ledgerPrivateKey: mainnetReplayRepresentative(),
-		network: MAINNET_NETWORK,
-		networkAlias: 'main',
-		ledger: mainnetLedgerSettings(storage),
-		stats: { kv: null }
-	});
 }
 
 /*
