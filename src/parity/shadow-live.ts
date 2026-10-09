@@ -113,8 +113,8 @@ class WeightedAdds {
  * follower holds every staple voted on before its reach, so the window ends
  * the sweep's margin before it (src/parity/sweep.ts): every staple the
  * window's blocks build on is replayed before them. Each refusal must be
- * one the classified differences between 0.18.4, which confirmed the
- * staples, and 0.18.7 explain (src/conformance/mainnet/shadow.ts).
+ * one the classified differences between the releases that voted for the
+ * staples and 0.18.7 explain (src/conformance/mainnet/shadow.ts).
  */
 export async function shadowVoteLive(setup: ShadowLiveSetup): Promise<ShadowLiveRecord> {
 	const at = new Date().toISOString();

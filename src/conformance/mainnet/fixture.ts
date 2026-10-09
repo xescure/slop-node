@@ -10,8 +10,12 @@ import { assertNever } from '../../util/assert-never.js';
 
 const lib = KeetaNet.lib;
 
-/** The captured staples: the first 2,037 of the chain, and 90 that an independent decoder first refused. */
-export type MainnetFixtureName = 'head' | 'edge-cases';
+/**
+ * The captured staples: the first 2,037 of the chain, 90 that an independent
+ * decoder first refused, and 3 airdrops voted before a send required its
+ * recipient's access.
+ */
+export type MainnetFixtureName = 'head' | 'edge-cases' | 'recipient-access';
 
 export const MAINNET_NETWORK = 0x5382n;
 
@@ -25,7 +29,8 @@ const REPLAY_REPRESENTATIVE_SEED = '3d6a0e91f4b7c285a1e30d9f6b4c7a28e5f1d0b39c8a
 
 const FIXTURE_FILES = {
 	'head': 'head.jsonl.gz',
-	'edge-cases': 'edge-cases.jsonl.gz'
+	'edge-cases': 'edge-cases.jsonl.gz',
+	'recipient-access': 'recipient-access.jsonl.gz'
 } as const satisfies Record<MainnetFixtureName, string>;
 
 const FIXTURE_DIRECTORY = new URL('../../../conformance/mainnet/', import.meta.url);
@@ -34,6 +39,7 @@ function fixtureFile(name: MainnetFixtureName): URL {
 	switch (name) {
 		case 'head':
 		case 'edge-cases':
+		case 'recipient-access':
 			return(new URL(FIXTURE_FILES[name], FIXTURE_DIRECTORY));
 		default:
 			return(assertNever(name));

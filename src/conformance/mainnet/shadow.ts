@@ -33,8 +33,10 @@ const lib = KeetaNet.lib;
  *   grant's entity, target and method.
  * - `trusted-account-genesis`: the network's first staple, which the trusted
  *   account vouched for alone; no representative was asked to vote on it.
+ * - `send-recipient-access`: the recipient's access on a sent token, which no
+ *   release before 0.18.0 required and which the staple's votes predate.
  */
-export const SHADOW_REFUSAL_REASONS = ['self-requirement-return', 'same-staple-grant-scope', 'trusted-account-genesis'] as const;
+export const SHADOW_REFUSAL_REASONS = ['self-requirement-return', 'same-staple-grant-scope', 'trusted-account-genesis', 'send-recipient-access'] as const;
 
 export type ShadowRefusalReason = typeof SHADOW_REFUSAL_REASONS[number];
 
@@ -94,7 +96,7 @@ export type NetworkAnchors = Pick<Ledger, 'initialTrustedAccount' | 'baseToken' 
 /** What the classification reads of a staple. */
 export type RefusedStaple = {
 	readonly blocks: readonly Block[];
-	readonly votes: readonly Pick<Vote, 'issuer'>[];
+	readonly votes: readonly Pick<Vote, 'issuer' | 'validityFrom'>[];
 };
 
 /** A refusal that no reason, or more than one, explains. */
@@ -257,6 +259,41 @@ function isTrustedAccountGenesis(staple: RefusedStaple, refused: Requirement, an
 	return(vouchedByTrustedAccountAlone && opens(anchors.networkAddress) && opens(anchors.baseToken) && onGenesisAccount && ofAnotherAccount);
 }
 
+/** When the npm registry published @keetanetwork/keetanet-client 0.18.0, the first release whose SEND lists its recipient's access. */
+const RECIPIENT_ACCESS_RELEASE = new Date('2026-05-23T16:44:23.024Z');
+
+/*
+ * Every release from 0.10.5 through 0.16.2 lists only the sender's access on
+ * the token for a SEND [Keeta TS 0.16.2] index.js:68008-68015; 0.18.0 adds the
+ * recipient's [Keeta TS 0.18.0] index.js:68263-68279, as 0.18.7 does
+ * [Keeta TS] index.js:68461-68474. No representative can have run 0.18.0
+ * before it was published, so a staple whose every vote is older was voted
+ * without it. Only a
+ * SEND names an account other than a block's own or its signer as the
+ * principal of a requirement on a token, so a principal that is neither for any
+ * block of the staple is required only as a recipient. A recipient listed after
+ * a self requirement in every SEND is the early return's instead.
+ * [Keeta TS] index.js:68458-68603, 68620-68631
+ */
+function requiredOnlyOfRecipient(staple: RefusedStaple, refused: Requirement): boolean {
+	const votedBeforeRelease = staple.votes.length > 0 && staple.votes.every(function(vote): boolean {
+		return(vote.validityFrom.valueOf() < RECIPIENT_ACCESS_RELEASE.valueOf());
+	});
+	const accessAlone = refused.target === undefined && refused.permissions.compare(new lib.Permissions(['ACCESS']));
+	const actsInStaple = staple.blocks.some(function(block): boolean {
+		return(block.account.comparePublicKey(refused.principal) || block.principal.comparePublicKey(refused.principal));
+	});
+	if (!votedBeforeRelease || !accessAlone || actsInStaple) {
+		return(false);
+	}
+	return(staple.blocks.some(function(block): boolean {
+		return(block.operations.filter(isSend).some(function(operation): boolean {
+			const [sender, recipient] = sendRequirements(block, operation);
+			return(sender !== undefined && recipient !== undefined && sameScope(recipient, refused) && !isSelfRequirement(sender));
+		}));
+	}));
+}
+
 function explains(reason: ShadowRefusalReason, staple: RefusedStaple, refused: Requirement, anchors: NetworkAnchors): boolean {
 	switch (reason) {
 		case 'self-requirement-return':
@@ -265,6 +302,8 @@ function explains(reason: ShadowRefusalReason, staple: RefusedStaple, refused: R
 			return(grantedUnderOldScope(staple.blocks, refused, anchors));
 		case 'trusted-account-genesis':
 			return(isTrustedAccountGenesis(staple, refused, anchors));
+		case 'send-recipient-access':
+			return(requiredOnlyOfRecipient(staple, refused));
 		default:
 			return(assertNever(reason));
 	}

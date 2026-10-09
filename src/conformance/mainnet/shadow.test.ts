@@ -4,10 +4,12 @@ import type { Account, GenericAccount, StorageAddress, TokenAddress } from '@kee
 import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { BlockOperations, BlockOperationSEND } from '@keetanetwork/keetanet-client/lib/block/operations.js';
 import type { ACLPermissionRequirement } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
+import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { operationsBlock, sendBlock } from '../../testing/blocks.js';
 import { LedgerInternals } from '../../upstream/internals.js';
+import { loadMainnetFixture, MAINNET_NETWORK, mainnetTrustedRoot } from './fixture.js';
 import { UnexplainedRefusal, explainRefusal, renderShadowVoteExceptions, sendRequirements } from './shadow.js';
-import type { LedgerRefusal, NetworkAnchors } from './shadow.js';
+import type { LedgerRefusal, NetworkAnchors, RefusedStaple } from './shadow.js';
 
 const lib = KeetaNet.lib;
 
@@ -41,8 +43,15 @@ function blockOf(account: GenericAccount, signer: Account, operations: Parameter
 	return(operationsBlock({ account, signer, previous: null, network: NETWORK, operations }));
 }
 
-function vouchedBy(issuer: Account, blocks: readonly Block[]): { readonly blocks: readonly Block[]; readonly votes: readonly { readonly issuer: Account }[] } {
-	return({ blocks, votes: [{ issuer }] });
+/** The publication of 0.18.0, the first release whose SEND lists its recipient's ACCESS. */
+const RECIPIENT_ACCESS_RELEASE = new Date('2026-05-23T16:44:23.024Z');
+
+const BEFORE_RECIPIENT_ACCESS = new Date(RECIPIENT_ACCESS_RELEASE.valueOf() - 1);
+
+const AFTER_RECIPIENT_ACCESS = new Date('2026-10-01T00:00:00.000Z');
+
+function vouchedBy(issuer: Account, blocks: readonly Block[], validityFrom: Date = AFTER_RECIPIENT_ACCESS): RefusedStaple {
+	return({ blocks, votes: [{ issuer, validityFrom }] });
 }
 
 const representative = lib.Account.fromSeed(SEED, 4);
@@ -162,6 +171,87 @@ describe('a shadow-vote refusal is explained by its refused requirement', functi
 			expect(function() {
 				return(explainRefusal(staple, lacking(owner, anchors.baseToken, 'OWNER, ACCESS'), anchors));
 			}).toThrow(UnexplainedRefusal);
+		});
+	});
+
+	describe('a send to a recipient without access on the token', function() {
+		test('voted before 0.18.0 was published, it was voted without the recipient\'s requirement', async function() {
+			const staple = vouchedBy(representative, [await blockOf(user, user, [
+				{ type: lib.Block.OperationType.SEND, to: delegate, amount: 1n, token }
+			])], BEFORE_RECIPIENT_ACCESS);
+
+			expect(explainRefusal(staple, lacking(delegate, token, 'ACCESS'), anchors).reason).toBe('send-recipient-access');
+		});
+
+		test('voted once 0.18.0 was published, its refusal is unexplained', async function() {
+			const staple = vouchedBy(representative, [await blockOf(user, user, [
+				{ type: lib.Block.OperationType.SEND, to: delegate, amount: 1n, token }
+			])], RECIPIENT_ACCESS_RELEASE);
+
+			expect(function() {
+				return(explainRefusal(staple, lacking(delegate, token, 'ACCESS'), anchors));
+			}).toThrow('0 reasons explain');
+		});
+
+		test('a staple with any vote cast once 0.18.0 was published is unexplained', async function() {
+			const blocks = [await blockOf(user, user, [
+				{ type: lib.Block.OperationType.SEND, to: delegate, amount: 1n, token }
+			])];
+			const staple: RefusedStaple = { blocks, votes: [{ issuer: representative, validityFrom: BEFORE_RECIPIENT_ACCESS }, { issuer: trustedRoot, validityFrom: AFTER_RECIPIENT_ACCESS }] };
+
+			expect(function() {
+				return(explainRefusal(staple, lacking(delegate, token, 'ACCESS'), anchors));
+			}).toThrow('0 reasons explain');
+		});
+
+		test('a staple without votes is unexplained', async function() {
+			const blocks = [await blockOf(user, user, [
+				{ type: lib.Block.OperationType.SEND, to: delegate, amount: 1n, token }
+			])];
+
+			expect(function() {
+				return(explainRefusal({ blocks, votes: [] }, lacking(delegate, token, 'ACCESS'), anchors));
+			}).toThrow('0 reasons explain');
+		});
+
+		test('a recipient that is also a block\'s account in the staple may owe the access for its own operation, so it is unexplained', async function() {
+			const staple = vouchedBy(representative, [
+				await blockOf(user, user, [
+					{ type: lib.Block.OperationType.SEND, to: delegate, amount: 1n, token }
+				]),
+				await blockOf(delegate, delegate, [
+					{ type: lib.Block.OperationType.RECEIVE, amount: 1n, token, from: user, exact: true }
+				])
+			], BEFORE_RECIPIENT_ACCESS);
+
+			expect(function() {
+				return(explainRefusal(staple, lacking(delegate, token, 'ACCESS'), anchors));
+			}).toThrow('0 reasons explain');
+		});
+
+		test('a token sending its own token is the early return\'s alone', async function() {
+			const staple = vouchedBy(representative, [await blockOf(token, owner, [
+				{ type: lib.Block.OperationType.SEND, to: user, amount: 10n, token }
+			])], BEFORE_RECIPIENT_ACCESS);
+
+			expect(explainRefusal(staple, lacking(user, token, 'ACCESS'), anchors).reason).toBe('self-requirement-return');
+		});
+
+		/*
+		 * Airdrops that mainnet confirmed on 2025-12-30: each sends one unit of a
+		 * token with no default permission to 500 accounts holding no permission
+		 * on it, and a 0.18.7 ledger refuses each for its first recipient.
+		 */
+		test.each([0, 1, 2])('explains the airdrop staple %i that mainnet confirmed', async function(index) {
+			const staple: VoteStaple | undefined = (await loadMainnetFixture('recipient-access'))[index];
+			const [block] = staple?.blocks ?? [];
+			const [send] = block?.operations ?? [];
+			if (staple === undefined || send?.type !== lib.Block.OperationType.SEND) {
+				throw(new Error('each airdrop staple opens with a send'));
+			}
+			const mainnet: NetworkAnchors = { initialTrustedAccount: mainnetTrustedRoot(), ...lib.Account.generateBaseAddresses(MAINNET_NETWORK) };
+
+			expect(explainRefusal(staple, lacking(send.to, send.token, 'ACCESS'), mainnet).reason).toBe('send-recipient-access');
 		});
 	});
 
