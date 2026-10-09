@@ -5,7 +5,7 @@ import type { PassAnswer, PassRequest, PassStaple } from '../node/bootstrap-pass
 import { RetryQueue } from '../node/bootstrap-retry.js';
 import type { Added, Offered, QueuedStaple, QueueBounds, RetryStore } from '../node/bootstrap-retry.js';
 import { assertNever } from '../util/assert-never.js';
-import { advanceClock } from './network.js';
+import { advanceClock, freezeClock } from './network.js';
 
 const lib = KeetaNet.lib;
 
@@ -119,7 +119,75 @@ export type SimulatedPeerOptions = {
 	readonly givesUpFilteredWithin?: { readonly from: number; readonly to: number };
 	/** How the peer keys and lists its staples: by when it applied them, as earlier versions of this node did, unless told otherwise. */
 	readonly keying?: SimulatedKeying;
+	/** The clock the peer shares with others answering at the same time, unless it answers on the one clock of the test. */
+	readonly clock?: ConcurrentClock;
+	/** The moment on the node's clock from which the peer, or the way to it, fails every request. */
+	readonly failsFrom?: number;
 };
+
+/**
+ * How many turns of the event loop a pass that was answered takes at most to
+ * send its next request: the node's own work between requests waits on
+ * nothing else.
+ */
+const SETTLING_TURNS = 8;
+
+/**
+ * Time as peers answering at once see it: each answers one request at a
+ * time, on a timeline of its own, and the node hears an answer once the
+ * clock reaches its end, after every answer due before it. The clock moves on
+ * only once every pass is waiting for an answer, so that passes over several
+ * peers side by side take as long as the slowest, as over a network.
+ */
+export class ConcurrentClock {
+	readonly #free = new Map<SimulatedPeer, number>();
+	readonly #due: { readonly at: number; readonly order: number; readonly answer: () => void }[] = [];
+	#order = 0;
+	#moving = false;
+
+	/** Answers the request at the moment the peer is free for it, the work moving the clock on from there as it answers, once the clock reaches where it ended. */
+	async serve<Result>(peer: SimulatedPeer, work: () => Result): Promise<Result> {
+		const arrived = Date.now();
+		freezeClock(new Date(Math.max(arrived, this.#free.get(peer) ?? arrived)));
+		const result = work();
+		const ends = Date.now();
+		freezeClock(new Date(arrived));
+		this.#free.set(peer, ends);
+		await new Promise<void>((resolve) => {
+			this.#due.push({ at: ends, order: this.#order++, answer: resolve });
+			this.#moveOn();
+		});
+		return(result);
+	}
+
+	#moveOn(): void {
+		if (this.#moving) {
+			return;
+		}
+		this.#moving = true;
+		void this.#answerInTurn();
+	}
+
+	async #answerInTurn(): Promise<void> {
+		while (this.#due.length > 0) {
+			for (let turn = 0; turn < SETTLING_TURNS; turn++) {
+				await new Promise(setImmediate);
+			}
+			this.#due.sort(function(left, right): number {
+				return(left.at - right.at || left.order - right.order);
+			});
+			const next = this.#due.shift();
+			if (next === undefined) {
+				break;
+			}
+			if (next.at > Date.now()) {
+				freezeClock(new Date(next.at));
+			}
+			next.answer();
+		}
+		this.#moving = false;
+	}
+}
 
 /**
  * How a peer finds the staples to list from a start.
@@ -208,6 +276,8 @@ export class SimulatedPeer {
 	readonly #readsAtMost: number;
 	readonly #givesUpPastNamed: number;
 	readonly #givesUpFilteredWithin: { readonly from: number; readonly to: number } | undefined;
+	readonly #clock: ConcurrentClock | undefined;
+	readonly #failsFrom: number;
 	readonly #filters = new Map<string, BloomFilter>();
 	readonly #random = deterministicRandom(7);
 	#nextID = 0;
@@ -226,6 +296,8 @@ export class SimulatedPeer {
 		this.#readsAtMost = options.readsAtMost ?? Number.POSITIVE_INFINITY;
 		this.#givesUpPastNamed = options.givesUpPastNamed ?? Number.POSITIVE_INFINITY;
 		this.#givesUpFilteredWithin = options.givesUpFilteredWithin;
+		this.#clock = options.clock;
+		this.#failsFrom = options.failsFrom ?? Number.POSITIVE_INFINITY;
 		this.#keying = options.keying ?? { kind: 'applied' };
 		this.#voteKey = keyedWhenMade;
 		if (this.#keying.kind === 'votes' && this.#keying.keyedAt !== undefined) {
@@ -318,6 +390,31 @@ export class SimulatedPeer {
 	async page(request: PassRequest): Promise<PassAnswer<SimulatedStaple>> {
 		// Answering on a later turn of the event loop, as over a network, lets the test runner's own timers run.
 		await new Promise(setImmediate);
+		let answer: PassAnswer<SimulatedStaple> | Error;
+		const clock = this.#clock;
+		if (clock === undefined) {
+			answer = this.#answerOrFail(request);
+		} else {
+			answer = await clock.serve(this, () => {
+				return(this.#answerOrFail(request));
+			});
+		}
+		if (answer instanceof Error) {
+			throw(answer);
+		}
+		return(answer);
+	}
+
+	/** The answer, or, once the peer fails, the failure, as long after the request as an answer would come. */
+	#answerOrFail(request: PassRequest): PassAnswer<SimulatedStaple> | Error {
+		if (Date.now() < this.#failsFrom) {
+			return(this.#answer(request));
+		}
+		advanceClock(this.#latency);
+		return(new Error(`the peer could not be reached from ${request.start.toISOString()}`));
+	}
+
+	#answer(request: PassRequest): PassAnswer<SimulatedStaple> {
 		this.#requests++;
 		advanceClock(this.#latency);
 		this.#catchUpLive();

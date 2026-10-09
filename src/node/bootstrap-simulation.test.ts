@@ -1,14 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { SimulatedNode, SimulatedPeer, SimulatedRetryStore, simulatedRetries } from '../testing/simulated-peer.js';
+import { ConcurrentClock, SimulatedNode, SimulatedPeer, SimulatedRetryStore, simulatedRetries } from '../testing/simulated-peer.js';
 import type { LiveTraffic, RefusalReport, SimulatedKeying, SimulatedPeerOptions, SimulatedStaple, VoteKey } from '../testing/simulated-peer.js';
 import { advanceClock, freezeClock } from '../testing/network.js';
-import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PrimingWindow, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, bootstrapPeer, completes } from './bootstrap-pass.js';
+import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PrimingWindow, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, VOTE_KEY_TOLERANCE_MILLISECONDS, bootstrapPeer, bootstrapRange, completes } from './bootstrap-pass.js';
 import type { PassEvent, PassOptions, PassOutcome, PeerIO, PeerOutcome, PeerProgress } from './bootstrap-pass.js';
+import { RANGE_OVERLAP_MILLISECONDS, rangeResultOf, updateRanges } from './bootstrap-ranges.js';
+import type { RangeEvent, RangeLayout, RangeResult } from './bootstrap-ranges.js';
 import { REPORT_REFUSED_AFTER_MILLISECONDS, RetryQueueFull } from './bootstrap-retry.js';
 import type { QueueBounds, RetryQueue } from './bootstrap-retry.js';
 import { nextUpdateDelay, updatePeers } from './bootstrap-update.js';
 import type { PeerResult } from './bootstrap-update.js';
-import { BLOOM_CAPACITY } from './bootstrap-window.js';
+import { BLOOM_CAPACITY, BOOTSTRAP_MARGIN_MILLISECONDS } from './bootstrap-window.js';
 import { assertNever } from '../util/assert-never.js';
 
 /*
@@ -56,20 +58,37 @@ function seeds(): () => number {
 	});
 }
 
+/** What a follower keeps across a restart: its ledger, its retry queue's store, and its progress on each peer. */
+type Kept = {
+	readonly node: SimulatedNode;
+	readonly retryStore: SimulatedRetryStore;
+	readonly progress: Map<SimulatedPeer, PeerProgress>;
+};
+
 /** A simulated node with the retry queue it keeps for the staples its ledger refuses, and its progress on each peer. */
 class Follower {
-	readonly node = new SimulatedNode();
-	readonly retryStore = new SimulatedRetryStore();
+	readonly node: SimulatedNode;
+	readonly retryStore: SimulatedRetryStore;
 	readonly reports: RefusalReport[] = [];
 	readonly retries: RetryQueue<SimulatedStaple>;
-	readonly progress = new Map<SimulatedPeer, PeerProgress>();
+	readonly progress: Map<SimulatedPeer, PeerProgress>;
 	readonly events: PassEvent[] = [];
+	readonly #bounds: QueueBounds | undefined;
 	readonly #answers = new Map<SimulatedPeer, LongestAnswer>();
 	readonly #priming = new Map<SimulatedPeer, PrimingWindow>();
 	readonly #seed = seeds();
 
-	constructor(bounds?: QueueBounds) {
+	constructor(bounds?: QueueBounds, kept: Kept = { node: new SimulatedNode(), retryStore: new SimulatedRetryStore(), progress: new Map() }) {
+		this.node = kept.node;
+		this.retryStore = kept.retryStore;
+		this.progress = kept.progress;
+		this.#bounds = bounds;
 		this.retries = simulatedRetries(this.node, this.retryStore, this.reports, bounds);
+	}
+
+	/** The follower after a restart: what it keeps, and nothing it learned while it ran. */
+	restarted(): Follower {
+		return(new Follower(this.#bounds, { node: this.node, retryStore: this.retryStore, progress: this.progress }));
 	}
 
 	/** How a pass over the peer reaches it and this node. */
@@ -300,20 +319,45 @@ function noNeeds(): readonly number[] {
 	return([]);
 }
 
-/** Several peers a follower bootstraps from, by name, as an update over every peer reads them (src/node/bootstrap-update.ts). */
+/** What a network of peers keeps of a follower's updates in the follower's store besides its progress: the horizon of the first pass that completed, and its ranges. */
+type NetworkStore = { caughtUp: Date | undefined; layout: RangeLayout | undefined };
+
+/** A pass over a range an update ran, and how it ended. */
+type RangeRun = { readonly peer: string; readonly result: RangeResult };
+
+/** Several peers a follower bootstraps from, by name, as an update over every peer reads them, in ranges while far behind (src/node/bootstrap-update.ts, src/node/bootstrap-ranges.ts). */
 class SimulatedNetwork {
 	readonly #follower: Follower;
 	readonly #peers: ReadonlyMap<string, SimulatedPeer>;
-	#caughtUp: Date | undefined;
+	readonly #store: NetworkStore;
+	readonly rangeEvents: RangeEvent[] = [];
+	readonly rangeRuns: RangeRun[] = [];
+	/** The passes from where the node last reached that failed. */
+	failures = 0;
 
-	constructor(follower: Follower, peers: ReadonlyMap<string, SimulatedPeer>) {
+	constructor(follower: Follower, peers: ReadonlyMap<string, SimulatedPeer>, store: NetworkStore = { caughtUp: undefined, layout: undefined }) {
 		this.#follower = follower;
 		this.#peers = peers;
+		this.#store = store;
 	}
 
-	/** One update over every peer, which answers how each pass ended, in the peers' order. */
+	/** The network as a follower that restarted reads it: from what its store kept. */
+	restarted(): SimulatedNetwork {
+		return(new SimulatedNetwork(this.#follower.restarted(), this.#peers, this.#store));
+	}
+
+	get follower(): Follower {
+		return(this.#follower);
+	}
+
+	get layout(): RangeLayout | undefined {
+		return(this.#store.layout);
+	}
+
+	/** One update over every peer, which answers how each pass ended, in the peers' order: a pass that fails, as the client logs it, as failed. */
 	async update(): Promise<PeerResult[]> {
 		const follower = this.#follower;
+		const store = this.#store;
 		const peerNamed = (name: string): SimulatedPeer => {
 			const peer = this.#peers.get(name);
 			if (peer === undefined) {
@@ -321,26 +365,65 @@ class SimulatedNetwork {
 			}
 			return(peer);
 		};
-		const results = await updatePeers([...this.#peers.keys()], {
-			readProgress: function(name) {
+		const progressIO = {
+			readProgress: function(name: string): Promise<PeerProgress | undefined> {
 				return(Promise.resolve(follower.progress.get(peerNamed(name))));
 			},
-			writeProgress: function(name, progress) {
+			writeProgress: function(name: string, progress: PeerProgress): Promise<void> {
 				follower.progress.set(peerNamed(name), progress);
 				return(Promise.resolve());
+			}
+		};
+		const names = [...this.#peers.keys()];
+		const results = await updateRanges(names, {
+			...progressIO,
+			readLayout: function() {
+				return(Promise.resolve(store.layout));
 			},
-			readCaughtUp: () => {
-				return(Promise.resolve(this.#caughtUp));
+			writeLayout: function(layout) {
+				store.layout = layout;
+				return(Promise.resolve());
 			},
-			writeCaughtUp: (horizon) => {
-				this.#caughtUp = horizon;
+			saturated: function() {
+				return(Promise.resolve(follower.retries.saturated()));
+			},
+			roomAhead: function() {
+				return(follower.retries.hasRoom('ahead'));
+			},
+			report: (event) => {
+				this.rangeEvents.push(event);
+			}
+		}, async (name, task): Promise<RangeResult> => {
+			let result: RangeResult;
+			try {
+				result = rangeResultOf(await bootstrapRange(follower.io(peerNamed(name)), task, follower.options(task.from)));
+			} catch (error: unknown) {
+				result = 'failed';
+				if (error instanceof RetryQueueFull) {
+					result = 'throttled';
+				}
+			}
+			this.rangeRuns.push({ peer: name, result });
+			return(result);
+		}) ?? await updatePeers(names, {
+			...progressIO,
+			readCaughtUp: function() {
+				return(Promise.resolve(store.caughtUp));
+			},
+			writeCaughtUp: function(horizon) {
+				store.caughtUp = horizon;
 				return(Promise.resolve());
 			}
-		}, this.#peers.size, async function(name, from): Promise<PeerResult> {
-			const { live } = await bootstrapPeer(follower.io(peerNamed(name)), follower.options(from));
-			return(resultOf(live));
+		}, this.#peers.size, async (name, from): Promise<PeerResult> => {
+			try {
+				const { live } = await bootstrapPeer(follower.io(peerNamed(name)), follower.options(from));
+				return(resultOf(live));
+			} catch {
+				this.failures++;
+				return('failed');
+			}
 		});
-		return([...this.#peers.keys()].map(function(name): PeerResult {
+		return(names.map(function(name): PeerResult {
 			return(results.get(name) ?? 'failed');
 		}));
 	}
@@ -1091,5 +1174,269 @@ describe('bootstrapping against a peer keyed by votes, as the main network\'s re
 		expect(scenario.follower.events.map(function(event): string {
 			return(event.kind);
 		})).toEqual(['late-votes']);
+	});
+});
+
+/*
+ * A node far behind reads the history it lacks in ranges, one per peer, each
+ * peer at its own pace (src/node/bootstrap-ranges.ts). The representatives
+ * here hold the same staples, key them by votes and read as the main
+ * network's do, and answer side by side on a clock they share.
+ */
+describe('reading the history it lacks in ranges, one per peer, while far behind', { timeout: 180_000 }, function() {
+	afterEach(function() {
+		vi.useRealTimers();
+	});
+
+	const NAMES: readonly string[] = ['rep1', 'rep2', 'rep3', 'rep4'];
+
+	const KEYED_AS_A_REPRESENTATIVE: SimulatedKeying = { kind: 'votes', votesPerRead: 20, readsAtMost: 10, readMilliseconds: 450, readsVaryBy: 5 };
+
+	/** Where the node holds every staple before, on the first peer, in the scenarios that start there: two days back. */
+	const HELD_UP_TO = NOW - 2 * DAY;
+
+	type History = {
+		/** When the staple at that index was made, in order. */
+		readonly made: readonly number[];
+		readonly needs?: (index: number) => readonly number[];
+		/** For staples whose votes were made at moments of their own, by index. */
+		readonly votes?: ReadonlyMap<number, readonly number[]>;
+	};
+
+	/** Representatives by name, each answering as the options for it say, on one clock, holding the same history. */
+	function representatives(names: readonly string[], history: History, optionsOf: (name: string) => SimulatedPeerOptions = function(): SimulatedPeerOptions {
+		return({});
+	}): Map<string, SimulatedPeer> {
+		const clock = new ConcurrentClock();
+		const peers = new Map(names.map(function(name): [string, SimulatedPeer] {
+			return([name, new SimulatedPeer({ latency: 1300, keying: KEYED_AS_A_REPRESENTATIVE, clock, ...optionsOf(name) })]);
+		}));
+		const [first, ...others] = [...peers.values()];
+		if (first === undefined) {
+			throw(new Error('no peers'));
+		}
+		history.made.forEach(function(madeAt, index): void {
+			const needs = history.needs?.(index) ?? [];
+			const stamps = history.votes?.get(index);
+			let staple: SimulatedStaple;
+			if (stamps === undefined) {
+				staple = first.apply(madeAt, madeAt, needs);
+			} else {
+				staple = first.applyVoted(madeAt, madeAt, needs, stamps);
+			}
+			for (const other of others) {
+				other.applyAlso(staple, staple.moment);
+			}
+		});
+		return(peers);
+	}
+
+	/** The node holds every staple made before the moment, and has read the first peer up to it, as after its first passes. */
+	async function heldUpTo(network: SimulatedNetwork, peers: ReadonlyMap<string, SimulatedPeer>, moment: number): Promise<void> {
+		const [first] = peers.values();
+		if (first === undefined) {
+			throw(new Error('no peers'));
+		}
+		for (const staple of first.staples) {
+			if (Math.max(...staple.votes.map(function(vote): number {
+				return(vote.validityFrom.getTime());
+			})) < moment) {
+				await network.follower.node.add(staple);
+			}
+		}
+		network.follower.progress.set(first, { reached: new Date(moment), caughtUp: false, deepScanFrom: new Date(0), nextDeepScan: new Date(NOW + HOUR), deepScan: undefined, keying: 'unknown' });
+	}
+
+	/** Updates as the client schedules them until the update the condition holds after, with no ranges left, and answers how long that took. */
+	async function untilCaughtUp(network: SimulatedNetwork, updates: number, done: (results: readonly PeerResult[]) => boolean = function(results): boolean {
+		return(results.every(function(result): boolean {
+			return(result === 'completed');
+		}));
+	}): Promise<number> {
+		const began = Date.now();
+		for (let update = 0; update < updates; update++) {
+			const results = await network.update();
+			if (network.layout === undefined && done(results)) {
+				return(Date.now() - began);
+			}
+			advanceClock(nextUpdateDelay(results, PERIOD));
+		}
+		throw(new Error(`the node did not catch up within ${String(updates)} updates`));
+	}
+
+	/** The staples some peer holds and the node does not. */
+	function missingFrom(network: SimulatedNetwork, peers: ReadonlyMap<string, SimulatedPeer>): readonly number[] {
+		const missing = new Set<number>();
+		for (const peer of peers.values()) {
+			for (const staple of peer.staples) {
+				if (!network.follower.node.holds(staple)) {
+					missing.add(staple.id);
+				}
+			}
+		}
+		return([...missing]);
+	}
+
+	/** Staples made one after another from the moment the node holds everything before, up to an hour ago: more than a representative reads in a page in any stretch of its time budget. */
+	function denseHistory(count: number): History {
+		const spacing = (NOW - HOUR - HELD_UP_TO) / count;
+		return({ made: Array.from({ length: count }, function(_ignored, index): number {
+			return(Math.floor(HELD_UP_TO + (index + 0.5) * spacing));
+		}) });
+	}
+
+	/** The first catch-up of a node holding the history up to two days back, from the peers named, and how many staples a minute it took. */
+	async function catchUpFrom(names: readonly string[], history: History): Promise<{ readonly perMinute: number; readonly missing: readonly number[]; readonly network: SimulatedNetwork }> {
+		freezeClock(new Date(NOW));
+		const peers = representatives(names, history);
+		const network = new SimulatedNetwork(new Follower(), peers);
+		await heldUpTo(network, peers, HELD_UP_TO);
+		const took = await untilCaughtUp(network, 500);
+		return({ perMinute: history.made.length / (took / MINUTE), missing: missingFrom(network, peers), network });
+	}
+
+	test('reads a dense history it lacks about four times as fast from four peers as from one, holding every staple', async function() {
+		const history = denseHistory(12_000);
+
+		const one = await catchUpFrom(['rep1'], history);
+		const four = await catchUpFrom(NAMES, history);
+
+		expect(one.missing).toEqual([]);
+		expect(four.missing).toEqual([]);
+		expect(one.network.rangeEvents).toEqual([]);
+		expect(four.network.rangeEvents.map(function(event): string {
+			return(event.kind);
+		})).toEqual(['laid-out', 'read']);
+		expect(four.perMinute / one.perMinute).toBeGreaterThan(3.3);
+	});
+
+	test('reads a history that is dense in one stretch and sparse elsewhere faster from four peers, which take on parts of the range left the longest', async function() {
+		const sparse = denseHistory(6000).made;
+		const burst = Array.from({ length: 6000 }, function(_ignored, index): number {
+			return(HELD_UP_TO + 18 * HOUR + Math.floor(index * 1200));
+		});
+		const history: History = { made: [...sparse, ...burst].sort(function(left, right): number {
+			return(left - right);
+		}) };
+
+		const one = await catchUpFrom(['rep1'], history);
+		const four = await catchUpFrom(NAMES, history);
+
+		expect(four.missing).toEqual([]);
+		expect(four.perMinute / one.perMinute).toBeGreaterThan(2.5);
+	});
+
+	test('holds every staple whose dependencies a range before brings, the ranges read ahead filling only part of the shared retry queue', async function() {
+		freezeClock(new Date(NOW));
+		const count = 4000;
+		const history = denseHistory(count);
+		// Voting weight the staples of the last three ranges need, near the end of the first; and a staple of the third range that those of the last need.
+		const weight = 900;
+		const third = 2600;
+		const peers = representatives(NAMES, { ...history, needs: function(index): readonly number[] {
+			if (index > 3000 && index % 3 === 0) {
+				return([weight, third]);
+			}
+			if (index > 1000 && index % 2 === 0) {
+				return([weight]);
+			}
+			return([]);
+		} });
+		const bounds: QueueBounds = { staples: 40, bytes: 1024 * 1024 };
+		const network = new SimulatedNetwork(new Follower(bounds), peers);
+		await heldUpTo(network, peers, HELD_UP_TO);
+
+		await network.update();
+		expect(network.layout?.ranges.length).toBe(NAMES.length);
+		await untilCaughtUp(network, 200);
+
+		expect(missingFrom(network, peers)).toEqual([]);
+		expect(await network.follower.retries.size()).toBe(0);
+		expect(network.follower.retryStore.largest).toBeLessThanOrEqual(bounds.staples);
+		expect(network.rangeRuns.some(function(run): boolean {
+			return(run.result === 'throttled');
+		})).toBe(true);
+	});
+
+	test('leaves the range of a peer that fails mid-range to another, which holds every staple of it', async function() {
+		const history = denseHistory(6000);
+		freezeClock(new Date(NOW));
+		const failing = 'rep3';
+		const peers = representatives(NAMES, history, function(name): SimulatedPeerOptions {
+			if (name === failing) {
+				return({ failsFrom: NOW + 3 * MINUTE });
+			}
+			return({});
+		});
+		const network = new SimulatedNetwork(new Follower(), peers);
+		await heldUpTo(network, peers, HELD_UP_TO);
+
+		await untilCaughtUp(network, 300, function(results): boolean {
+			return(NAMES.every(function(name, index): boolean {
+				return(name === failing || results[index] === 'completed');
+			}));
+		});
+
+		expect(missingFrom(network, peers)).toEqual([]);
+		expect(network.rangeEvents.filter(function(event): boolean {
+			return(event.kind === 'benched');
+		})).toMatchObject([{ kind: 'benched', peer: failing }]);
+		expect(network.rangeRuns.filter(function(run): boolean {
+			return(run.peer === failing && run.result === 'failed');
+		}).length).toBe(3);
+	});
+
+	test('holds every staple whose votes lie on both sides of where two ranges meet, from peers that key each vote up to the tolerance off, across a restart', async function() {
+		freezeClock(new Date(NOW));
+		const end = NOW - BOOTSTRAP_MARGIN_MILLISECONDS;
+		const span = (end - HELD_UP_TO) / NAMES.length;
+		const meetings = [1, 2, 3].map(function(index): number {
+			return(Math.floor(HELD_UP_TO + index * span));
+		});
+		const tolerance = VOTE_KEY_TOLERANCE_MILLISECONDS;
+		const straddling: (readonly number[])[] = [];
+		for (const meeting of [HELD_UP_TO, ...meetings, end]) {
+			straddling.push(
+				[meeting - 900, meeting - 300, meeting + 200, meeting + 700],
+				[meeting - 2 * MINUTE, meeting + 2 * MINUTE],
+				[meeting - RANGE_OVERLAP_MILLISECONDS + 10, meeting + RANGE_OVERLAP_MILLISECONDS - 10],
+				[meeting - tolerance, meeting - tolerance / 2],
+				[meeting, meeting + tolerance]
+			);
+		}
+		const base = denseHistory(6000).made.map(function(madeAt): readonly number[] {
+			return([madeAt - 900, madeAt - 400, madeAt - 150, madeAt]);
+		});
+		const stamped = [...base, ...straddling].sort(function(left, right): number {
+			return(Math.max(...left) - Math.max(...right));
+		});
+		const peers = representatives(NAMES, {
+			made: stamped.map(function(stamps): number {
+				return(Math.max(...stamps));
+			}),
+			votes: new Map(stamped.map(function(stamps, index): [number, readonly number[]] {
+				return([index, stamps]);
+			}))
+		}, function(name): SimulatedPeerOptions {
+			const salt = NAMES.indexOf(name) * 1009;
+			return({ keying: { ...KEYED_AS_A_REPRESENTATIVE, keyedAt: function(made, staple, vote): number {
+				return(made + (staple * 7919 + vote * 104_729 + salt) % (2 * tolerance + 1) - tolerance);
+			} } });
+		});
+		let network = new SimulatedNetwork(new Follower(), peers);
+		await heldUpTo(network, peers, HELD_UP_TO);
+
+		await network.update();
+		expect(network.layout?.from.getTime()).toBe(HELD_UP_TO);
+		expect(network.layout?.ranges.map(function(range): number {
+			return(range.end.getTime());
+		}).slice(0, 3)).toEqual(meetings);
+		network = network.restarted();
+		await untilCaughtUp(network, 300);
+
+		expect(missingFrom(network, peers)).toEqual([]);
+		expect(network.rangeEvents.map(function(event): string {
+			return(event.kind);
+		})).toEqual(['read']);
 	});
 });
