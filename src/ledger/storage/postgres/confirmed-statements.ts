@@ -247,16 +247,24 @@ export type LedgerCountsColumns = {
 	readonly block_count: IntegerText;
 	readonly transaction_count: IntegerText;
 	readonly representative_count: IntegerText;
-	/** The ledger checksum's 256 bits, as text; null without staples. */
-	readonly ledger_checksum: string | null;
 };
 
 export const mainLedgerCounts: Statement<[], LedgerCountsColumns> = statement('main_ledger_counts', `
 	SELECT
 		(SELECT count(*) FROM blocks WHERE ledger = 'main') AS block_count,
 		(SELECT COALESCE(sum(operation_count), 0) FROM blocks WHERE ledger = 'main') AS transaction_count,
-		(SELECT count(*) FROM weights WHERE weight > 0) AS representative_count,
-		(SELECT bit_xor(checksum)::text FROM staples) AS ledger_checksum`);
+		(SELECT count(*) FROM weights WHERE weight > 0) AS representative_count`);
+
+/** The ledger checksum's 256 bits, as text, folded from its rows in one statement, so one snapshot (D19). */
+export const readLedgerChecksum: Statement<[], { readonly ledger_checksum: string }> = statement('read_ledger_checksum', `
+	SELECT bit_xor(checksum)::text AS ledger_checksum FROM ledger_checksum`);
+
+/**
+ * Folds a staple's checksum, as 64 hexadecimal digits, into the row of the
+ * ledger checksum for the first byte of its blocks hash.
+ */
+export const foldLedgerChecksum: Statement<[number, string]> = statement('fold_ledger_checksum', `
+	UPDATE ledger_checksum SET checksum = checksum # ('x' || $2)::bit(256) WHERE shard = $1`);
 
 export const mainBlocksOrSuccessors: Statement<[Buffer[], Buffer[]], { hash: Buffer; previous: Buffer }> = statement('main_blocks_or_successors', `
 	SELECT hash, previous FROM blocks

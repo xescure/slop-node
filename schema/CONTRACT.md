@@ -886,7 +886,7 @@ Writes everything that one confirmed staple changes, all of it or none of it (se
 
 - **`staple`, `blockHeights`, `moment`.**
   - Store the staple under its `blocksHash`, with its block order, every vote keyed by `$uid`, and its bytes, `VoteStaple.toBytes()` without an argument (section 1, staple bytes). Votes are kept per staple: a vote stored once globally could be overwritten by an equivocating representative's vote with the same `$uid`.
-  - Store with the staple `change.checksum`, the XOR of its blocks' hashes, its part of the ledger checksum (D19).
+  - Store with the staple `change.checksum`, the XOR of its blocks' hashes, its part of the ledger checksum, and fold it into the ledger checksum the driver keeps by XOR, in the same write (D19).
   - Give each of its votes, in staple order, a node-local sequence number that is never reused: the tie-break of the catch-up key (D8). `moment`, when this node applied the staple, orders nothing.
   - Store the staple with its history key: its staple time and its `blocksHash` (D8).
   - Store each block with its height, record it as the successor of its `previous` (opening sentinel included), and make it the account's head when its height exceeds the current head's.
@@ -915,7 +915,7 @@ Writes everything that one confirmed staple changes, all of it or none of it (se
 1. Refuse a key that `idempotent_keys_main` gives to a different block, or that an earlier block of the change claims.
 2. Refuse a block already on main (`blocks_pkey`) or whose previous has a main successor (`blocks_main_successor`), as section D14 states.
 3. Intern every account the change names, in public-key order, inserting missing rows and skipping existing ones.
-4. Insert the `staples` row: `blocks_hash`, `staple_time` (`VoteStaple.timestamp()`), `moment` (`change.moment`), `bytes` (`VoteStaple.toBytes()`), `checksum` (`change.checksum` as `bit(256)`) and the next `sequence`.
+4. Insert the `staples` row: `blocks_hash`, `staple_time` (`VoteStaple.timestamp()`), `moment` (`change.moment`), `bytes` (`VoteStaple.toBytes()`), `checksum` (`change.checksum` as `bit(256)`) and the next `sequence`. Fold `checksum` by XOR (`#`) into the `ledger_checksum` row whose `shard` is the first byte of `blocks_hash`.
 5. Insert the blocks as main rows with their staple and position. A side copy is turned into the main row in place (`ON CONFLICT (hash) DO UPDATE ... WHERE ledger = 'side'`); a hash already on main returns no row, and fewer rows than blocks is `LEDGER_BLOCK_ALREADY_EXISTS`. Delete the blocks' side claims; list for gc in `deferred_checks` each deferred staple that waits on one of the blocks and on no block still missing from main (`deferred_waits_pkey`, then its other waits through `deferred_waits_staple` and `blocks_pkey`), and each that has a block extending the `previous` of one of them (`deferred_blocks_previous`), skipping a staple already listed; insert their `chain` rows, and raise each account's `heads` row only when the new height is greater.
 6. Delete side votes with the staple's `uid`s, then insert the staple's votes with `ledger = 'main'` in staple order, so that their row IDs, the catch-up key's sequence, follow it.
 7. Add each balance, supply and weight delta to its row, creating it at the delta (`ON CONFLICT ... DO UPDATE SET x = x + delta`); never clamp.
@@ -1041,9 +1041,19 @@ A vote that has expired but is not yet collected still covers its blocks, so it 
 protected abstract countLedger(): Promise<LedgerCountsSnapshot>;
 ```
 
-Returns the counts `stats` reports and the ledger checksum, taken from one consistent view of the committed main ledger. Also returns the moment that view describes, and `momentRange`: the number of milliseconds either side of that moment the view may come from. Definitions in D19. Tested by `stats.ts: "stats returns the upstream shape with counts that follow the staples added"`.
+Returns the counts `stats` reports, taken from one consistent view of the committed main ledger. Also returns the moment that view describes, and `momentRange`: the number of milliseconds either side of that moment the view may come from. Definitions in D19. Tested by `stats.ts: "stats returns the upstream shape with counts that follow the staples added"`.
 
-**Postgres.** One statement on a pooled connection outside any transaction, so one snapshot of the committed state: main `blocks` rows, the sum of their `operation_count`, the `weights` rows above zero, and the `bit_xor` of the `checksum` of `staples`. The moment is the middle of the statement's round trip, and `momentRange` half its length.
+**Postgres.** One statement on a pooled connection outside any transaction, so one snapshot of the committed state: main `blocks` rows, the sum of their `operation_count`, and the `weights` rows above zero. The moment is the middle of the statement's round trip, and `momentRange` half its length.
+
+#### `ledgerChecksum`
+
+```ts
+abstract ledgerChecksum(): Promise<LedgerChecksum>;
+```
+
+Returns the ledger checksum, the XOR of the hash of every block on the main ledger, from one consistent view of the committed main ledger, with the moment that view describes and its `momentRange`, as `countLedger` does. The driver keeps the checksum folded, so the read costs the same whatever the ledger holds (D19). Tested by `stats.ts: "the checksum is the driver's, written with the staples it covers, and no node statistic holds it"`.
+
+**Postgres.** One statement on a pooled connection outside any transaction: the `bit_xor` of the 256 `checksum` rows of `ledger_checksum`. The moment is the middle of the statement's round trip, and `momentRange` half its length.
 
 #### `confirmedHistoryConflict`
 
@@ -1353,9 +1363,9 @@ Sections 3.2 to 3.4, which also describe how the memory driver meets them.
 
 **Tested by** `stats.ts: "stats returns the upstream shape with counts that follow the staples added"`, `stats.ts: "stats reads settlement times and retries from the node"` and `stats.ts: "a replayed staple that rolls back does not record a settlement time"`.
 
-**The ledger checksum.** `ledgerChecksum()` returns the XOR of the hash of every block on the main ledger, with the `moment` and `momentRange` of the view `countLedger` reads it from, the view of `stats()`. The driver keeps it: each staple's write stores the XOR of its blocks' hashes with the staple, in the same transaction, and the checksum is the XOR of those of the staples on the main ledger. The Postgres driver folds the `checksum` column of `staples` in the statement that counts the blocks.
+**The ledger checksum.** `ledgerChecksum()` returns the XOR of the hash of every block on the main ledger, with the `moment` and `momentRange` of the view it is read from. The driver keeps it: each staple's write stores the XOR of its blocks' hashes with the staple, its part of the checksum, and folds that part into the checksum the driver keeps, in the same transaction, so the checksum is the XOR of the parts of the staples on the main ledger, and reading it reads none of them. The Postgres driver keeps the checksum in 256 rows of `ledger_checksum`, each the XOR of the parts of the staples whose `blocks_hash` begins with its `shard` byte, and reads their `bit_xor`.
 
-**Reason.** Upstream's ledger keeps its checksum as a node statistic: `Ledger.add` folds each staple it adds into the transaction's statistics, the node merges them after the commit and writes them to its store later [Keeta TS] index.js:69001-69006, 69413-69417, 71377-71383. A process stopped in between holds the staples and has lost their part of the checksum. One row that every staple's write updated would make every two writes at once conflict.
+**Reason.** Upstream's ledger keeps its checksum as a node statistic: `Ledger.add` folds each staple it adds into the transaction's statistics, the node merges them after the commit and writes them to its store later [Keeta TS] index.js:69001-69006, 69413-69417, 71377-71383. A process stopped in between holds the staples and has lost their part of the checksum. Folding the checksum from every staple at each read costs as much as the ledger holds. Under serializable isolation, two transactions at once that update one row conflict, and one of them is retried; one row that every staple's write updated would make every two writes at once conflict, while with 256 rows two writes conflict only when their staples' `blocks_hash` begin with the same byte.
 
 **Tested by** `stats.ts: "the checksum is the driver's, written with the staples it covers, and no node statistic holds it"`, `gc.ts: "gc counts a deferred chain its retry releases in the checksum"`, and the Postgres driver's `"a node killed after its commits, before it writes its statistics, leaves a checksum covering every staple it committed"`.
 

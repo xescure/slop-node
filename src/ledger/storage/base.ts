@@ -110,12 +110,11 @@ type AppliedStaple = {
  */
 export type LedgerCountsSnapshot = Pick<LedgerStatistics, 'momentRange' | 'blockCount' | 'transactionCount' | 'representativeCount'> & {
 	readonly moment: Date;
-	/** The XOR of the hash of every block on the main ledger (D19). */
-	readonly ledgerChecksum: bigint;
 };
 
 /** The ledger checksum, and the moment of the snapshot it describes with its range in milliseconds. */
 export type LedgerChecksum = Pick<LedgerCountsSnapshot, 'moment' | 'momentRange'> & {
+	/** The XOR of the hash of every block on the main ledger (D19). */
 	readonly checksum: bigint;
 };
 
@@ -439,13 +438,11 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 
 	/**
 	 * The XOR of the hash of every block on the main ledger, which each
-	 * staple's write adds its blocks to (D19), read with the moment of the
-	 * snapshot that holds them, as the ledger's counts are.
+	 * staple's write folds its blocks into (D19), kept folded so that a read
+	 * costs the same whatever the ledger holds, with the moment of the
+	 * snapshot that holds them, as the ledger's counts are read.
 	 */
-	async ledgerChecksum(): Promise<LedgerChecksum> {
-		const { moment, momentRange, ledgerChecksum } = await this.countLedger();
-		return({ moment, momentRange, checksum: ledgerChecksum });
-	}
+	abstract ledgerChecksum(): Promise<LedgerChecksum>;
 
 	/** Makes the transaction's writes permanent and ends it. */
 	protected abstract commitStorage(transaction: Transaction): Promise<void>;

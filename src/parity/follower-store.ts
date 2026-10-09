@@ -38,10 +38,10 @@ export type MismatchedStaple = {
 };
 
 /**
- * The ledger checksum as the follower stores it, the XOR of each main
- * staple's checksum written with it, and the XOR of the main ledger's
- * blocks, read from one view of the database, with the staples whose stored
- * checksum is not the fold of their blocks when the two differ.
+ * The ledger checksum as the follower keeps it, folded from each main
+ * staple's checksum as the staple was written, and the XOR of the main
+ * ledger's blocks, read from one view of the database, with the staples whose
+ * stored checksum is not the fold of their blocks when the two differ.
  */
 export type ChecksumSnapshot = {
 	readonly stored: bigint;
@@ -184,7 +184,8 @@ function bitsOf(column: string): string {
 	return(`('x' || encode(${column}, 'hex'))::bit(256)`);
 }
 
-const STORED_CHECKSUM = 'SELECT bit_xor(checksum)::text AS stored FROM staples';
+/* The checksum the node keeps folded and serves (schema/migrations/0008_ledger_checksum.sql), which a fold of the blocks checks. */
+const STORED_CHECKSUM = 'SELECT bit_xor(checksum)::text AS stored FROM ledger_checksum';
 
 const FOLDED_MAIN_BLOCKS = `SELECT count(*) AS blocks, bit_xor(${bitsOf('hash')})::text AS fold FROM blocks WHERE ledger = 'main'`;
 

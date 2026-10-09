@@ -111,7 +111,7 @@ describe('the Postgres key-value store', function() {
 		await store.set('stats', 'probe', 1);
 
 		const versions = await database.pool().query<{ version: number }>('SELECT version FROM schema_version ORDER BY version');
-		expect(versions.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }]);
+		expect(versions.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }]);
 		expect(await store.get('stats', 'probe')).toBe(1);
 	});
 

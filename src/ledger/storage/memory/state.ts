@@ -77,6 +77,8 @@ export type LedgerTables = {
 	readonly successors: Table<BlockHashKey, BlockHashKey>;
 	readonly chainHeads: Table<AccountKey, BlockHashKey>;
 	readonly staples: Table<StapleKey, StapleRow>;
+	/** The XOR of every staple's checksum, under 'main', which each staple's write folds its own into. */
+	readonly ledgerChecksum: Table<'main', bigint>;
 	readonly balances: Table<AccountKey, ReadonlyMap<AccountKey, BalanceRow>>;
 	readonly accountInfo: Table<AccountKey, AccountInfoRow>;
 	readonly representatives: Table<AccountKey, Account>;
@@ -199,6 +201,7 @@ export function createCommittedLedger(): CommittedLedger {
 		successors: new Map(),
 		chainHeads: new Map(),
 		staples: new Map(),
+		ledgerChecksum: new Map(),
 		balances: new Map(),
 		accountInfo: new Map(),
 		representatives: new Map(),
@@ -225,6 +228,7 @@ export function openOverlay(underlying: LedgerStores): LedgerOverlay {
 		successors: new TableOverlay(underlying.successors),
 		chainHeads: new TableOverlay(underlying.chainHeads),
 		staples: new TableOverlay(underlying.staples),
+		ledgerChecksum: new TableOverlay(underlying.ledgerChecksum),
 		balances: new TableOverlay(underlying.balances),
 		accountInfo: new TableOverlay(underlying.accountInfo),
 		representatives: new TableOverlay(underlying.representatives),

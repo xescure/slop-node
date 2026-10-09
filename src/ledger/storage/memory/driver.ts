@@ -7,7 +7,7 @@ import type { Vote, VoteBlockHash, VoteBlockHashMap, VoteStaple } from '@keetane
 import { LedgerInternals } from '../../../upstream/internals.js';
 import { assertNever } from '../../../util/assert-never.js';
 import { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
-import type { CollectedDeferredStaples, LedgerCountsSnapshot, TransactionOptions } from '../base.js';
+import type { CollectedDeferredStaples, LedgerChecksum, LedgerCountsSnapshot, TransactionOptions } from '../base.js';
 import type { AccountInfoUpdate, ConfirmedStapleChange } from '../confirmed.js';
 import { createIdempotentKeyError, createLedgerError, HistoryStartNotListed } from '../errors.js';
 import { isVoteUnexpired } from '../expiry.js';
@@ -723,18 +723,18 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 				representativeCount++;
 			}
 		}
-		let ledgerChecksum = 0n;
-		for (const row of committed.staples.values()) {
-			ledgerChecksum ^= row.checksum;
-		}
 		return(Promise.resolve({
 			moment: new Date(),
 			momentRange: 0,
 			blockCount: committed.blocks.size,
 			transactionCount,
-			representativeCount,
-			ledgerChecksum
+			representativeCount
 		}));
+	}
+
+	/* Read from the committed state, as the counts are. */
+	ledgerChecksum(): Promise<LedgerChecksum> {
+		return(Promise.resolve({ moment: new Date(), momentRange: 0, checksum: this.#committed.ledgerChecksum.get('main') ?? 0n }));
 	}
 
 	/*
@@ -1118,6 +1118,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 			firstVote: this.#takeVoteSequences(votes.size),
 			checksum: change.checksum
 		});
+		overlay.ledgerChecksum.set('main', (overlay.ledgerChecksum.get('main') ?? 0n) ^ change.checksum);
 
 		for (const block of staple.blocks) {
 			const blockKey = toBlockHashKey(block.hash);

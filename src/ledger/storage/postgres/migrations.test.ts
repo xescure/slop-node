@@ -190,6 +190,37 @@ describe('applyMigrations', function() {
 		expect(buffers.rows).toEqual([{ key: '@buffer:other' }]);
 	});
 
+	test('version 8 keeps the ledger checksum folded from the staples\' checksums, in a row per first byte of their blocks hashes', async function() {
+		const database = await freshDatabase();
+		const pool = database.pool();
+		const shipped = (await readdir(SCHEMA_MIGRATIONS)).sort();
+		const beforeChecksums: Record<string, Buffer> = {};
+		for (const file of shipped.filter(function(name) {
+			return(name < '0008');
+		})) {
+			beforeChecksums[file] = await readFile(new URL(file, SCHEMA_MIGRATIONS));
+		}
+		expect(await applyMigrations(pool, await migrationDirectory(beforeChecksums), clockAt(FIRST_START))).toBe(7);
+		// Two staples whose blocks hashes begin with 0x0A, one with 0xFF.
+		const staples: readonly (readonly [string, string])[] = [['0a01', '11'], ['0a02', '22'], ['ff03', '44']];
+		for (const [hashStart, checksum] of staples) {
+			await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, checksum) VALUES ($1, $2, $2, (\'x\' || $3)::bit(256))', [Buffer.from(hashStart.padEnd(64, '0'), 'hex'), FIRST_START, checksum.repeat(32)]);
+		}
+
+		expect(await applyMigrations(pool, SCHEMA_MIGRATIONS, clockAt(SECOND_START))).toBe(shipped.length);
+
+		const rows = await pool.query<{ shard: number; checksum: string }>('SELECT shard, checksum::text FROM ledger_checksum ORDER BY shard');
+		expect(rows.rows).toHaveLength(256);
+		const nonZero = rows.rows.flatMap(function(row): [number, string][] {
+			const value = BigInt(`0b${row.checksum}`);
+			if (value === 0n) {
+				return([]);
+			}
+			return([[row.shard, value.toString(16)]]);
+		});
+		expect(nonZero).toEqual([[0x0a, '33'.repeat(32)], [0xff, '44'.repeat(32)]]);
+	});
+
 	test('a migration runs without the session\'s statement timeout, which the session gets back afterwards', async function() {
 		const database = await freshDatabase();
 		// One connection, so the setting read afterwards is the migrating session's.

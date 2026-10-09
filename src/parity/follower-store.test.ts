@@ -24,6 +24,11 @@ const ACCOUNTS = [
 const STAPLE = 'AB'.repeat(32);
 const OTHER_STAPLE = 'CD'.repeat(32);
 
+/** The checksum the node keeps folded, folded afresh from the staples' own, as a node writing them would have kept it. */
+const KEEP_FOLDED = `UPDATE ledger_checksum SET checksum = COALESCE(
+	(SELECT bit_xor(checksum) FROM staples WHERE get_byte(blocks_hash, 0) = shard),
+	repeat('0', 256)::bit(256))`;
+
 function progress(reached: number): PeerProgress {
 	return({ reached: new Date(reached), caughtUp: false, deepScanFrom: new Date(0), nextDeepScan: new Date(0), deepScan: undefined, keying: 'votes' });
 }
@@ -184,6 +189,7 @@ describe('the follower\'s store, read from its database', function() {
 		// The first staple's checksum is its block's; the second's leaves out one of its two blocks.
 		await pool.query('UPDATE staples SET checksum = (\'x\' || $2)::bit(256) WHERE blocks_hash = $1', [staple('AB'), '11'.repeat(32)]);
 		await pool.query('UPDATE staples SET checksum = (\'x\' || $2)::bit(256) WHERE blocks_hash = $1', [staple('CD'), '22'.repeat(32)]);
+		await pool.query(KEEP_FOLDED);
 		const store = storeOf(database);
 		const fold = function(...bytes: readonly string[]): bigint {
 			return(bytes.reduce(function(value, byte): bigint {
@@ -198,7 +204,13 @@ describe('the follower\'s store, read from its database', function() {
 			mismatched: [{ sequence: '2', blocksHash: OTHER_STAPLE, stored: fold('22'), fold: fold('22', '33') }]
 		});
 		await pool.query('UPDATE staples SET checksum = (\'x\' || $2)::bit(256) WHERE blocks_hash = $1', [staple('CD'), fold('22', '33').toString(16)]);
+		expect((await store.checksumSnapshot()).stored).toBe(fold('11', '22'));
+		await pool.query(KEEP_FOLDED);
 		expect(await store.checksumSnapshot()).toEqual({ stored: fold('11', '22', '33'), folded: fold('11', '22', '33'), mainBlocks: 3, mismatched: [] });
+
+		// The checksum kept folded, not the staples', is what is checked: one that drifted from its staples differs with no staple listed.
+		await pool.query('UPDATE ledger_checksum SET checksum = checksum # (\'x\' || $1)::bit(256) WHERE shard = 0', ['44'.repeat(32)]);
+		expect(await store.checksumSnapshot()).toEqual({ stored: fold('11', '22', '33', '44'), folded: fold('11', '22', '33'), mainBlocks: 3, mismatched: [] });
 	});
 
 	test('reads a zero checksum and fold from a node that applied nothing', async function() {

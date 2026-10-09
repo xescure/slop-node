@@ -9,7 +9,7 @@ import type pg from 'pg';
 import { LedgerInternals } from '../../../upstream/internals.js';
 import { assertNever } from '../../../util/assert-never.js';
 import { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
-import type { CollectedDeferredStaples, LedgerCountsSnapshot, TransactionOptions } from '../base.js';
+import type { CollectedDeferredStaples, LedgerChecksum, LedgerCountsSnapshot, TransactionOptions } from '../base.js';
 import { historyAccountsOf } from '../confirmed.js';
 import type { AccountInfoUpdate, ConfirmedStapleChange } from '../confirmed.js';
 import { createIdempotentKeyError, createLedgerError, HistoryStartNotListed } from '../errors.js';
@@ -40,6 +40,7 @@ import {
 	certificatesOf,
 	deleteACL,
 	deleteSideIdempotentKeys,
+	foldLedgerChecksum,
 	headsOf,
 	insertChain,
 	insertMainBlocks,
@@ -64,6 +65,7 @@ import {
 	nonZeroBalances,
 	ownersOf,
 	raiseHeads,
+	readLedgerChecksum,
 	removeCertificate,
 	removeHistoryRows,
 	representativeOf,
@@ -326,6 +328,15 @@ export type HistoryReindex = {
 
 /** A ledger checksum is a block hash's width, 256 bits. */
 const CHECKSUM_HEX_DIGITS = 64;
+
+/** The row of the ledger checksum a staple's checksum is folded into: the first byte of its blocks hash. */
+function checksumShardOf(blocksHash: Buffer): number {
+	const shard = blocksHash[0];
+	if (shard === undefined) {
+		throw(new Error('internal error: a staple\'s blocks hash is empty'));
+	}
+	return(shard);
+}
 
 /** The staples a reindex reads and rewrites in one transaction; one of the main network's largest touches about a thousand accounts. */
 const REINDEX_BATCH_STAPLES = 200;
@@ -1235,9 +1246,27 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 			momentRange,
 			blockCount: Number(fromInteger(row.block_count)),
 			transactionCount: Number(fromInteger(row.transaction_count)),
-			representativeCount: Number(fromInteger(row.representative_count)),
-			ledgerChecksum: BigInt(`0b${row.ledger_checksum ?? '0'}`)
+			representativeCount: Number(fromInteger(row.representative_count))
 		});
+	}
+
+	/*
+	 * One statement over the ledger checksum's rows, which each staple's
+	 * transaction folds its checksum into (schema/migrations/0008_ledger_checksum.sql),
+	 * reads one snapshot of the committed main ledger in as many rows whatever
+	 * its size; the moment is the middle of the span it ran in.
+	 */
+	async ledgerChecksum(): Promise<LedgerChecksum> {
+		const { pool } = await this.#pool.connection();
+		const sent = Date.now();
+		const result = await pool.query<{ ledger_checksum: string }>({ name: readLedgerChecksum.name, text: readLedgerChecksum.text });
+		const received = Date.now();
+		const row = onlyRow(result.rows);
+		if (row === undefined) {
+			throw(new Error('internal error: the ledger checksum returned no row'));
+		}
+		const momentRange = Math.ceil((received - sent) / 2);
+		return({ moment: new Date(received - momentRange), momentRange, checksum: BigInt(`0b${row.ledger_checksum}`) });
 	}
 
 	/*
@@ -1251,7 +1280,9 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 			await this.#assertExtendsMainChains(transaction, change);
 			const ids = await this.#intern(transaction, accountsNamedBy(change));
 			const blocksHash = hashBytes(change.staple.blocksHash);
-			await transaction.run(insertStaple, [blocksHash, change.staple.timestamp(), change.moment, Buffer.from(change.staple.toBytes()), change.checksum.toString(16).padStart(CHECKSUM_HEX_DIGITS, '0')]);
+			const checksum = change.checksum.toString(16).padStart(CHECKSUM_HEX_DIGITS, '0');
+			await transaction.run(insertStaple, [blocksHash, change.staple.timestamp(), change.moment, Buffer.from(change.staple.toBytes()), checksum]);
+			await transaction.run(foldLedgerChecksum, [checksumShardOf(blocksHash), checksum]);
 			await this.#writeBlocks(transaction, change, ids, blocksHash);
 			await this.#writeVotes(transaction, change, ids, blocksHash);
 			await this.#writeAmounts(transaction, change, ids);

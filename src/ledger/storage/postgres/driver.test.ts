@@ -2,6 +2,7 @@ import { afterEach, describe, expect, inject, onTestFinished, test, vi } from 'v
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
+import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import type pg from 'pg';
 import { confirmedStaple, sendBlock } from '../../../testing/blocks.js';
 import { createTestNetwork, freezeClock } from '../../../testing/network.js';
@@ -388,7 +389,7 @@ describe('the Postgres driver', function() {
 		await storage.abortTransaction(transaction);
 
 		const versions = await database.pool().query<{ version: number }>('SELECT version FROM schema_version ORDER BY version');
-		expect(versions.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }]);
+		expect(versions.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }]);
 	});
 
 	test('destroy ends a pool the driver opened and leaves an injected pool to its owner', async function() {
@@ -596,5 +597,37 @@ describe('the Postgres driver', function() {
 		expect((await restarted.ledgerChecksum()).checksum).toBe(checksumOf([network.genesis, sent]));
 		const folded = await database.pool().query<{ fold: string }>('SELECT bit_xor((\'x\' || encode(hash, \'hex\'))::bit(256))::text AS fold FROM blocks WHERE ledger = \'main\'');
 		expect(BigInt(`0b${folded.rows[0]?.fold ?? ''}`)).toBe(checksumOf([network.genesis, sent]));
+	});
+
+	test('keeps the checksum folded in a row per first byte of the staples\' blocks hashes, which a read reads instead of the staples', async function() {
+		const database = await ledgerDatabase();
+		freezeClock(GENESIS_MOMENT);
+		const network = await createTestNetwork({ representativeWeights: DEFAULT_WEIGHTS });
+		const storage = ownedStorageOn(database);
+		const node = network.createNode(storage, requireAt(network.representatives, 0));
+		await node.ledger.add(network.genesis);
+		const sender = requireAt(network.users, 0);
+		const sent = await confirmedStaple([await sendBlock({ from: sender, previous: headOf(network.genesis, sender), to: requireAt(network.users, 1), amount: 1n, token: network.baseToken, network: network.network })], network.representatives);
+		await node.ledger.add(sent);
+		const pool = database.pool();
+
+		const rows = await pool.query<{ shard: number; checksum: string }>('SELECT shard, checksum::text FROM ledger_checksum WHERE checksum <> repeat(\'0\', 256)::bit(256) ORDER BY shard');
+		const shardOf = function(staple: VoteStaple): number {
+			return(Number.parseInt(staple.blocksHash.toString().slice(0, 2), 16));
+		};
+		const expected = new Map<number, bigint>();
+		for (const staple of [network.genesis, sent]) {
+			expected.set(shardOf(staple), (expected.get(shardOf(staple)) ?? 0n) ^ checksumOf([staple]));
+		}
+		expect(rows.rows.map(function(row): [number, bigint] {
+			return([row.shard, BigInt(`0b${row.checksum}`)]);
+		})).toEqual([...expected].sort(function([left], [right]): number {
+			return(left - right);
+		}));
+		expect((await pool.query('SELECT shard FROM ledger_checksum')).rowCount).toBe(256);
+
+		// A staple row that no write of the driver folded in is no part of what a read returns.
+		await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, checksum) VALUES ($1, $2, $2, repeat(\'1\', 256)::bit(256))', [Buffer.alloc(32, 7), GENESIS_MOMENT]);
+		expect((await storage.ledgerChecksum()).checksum).toBe(checksumOf([network.genesis, sent]));
 	});
 });
