@@ -134,13 +134,15 @@ export type SimulatedPeerOptions = {
  * per read [Keeta TS] index.js:69655-69676, in no order of its own within a
  * read; a staple whose votes two reads share is listed twice. A read holds
  * so many votes, or, as a representative's storage returns them, up to so
- * many more or fewer. Its time for a request runs out after so many reads,
- * once it has a staple to send [Keeta TS] index.js:69641-69647, and each read
- * takes so long.
+ * many more or fewer. Its time for a request runs out after as long as so
+ * many reads take, once it has a staple to send
+ * [Keeta TS] index.js:69641-69647, and each read takes so long, or, when
+ * the request carries a filter, which it tests every staple read against
+ * [Keeta TS] index.js:69686-69690, as long as given for that.
  */
 export type SimulatedKeying =
 	| { readonly kind: 'applied' }
-	| { readonly kind: 'votes'; readonly votesPerRead: number; readonly readsAtMost: number; readonly readMilliseconds: number; readonly keyedAt?: VoteKey; readonly readsVaryBy?: number };
+	| { readonly kind: 'votes'; readonly votesPerRead: number; readonly readsAtMost: number; readonly readMilliseconds: number; readonly filteredReadMilliseconds?: number; readonly keyedAt?: VoteKey; readonly readsVaryBy?: number };
 
 /**
  * Where a peer keyed by votes keys a vote of a staple, by its index among
@@ -354,6 +356,16 @@ export class SimulatedPeer {
 		const limit = Math.min(request.limit, this.#answersAtMost);
 		let at = this.#firstVoteAtOrAfter(start);
 		let reads = 0;
+		let reading = 0;
+		let perRead = keying.readMilliseconds;
+		if (filter !== undefined) {
+			perRead = keying.filteredReadMilliseconds ?? perRead;
+		}
+		// Reads that take no time are bounded by their count alone.
+		let budget = Number.POSITIVE_INFINITY;
+		if (keying.readMilliseconds > 0) {
+			budget = keying.readsAtMost * keying.readMilliseconds;
+		}
 		while (staples.length < limit && at < this.#votes.length) {
 			// [Keeta TS] index.js:69655-69659
 			const vary = keying.readsVaryBy ?? 0;
@@ -366,6 +378,7 @@ export class SimulatedPeer {
 			});
 			at += size;
 			reads++;
+			reading += perRead;
 			for (const staple of listed) {
 				if (staples.length >= limit) {
 					break;
@@ -376,11 +389,11 @@ export class SimulatedPeer {
 					leftOutFirst++;
 				}
 			}
-			if (staples.length > 0 && reads >= keying.readsAtMost) {
+			if (staples.length > 0 && (reads >= keying.readsAtMost || reading >= budget)) {
 				break;
 			}
 		}
-		advanceClock(reads * keying.readMilliseconds);
+		advanceClock(reading);
 		return({ staples, leftOutFirst });
 	}
 

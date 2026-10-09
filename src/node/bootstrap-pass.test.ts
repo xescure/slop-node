@@ -205,10 +205,10 @@ describe('a pass over a peer', function() {
 		{ name: 'their votes', keying: { kind: 'votes', votesPerRead: 20, readsAtMost: 10, readMilliseconds: 450 } }
 	] satisfies readonly { readonly name: string; readonly keying: SimulatedKeying }[])('names first, catching up, what the node holds with a vote made from where the last pass reached, which a peer keying staples by $name would send again', async function({ keying }) {
 		freezeClock(new Date(NOW));
-		// A year of history, which the node takes long after the peer applied it, from a peer whose time for a request runs out.
+		// Most of a day of history, which the node takes after the peer applied it, from a peer whose time for a request runs out; within the day, so that every request carries a filter.
 		const peer = new SimulatedPeer({ latency: 5 * SECOND, readsAtMost: 150, keying });
 		for (let index = 0; index < 20_000; index++) {
-			const madeAt = NOW - 365 * 24 * HOUR + index * 10 * SECOND;
+			const madeAt = NOW - 23 * HOUR + index * 4 * SECOND;
 			peer.apply(madeAt, madeAt);
 		}
 		const harness = new Harness(function(request) {
