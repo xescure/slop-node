@@ -2,9 +2,9 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { SimulatedNode, SimulatedPeer } from '../testing/simulated-peer.js';
 import type { SimulatedKeying, SimulatedPeerOptions, SimulatedStaple } from '../testing/simulated-peer.js';
 import { advanceClock, freezeClock } from '../testing/network.js';
-import { DEEP_SCAN_DEPTH_MILLISECONDS, DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, MAX_PASS_MILLISECONDS, bootstrapPeer, completes } from './bootstrap-pass.js';
+import { DEEP_SCAN_DEPTH_MILLISECONDS, DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PrimingWindow, MAX_PASS_MILLISECONDS, bootstrapPeer, completes } from './bootstrap-pass.js';
 import type { PassAnswer, PassEvent, PassOptions, PassRequest, PeerIO, PeerOutcome, PeerProgress } from './bootstrap-pass.js';
-import { BOOTSTRAP_MARGIN_MILLISECONDS, MAX_NAMED } from './bootstrap-window.js';
+import { BLOOM_CAPACITY, BOOTSTRAP_MARGIN_MILLISECONDS, MAX_NAMED } from './bootstrap-window.js';
 
 const NOW = Date.UTC(2026, 9, 7, 12);
 const SECOND = 1000;
@@ -36,6 +36,8 @@ class Harness {
 	readonly heldFrom: number[] = [];
 	readonly events: PassEvent[] = [];
 	readonly answers = new LongestAnswer();
+	/** As wide as a filter, so that what a pass names of what the node holds is not cut short by the window the peer is read with. */
+	readonly priming = new PrimingWindow(BLOOM_CAPACITY);
 	progress: PeerProgress | undefined;
 	readonly #answer: (request: PassRequest) => Promise<PassAnswer<SimulatedStaple>>;
 
@@ -46,6 +48,7 @@ class Harness {
 	get io(): PeerIO<SimulatedStaple> {
 		return({
 			answers: this.answers,
+			priming: this.priming,
 			page: async (request) => {
 				const answer = await this.#answer(request);
 				let served = 0;
@@ -457,6 +460,26 @@ describe('a pass over a peer', function() {
 		const firstFloor = new Date(NOW - BOOTSTRAP_MARGIN_MILLISECONDS);
 		expect(harness.requests[2]?.start).toEqual(firstFloor);
 		expect(harness.progress).toEqual({ reached: new Date(NOW + 50 + MINUTE - BOOTSTRAP_MARGIN_MILLISECONDS), caughtUp: true, deepScanFrom: EPOCH, nextDeepScan: new Date(NOW + DEEP_SCAN_PERIOD_MILLISECONDS), deepScan: undefined, keying: 'unknown' });
+	});
+});
+
+describe('the staples a pass names ahead of its start', function() {
+	test('halve each time the peer gives up, down to a floor, and grow back slowly as it answers', function() {
+		const window = new PrimingWindow();
+		const sizes = [window.size];
+		for (let gaveUp = 0; gaveUp < 6; gaveUp++) {
+			window.gaveUp();
+			sizes.push(window.size);
+		}
+		expect(sizes).toEqual([128, 64, 32, 16, 8, 8, 8]);
+
+		for (let page = 0; page < 20; page++) {
+			window.answered();
+		}
+		expect(window.size).toBe(128);
+		window.gaveUp();
+		window.answered();
+		expect(window.size).toBe(72);
 	});
 });
 

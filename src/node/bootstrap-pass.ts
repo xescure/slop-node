@@ -114,12 +114,63 @@ export class LongestAnswer {
 	}
 }
 
+/**
+ * How many staples the node holds a pass names to the peer ahead of where it
+ * asks from (PeerIO.held), learned from the peer's answers.
+ *
+ * A peer runs out of time for a request only once it has a staple to send
+ * [Keeta TS] index.js:69641-69647: one asked to leave out every staple ahead
+ * of the start reads on until something in front of it gives up, as a
+ * gateway that answers 504 does, or until the node stops waiting. So the
+ * window halves whenever the peer gives up, down to PRIMING_FLOOR, and grows
+ * back by PRIMING_STEP with each page it answers, up to PRIMING_CAP.
+ *
+ * Naming fewer loses nothing: a pass concludes only that the node holds or
+ * has queued what it was sent or its filter named, and a staple left
+ * unnamed is sent, and found held. It costs only what the peer sends again.
+ */
+export class PrimingWindow {
+	readonly #cap: number;
+	#size: number;
+
+	/** Opens at the cap, PRIMING_CAP unless another is given. */
+	constructor(cap: number = PRIMING_CAP) {
+		this.#cap = cap;
+		this.#size = cap;
+	}
+
+	get size(): number {
+		return(this.#size);
+	}
+
+	gaveUp(): void {
+		this.#size = Math.max(PRIMING_FLOOR, Math.floor(this.#size / 2));
+	}
+
+	answered(): void {
+		this.#size = Math.min(this.#cap, this.#size + PRIMING_STEP);
+	}
+}
+
 /** What a pass reports of a peer, for the node to log. */
 export type PassEvent =
 	/** The peer was first seen to key votes later than VOTE_KEY_TOLERANCE_MILLISECONDS after they were made, listing this staple from the start given. */
 	| { readonly kind: 'late-votes'; readonly start: Date; readonly staple: string }
 	/** A pass named MAX_NAMED staples from the start given with nothing to show that its pages read past it, and ended there. */
 	| { readonly kind: 'crowded'; readonly start: Date };
+
+/**
+ * The most staples the node holds a pass names ahead of the start: about as
+ * many as a main network representative reads past, at about 20 votes and
+ * half a second a read, well within the time its gateway allows a request.
+ */
+const PRIMING_CAP = 128;
+
+/** The fewest held staples a pass names ahead of the start, however often the peer gave up. */
+const PRIMING_FLOOR = 8;
+
+/** How many more held staples a pass may name after each page the peer answers. */
+const PRIMING_STEP = 8;
 
 /** Seeds a filter takes: integers its hash functions read exactly. */
 const SEED_LIMIT = 2 ** 31;
@@ -139,7 +190,9 @@ export type PassRequest = {
 export type PassAnswer<Staple extends PassStaple> =
 	| { readonly kind: 'page'; readonly staples: readonly Staple[] }
 	/** The answer was larger than a page may be, so fewer staples must be asked for. */
-	| { readonly kind: 'too-large' };
+	| { readonly kind: 'too-large' }
+	/** The peer, or what stands in front of it, gave up on the request, or the node stopped waiting for it, as the reason says (PrimingWindow). */
+	| { readonly kind: 'gave-up'; readonly reason: string };
 
 /** A deep re-scan under way: it reads the peer again from where it has reached up to the horizon, the margin before it began. */
 export type DeepScan = {
@@ -182,6 +235,8 @@ export type PeerIO<Staple extends PassStaple> = {
 	report(event: PassEvent): void;
 	/** Kept for as long as the node reads the peer. */
 	readonly answers: LongestAnswer;
+	/** Kept for as long as the node reads the peer. */
+	readonly priming: PrimingWindow;
 	readProgress(): Promise<PeerProgress | undefined>;
 	writeProgress(progress: PeerProgress): Promise<void>;
 };
@@ -826,9 +881,9 @@ class Pass<Staple extends PassStaple> {
 		await this.#holdInto(this.#named, this.#start, first);
 	}
 
-	/** Names, for the start given, what the node holds from there, as #hold does for the current one. */
+	/** Names, for the start given, what the node holds from there, as #hold does for the current one, as many as the peer's priming window allows. */
 	async #holdInto(named: NamedStaples, start: number, first?: NamedStaple): Promise<void> {
-		const room = BLOOM_CAPACITY - named.size;
+		const room = Math.min(BLOOM_CAPACITY - named.size, this.#io.priming.size);
 		if (room <= 0) {
 			return;
 		}
@@ -863,9 +918,13 @@ class Pass<Staple extends PassStaple> {
 				}
 				this.#limit = Math.min(this.#limit, Math.ceil(limit / 2));
 				return(undefined);
+			case 'gave-up':
+				this.#io.priming.gaveUp();
+				throw(new Error(`${answer.reason}; the next pass names at most ${String(this.#io.priming.size)} staples the node holds ahead of its start`));
 			default:
 				return(assertNever(answer));
 		}
+		this.#io.priming.answered();
 		const staples = answer.staples;
 		await this.#keying.observe(staples, start);
 		this.#known.learn(staples);

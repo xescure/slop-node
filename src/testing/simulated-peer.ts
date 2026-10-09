@@ -108,6 +108,13 @@ export type SimulatedPeerOptions = {
 	 * staples the filter names, as the main network's representatives do.
 	 */
 	readonly readsAtMost?: number;
+	/**
+	 * The most staples the filter names that the peer leaves out before it has
+	 * one to send, after which what stands in front of it gives up on the
+	 * request, as a gateway answering 504 does: the peer runs out of time only
+	 * once it has a staple to send [Keeta TS] index.js:69641-69647.
+	 */
+	readonly givesUpPastNamed?: number;
 	/** How the peer keys and lists its staples: by when it applied them, as earlier versions of this node did, unless told otherwise. */
 	readonly keying?: SimulatedKeying;
 };
@@ -139,6 +146,9 @@ export type SimulatedKeying =
  * off, or, outside what a pass allows, at when it received it.
  */
 export type VoteKey = (made: number, staple: number, vote: number) => number;
+
+/** The staples a peer lists for a request, and how many the filter named that it left out before it had one to send. */
+type Listing = { readonly staples: SimulatedStaple[]; readonly leftOutFirst: number };
 
 /** A vote as a peer keyed by votes holds it: its key, the moment it was made, and the staple it is in. */
 type SimulatedVote = { readonly key: number; readonly made: number; readonly vote: number; readonly staple: SimulatedStaple };
@@ -194,6 +204,7 @@ export class SimulatedPeer {
 	readonly #latency: number;
 	readonly #answersAtMost: number;
 	readonly #readsAtMost: number;
+	readonly #givesUpPastNamed: number;
 	readonly #filters = new Map<string, BloomFilter>();
 	readonly #random = deterministicRandom(7);
 	#nextID = 0;
@@ -203,12 +214,14 @@ export class SimulatedPeer {
 	#forcedFalsePositive: number | undefined;
 	#requests = 0;
 	#served = 0;
+	#gaveUp = 0;
 
 	constructor(options: SimulatedPeerOptions = {}) {
 		this.#clockOffset = options.clockOffset ?? 0;
 		this.#latency = options.latency ?? 25;
 		this.#answersAtMost = options.answersAtMost ?? Number.POSITIVE_INFINITY;
 		this.#readsAtMost = options.readsAtMost ?? Number.POSITIVE_INFINITY;
+		this.#givesUpPastNamed = options.givesUpPastNamed ?? Number.POSITIVE_INFINITY;
 		this.#keying = options.keying ?? { kind: 'applied' };
 		this.#voteKey = keyedWhenMade;
 		if (this.#keying.kind === 'votes' && this.#keying.keyedAt !== undefined) {
@@ -223,6 +236,11 @@ export class SimulatedPeer {
 
 	get requests(): number {
 		return(this.#requests);
+	}
+
+	/** The requests the peer gave up on. */
+	get gaveUp(): number {
+		return(this.#gaveUp);
 	}
 
 	/** The staples the peer has sent in all, its answers to probes included: what it uploaded. */
@@ -302,24 +320,29 @@ export class SimulatedPeer {
 		this.#commitLate();
 		const filter = this.#filterOf(request.bloomFilter);
 		const keying = this.#keying;
-		let staples: SimulatedStaple[];
+		let listing: Listing;
 		switch (keying.kind) {
 			case 'applied':
-				staples = this.#listApplied(request, filter);
+				listing = this.#listApplied(request, filter);
 				break;
 			case 'votes':
-				staples = this.#listVoted(request, filter, keying);
+				listing = this.#listVoted(request, filter, keying);
 				break;
 			default:
 				return(assertNever(keying));
 		}
-		this.#served += staples.length;
-		return({ kind: 'page', staples });
+		if (listing.leftOutFirst > this.#givesUpPastNamed) {
+			this.#gaveUp++;
+			return({ kind: 'gave-up', reason: `the peer gave up on a request from ${request.start.toISOString()}` });
+		}
+		this.#served += listing.staples.length;
+		return({ kind: 'page', staples: listing.staples });
 	}
 
 	/** The staples of the votes keyed at or after the start, read as a representative reads them, up to the limit, or the peer's own if lower. */
-	#listVoted(request: PassRequest, filter: BloomFilter | undefined, keying: SimulatedKeying & { readonly kind: 'votes' }): SimulatedStaple[] {
+	#listVoted(request: PassRequest, filter: BloomFilter | undefined, keying: SimulatedKeying & { readonly kind: 'votes' }): Listing {
 		const staples: SimulatedStaple[] = [];
+		let leftOutFirst = 0;
 		const start = request.start.getTime();
 		const limit = Math.min(request.limit, this.#answersAtMost);
 		let at = this.#firstVoteAtOrAfter(start);
@@ -342,6 +365,8 @@ export class SimulatedPeer {
 				}
 				if (!this.#named(filter, staple)) {
 					staples.push(staple);
+				} else if (staples.length === 0) {
+					leftOutFirst++;
 				}
 			}
 			if (staples.length > 0 && reads >= keying.readsAtMost) {
@@ -349,7 +374,7 @@ export class SimulatedPeer {
 			}
 		}
 		advanceClock(reads * keying.readMilliseconds);
-		return(staples);
+		return({ staples, leftOutFirst });
 	}
 
 	#firstVoteAtOrAfter(moment: number): number {
@@ -366,9 +391,10 @@ export class SimulatedPeer {
 		return(low);
 	}
 
-	#listApplied(request: PassRequest, filter: BloomFilter | undefined): SimulatedStaple[] {
+	#listApplied(request: PassRequest, filter: BloomFilter | undefined): Listing {
 		const start = request.start.getTime();
 		const staples: SimulatedStaple[] = [];
+		let leftOutFirst = 0;
 		const limit = Math.min(request.limit, this.#answersAtMost);
 		let read = 0;
 		for (let at = this.#firstAtOrAfter(start); at < this.#applied.length && staples.length < limit; at++) {
@@ -381,11 +407,14 @@ export class SimulatedPeer {
 			}
 			read++;
 			if (this.#named(filter, staple)) {
+				if (staples.length === 0) {
+					leftOutFirst++;
+				}
 				continue;
 			}
 			staples.push(staple);
 		}
-		return(staples);
+		return({ staples, leftOutFirst });
 	}
 
 	#named(filter: BloomFilter | undefined, staple: SimulatedStaple): boolean {

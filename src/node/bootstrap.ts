@@ -10,7 +10,7 @@ import type { ClassSurface } from '../util/class-surface.js';
 import { BootstrapCursors, KVRetryStore } from './bootstrap-cursors.js';
 import { PageError, PageFetcher } from './bootstrap-page.js';
 import { PeerPacer } from './bootstrap-pacing.js';
-import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, VOTE_KEY_TOLERANCE_MILLISECONDS, bootstrapPeer, completes } from './bootstrap-pass.js';
+import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PrimingWindow, VOTE_KEY_TOLERANCE_MILLISECONDS, bootstrapPeer, completes } from './bootstrap-pass.js';
 import type { PassAnswer, PassEvent, PassOutcome, PassRequest, PeerIO } from './bootstrap-pass.js';
 import { bootstrapPacingOf, bootstrapSources } from './bootstrap-peers.js';
 import type { BootstrapNode } from './bootstrap-peers.js';
@@ -82,6 +82,41 @@ function refusalOf(error: unknown): string {
 		return(`${error.name}: ${error.message}`.slice(0, MAX_REFUSAL_LENGTH));
 	}
 	return(String(error).slice(0, MAX_REFUSAL_LENGTH));
+}
+
+/** What the client keeps for the peer while it runs, made the first time it reads the peer. */
+function keptFor<Value>(kept: Map<string, Value>, endpoint: string, make: () => Value): Value {
+	let value = kept.get(endpoint);
+	if (value === undefined) {
+		value = make();
+		kept.set(endpoint, value);
+	}
+	return(value);
+}
+
+/** A gateway's answer when what stands behind it took too long to answer. */
+const GATEWAY_TIMEOUT_STATUS = 504;
+
+/** What a failed request tells a pass of the peer, or nothing when it only fails the pass. */
+function answerOf(error: PageError): PassAnswer<VoteStaple> | undefined {
+	const problem = error.problem;
+	switch (problem.kind) {
+		case 'too-large':
+			return({ kind: 'too-large' });
+		case 'timeout':
+			return({ kind: 'gave-up', reason: String(error) });
+		case 'status':
+			if (problem.status === GATEWAY_TIMEOUT_STATUS) {
+				return({ kind: 'gave-up', reason: String(error) });
+			}
+			return(undefined);
+		case 'protocol':
+		case 'malformed':
+		case 'stopped':
+			return(undefined);
+		default:
+			return(assertNever(problem));
+	}
 }
 
 function resultOf(outcome: PassOutcome): PeerResult {
@@ -158,6 +193,7 @@ export class BootstrapClient {
 	/** Where a pass over each peer last ended for naming too many staples from one start, to tell a peer it stays stuck on. */
 	readonly #crowdedAt = new Map<string, number>();
 	readonly #answers = new Map<string, LongestAnswer>();
+	readonly #priming = new Map<string, PrimingWindow>();
 
 	/**
 	 * With a period, an update runs at once and then that many milliseconds
@@ -317,13 +353,13 @@ export class BootstrapClient {
 	/** The update's passes over the peer, those over a peer it has no progress on starting from the moment given. */
 	async #catchUp(endpoint: string, limit: number, fetcher: PageFetcher, from: Date): Promise<PeerResult> {
 		const tally: PassTally = { requests: 0, added: 0, held: 0, queued: 0 };
-		let answers = this.#answers.get(endpoint);
-		if (answers === undefined) {
-			answers = new LongestAnswer();
-			this.#answers.set(endpoint, answers);
-		}
 		const io: PeerIO<VoteStaple> = {
-			answers,
+			answers: keptFor(this.#answers, endpoint, function() {
+				return(new LongestAnswer());
+			}),
+			priming: keptFor(this.#priming, endpoint, function() {
+				return(new PrimingWindow());
+			}),
 			page: (request) => {
 				tally.requests++;
 				return(this.#page(fetcher, endpoint, request));
@@ -377,8 +413,11 @@ export class BootstrapClient {
 			});
 			return({ kind: 'page', staples });
 		} catch (error: unknown) {
-			if (error instanceof PageError && error.problem.kind === 'too-large') {
-				return({ kind: 'too-large' });
+			if (error instanceof PageError) {
+				const answer = answerOf(error);
+				if (answer !== undefined) {
+					return(answer);
+				}
 			}
 			throw(error);
 		}

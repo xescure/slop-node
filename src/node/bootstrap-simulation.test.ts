@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { SimulatedNode, SimulatedPeer, SimulatedRetryStore, simulatedRetries } from '../testing/simulated-peer.js';
 import type { LiveTraffic, RefusalReport, SimulatedKeying, SimulatedPeerOptions, SimulatedStaple, VoteKey } from '../testing/simulated-peer.js';
 import { advanceClock, freezeClock } from '../testing/network.js';
-import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, bootstrapPeer, completes } from './bootstrap-pass.js';
+import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PrimingWindow, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, bootstrapPeer, completes } from './bootstrap-pass.js';
 import type { PassEvent, PassOptions, PassOutcome, PeerIO, PeerOutcome, PeerProgress } from './bootstrap-pass.js';
 import { REPORT_REFUSED_AFTER_MILLISECONDS, RetryQueueFull } from './bootstrap-retry.js';
 import type { QueueBounds, RetryQueue } from './bootstrap-retry.js';
@@ -65,6 +65,7 @@ class Follower {
 	readonly progress = new Map<SimulatedPeer, PeerProgress>();
 	readonly events: PassEvent[] = [];
 	readonly #answers = new Map<SimulatedPeer, LongestAnswer>();
+	readonly #priming = new Map<SimulatedPeer, PrimingWindow>();
 	readonly #seed = seeds();
 
 	constructor(bounds?: QueueBounds) {
@@ -78,8 +79,14 @@ class Follower {
 			answers = new LongestAnswer();
 			this.#answers.set(peer, answers);
 		}
+		let priming = this.#priming.get(peer);
+		if (priming === undefined) {
+			priming = new PrimingWindow();
+			this.#priming.set(peer, priming);
+		}
 		return({
 			answers,
+			priming,
 			page: function(request) {
 				return(peer.page(request));
 			},
@@ -173,6 +180,33 @@ class Scenario {
 			waited += delay;
 		}
 		throw(new Error(`no pass completed within ${String(updates)} updates`));
+	}
+
+	/**
+	 * Updates until a pass completes, at once after one that ended at its
+	 * bound and a period after one the peer gave up on, as the client schedules
+	 * them, and answers how many it gave up on.
+	 */
+	async untilCompleteThroughFailures(updates: number): Promise<number> {
+		let failed = 0;
+		for (let update = 0; update < updates; update++) {
+			let live: PassOutcome;
+			try {
+				({ live } = await this.update());
+			} catch (error: unknown) {
+				// Only a pass the peer gave up on is expected to fail.
+				if (!(error instanceof Error) || !error.message.includes('gave up')) {
+					throw(error);
+				}
+				failed++;
+				advanceClock(PERIOD);
+				continue;
+			}
+			if (completes(live)) {
+				return(failed);
+			}
+		}
+		throw(new Error(`no pass completed within ${String(updates)} updates, ${String(failed)} of which failed`));
 	}
 
 	/** Updates on the period for that long. */
@@ -921,6 +955,47 @@ describe('bootstrapping against a peer keyed by votes, as the main network\'s re
 		await scenario.onScheduleUntilComplete(60);
 
 		expect(scenario.missing()).toEqual([]);
+	});
+
+	/*
+	 * A representative runs out of time for a request only once it has a
+	 * staple to send, so one asked to leave out every staple ahead of the
+	 * start reads on until its gateway gives up, as the main network's did
+	 * when the node named the 1200 staples it held ahead of the start. The
+	 * node holds most of the history already, as after its cursors are reset.
+	 */
+	test('reads again the history it holds from a peer that gives up past too many named staples, naming fewer ahead of the start', async function() {
+		freezeClock(new Date(NOW));
+		const scenario = new Scenario({ ...REPRESENTATIVE, givesUpPastNamed: 200 });
+		const count = 3000;
+		liveHistory(scenario.peer, count, 0.1, NOW - HOUR);
+		for (const staple of scenario.peer.staples.slice(0, 2500)) {
+			await scenario.node.add(staple);
+		}
+		scenario.from = new Date(NOW - HOUR - count * 10 * SECOND - MINUTE);
+
+		const failed = await scenario.untilCompleteThroughFailures(80);
+
+		expect(scenario.missing()).toEqual([]);
+		expect({ failed, gaveUp: scenario.peer.gaveUp }).toEqual({ failed: 0, gaveUp: 0 });
+	});
+
+	test('names fewer staples it holds ahead of the start each time a peer gives up, and holds every staple', async function() {
+		freezeClock(new Date(NOW));
+		const scenario = new Scenario({ ...REPRESENTATIVE, givesUpPastNamed: 100 });
+		const count = 3000;
+		liveHistory(scenario.peer, count, 0.1, NOW - HOUR);
+		for (const staple of scenario.peer.staples.slice(0, 2500)) {
+			await scenario.node.add(staple);
+		}
+		scenario.from = new Date(NOW - HOUR - count * 10 * SECOND - MINUTE);
+
+		const failed = await scenario.untilCompleteThroughFailures(120);
+
+		expect(scenario.missing()).toEqual([]);
+		// It halves from 128 below what the peer reads past, and growing back past it costs one more now and then.
+		expect(failed).toBeGreaterThan(0);
+		expect(failed).toBe(scenario.peer.gaveUp);
 	});
 
 	/** Staples made one a second over the hour before, each with four votes within a second, from a peer keyed by votes as given. */
