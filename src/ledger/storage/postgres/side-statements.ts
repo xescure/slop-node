@@ -185,28 +185,73 @@ export const deferredStaplesWaitingOn: Statement<[Buffer[]], DeferredStapleColum
 		SELECT deferred_waits.blocks_hash FROM deferred_waits WHERE deferred_waits.block_hash = ANY($1::bytea[]))
 	ORDER BY deferred_staples.blocks_hash`);
 
+/*
+ * A deferred staple dead when it is deferred is listed for gc then; one that
+ * dies or is released later is listed by the confirmed write that does it
+ * (listReadyDeferredStaples).
+ */
+export const listDeadDeferredStaple: Statement<[Buffer]> = statement('list_dead_deferred_staple', `
+	INSERT INTO deferred_checks (blocks_hash)
+	SELECT $1::bytea
+	WHERE EXISTS (
+		SELECT 1 FROM deferred_blocks
+		JOIN blocks successor ON successor.previous = deferred_blocks.previous AND successor.ledger = 'main'
+		WHERE deferred_blocks.blocks_hash = $1::bytea)`);
+
+/*
+ * Lists for gc the deferred staples that blocks just written to main release
+ * ($1, their hashes) or kill ($2, their previous blocks). Neither state ever
+ * ends, and only such a write begins one, so every released or dead staple is
+ * listed. A deferral or write running beside this one that would change what
+ * it lists reads or writes the same rows, which serializable isolation
+ * orders.
+ */
+export const listReadyDeferredStaples: Statement<[Buffer[], Buffer[]]> = statement('list_ready_deferred_staples', `
+	INSERT INTO deferred_checks (blocks_hash)
+	SELECT waits.blocks_hash FROM deferred_waits waits
+	WHERE waits.block_hash = ANY($1::bytea[])
+		AND NOT EXISTS (
+			SELECT 1 FROM deferred_waits other
+			WHERE other.blocks_hash = waits.blocks_hash
+				AND NOT EXISTS (SELECT 1 FROM blocks WHERE blocks.hash = other.block_hash AND blocks.ledger = 'main'))
+	UNION
+	SELECT deferred_blocks.blocks_hash FROM deferred_blocks WHERE deferred_blocks.previous = ANY($2::bytea[])
+	ON CONFLICT (blocks_hash) DO NOTHING`);
+
+/*
+ * gc reads only the listed staples. The listing is chosen and limited before
+ * the staples are joined, so the plan cannot reach the deferred staples that
+ * are not listed, whatever the planner estimates of the tables.
+ */
+
 // A deferred staple can never apply once the previous of any of its blocks has a confirmed successor (D6, D20).
 export const deadDeferredStaples: Statement<[number], DeferredStapleColumns> = statement('dead_deferred_staples', `
 	SELECT deferred_staples.blocks_hash, deferred_staples.bytes, deferred_staples.latest_vote_from
 	FROM deferred_staples
-	WHERE EXISTS (
-		SELECT 1 FROM deferred_blocks
-		JOIN blocks successor ON successor.previous = deferred_blocks.previous AND successor.ledger = 'main'
-		WHERE deferred_blocks.blocks_hash = deferred_staples.blocks_hash)
-	ORDER BY deferred_staples.blocks_hash
-	LIMIT $1`);
+	WHERE deferred_staples.blocks_hash IN (
+		SELECT deferred_checks.blocks_hash FROM deferred_checks
+		WHERE EXISTS (
+			SELECT 1 FROM deferred_blocks
+			JOIN blocks successor ON successor.previous = deferred_blocks.previous AND successor.ledger = 'main'
+			WHERE deferred_blocks.blocks_hash = deferred_checks.blocks_hash)
+		ORDER BY deferred_checks.blocks_hash
+		LIMIT $1)
+	ORDER BY deferred_staples.blocks_hash`);
 
 // Deferred staples, other than those in $2, whose every awaited block is on main.
 export const releasedDeferredStaples: Statement<[number, Buffer[]], DeferredStapleColumns> = statement('released_deferred_staples', `
 	SELECT deferred_staples.blocks_hash, deferred_staples.bytes, deferred_staples.latest_vote_from
 	FROM deferred_staples
-	WHERE deferred_staples.blocks_hash <> ALL($2::bytea[])
-		AND NOT EXISTS (
-			SELECT 1 FROM deferred_waits
-			WHERE deferred_waits.blocks_hash = deferred_staples.blocks_hash
-				AND NOT EXISTS (SELECT 1 FROM blocks WHERE blocks.hash = deferred_waits.block_hash AND blocks.ledger = 'main'))
-	ORDER BY deferred_staples.blocks_hash
-	LIMIT $1`);
+	WHERE deferred_staples.blocks_hash IN (
+		SELECT deferred_checks.blocks_hash FROM deferred_checks
+		WHERE deferred_checks.blocks_hash <> ALL($2::bytea[])
+			AND NOT EXISTS (
+				SELECT 1 FROM deferred_waits
+				WHERE deferred_waits.blocks_hash = deferred_checks.blocks_hash
+					AND NOT EXISTS (SELECT 1 FROM blocks WHERE blocks.hash = deferred_waits.block_hash AND blocks.ledger = 'main'))
+		ORDER BY deferred_checks.blocks_hash
+		LIMIT $1)
+	ORDER BY deferred_staples.blocks_hash`);
 
 // Each staple's waits and recorded previous blocks are deleted with it.
 export const deleteDeferredStaples: Statement<[Buffer[]]> = statement('delete_deferred_staples', 'DELETE FROM deferred_staples WHERE blocks_hash = ANY($1::bytea[])');

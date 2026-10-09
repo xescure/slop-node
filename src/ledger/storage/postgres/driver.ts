@@ -87,6 +87,8 @@ import {
 	insertSideIdempotentKeys,
 	insertSideVote,
 	insertVoteBlocks,
+	listDeadDeferredStaple,
+	listReadyDeferredStaples,
 	obsoleteSideVotes,
 	orphanedSideRows,
 	releasedDeferredStaples,
@@ -1158,7 +1160,9 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	/*
 	 * Replaces an earlier copy. Several staples may wait on one block, so a
 	 * wait is keyed by the pair (D13). The previous of each block is kept for
-	 * the dead-staple check.
+	 * the dead-staple check. A staple can wait on one block while another of
+	 * its blocks already competes with a confirmed one, so it may be dead as
+	 * it is deferred.
 	 */
 	protected async storeDeferredStaple(transaction: PostgresTransaction, staple: VoteStaple, waitingOn: readonly BlockHash[]): Promise<void> {
 		const key = hashBytes(staple.blocksHash);
@@ -1168,6 +1172,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 		await transaction.run(insertDeferredBlocks, [key, staple.blocks.map(function(block) {
 			return(hashBytes(block.previous));
 		})]);
+		await transaction.run(listDeadDeferredStaple, [key]);
 	}
 
 	protected async listDeferredStaplesWaitingOn(transaction: PostgresTransaction, blockHashes: readonly BlockHash[]): Promise<readonly VoteStaple[]> {
@@ -1338,6 +1343,9 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 			throw(createLedgerError('LEDGER_BLOCK_ALREADY_EXISTS', `Block Already Exists in staple ${change.staple.blocksHash.toString()}`));
 		}
 		await transaction.run(deleteSideIdempotentKeys, [hashes]);
+		await transaction.run(listReadyDeferredStaples, [hashes, blocks.map(function(block) {
+			return(hashBytes(block.previous));
+		})]);
 
 		const heights = blocks.map(function(block): bigint {
 			const height = change.blockHeights.get(toBlockHashKey(block.hash));

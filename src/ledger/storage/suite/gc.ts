@@ -437,6 +437,23 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			expect(blocksHashesOf(await ledger.add(missingStaple))).toEqual(blocksHashesOf([missingStaple]));
 		});
 
+		test('gc drops a staple deferred after the previous of one of its blocks was confirmed', async function() {
+			const log = new RecordingLog();
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0, log });
+			await ledger.add(network.genesis);
+			await ledger.add(await confirmedStaple([await sendFromGenesis(network, 0, 5n)], network.representatives));
+			// Its competitor arrives with a block whose previous is missing, so it is deferred, though it can never apply.
+			const missing = await sendFromGenesis(network, 1, 1n);
+			const late = await confirmedStaple([await sendFromGenesis(network, 0, 7n), await sendFrom(network, 1, missing.hash, 2n)], network.representatives);
+			expect(await ledger.add(late)).toEqual([]);
+			expect(await deferredWaitingOn(storage, missing.hash)).toEqual(blocksHashesOf([late]));
+
+			expect(await ledger.gc()).toBe(false);
+
+			expect(await deferredWaitingOn(storage, missing.hash)).toEqual([]);
+			expect(log.errorsMentioning(late)).toHaveLength(1);
+		});
+
 		test('a deferred staple that is not dead survives gc and a partial release, then applies', async function() {
 			const log = new RecordingLog();
 			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { log });

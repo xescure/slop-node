@@ -116,6 +116,42 @@ describe('applyMigrations', function() {
 		})).toEqual(digests);
 	});
 
+	test('version 6 lists for gc the deferred staples already released or dead, and history keeps its rows through version 5', async function() {
+		const database = await freshDatabase();
+		const pool = database.pool();
+		const shipped = (await readdir(SCHEMA_MIGRATIONS)).sort();
+		const beforeChecks: Record<string, Buffer> = {};
+		for (const file of shipped.filter(function(name) {
+			return(name < '0006');
+		})) {
+			beforeChecks[file] = await readFile(new URL(file, SCHEMA_MIGRATIONS));
+		}
+		expect(await applyMigrations(pool, await migrationDirectory(beforeChecks), clockAt(FIRST_START))).toBe(5);
+		const hash = function(label: string): string {
+			return(`sha256(convert_to('${label}', 'UTF8'))`);
+		};
+		await pool.query('INSERT INTO accounts (public_key, key_type) VALUES (\'keeta_migrated\', 0)');
+		await pool.query(`INSERT INTO staples (blocks_hash, staple_time, moment) VALUES (${hash('main staple')}, $1, $1)`, [FIRST_START]);
+		await pool.query(`INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position)
+			SELECT ${hash('arrived')}, 'main', id, ${hash('contested')}, 1, '\\x00', ${hash('main staple')}, 0 FROM accounts`);
+		await pool.query(`INSERT INTO history (account_id, blocks_hash, staple_time) SELECT id, ${hash('main staple')}, $1 FROM accounts`, [FIRST_START]);
+		// Released: it waits only on a block on main. Dead: one of its blocks competes with that block. Waiting: neither.
+		for (const [staple, awaited, previous] of [['released', 'arrived', 'free'], ['dead', 'missing', 'contested'], ['waiting', 'missing', 'free']] as const) {
+			await pool.query(`INSERT INTO deferred_staples (blocks_hash, bytes, latest_vote_from) VALUES (${hash(staple)}, '\\x00', $1)`, [FIRST_START]);
+			await pool.query(`INSERT INTO deferred_waits (block_hash, blocks_hash) VALUES (${hash(awaited)}, ${hash(staple)})`);
+			await pool.query(`INSERT INTO deferred_blocks (blocks_hash, previous) VALUES (${hash(staple)}, ${hash(previous)})`);
+		}
+
+		expect(await applyMigrations(pool, SCHEMA_MIGRATIONS, clockAt(SECOND_START))).toBe(shipped.length);
+
+		const listed = await pool.query<{ blocks_hash: Buffer }>('SELECT blocks_hash FROM deferred_checks ORDER BY blocks_hash');
+		const expected = await pool.query<{ blocks_hash: Buffer }>(`SELECT blocks_hash FROM deferred_staples WHERE blocks_hash IN (${hash('released')}, ${hash('dead')}) ORDER BY blocks_hash`);
+		expect(listed.rows).toEqual(expected.rows);
+		expect(listed.rows).toHaveLength(2);
+		const history = await pool.query<{ staple_time: Date }>('SELECT staple_time FROM history');
+		expect(history.rows).toEqual([{ staple_time: FIRST_START }]);
+	});
+
 	test('a migration runs without the session\'s statement timeout, which the session gets back afterwards', async function() {
 		const database = await freshDatabase();
 		// One connection, so the setting read afterwards is the migrating session's.
