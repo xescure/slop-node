@@ -754,7 +754,11 @@ function madeBetween(staple: PassStaple, start: number, moment: number): boolean
  * same, unless the peer answers short pages throughout, when the next
  * passes bring the rest. It stops earlier only when its start reaches its
  * end: the moment it began, for a pass from where the last reached, and the
- * horizon, for a deep re-scan, which need not read the present. The horizon
+ * horizon, for a deep re-scan and a pass over a range, which need not read
+ * the present: for those, the start reaching the horizon is a move to it, and
+ * the probe of the horizon shows it as a move would, so either shows the node
+ * holds or has queued every staple keyed before the horizon but those the
+ * filters named (src/node/bootstrap-ranges.ts). The horizon
  * must not be the moment the pass began: the probe needs a staple the peer
  * applied at or after it, and a peer whose clock runs behind the node's by
  * more than a pass lasts has applied none while the pass runs, whereas the
@@ -1448,4 +1452,49 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 		throw(failureOf(retried));
 	}
 	return({ live: liveResult.value, deepScan: deepResult.value });
+}
+
+/** A range of a peer's history a pass reads (src/node/bootstrap-ranges.ts). */
+export type RangeSetup = {
+	/** Where the node holds or has queued every staple the range's peers keyed from where it began. */
+	readonly reached: Date;
+	readonly end: Date;
+	readonly use: QueueUse;
+	readonly moved: (start: Date) => Promise<void>;
+};
+
+/**
+ * An update's pass over a range of the peer's history: a pass from where the
+ * range reached with the range's end as its horizon and its end, which
+ * completes once it is shown to hold or have queued every staple the peer
+ * keyed before the end, as any pass is (see Pass), and records where it
+ * reached through the setup, not in the peer's progress. The node keeps
+ * what the pass learns of how the peer keys in the peer's progress, which
+ * it begins as from the moment PassOptions.from gives when it has none.
+ */
+export async function bootstrapRange<Staple extends PassStaple>(io: PeerIO<Staple>, range: RangeSetup, options: PassOptions): Promise<PassOutcome> {
+	const began = Date.now();
+	let progress = await io.readProgress();
+	if (progress === undefined) {
+		progress = firstProgress(began, options.stagger ?? 0, options.from ?? EPOCH);
+		await io.writeProgress(progress);
+	}
+	const keying = new KeyingRecord(progress.keying, async function(learned) {
+		const current = await io.readProgress() ?? firstProgress(began, options.stagger ?? 0, options.from ?? EPOCH);
+		await io.writeProgress({ ...current, keying: learned });
+	}, function(event) {
+		io.report(event);
+	});
+	const pass = new Pass(io, { start: range.reached, horizon: range.end, end: range.end, use: range.use, keying, moved: range.moved }, options);
+	const [result] = await Promise.allSettled([pass.run()]);
+	// As after the passes over a peer, the staples queued are offered again whatever the pass did.
+	const [retried] = await Promise.allSettled([io.retry()]);
+	if (result.status === 'rejected') {
+		throw(failureOf(result));
+	}
+	io.priming.passed(completes(result.value));
+	if (retried.status === 'rejected') {
+		throw(failureOf(retried));
+	}
+	return(result.value);
 }
