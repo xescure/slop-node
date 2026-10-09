@@ -23,6 +23,18 @@ export const POSTGRES_SOCKET_DIRECTORY = 'run';
 /** Names the server's socket only, since it listens on no TCP address. */
 export const POSTGRES_PORT = 5432;
 
+/** The follower's Postgres user and database, in its own cluster. */
+export const FOLLOWER_POSTGRES_USER = 'slop';
+export const FOLLOWER_DATABASE = 'follower';
+
+/** Where "up" writes the settings it started the follower with. */
+export const FOLLOWER_SETTINGS_FILE = 'follower.json';
+
+/** The follower's database, reached through the socket in its directory. */
+export function followerDatabaseURL(directory: string): string {
+	return(`postgresql://${FOLLOWER_POSTGRES_USER}@${encodeURIComponent(join(directory, POSTGRES_SOCKET_DIRECTORY))}:${String(POSTGRES_PORT)}/${FOLLOWER_DATABASE}`);
+}
+
 /** What a Unix-domain socket path may take: sun_path is 108 bytes on Linux, one of them the terminating NUL. */
 const SOCKET_PATH_LIMIT_BYTES = 107;
 
@@ -52,6 +64,29 @@ export const DEFAULT_FOLLOWER_SETTINGS: Omit<FollowerSettings, 'directory'> = {
 	 */
 	maxHeapMegabytes: 768
 };
+
+/** The settings "up" last started the follower with, or nothing when it never started one in the directory. */
+export async function readFollowerSettings(directory: string): Promise<FollowerSettings | undefined> {
+	const path = join(directory, FOLLOWER_SETTINGS_FILE);
+	let text: string;
+	try {
+		text = await readFile(path, 'utf8');
+	} catch (error: unknown) {
+		if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+			return(undefined);
+		}
+		throw(error);
+	}
+	const parsed: unknown = JSON.parse(text);
+	if (typeof parsed !== 'object' || parsed === null) {
+		throw(new Error(`${path} holds no follower settings`));
+	}
+	const { port, minIntervalMilliseconds, maxHeapMegabytes } = { port: undefined, minIntervalMilliseconds: undefined, maxHeapMegabytes: undefined, ...parsed };
+	if (typeof port !== 'number' || typeof minIntervalMilliseconds !== 'number' || typeof maxHeapMegabytes !== 'number') {
+		throw(new Error(`${path} holds no follower settings`));
+	}
+	return({ directory, port, minIntervalMilliseconds, maxHeapMegabytes });
+}
 
 export type FollowerLog = 'node' | 'postgres';
 
@@ -215,7 +250,7 @@ function wholeNumber(text: string | undefined, maximum: number): number | undefi
 }
 
 /** The options given, each with its value, or undefined when one is not among those allowed or lacks its value. */
-function optionsOf(argv: readonly string[], valued: readonly string[], flags: readonly string[]): Map<string, string> | undefined {
+export function optionsOf(argv: readonly string[], valued: readonly string[], flags: readonly string[]): Map<string, string> | undefined {
 	const options = new Map<string, string>();
 	for (let index = 0; index < argv.length; index++) {
 		const name = argv[index] ?? '';
@@ -234,7 +269,7 @@ function optionsOf(argv: readonly string[], valued: readonly string[], flags: re
 }
 
 /** A setting given as an option, its default when the option is absent, or undefined when it is malformed. */
-function setting(options: ReadonlyMap<string, string>, name: string, maximum: number, fallback: number): number | undefined {
+export function setting(options: ReadonlyMap<string, string>, name: string, maximum: number, fallback: number): number | undefined {
 	const text = options.get(name);
 	if (text === undefined) {
 		return(fallback);

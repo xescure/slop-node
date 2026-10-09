@@ -10,22 +10,18 @@ import { promisify } from 'node:util';
 import pg from 'pg';
 import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RETRY_ARENA } from '../node/bootstrap-cursors.js';
 import { assertNever } from '../util/assert-never.js';
-import { checkFollowerEnvironment, FOLLOWER_LISTEN_IP, followerDirectory, followerEnvironment, parseFollowerCommand, POSTGRES_PORT, POSTGRES_SOCKET_DIRECTORY, readOrCreateSeed } from './follower-config.js';
+import { checkFollowerEnvironment, FOLLOWER_DATABASE, FOLLOWER_LISTEN_IP, FOLLOWER_POSTGRES_USER, FOLLOWER_SETTINGS_FILE, followerDatabaseURL, followerDirectory, followerEnvironment, parseFollowerCommand, POSTGRES_PORT, POSTGRES_SOCKET_DIRECTORY, readFollowerSettings, readOrCreateSeed } from './follower-config.js';
 import type { FollowerLog, FollowerSettings } from './follower-config.js';
 
 /** The built node, which utils/follower builds before it runs this. */
 const BUILT_CLI = new URL('../../../dist/main.js', import.meta.url);
 
 const SEED_FILE = 'seed';
-const SETTINGS_FILE = 'follower.json';
 const NODE_PID_FILE = 'node.pid';
 const POSTGRES_DATA = 'postgres';
 const POSTMASTER_PID_FILE = 'postmaster.pid';
 const SETTINGS_INCLUDE = 'follower.conf';
 const LOG_FILES: Readonly<Record<FollowerLog, string>> = { node: 'node.log', postgres: 'postgres.log' };
-
-const POSTGRES_USER = 'slop';
-const DATABASE = 'follower';
 
 /** Only the follower's user may enter its directory, which holds its seed and its database's socket. */
 const PRIVATE_DIRECTORY = 0o700;
@@ -206,10 +202,6 @@ async function runningPostmaster(directory: string): Promise<number | undefined>
 	return(processID);
 }
 
-function databaseURL(directory: string): string {
-	return(`postgresql://${POSTGRES_USER}@${encodeURIComponent(join(directory, POSTGRES_SOCKET_DIRECTORY))}:${String(POSTGRES_PORT)}/${DATABASE}`);
-}
-
 function serverSettings(directory: string): string {
 	const settings: Record<string, string> = { ...POSTGRES_SETTINGS, unix_socket_directories: `'${join(directory, POSTGRES_SOCKET_DIRECTORY)}'` };
 	return(Object.entries(settings).map(function([name, value]): string {
@@ -224,7 +216,7 @@ async function prepareCluster(directory: string): Promise<void> {
 		await rm(data, { recursive: true, force: true });
 		await runTool('initdb', [
 			'--pgdata', data,
-			'--username', POSTGRES_USER,
+			'--username', FOLLOWER_POSTGRES_USER,
 			// Only the follower's user can reach the socket, in its private directory.
 			'--auth', 'trust',
 			'--encoding', 'UTF8',
@@ -244,7 +236,7 @@ async function startPostgres(directory: string): Promise<void> {
 }
 
 async function withDatabase<Result>(database: string, directory: string, work: (client: pg.Client) => Promise<Result>): Promise<Result> {
-	const client = new pg.Client({ host: join(directory, POSTGRES_SOCKET_DIRECTORY), port: POSTGRES_PORT, user: POSTGRES_USER, database });
+	const client = new pg.Client({ host: join(directory, POSTGRES_SOCKET_DIRECTORY), port: POSTGRES_PORT, user: FOLLOWER_POSTGRES_USER, database });
 	await client.connect();
 	try {
 		return(await work(client));
@@ -256,12 +248,12 @@ async function withDatabase<Result>(database: string, directory: string, work: (
 /** The database, with the view of the statement statistics the cluster keeps (POSTGRES_SETTINGS). */
 async function createDatabase(directory: string): Promise<void> {
 	await withDatabase('postgres', directory, async function(client) {
-		const found = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [DATABASE]);
+		const found = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [FOLLOWER_DATABASE]);
 		if (found.rowCount === 0) {
-			await client.query(`CREATE DATABASE ${DATABASE}`);
+			await client.query(`CREATE DATABASE ${FOLLOWER_DATABASE}`);
 		}
 	});
-	await withDatabase(DATABASE, directory, async function(client) {
+	await withDatabase(FOLLOWER_DATABASE, directory, async function(client) {
 		await client.query('CREATE EXTENSION IF NOT EXISTS pg_stat_statements');
 	});
 }
@@ -375,12 +367,12 @@ async function up(settings: FollowerSettings): Promise<ExitCode> {
 	await chmod(directory, PRIVATE_DIRECTORY);
 	await chmod(join(directory, POSTGRES_SOCKET_DIRECTORY), PRIVATE_DIRECTORY);
 	const seed = await readOrCreateSeed(join(directory, SEED_FILE));
-	const environment = followerEnvironment({ settings, seed, databaseURL: databaseURL(directory) });
+	const environment = followerEnvironment({ settings, seed, databaseURL: followerDatabaseURL(directory) });
 	const config = checkFollowerEnvironment(environment);
 	await prepareCluster(directory);
 	await startPostgres(directory);
 	await createDatabase(directory);
-	await writeFile(join(directory, SETTINGS_FILE), `${JSON.stringify(settings, null, '\t')}\n`);
+	await writeFile(join(directory, FOLLOWER_SETTINGS_FILE), `${JSON.stringify(settings, null, '\t')}\n`);
 	const processID = await startNode(directory, settings, environment);
 	await waitUntilServing(processID, settings.port, join(directory, LOG_FILES.node));
 	process.stdout.write([
@@ -471,7 +463,7 @@ async function resetCursors(directory: string): Promise<ExitCode> {
 	await startPostgres(directory);
 	let cleared: { readonly arena: string; readonly count: string }[];
 	try {
-		cleared = await withDatabase(DATABASE, directory, async function(client) {
+		cleared = await withDatabase(FOLLOWER_DATABASE, directory, async function(client) {
 			await client.query('BEGIN');
 			try {
 				const counts = await client.query<{ arena: string; count: string }>('SELECT arena, count(*) AS count FROM kv_entries WHERE arena = ANY($1) GROUP BY arena ORDER BY arena', [BOOTSTRAP_ARENAS]);
@@ -608,7 +600,7 @@ function rangesOf(value: unknown): unknown {
 }
 
 async function ledgerProgress(directory: string): Promise<unknown> {
-	return(await withDatabase(DATABASE, directory, async function(client) {
+	return(await withDatabase(FOLLOWER_DATABASE, directory, async function(client) {
 		const staples = await client.query<{ count: string; newest_staple_time: Date | null; newest_moment: Date | null }>('SELECT count(*) AS count, max(staple_time) AS newest_staple_time, max(moment) AS newest_moment FROM staples');
 		const cursors = await client.query<{ key: string; value: unknown }>('SELECT key, value FROM kv_entries WHERE arena = $1 ORDER BY key', [BOOTSTRAP_CURSOR_ARENA]);
 		const size = await client.query<{ bytes: string }>('SELECT pg_database_size(current_database()) AS bytes');
@@ -647,26 +639,8 @@ async function settled<Value>(work: () => Promise<Value>): Promise<Value | { rea
 	}
 }
 
-/** The settings "up" last started the follower with. */
-async function readSettings(directory: string): Promise<FollowerSettings | undefined> {
-	const path = join(directory, SETTINGS_FILE);
-	const text = await readTrimmed(path);
-	if (text === undefined) {
-		return(undefined);
-	}
-	const parsed: unknown = JSON.parse(text);
-	if (typeof parsed !== 'object' || parsed === null) {
-		throw(new Error(`${path} holds no follower settings`));
-	}
-	const { port, minIntervalMilliseconds, maxHeapMegabytes } = { port: undefined, minIntervalMilliseconds: undefined, maxHeapMegabytes: undefined, ...parsed };
-	if (typeof port !== 'number' || typeof minIntervalMilliseconds !== 'number' || typeof maxHeapMegabytes !== 'number') {
-		throw(new Error(`${path} holds no follower settings`));
-	}
-	return({ directory, port, minIntervalMilliseconds, maxHeapMegabytes });
-}
-
 async function status(directory: string): Promise<ExitCode> {
-	const settings = await readSettings(directory);
+	const settings = await readFollowerSettings(directory);
 	if (settings === undefined) {
 		process.stderr.write(`no follower was started in ${directory}\n`);
 		return(1);

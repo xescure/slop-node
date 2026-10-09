@@ -15,15 +15,15 @@ const lib = KeetaNet.lib;
  */
 export const BOOTSTRAP_CURSOR_ARENA = 'bootstrapCursors';
 
-/** The arena that holds, under CAUGHT_UP_KEY, the horizon of the latest pass over any peer that completed (src/node/bootstrap-update.ts). */
+/** The arena that holds, under BOOTSTRAP_CAUGHT_UP_KEY, the horizon of the latest pass over any peer that completed (src/node/bootstrap-update.ts). */
 export const BOOTSTRAP_CAUGHT_UP_ARENA = 'bootstrapCaughtUp';
 
-const CAUGHT_UP_KEY = 'horizon';
+export const BOOTSTRAP_CAUGHT_UP_KEY = 'horizon';
 
-/** The arena that holds, under RANGES_KEY, the history the node reads in ranges while far behind, and where each range reached (src/node/bootstrap-ranges.ts). */
+/** The arena that holds, under BOOTSTRAP_RANGES_KEY, the history the node reads in ranges while far behind, and where each range reached (src/node/bootstrap-ranges.ts). */
 export const BOOTSTRAP_RANGES_ARENA = 'bootstrapRanges';
 
-const RANGES_KEY = 'layout';
+export const BOOTSTRAP_RANGES_KEY = 'layout';
 
 /** The arena that holds the staples the ledger refused, by the hash of their blocks, until they apply (src/node/bootstrap-retry.ts). */
 export const BOOTSTRAP_RETRY_ARENA = 'bootstrapRetries';
@@ -69,7 +69,8 @@ function keyingOf(value: unknown): PeerKeying | false {
 	}) ?? false);
 }
 
-function progressOf(value: unknown): PeerProgress | undefined {
+/** A peer's progress as stored, or nothing when the value is not one the node wrote. */
+export function progressOf(value: unknown): PeerProgress | undefined {
 	if (!isRecord(value)) {
 		return(undefined);
 	}
@@ -118,7 +119,7 @@ function standingOf(value: unknown): RangeStanding | undefined {
 }
 
 /** The layout as stored, or nothing when the node did not write it, as a cursor's. */
-function layoutOf(value: unknown): RangeLayout | undefined {
+export function layoutOf(value: unknown): RangeLayout | undefined {
 	if (!isRecord(value)) {
 		return(undefined);
 	}
@@ -190,7 +191,7 @@ export class BootstrapCursors {
 
 	/** The horizon of the latest pass over any peer that completed, or nothing while none has. */
 	async readCaughtUp(): Promise<Date | undefined> {
-		const stored = await this.#kv.get(BOOTSTRAP_CAUGHT_UP_ARENA, CAUGHT_UP_KEY);
+		const stored = await this.#kv.get(BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY);
 		if (!isWholeNumber(stored)) {
 			return(undefined);
 		}
@@ -198,20 +199,20 @@ export class BootstrapCursors {
 	}
 
 	async writeCaughtUp(horizon: Date): Promise<void> {
-		await this.#kv.set(BOOTSTRAP_CAUGHT_UP_ARENA, CAUGHT_UP_KEY, horizon.getTime());
+		await this.#kv.set(BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY, horizon.getTime());
 	}
 
 	/** The history the node reads in ranges, or nothing while it reads none. */
 	async readLayout(): Promise<RangeLayout | undefined> {
-		return(layoutOf(await this.#kv.get(BOOTSTRAP_RANGES_ARENA, RANGES_KEY)));
+		return(layoutOf(await this.#kv.get(BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RANGES_KEY)));
 	}
 
 	async writeLayout(layout: RangeLayout | undefined): Promise<void> {
 		if (layout === undefined) {
-			await this.#kv.set(BOOTSTRAP_RANGES_ARENA, RANGES_KEY, undefined);
+			await this.#kv.set(BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RANGES_KEY, undefined);
 			return;
 		}
-		await this.#kv.set(BOOTSTRAP_RANGES_ARENA, RANGES_KEY, storedLayout(layout));
+		await this.#kv.set(BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RANGES_KEY, storedLayout(layout));
 	}
 
 	/** Forgets every peer's progress, the ranges, and that any pass completed; the staples queued for retry stay, as nothing reads them again. */
@@ -219,8 +220,8 @@ export class BootstrapCursors {
 		for (const endpoint of await this.#kv.list(BOOTSTRAP_CURSOR_ARENA)) {
 			await this.#kv.set(BOOTSTRAP_CURSOR_ARENA, endpoint, undefined);
 		}
-		await this.#kv.set(BOOTSTRAP_CAUGHT_UP_ARENA, CAUGHT_UP_KEY, undefined);
-		await this.#kv.set(BOOTSTRAP_RANGES_ARENA, RANGES_KEY, undefined);
+		await this.#kv.set(BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY, undefined);
+		await this.#kv.set(BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RANGES_KEY, undefined);
 	}
 }
 
