@@ -10,7 +10,7 @@ import { GENESIS_MOMENT, ChainCursor, requireAt } from '../ledger/storage/suite/
 import { confirmedStaple, sendBlock } from '../testing/blocks.js';
 import { VOTES_PER_READ, listedByVotes, pageFrom, startFailingPeer, startRecordingPeer, startServingPeer, startSilentAPIPeer, unreachableEndpoint } from '../testing/bootstrap-peers.js';
 import type { RecordedPage } from '../testing/bootstrap-peers.js';
-import { useLocalNodes } from '../testing/local-node.js';
+import { request, useLocalNodes } from '../testing/local-node.js';
 import type { CreatedLocalNode, LocalNodeOptions, RunningLocalNode } from '../testing/local-node.js';
 import { advanceClock, freezeClock } from '../testing/network.js';
 import type { TestNetwork } from '../testing/network.js';
@@ -82,6 +82,11 @@ function servedCounts(pages: readonly RecordedPage[]): number[] {
 	return(pages.map(function(page): number {
 		return(page.served.length);
 	}));
+}
+
+/** How many sections of work the node's request timing holds. */
+function timedSections(node: Node): number {
+	return(Object.keys(node.timing.getAllTiming()).length);
 }
 
 /** A client of the node's own, stopped as the test ends. */
@@ -716,6 +721,33 @@ describe('a bootstrap client', function() {
 		await client.stop();
 
 		expect(await watch.open()).toEqual([]);
+	});
+
+	test('leaves no record of its transactions on the node however long it catches up, while a request still times its own', async function() {
+		const peer = await representative();
+		const late = await joiner({ bootstrapFrom: [peer.apiURL] });
+		const client = clientOf(late.node);
+		const staples = await sendsFrom(peer.network, 0, 24);
+		const recorded: number[] = [];
+		for (let added = 0; added < staples.length; added += 6) {
+			await addAll(peer.node, staples.slice(added, added + 6));
+			advanceClock(1000);
+			expect(await client.update(2)).toEqual({ complete: true });
+			recorded.push(timedSections(late.node), timedSections(peer.node));
+		}
+
+		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
+		expect(recorded).toEqual(new Array<number>(8).fill(0));
+		const copies: Node[] = [];
+		const copy = peer.node.copy.bind(peer.node);
+		vi.spyOn(peer.node, 'copy').mockImplementation(function(): Node {
+			const made = copy();
+			copies.push(made);
+			return(made);
+		});
+		expect((await request(peer, '/node/ledger/checksum')).status).toBe(200);
+		expect(copies).toHaveLength(1);
+		expect(timedSections(requireAt(copies, 0))).toBeGreaterThan(0);
 	});
 });
 

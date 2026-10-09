@@ -4,6 +4,7 @@ import type { Express, NextFunction, Request as ExpressRequest, Response as Expr
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { LocalNode as DeclaredLocalNode, LocalNodeConfig } from '@keetanetwork/keetanet-client/lib/node/local.js';
+import type { RequestTiming } from '@keetanetwork/keetanet-client/lib/node/timing.js';
 import { answerError, ERROR_STATUS, newErrorID } from '../api/errors.js';
 import type { ErrorBody } from '../api/errors.js';
 import { API_ROUTES, invokeRoute } from '../api/index.js';
@@ -70,6 +71,29 @@ const CORS_HEADERS: Readonly<Record<string, string>> = {
  * so updates only catch up on what that missed.
  */
 const DEFAULT_BOOTSTRAP_PERIOD_MILLISECONDS = 60_000;
+
+function recordNothing(): void {
+	// No section was recorded, so ending one has nothing to change.
+}
+
+/**
+ * Request timing is read from the copy of the node that each request runs
+ * on, which upstream builds with a timing of its own
+ * [Keeta TS] index.js:71310-71311. The node's own timing is never read, yet
+ * every transaction of the work the node does itself, catching up, its
+ * garbage collection, messages from peers, would add sections to it for as
+ * long as the process runs [Keeta TS] index.js:70297, 70339, 69397-69409,
+ * 71538-71560, 71578-71584, 71630-71637, about 20,000 a minute while it catches up on the
+ * main network. It records none.
+ */
+function recordNoTiming(timing: RequestTiming): void {
+	timing.startTime = function(section) {
+		return({ id: Symbol(section), end: recordNothing, [Symbol.dispose]: recordNothing });
+	};
+	timing.runTimer = function<Result>(_section: string, code: () => Promise<Result>): Promise<Result> {
+		return(code());
+	};
+}
 
 /** Addresses that stand for every interface, which peers cannot be sent to. */
 const UNSPECIFIED_ADDRESSES: ReadonlySet<string> = new Set(['0.0.0.0', '::', '']);
@@ -236,6 +260,7 @@ export class LocalNode extends ClientNode {
 	constructor(config: LimitedLocalNodeConfig) {
 		super(withoutManualPeers(config));
 		this.config = config;
+		recordNoTiming(this.timing);
 		this.stats = new NodeStats(config.stats);
 		this.#peerLimits = config.peerLimits ?? DEFAULT_PEER_LIMITS;
 		this.#connections = new SwitchConnections(this.switch, this.log);
