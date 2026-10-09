@@ -253,12 +253,16 @@ async function withDatabase<Result>(database: string, directory: string, work: (
 	}
 }
 
+/** The database, with the view of the statement statistics the cluster keeps (POSTGRES_SETTINGS). */
 async function createDatabase(directory: string): Promise<void> {
 	await withDatabase('postgres', directory, async function(client) {
 		const found = await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [DATABASE]);
 		if (found.rowCount === 0) {
 			await client.query(`CREATE DATABASE ${DATABASE}`);
 		}
+	});
+	await withDatabase(DATABASE, directory, async function(client) {
+		await client.query('CREATE EXTENSION IF NOT EXISTS pg_stat_statements');
 	});
 }
 
