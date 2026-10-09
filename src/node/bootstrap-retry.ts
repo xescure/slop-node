@@ -270,6 +270,11 @@ export class RetryQueue<Staple extends NamedStaple> {
 		return((await this.#load()).size);
 	}
 
+	/** Whether it holds the staple of these blocks. */
+	async queues(staple: NamedStaple): Promise<boolean> {
+		return((await this.#load()).has(keyOf(staple)));
+	}
+
 	/** The staples queued, the earliest refused first, named by the bytes they came as. */
 	async staples(): Promise<NamedStaple[]> {
 		return([...(await this.#load()).values()].map(function({ entry }): NamedStaple {

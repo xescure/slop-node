@@ -10,7 +10,7 @@ import { advanceClock, freezeClock } from './network.js';
 const lib = KeetaNet.lib;
 
 /** About the size of a staple's hash input that matters to a filter: distinct bytes per staple. */
-const STAPLE_BYTES = 64;
+export const SIMULATED_STAPLE_BYTES = 64;
 
 /** A staple as a simulated peer holds it: when the peer applied it, and when its votes say it was made. */
 export type SimulatedStaple = PassStaple & {
@@ -28,8 +28,8 @@ export type SimulatedStaple = PassStaple & {
 
 /** The bytes of a staple: those of its blocks and of the votes on them, which another vote set on the same blocks changes. */
 function stapleBytes(id: number, votes: number): ArrayBuffer {
-	const bytes = Buffer.alloc(STAPLE_BYTES);
-	for (let at = 0; at < STAPLE_BYTES; at += 32) {
+	const bytes = Buffer.alloc(SIMULATED_STAPLE_BYTES);
+	for (let at = 0; at < SIMULATED_STAPLE_BYTES; at += 32) {
 		createHash('sha256').update(`staple:${String(id)}:${String(votes)}:${String(at)}`).digest().copy(bytes, at);
 	}
 	return(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));

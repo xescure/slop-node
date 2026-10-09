@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { ConcurrentClock, SimulatedNode, SimulatedPeer, SimulatedRetryStore, simulatedRetries } from '../testing/simulated-peer.js';
+import { MemoryBootstrapStage } from '../ledger/storage/stage.js';
+import { ConcurrentClock, SIMULATED_STAPLE_BYTES, SimulatedNode, SimulatedPeer, SimulatedRetryStore, decodeSimulatedStaple, simulatedRetries } from '../testing/simulated-peer.js';
 import type { LiveTraffic, RefusalReport, SimulatedKeying, SimulatedPeerOptions, SimulatedStaple, VoteKey } from '../testing/simulated-peer.js';
 import { advanceClock, freezeClock } from '../testing/network.js';
 import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PrimingWindow, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, VOTE_KEY_TOLERANCE_MILLISECONDS, bootstrapPeer, bootstrapRange, completes } from './bootstrap-pass.js';
@@ -7,10 +8,12 @@ import type { PassEvent, PassOptions, PassOutcome, PeerIO, PeerOutcome, PeerProg
 import { RANGE_OVERLAP_MILLISECONDS, rangeResultOf, updateRanges } from './bootstrap-ranges.js';
 import type { RangeEvent, RangeLayout, RangeResult } from './bootstrap-ranges.js';
 import { backoffAfter, FIRST_BACKOFF_MILLISECONDS, LAST_BACKOFF_MILLISECONDS, REPORT_REFUSED_AFTER_MILLISECONDS, RetryQueueFull } from './bootstrap-retry.js';
-import type { QueueBounds, RetryQueue } from './bootstrap-retry.js';
+import type { Added, QueueBounds, QueueUse, RetryQueue } from './bootstrap-retry.js';
+import { StageFull, Staging, applyFrontier } from './bootstrap-stage.js';
 import { nextUpdateDelay, updatePeers } from './bootstrap-update.js';
 import type { PeerResult } from './bootstrap-update.js';
 import { BLOOM_CAPACITY, BOOTSTRAP_MARGIN_MILLISECONDS } from './bootstrap-window.js';
+import type { NamedStaple } from './bootstrap-window.js';
 import { assertNever } from '../util/assert-never.js';
 
 /*
@@ -58,12 +61,20 @@ function seeds(): () => number {
 	});
 }
 
-/** What a follower keeps across a restart: its ledger, its retry queue's store, and its progress on each peer. */
+/** What a follower keeps across a restart: its ledger, its retry queue's store, what it staged, and its progress on each peer. */
 type Kept = {
 	readonly node: SimulatedNode;
 	readonly retryStore: SimulatedRetryStore;
+	readonly stage: MemoryBootstrapStage;
 	readonly progress: Map<SimulatedPeer, PeerProgress>;
 };
+
+/** How a pass treats what it is sent, as the client does (src/node/bootstrap.ts): adds it, or stages it to be added in the order of its votes. */
+type Taking = 'add' | 'stage';
+
+function freshKept(node: SimulatedNode = new SimulatedNode()): Kept {
+	return({ node, retryStore: new SimulatedRetryStore(), stage: new MemoryBootstrapStage(), progress: new Map() });
+}
 
 /** A simulated node with the retry queue it keeps for the staples its ledger refuses, and its progress on each peer. */
 class Follower {
@@ -71,28 +82,52 @@ class Follower {
 	readonly retryStore: SimulatedRetryStore;
 	readonly reports: RefusalReport[] = [];
 	readonly retries: RetryQueue<SimulatedStaple>;
+	readonly stage: MemoryBootstrapStage;
+	readonly staging: Staging<SimulatedStaple>;
 	readonly progress: Map<SimulatedPeer, PeerProgress>;
 	readonly events: PassEvent[] = [];
 	readonly #bounds: QueueBounds | undefined;
+	readonly #stageBound: number | undefined;
 	readonly #answers = new Map<SimulatedPeer, LongestAnswer>();
 	readonly #priming = new Map<SimulatedPeer, PrimingWindow>();
 	readonly #seed = seeds();
 
-	constructor(bounds?: QueueBounds, kept: Kept = { node: new SimulatedNode(), retryStore: new SimulatedRetryStore(), progress: new Map() }) {
+	/** A follower whose stage holds at most that many bytes for the ranges read ahead, unless the client's bound. */
+	constructor(bounds?: QueueBounds, kept: Kept = freshKept(), stageBound?: number) {
 		this.node = kept.node;
 		this.retryStore = kept.retryStore;
+		this.stage = kept.stage;
 		this.progress = kept.progress;
 		this.#bounds = bounds;
+		this.#stageBound = stageBound;
 		this.retries = simulatedRetries(this.node, this.retryStore, this.reports, bounds);
+		const node = this.node;
+		this.staging = new Staging(this.stage, this.retries, {
+			holds: function(staple): Promise<boolean> {
+				return(Promise.resolve(node.holds(staple)));
+			},
+			decode: decodeSimulatedStaple
+		}, stageBound);
 	}
 
 	/** The follower after a restart: what it keeps, and nothing it learned while it ran. */
 	restarted(): Follower {
-		return(new Follower(this.#bounds, { node: this.node, retryStore: this.retryStore, progress: this.progress }));
+		return(new Follower(this.#bounds, { node: this.node, retryStore: this.retryStore, stage: this.stage, progress: this.progress }, this.#stageBound));
 	}
 
-	/** How a pass over the peer reaches it and this node. */
-	io(peer: SimulatedPeer): PeerIO<SimulatedStaple> {
+	#take(taking: Taking, staple: SimulatedStaple, use: QueueUse): Promise<Added> {
+		switch (taking) {
+			case 'add':
+				return(this.retries.add(staple, use));
+			case 'stage':
+				return(this.staging.take(staple, use));
+			default:
+				return(assertNever(taking));
+		}
+	}
+
+	/** How a pass over the peer reaches it and this node, adding or staging what it is sent as told. */
+	io(peer: SimulatedPeer, taking: Taking = 'add'): PeerIO<SimulatedStaple> {
 		let answers = this.#answers.get(peer);
 		if (answers === undefined) {
 			answers = new LongestAnswer();
@@ -106,13 +141,20 @@ class Follower {
 			},
 			held: async (from, count) => {
 				const queued = (await this.retries.staples()).slice(0, count);
-				return([...queued, ...await this.node.held(from, count - queued.length)]);
+				let staged: readonly NamedStaple[] = [];
+				if (taking === 'stage') {
+					staged = await this.staging.named(from, count - queued.length);
+				}
+				const named = [...queued, ...staged];
+				return([...named, ...await this.node.held(from, count - named.length)]);
 			},
 			add: (staple, use) => {
-				return(this.retries.add(staple, use));
+				return(this.#take(taking, staple, use));
 			},
 			retry: async () => {
-				await this.retries.retry();
+				if (taking === 'add') {
+					await this.retries.retry();
+				}
 			},
 			saturated: () => {
 				return(Promise.resolve(this.retries.saturated()));
@@ -158,7 +200,7 @@ class Scenario {
 	/** The staples, by ID, that the node refuses for a balance rather than for weight while they lack what they need. */
 	constructor(options: SimulatedPeerOptions = {}, bounds?: QueueBounds, spending: ReadonlySet<number> = new Set()) {
 		this.peer = new SimulatedPeer({ latency: LATENCY, keying, ...options });
-		this.follower = new Follower(bounds, { node: new SimulatedNode(spending), retryStore: new SimulatedRetryStore(), progress: new Map() });
+		this.follower = new Follower(bounds, freshKept(new SimulatedNode(spending)));
 		this.node = this.follower.node;
 	}
 
@@ -326,25 +368,47 @@ type NetworkStore = { caughtUp: Date | undefined; layout: RangeLayout | undefine
 /** A pass over a range an update ran, and how it ended. */
 type RangeRun = { readonly peer: string; readonly result: RangeResult };
 
+/**
+ * When a follower adds what the passes over its ranges read: in the order
+ * of the staples' votes, up to where every range before has read, as the
+ * client does (src/node/bootstrap-stage.ts), or as each pass reads it, as
+ * the client did before it staged them.
+ */
+type Adding = 'in-order' | 'as-read';
+
 /** Several peers a follower bootstraps from, by name, as an update over every peer reads them, in ranges while far behind (src/node/bootstrap-update.ts, src/node/bootstrap-ranges.ts). */
 class SimulatedNetwork {
 	readonly #follower: Follower;
 	readonly #peers: ReadonlyMap<string, SimulatedPeer>;
 	readonly #store: NetworkStore;
+	readonly #adding: Adding;
 	readonly rangeEvents: RangeEvent[] = [];
 	readonly rangeRuns: RangeRun[] = [];
 	/** The passes from where the node last reached that failed. */
 	failures = 0;
 
-	constructor(follower: Follower, peers: ReadonlyMap<string, SimulatedPeer>, store: NetworkStore = { caughtUp: undefined, layout: undefined }) {
+	constructor(follower: Follower, peers: ReadonlyMap<string, SimulatedPeer>, store: NetworkStore = { caughtUp: undefined, layout: undefined }, adding: Adding = 'in-order') {
 		this.#follower = follower;
 		this.#peers = peers;
 		this.#store = store;
+		this.#adding = adding;
 	}
 
 	/** The network as a follower that restarted reads it: from what its store kept. */
 	restarted(): SimulatedNetwork {
-		return(new SimulatedNetwork(this.#follower.restarted(), this.#peers, this.#store));
+		return(new SimulatedNetwork(this.#follower.restarted(), this.#peers, this.#store, this.#adding));
+	}
+
+	/** How the passes over ranges take what they read. */
+	#rangeTaking(): Taking {
+		switch (this.#adding) {
+			case 'in-order':
+				return('stage');
+			case 'as-read':
+				return('add');
+			default:
+				return(assertNever(this.#adding));
+		}
 	}
 
 	get follower(): Follower {
@@ -376,54 +440,80 @@ class SimulatedNetwork {
 			}
 		};
 		const names = [...this.#peers.keys()];
-		const results = await updateRanges(names, {
-			...progressIO,
-			readLayout: function() {
-				return(Promise.resolve(store.layout));
-			},
-			writeLayout: function(layout) {
-				store.layout = layout;
-				return(Promise.resolve());
-			},
-			saturated: function() {
-				return(Promise.resolve(follower.retries.saturated()));
-			},
-			roomAhead: function() {
-				return(follower.retries.hasRoom('ahead'));
-			},
-			report: (event) => {
-				this.rangeEvents.push(event);
-			}
-		}, async (name, task): Promise<RangeResult> => {
-			let result: RangeResult;
-			try {
-				result = rangeResultOf(await bootstrapRange(follower.io(peerNamed(name)), task, follower.options(task.from)));
-			} catch (error: unknown) {
-				result = 'failed';
-				if (error instanceof RetryQueueFull) {
-					result = 'throttled';
+		const staging = follower.staging;
+		const rangeTaking = this.#rangeTaking();
+		let taking: Taking = 'add';
+		if (rangeTaking === 'stage' && (store.layout !== undefined || !await staging.isEmpty())) {
+			taking = 'stage';
+		}
+		const passes = (async (): Promise<ReadonlyMap<string, PeerResult>> => {
+			return(await updateRanges(names, {
+				...progressIO,
+				readLayout: function() {
+					return(Promise.resolve(store.layout));
+				},
+				writeLayout: function(layout) {
+					store.layout = layout;
+					staging.moved();
+					return(Promise.resolve());
+				},
+				saturated: function() {
+					return(Promise.resolve(follower.retries.saturated()));
+				},
+				roomAhead: function() {
+					switch (rangeTaking) {
+						case 'stage':
+							return(staging.roomAhead());
+						case 'add':
+							return(follower.retries.hasRoom('ahead'));
+						default:
+							return(assertNever(rangeTaking));
+					}
+				},
+				report: (event) => {
+					this.rangeEvents.push(event);
 				}
-			}
-			this.rangeRuns.push({ peer: name, result });
-			return(result);
-		}) ?? await updatePeers(names, {
-			...progressIO,
-			readCaughtUp: function() {
-				return(Promise.resolve(store.caughtUp));
-			},
-			writeCaughtUp: function(horizon) {
-				store.caughtUp = horizon;
-				return(Promise.resolve());
-			}
-		}, this.#peers.size, async (name, from): Promise<PeerResult> => {
-			try {
-				const { live } = await bootstrapPeer(follower.io(peerNamed(name)), follower.options(from));
-				return(resultOf(live));
-			} catch {
-				this.failures++;
-				return('failed');
-			}
+			}, async (name, task): Promise<RangeResult> => {
+				let result: RangeResult;
+				try {
+					result = rangeResultOf(await bootstrapRange(follower.io(peerNamed(name), rangeTaking), task, follower.options(task.from)));
+				} catch (error: unknown) {
+					result = 'failed';
+					if (error instanceof RetryQueueFull || error instanceof StageFull) {
+						result = 'throttled';
+					}
+				}
+				this.rangeRuns.push({ peer: name, result });
+				return(result);
+			}) ?? await updatePeers(names, {
+				...progressIO,
+				readCaughtUp: function() {
+					return(Promise.resolve(store.caughtUp));
+				},
+				writeCaughtUp: function(horizon) {
+					store.caughtUp = horizon;
+					return(Promise.resolve());
+				}
+			}, this.#peers.size, async (name, from): Promise<PeerResult> => {
+				try {
+					const { live } = await bootstrapPeer(follower.io(peerNamed(name), taking), follower.options(from));
+					return(resultOf(live));
+				} catch {
+					this.failures++;
+					return('failed');
+				}
+			}));
+		})();
+		const { result: results, applied } = await staging.alongside(passes, function(): number {
+			return(applyFrontier(store.layout));
+		}, Date.now() + MAX_PASS_MILLISECONDS, function(): boolean {
+			return(false);
 		});
+		if (applied.backlog) {
+			return(names.map(function(): PeerResult {
+				return('bounded');
+			}));
+		}
 		return(names.map(function(name): PeerResult {
 			return(results.get(name) ?? 'failed');
 		}));
@@ -1404,7 +1494,7 @@ describe('reading the history it lacks in ranges, one per peer, while far behind
 		expect(four.perMinute / one.perMinute).toBeGreaterThan(2.5);
 	});
 
-	test('reads a dense stretch at the start of the earliest range with every peer, while the ranges read ahead wait on it for room in the retry queue, about as fast as all of them read', async function() {
+	test('reads a dense stretch at the start of the earliest range with every peer, while the ranges read ahead wait on it for room in the stage, about as fast as all of them read', async function() {
 		// Eight days the node lacks, laid out in ranges of two; nine thousand staples made in the first four hours, three thousand over the rest.
 		const lacksFrom = NOW - 8 * DAY;
 		const burstEnds = lacksFrom + 4 * HOUR;
@@ -1434,7 +1524,7 @@ describe('reading the history it lacks in ranges, one per peer, while far behind
 		const catchUp = async function(names: readonly string[]): Promise<{ readonly burstTook: number; readonly missing: readonly number[]; readonly network: SimulatedNetwork }> {
 			freezeClock(new Date(NOW));
 			const peers = representatives(names, history);
-			const network = new SimulatedNetwork(new Follower(bounds), peers);
+			const network = new SimulatedNetwork(new Follower(bounds, freshKept(), 100 * SIMULATED_STAPLE_BYTES), peers);
 			await heldUpTo(network, peers, lacksFrom);
 			const ofBurst = [...peers.values()][0]?.staples.filter(function(staple): boolean {
 				return(staple.timestamp().getTime() < burstEnds);
@@ -1569,7 +1659,7 @@ describe('reading the history it lacks in ranges, one per peer, while far behind
 		expect(missingFrom(network, peers)).toEqual([]);
 	});
 
-	test('holds every staple whose dependencies a range before brings, the ranges read ahead filling only part of the shared retry queue', async function() {
+	test('holds every staple whose dependencies a range before brings, the ranges read ahead staging only up to the stage\'s bound, and queues none', async function() {
 		freezeClock(new Date(NOW));
 		const count = 4000;
 		const history = denseHistory(count);
@@ -1586,16 +1676,16 @@ describe('reading the history it lacks in ranges, one per peer, while far behind
 			return([]);
 		} });
 		const bounds: QueueBounds = { staples: 40, bytes: 1024 * 1024 };
-		const network = new SimulatedNetwork(new Follower(bounds), peers);
+		const network = new SimulatedNetwork(new Follower(bounds, freshKept(), 40 * SIMULATED_STAPLE_BYTES), peers);
 		await heldUpTo(network, peers, HELD_UP_TO);
 
-		await network.update();
-		expect(network.layout?.ranges.length).toBe(NAMES.length);
 		await untilCaughtUp(network, 200);
 
+		const [laidOut] = network.rangeEvents;
+		expect(laidOut?.kind === 'laid-out' && laidOut.layout.ranges.length).toBe(NAMES.length);
 		expect(missingFrom(network, peers)).toEqual([]);
 		expect(await network.follower.retries.size()).toBe(0);
-		expect(network.follower.retryStore.largest).toBeLessThanOrEqual(bounds.staples);
+		expect(network.follower.retryStore.largest).toBe(0);
 		expect(network.rangeRuns.some(function(run): boolean {
 			return(run.result === 'throttled');
 		})).toBe(true);

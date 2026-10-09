@@ -6,6 +6,7 @@ import type { KVStorageProvider } from '@keetanetwork/keetanet-client/lib/kv/ind
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { P2PPeer } from '@keetanetwork/keetanet-client/lib/p2p.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import { LedgerStorageDriverBase } from '../ledger/storage/base.js';
 import { GENESIS_MOMENT, ChainCursor, requireAt } from '../ledger/storage/suite/support.js';
 import { confirmedStaple, sendBlock } from '../testing/blocks.js';
 import { VOTES_PER_READ, listedByVotes, pageFrom, startFailingPeer, startRecordingPeer, startServingPeer, startSilentAPIPeer, unreachableEndpoint } from '../testing/bootstrap-peers.js';
@@ -24,6 +25,7 @@ import { BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RETRY_ARENA, BootstrapCursors } from 
 import { bootstrapFrom, bootstrapSources } from './bootstrap-peers.js';
 import { MAX_PASS_MILLISECONDS } from './bootstrap-pass.js';
 import { REPORT_REFUSED_AFTER_MILLISECONDS } from './bootstrap-retry.js';
+import { stagedOf } from './bootstrap-stage.js';
 import { BOOTSTRAP_MARGIN_MILLISECONDS } from './bootstrap-window.js';
 import type { LocalNode } from './local.js';
 
@@ -270,8 +272,8 @@ describe('a bootstrap client', function() {
 				return(line.includes('Bootstrap pass over'));
 			}));
 		};
-		expect(lines(info.mock.calls)).toEqual([`BOOTSTRAP Bootstrap pass over ${recording.apiURL}: drained after ${String(requests)} requests, 4 staples added, 0 held already, 0 queued for retry (0 in the queue)`]);
-		expect(lines(debug.mock.calls)).toEqual([`BOOTSTRAP Bootstrap pass over ${recording.apiURL}: drained after ${String(recording.pages.length - requests)} requests, 0 staples added, 0 held already, 0 queued for retry (0 in the queue)`]);
+		expect(lines(info.mock.calls)).toEqual([`BOOTSTRAP Bootstrap pass over ${recording.apiURL}: drained after ${String(requests)} requests, 4 staples added, 0 held already, 0 queued for retry, 0 staged (0 in the queue)`]);
+		expect(lines(debug.mock.calls)).toEqual([`BOOTSTRAP Bootstrap pass over ${recording.apiURL}: drained after ${String(recording.pages.length - requests)} requests, 0 staples added, 0 held already, 0 queued for retry, 0 staged (0 in the queue)`]);
 	});
 
 	/*
@@ -415,6 +417,34 @@ describe('a bootstrap client', function() {
 		expect(await client.update()).toEqual({ complete: true });
 
 		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
+	});
+
+	test('adds the staples staged in its store in the order of their votes, as a restage leaves them, before it reads its peers on from where it reached', async function() {
+		const peer = await representative();
+		const sends = await sendsFrom(peer.network, 0, 4);
+		await addAll(peer.node, sends);
+		const recording = await startRecordingPeer(peer.apiURL);
+		const late = await joiner({ bootstrapFrom: [recording.apiURL] });
+		const storage = late.node.config.ledger.storageDriver;
+		if (!(storage instanceof LedgerStorageDriverBase)) {
+			throw(new Error('the node\'s ledger is not on a driver of this node'));
+		}
+		// Each send follows the one before, and genesis gives the voters weight: added in any order but theirs, one is refused.
+		const staged = [...sends].reverse().concat([peer.network.genesis]).map(stagedOf);
+		await storage.bootstrapStage().put(staged);
+		const info = vi.spyOn(late.node.log, 'info');
+		const client = clientOf(late.node);
+
+		expect(await client.update()).toEqual({ complete: true });
+
+		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
+		expect(await storage.bootstrapStage().counts()).toEqual({ staples: 0, bytes: 0 });
+		const logged = info.mock.calls.map(function(call): string {
+			return(call.map(String).join(' '));
+		});
+		expect(logged).toContainEqual(expect.stringContaining('Bootstrap: added 5 staged staples, by their votes, of every staple; 0 staples (0 MiB) remain staged'));
+		// What the stage held, or the ledger once it was added, the filters named, so the peer sent none of it.
+		expect(new Set(servedCounts(recording.pages))).toEqual(new Set([0]));
 	});
 
 	test('runs the ledger\'s garbage collection after each update, which applies staples deferred past the replay window, in a few short slices, and none once stopped', async function() {

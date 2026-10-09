@@ -24,10 +24,11 @@ export const RANGE_OVERLAP_MILLISECONDS: number = VOTE_KEY_TOLERANCE_MILLISECOND
 
 /**
  * How far past where the earliest range reached a range starts for it to
- * count as read ahead: its staples need those of the history before it,
- * which only the ranges before it bring, so it adds to the retry queue no
- * more than a share of its own, and waits while the queue is full. Nearer,
- * a range reads on from about where the earliest stands, as one pass would.
+ * count as read ahead: what it reads is added only once every range before
+ * it is read (src/node/bootstrap-stage.ts), so it waits while the stage holds
+ * its bound, or the retry queue is full. Nearer, a range reads on from about
+ * where the earliest stands, as one pass would, and the stage holds at most
+ * this much of the history it reads past the earliest.
  */
 export const FAR_AHEAD_MILLISECONDS: number = 24 * 60 * 60_000;
 
@@ -148,7 +149,7 @@ export type RangeIO = Pick<UpdateIO, 'readProgress' | 'writeProgress'> & {
 	writeLayout(layout: RangeLayout | undefined): Promise<void>;
 	/** Whether the retry queue stopped a pass from where the last reached, or over a range near the earliest (RetryQueue.saturated). */
 	saturated(): Promise<boolean>;
-	/** Whether the retry queue has room for a staple a pass over a range read ahead refuses. */
+	/** Whether a pass over a range read ahead may stage another staple: the stage holds less than its bound. */
 	roomAhead(): Promise<boolean>;
 	report(event: RangeEvent): void;
 };
@@ -365,7 +366,7 @@ class Schedule {
 	#layout: RangeLayout;
 	readonly #peers: readonly string[];
 	readonly #io: RangeIO;
-	/** Whether the ranges read ahead run: not while the queue is full, nor once a pass over one found no room. */
+	/** Whether the ranges read ahead run: not while the retry queue is full, nor once a pass over one found the stage full. */
 	#aheadRuns: boolean;
 	readonly #running = new Map<number, Running>();
 	readonly #results = new Map<string, PeerResult>();
@@ -599,7 +600,9 @@ class Schedule {
  * its start on only as the rule of every pass allows, and the update records
  * each move. It completes once it is shown to hold or have queued every
  * staple keyed before the end but those a filter named, which only the
- * three ways any pass shows its horizon show (see Pass):
+ * three ways any pass shows its horizon show (see Pass); "held" here counts
+ * a staple staged to be added (src/node/bootstrap-stage.ts), which the node
+ * keeps as durably:
  * - its start moves to a moment T at or past the end: an answer from T lists
  *   a staple x of the page from the start S that shows T. From a peer keyed
  *   by when it applied them, as versions of this node before it keyed votes
@@ -668,25 +671,25 @@ class Schedule {
  * reached, the first catch-up from one peer at a time, which lays out
  * ranges again if the node is still far behind.
  *
- * The retry queue. Every pass adds to the node's one queue, as a staple may
- * need a staple of an earlier range, which only that range brings: it waits
- * queued meanwhile, and is offered again after each page that adds a staple.
- * The passes over the ranges that start within FAR_AHEAD_MILLISECONDS of
- * where the earliest reached, the earliest among them, fill the queue up to
- * the share of a pass from where the last reached, nine tenths of it, and
- * saturate it when they find no room, as such a pass does; the passes over
- * the ranges read further ahead fill at most half the queue, and stop before
- * a staple they refuse once it is that full. While it is that full or
- * saturated, the ranges read ahead wait, and the peers that would read them
- * take on parts of the ranges near the earliest instead, split no later
- * than FAR_AHEAD_MILLISECONDS past it, so that every peer reads the history
- * the queued staples wait for. A staple's dependencies have votes made
- * before its own, but for the slop a vote may be timestamped ahead of the
- * clock, so a range seldom needs a later one. Should the queue stay
+ * Staging. The passes over the ranges add nothing to the ledger: they stage
+ * what they read, and the node adds the staged staples in the order of their
+ * votes, those made before where the range that reached least has reached,
+ * as one pass from the beginning would (src/node/bootstrap-stage.ts), since
+ * the ledger judges each staple by the voting weight it holds when the staple
+ * is added. Once every range is read, every staged staple is added. The
+ * passes over the ranges that start within FAR_AHEAD_MILLISECONDS of where
+ * the earliest reached, the earliest among them, stage whatever they read;
+ * the passes over the ranges read further ahead stop before a staple once the
+ * stage holds its bound. While it does, or while the retry queue the node
+ * adds through is saturated, the ranges read ahead wait, and the peers that
+ * would read them take on parts of the ranges near the earliest instead,
+ * split no later than FAR_AHEAD_MILLISECONDS past it, so that every peer
+ * reads the history the frontier waits for. Should the queue stay
  * saturated, every FULL_QUEUE_UPDATES_BEFORE_DEEP_SCAN updates in a row
  * that read ranges are followed by one over every peer from where it last
- * reached, which begins the deep re-scans that read again a staple a filter
- * named by mistake that the queued ones need; the ranges go on after it.
+ * reached, which stages what it reads too, and begins the deep re-scans that
+ * read again a staple a filter named by mistake that the queued ones need;
+ * the ranges go on after it.
  *
  * Peers. Each peer reads one range at a time, paced as its requests always
  * are, and one whose pass read its range takes on another as long as the

@@ -2,6 +2,9 @@ import { createHash } from 'node:crypto';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { BootstrapClient as DeclaredBootstrapClient, BootstrapConfig } from '@keetanetwork/keetanet-client/lib/bootstrap.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import { LedgerStorageDriverBase } from '../ledger/storage/base.js';
+import { MemoryBootstrapStage } from '../ledger/storage/stage.js';
+import type { BootstrapStage } from '../ledger/storage/stage.js';
 import { KVInternals } from '../upstream/internals.js';
 import { assertNever } from '../util/assert-never.js';
 import { eachStapleOnce } from '../util/each-staple-once.js';
@@ -10,16 +13,19 @@ import type { ClassSurface } from '../util/class-surface.js';
 import { BootstrapCursors, KVRetryStore } from './bootstrap-cursors.js';
 import { PageError, PageFetcher } from './bootstrap-page.js';
 import { PeerPacer } from './bootstrap-pacing.js';
-import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PrimingWindow, VOTE_KEY_TOLERANCE_MILLISECONDS, bootstrapPeer, bootstrapRange, completes } from './bootstrap-pass.js';
+import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, MAX_PASS_MILLISECONDS, PrimingWindow, VOTE_KEY_TOLERANCE_MILLISECONDS, bootstrapPeer, bootstrapRange, completes } from './bootstrap-pass.js';
 import type { PassAnswer, PassEvent, PassOutcome, PassRequest, PeerIO } from './bootstrap-pass.js';
 import { bootstrapPacingOf, bootstrapSources } from './bootstrap-peers.js';
 import type { BootstrapNode } from './bootstrap-peers.js';
 import { rangeResultOf, updateRanges } from './bootstrap-ranges.js';
-import type { RangeEvent, RangeIO, RangeResult, RangeTask } from './bootstrap-ranges.js';
+import type { RangeEvent, RangeIO, RangeLayout, RangeResult, RangeTask } from './bootstrap-ranges.js';
 import { RetryQueue, RetryQueueFull } from './bootstrap-retry.js';
+import { StageFull, Staging, applyFrontier } from './bootstrap-stage.js';
+import type { Applied } from './bootstrap-stage.js';
 import { awaitedOf, landedOn, weightSufficesOn } from './retry-signals.js';
 import { MAX_NAMED } from './bootstrap-window.js';
-import type { Added, Offered, QueuedStaple } from './bootstrap-retry.js';
+import type { NamedStaple } from './bootstrap-window.js';
+import type { Added, Offered, QueuedStaple, QueueUse } from './bootstrap-retry.js';
 import { nextUpdateDelay, updatePeers } from './bootstrap-update.js';
 import type { PeerResult, UpdateIO } from './bootstrap-update.js';
 
@@ -68,8 +74,18 @@ const GC_SLICES = 5;
 
 type UpdateResult = { complete: boolean };
 
-/** What an update's passes over one peer did: its requests, and the staples it was sent, by whether the node added them, held them already or queued them. */
-type PassTally = Record<'requests' | Added, number>;
+/** What an update's passes over one peer did: its requests, and the staples it was sent, by whether the node added them, staged them, held them already or queued them. */
+type PassTally = Record<'requests' | 'staged' | Added, number>;
+
+/**
+ * How a pass treats what it is sent: adds it, as once the node has caught up
+ * on the history it lacked, or stages it, to be added in the order of its
+ * votes, while the node reads that history in ranges or has not added all
+ * it staged (src/node/bootstrap-stage.ts).
+ */
+type Taking = 'add' | 'stage';
+
+const BYTES_PER_MIB = 1024 * 1024;
 
 function describeRange(outcome: PassOutcome, task: RangeTask): string {
 	const range = `the range from ${task.reached.toISOString()} to ${task.end().toISOString()}`;
@@ -152,6 +168,15 @@ function resultOf(outcome: PassOutcome): PeerResult {
 	return('bounded');
 }
 
+/** Where the node keeps what its bootstrap stages: its storage driver's stage, or, on a driver of another kind, one in memory. */
+function stageOf(node: BootstrapNode): BootstrapStage {
+	const storage = node.config.ledger.storageDriver;
+	if (storage instanceof LedgerStorageDriverBase) {
+		return(storage.bootstrapStage());
+	}
+	return(new MemoryBootstrapStage());
+}
+
 function positiveMilliseconds(name: string, value: number): number {
 	if (!Number.isFinite(value) || value <= 0) {
 		throw(new RangeError(`the bootstrap ${name} must be a positive number of milliseconds (it is ${String(value)})`));
@@ -184,7 +209,11 @@ function pageLimit(limit: number): number {
  * (src/node/bootstrap-retry.ts), and is done with the peer once it is shown
  * to hold or have queued every staple the peer had applied before the
  * margin before the pass began. A deep re-scan of the peer, when one is
- * under way, runs alongside. A pass is bounded in requests and time, and
+ * under way, runs alongside. While the node reads the history it lacks in
+ * ranges (src/node/bootstrap-ranges.ts), or has not added all it read so,
+ * the passes stage what they are sent instead of adding it, and the node
+ * adds the staged staples in the order of their votes alongside the passes
+ * (src/node/bootstrap-stage.ts). A pass is bounded in requests and time, and
  * one that reaches its bound is continued on the next update, which a
  * client updating on a period then begins at once; a peer that
  * fails is logged and tried again on the next update. Neither holds up any
@@ -194,7 +223,7 @@ function pageLimit(limit: number): number {
  *
  * stats() counts the updates in a row that were complete: every peer's pass
  * completed, so the node held or queued all its peers had applied before
- * the margin before each pass began. An incomplete update sets the count
+ * the margin before each pass began, and nothing was left staged. An incomplete update sets the count
  * back to 0, so a count above 0 says the node is caught up.
  */
 export class BootstrapClient {
@@ -205,6 +234,9 @@ export class BootstrapClient {
 	readonly #node: BootstrapNode;
 	readonly #cursors: BootstrapCursors;
 	readonly #retries: RetryQueue<VoteStaple>;
+	readonly #staging: Staging<VoteStaple>;
+	/** The ranges as the node last read or wrote them, which say up to where it adds what it staged. */
+	#layout: RangeLayout | undefined;
 	/** Kept across updates, so that the first request of an update is paced after the last of the one before. */
 	readonly #pacer: PeerPacer;
 	readonly #callback: Callback | undefined;
@@ -249,6 +281,14 @@ export class BootstrapClient {
 			}
 		}, new KVRetryStore(kv), (entry, age) => {
 			this.#reportRefused(entry, age);
+		});
+		this.#staging = new Staging<VoteStaple>(stageOf(node), this.#retries, {
+			holds: (staple) => {
+				return(this.#holds(staple));
+			},
+			decode: function(bytes): VoteStaple {
+				return(new lib.Vote.Staple(bytes));
+			}
 		});
 		this.#pacer = new PeerPacer(bootstrapPacingOf(node.config));
 		this.#callback = config.callback;
@@ -343,40 +383,78 @@ export class BootstrapClient {
 			}
 		};
 		const retries = this.#retries;
+		const staging = this.#staging;
 		const rangeIO: RangeIO = {
 			...io,
 			readLayout: function() {
 				return(cursors.readLayout());
 			},
-			writeLayout: function(layout) {
-				return(cursors.writeLayout(layout));
+			writeLayout: async (layout) => {
+				await cursors.writeLayout(layout);
+				this.#layout = layout;
+				staging.moved();
 			},
 			saturated: function() {
 				return(Promise.resolve(retries.saturated()));
 			},
 			roomAhead: function() {
-				return(retries.hasRoom('ahead'));
+				return(staging.roomAhead());
 			},
 			report: (event) => {
 				this.#reportRanges(event);
 			}
 		};
 		try {
-			const results = await updateRanges(sources, rangeIO, (endpoint, task) => {
-				return(this.#readRangeLogged(endpoint, limit, fetcher, task));
-			}) ?? await updatePeers(sources, io, MAX_CONCURRENT_PASSES, (endpoint, from) => {
-				return(this.#catchUpLogged(endpoint, limit, fetcher, from));
+			this.#layout = await cursors.readLayout();
+			let taking: Taking = 'add';
+			if (this.#layout !== undefined || !await staging.isEmpty()) {
+				taking = 'stage';
+			}
+			const passes = (async (): Promise<ReadonlyMap<string, PeerResult>> => {
+				return(await updateRanges(sources, rangeIO, (endpoint, task) => {
+					return(this.#readRangeLogged(endpoint, limit, fetcher, task));
+				}) ?? await updatePeers(sources, io, MAX_CONCURRENT_PASSES, (endpoint, from) => {
+					return(this.#catchUpLogged(endpoint, limit, fetcher, from, taking));
+				}));
+			})();
+			const { result: results, applied } = await staging.alongside(passes, () => {
+				return(applyFrontier(this.#layout));
+			}, Date.now() + MAX_PASS_MILLISECONDS, () => {
+				return(this.#stopped());
 			});
+			await this.#logApplied(applied);
 			this.#lastResults = [...results.values()];
+			if (applied.backlog) {
+				// What is left to add makes the update incomplete, and the next begins at once to add it.
+				this.#lastResults = [...this.#lastResults, 'bounded'];
+			}
 			await this.#collect();
 			const complete = sources.every(function(endpoint): boolean {
 				return(results.get(endpoint) === 'completed');
-			}) && !this.#stopping.signal.aborted;
+			}) && !this.#stopped() && await staging.isEmpty();
 			this.#record(complete);
 			return({ complete });
 		} finally {
 			fetcher.close();
 		}
+	}
+
+	/** What the update added of what was staged, logged when it added any or left some. */
+	async #logApplied(applied: Applied): Promise<void> {
+		if (applied.left === 0 && !applied.backlog) {
+			return;
+		}
+		const staged = await this.#staging.counts();
+		let frontier = 'every staple';
+		const layout = this.#layout;
+		if (layout !== undefined && layout.ranges.length > 0) {
+			frontier = `those whose earliest vote was made before ${new Date(applyFrontier(layout)).toISOString()}`;
+		}
+		let left = '';
+		if (applied.backlog) {
+			left = '; more of those are left to add';
+		}
+		this.#node.log.info(LOG_SOURCE, `Bootstrap: added ${String(applied.left)} staged staples, by their votes, of ${frontier}${left}; ${String(staged.staples)} staples (${String(Math.round(staged.bytes / BYTES_PER_MIB))} MiB) remain staged`);
 	}
 
 	/**
@@ -413,12 +491,12 @@ export class BootstrapClient {
 	}
 
 	/** Once stopped, a pass not yet begun is not begun: it would read the node's ledger before its first request found the stop. */
-	async #catchUpLogged(endpoint: string, limit: number, fetcher: PageFetcher, from: Date): Promise<PeerResult> {
+	async #catchUpLogged(endpoint: string, limit: number, fetcher: PageFetcher, from: Date, taking: Taking): Promise<PeerResult> {
 		if (this.#stopped()) {
 			return('failed');
 		}
 		try {
-			return(await this.#catchUp(endpoint, limit, fetcher, from));
+			return(await this.#catchUp(endpoint, limit, fetcher, from, taking));
 		} catch (error: unknown) {
 			if (this.#stopped()) {
 				this.#node.log.debug(LOG_SOURCE, `Stopped bootstrapping from ${endpoint}`);
@@ -430,9 +508,9 @@ export class BootstrapClient {
 	}
 
 	/** The update's passes over the peer, those over a peer it has no progress on starting from the moment given. */
-	async #catchUp(endpoint: string, limit: number, fetcher: PageFetcher, from: Date): Promise<PeerResult> {
-		const tally: PassTally = { requests: 0, added: 0, held: 0, queued: 0 };
-		const io = this.#peerIO(endpoint, fetcher, tally);
+	async #catchUp(endpoint: string, limit: number, fetcher: PageFetcher, from: Date, taking: Taking): Promise<PeerResult> {
+		const tally: PassTally = { requests: 0, added: 0, staged: 0, held: 0, queued: 0 };
+		const io = this.#peerIO(endpoint, fetcher, tally, taking);
 		const { live: outcome } = await bootstrapPeer(io, { limit, stagger: staggerOf(endpoint), from });
 		await this.#logPass(endpoint, describeOutcome(outcome), tally, completes(outcome));
 		return(resultOf(outcome));
@@ -443,9 +521,9 @@ export class BootstrapClient {
 		if (this.#stopped()) {
 			return('stopped');
 		}
-		const tally: PassTally = { requests: 0, added: 0, held: 0, queued: 0 };
+		const tally: PassTally = { requests: 0, added: 0, staged: 0, held: 0, queued: 0 };
 		try {
-			const outcome = await bootstrapRange(this.#peerIO(endpoint, fetcher, tally), task, { limit, stagger: staggerOf(endpoint), from: task.from });
+			const outcome = await bootstrapRange(this.#peerIO(endpoint, fetcher, tally, 'stage'), task, { limit, stagger: staggerOf(endpoint), from: task.from });
 			await this.#logPass(endpoint, describeRange(outcome, task), tally, completes(outcome));
 			return(rangeResultOf(outcome));
 		} catch (error: unknown) {
@@ -453,8 +531,8 @@ export class BootstrapClient {
 				this.#node.log.debug(LOG_SOURCE, `Stopped bootstrapping from ${endpoint}`);
 				return('stopped');
 			}
-			if (error instanceof RetryQueueFull) {
-				this.#node.log.info(LOG_SOURCE, `Bootstrap pass over ${endpoint} waits for room in the retry queue, in the range from ${task.reached.toISOString()} to ${task.end().toISOString()}: ${error.message}`);
+			if (error instanceof RetryQueueFull || error instanceof StageFull) {
+				this.#node.log.info(LOG_SOURCE, `Bootstrap pass over ${endpoint} waits for room, in the range from ${task.reached.toISOString()} to ${task.end().toISOString()}: ${error.message}`);
 				return('throttled');
 			}
 			this.#node.log.warn(LOG_SOURCE, `Bootstrapping from ${endpoint} in the range from ${task.reached.toISOString()} to ${task.end().toISOString()} failed; it is tried again on the next update:`, error);
@@ -463,17 +541,17 @@ export class BootstrapClient {
 	}
 
 	async #logPass(endpoint: string, outcome: string, tally: PassTally, complete: boolean): Promise<void> {
-		const summary = `Bootstrap pass over ${endpoint}: ${outcome} after ${String(tally.requests)} requests, ${String(tally.added)} staples added, ${String(tally.held)} held already, ${String(tally.queued)} queued for retry (${String(await this.#retries.size())} in the queue)`;
+		const summary = `Bootstrap pass over ${endpoint}: ${outcome} after ${String(tally.requests)} requests, ${String(tally.added)} staples added, ${String(tally.held)} held already, ${String(tally.queued)} queued for retry, ${String(tally.staged)} staged (${String(await this.#retries.size())} in the queue)`;
 		// Once caught up, a pass every period adds nothing, which an operator need not read.
-		if (tally.added > 0 || tally.queued > 0 || !complete) {
+		if (tally.added > 0 || tally.staged > 0 || tally.queued > 0 || !complete) {
 			this.#node.log.info(LOG_SOURCE, summary);
 		} else {
 			this.#node.log.debug(LOG_SOURCE, summary);
 		}
 	}
 
-	/** How passes over the peer reach it and the node, counting what they do in the tally. */
-	#peerIO(endpoint: string, fetcher: PageFetcher, tally: PassTally): PeerIO<VoteStaple> {
+	/** How passes over the peer reach it and the node, adding or staging what they are sent as told, counting what they do in the tally. */
+	#peerIO(endpoint: string, fetcher: PageFetcher, tally: PassTally, taking: Taking): PeerIO<VoteStaple> {
 		return({
 			answers: keptFor(this.#answers, endpoint, function() {
 				return(new LongestAnswer());
@@ -488,20 +566,38 @@ export class BootstrapClient {
 			held: async (since, count) => {
 				this.#stopping.signal.throwIfAborted();
 				const queued = (await this.#retries.staples()).slice(0, count);
-				if (queued.length >= count) {
-					return(queued);
+				const staged = await this.#stagedNamed(taking, since, count - queued.length);
+				const named = [...queued, ...staged];
+				if (named.length >= count) {
+					return(named);
 				}
-				return([...queued, ...eachStapleOnce(await this.#node.ledger.getVoteStaplesAfter(since, count - queued.length, { timeout: HELD_READ_MILLISECONDS }))]);
+				return([...named, ...eachStapleOnce(await this.#node.ledger.getVoteStaplesAfter(since, count - named.length, { timeout: HELD_READ_MILLISECONDS }))]);
 			},
 			add: async (staple, use) => {
 				this.#stopping.signal.throwIfAborted();
-				const added = await this.#retries.add(staple, use);
+				const added = await this.#take(taking, staple, use);
+				switch (added) {
+					case 'added':
+						if (taking === 'stage') {
+							tally.staged++;
+							return(added);
+						}
+						break;
+					case 'held':
+					case 'queued':
+						break;
+					default:
+						assertNever(added);
+				}
 				tally[added]++;
 				return(added);
 			},
 			retry: async () => {
 				this.#stopping.signal.throwIfAborted();
-				await this.#retries.retry();
+				// What is staged is added, and the queue offered again, by the node adding it.
+				if (taking === 'add') {
+					await this.#retries.retry();
+				}
 			},
 			saturated: () => {
 				return(Promise.resolve(this.#retries.saturated()));
@@ -516,6 +612,28 @@ export class BootstrapClient {
 				return(this.#cursors.write(endpoint, progress));
 			}
 		});
+	}
+
+	#take(taking: Taking, staple: VoteStaple, use: QueueUse): Promise<Added> {
+		switch (taking) {
+			case 'add':
+				return(this.#retries.add(staple, use));
+			case 'stage':
+				return(this.#staging.take(staple, use));
+			default:
+				return(assertNever(taking));
+		}
+	}
+
+	async #stagedNamed(taking: Taking, since: Date, count: number): Promise<readonly NamedStaple[]> {
+		switch (taking) {
+			case 'add':
+				return([]);
+			case 'stage':
+				return(await this.#staging.named(since, count));
+			default:
+				return(assertNever(taking));
+		}
 	}
 
 	async #page(fetcher: PageFetcher, endpoint: string, request: PassRequest): Promise<PassAnswer<VoteStaple>> {
