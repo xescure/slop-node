@@ -152,4 +152,49 @@ describe('the follower\'s store, read from its database', function() {
 			await pool.end();
 		}
 	});
+
+	test('reads the stored checksum and the fold of the main blocks in one view, with the staples asked for in commit order', async function() {
+		const database = await followerDatabase({});
+		const pool = database.pool();
+		const hashes = ['11', '22', '33', '44'].map(function(byte): Buffer {
+			return(Buffer.from(byte.repeat(32), 'hex'));
+		});
+		const staple = function(byte: string): Buffer {
+			return(Buffer.from(byte.repeat(32), 'hex'));
+		};
+		// Each block in a staple of its own but the last two, which share one; a side block is no part of the fold.
+		const placements: readonly (readonly [Buffer | undefined, string | null, number])[] = [[hashes[0], 'AB', 0], [hashes[1], 'CD', 0], [hashes[2], 'CD', 1], [hashes[3], null, 0]];
+		for (const [hash, holder, position] of placements) {
+			let ledger = 'side';
+			let stapleHash: Buffer | null = null;
+			let stapleAt: number | null = null;
+			if (holder !== null) {
+				ledger = 'main';
+				stapleHash = staple(holder);
+				stapleAt = position;
+			}
+			await pool.query(`INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position)
+				SELECT $1, $2::ledger_name, id, $1, 1, '\\x00', $3, $4 FROM accounts WHERE public_key = $5`, [hash, ledger, stapleHash, stapleAt, ACCOUNTS[0]]);
+		}
+		await pool.query('INSERT INTO kv_buffers (key, value) VALUES ($1, $2)', ['@buffer:ledgerChecksum', hashes[0]]);
+		await database.endPools();
+		const store = storeOf(database);
+		const fold = function(...bytes: readonly string[]): bigint {
+			return(bytes.reduce(function(value, byte): bigint {
+				return(value ^ BigInt(`0x${byte.repeat(32)}`));
+			}, 0n));
+		};
+
+		const newest = await store.checksumSnapshot({ kind: 'newest', count: 1 });
+		expect(newest).toEqual({ stored: fold('11'), folded: fold('11', '22', '33'), mainBlocks: 3, staples: [expect.objectContaining({ sequence: '2', blocksHash: OTHER_STAPLE, fold: fold('22', '33') })] });
+		const every = await store.checksumSnapshot({ kind: 'every' });
+		expect(every.staples.map(function(listed) {
+			return([listed.sequence, listed.blocksHash, listed.fold]);
+		})).toEqual([['1', STAPLE, fold('11')], ['2', OTHER_STAPLE, fold('22', '33')]]);
+	});
+
+	test('reads a zero checksum and fold from a node that applied nothing', async function() {
+		const store = storeOf(await followerDatabase({}));
+		expect(await store.checksumSnapshot({ kind: 'newest', count: 4 })).toMatchObject({ stored: 0n, folded: 0n, mainBlocks: 0 });
+	});
 });

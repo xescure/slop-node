@@ -5,10 +5,12 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { startFakeAPI } from '../testing/fake-api.js';
 import type { FakeAPI } from '../testing/fake-api.js';
 import { httpSource } from './api-source.js';
-import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-store.js';
+import type { FollowerProgress, KnownAccount } from './follower-store.js';
 import { ParityLog } from './log.js';
 import type { SweepRecord } from './log.js';
+import { recordsOf } from './report.js';
 import { firstDifference, QUIET_MARGIN_MILLISECONDS, readSweepCursor, sweepAccounts } from './sweep.js';
+import type { SweepStore } from './sweep.js';
 
 const ACCOUNTS = [
 	'keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai',
@@ -64,7 +66,7 @@ function history(staple: string, votedAt: readonly Date[]): unknown {
  * in its history the staples listed, the newest of them from the moment
  * given or, by default, quiet since long before the follower's reach.
  */
-function memoryStore(histories: Readonly<Record<string, readonly string[]>>, progress: FollowerProgress = { completedPass: undefined, heldBefore: HELD_BEFORE }, newest: Readonly<Record<string, Date>> = {}): FollowerStore {
+function memoryStore(histories: Readonly<Record<string, readonly string[]>>, progress: FollowerProgress = { completedPass: undefined, heldBefore: HELD_BEFORE }, newest: Readonly<Record<string, Date>> = {}): SweepStore {
 	const known: KnownAccount[] = Object.entries(histories).map(function([account, staples], index): KnownAccount {
 		let newestStaple: Date | undefined;
 		if (staples.length > 0) {
@@ -81,19 +83,8 @@ function memoryStore(histories: Readonly<Record<string, readonly string[]>>, pro
 				return(BigInt(entry.rowID) > BigInt(rowID));
 			}).slice(0, count)));
 		},
-		accountCount(): Promise<number> {
-			return(Promise.resolve(known.length));
-		},
-		accountsUpTo(rowID: string): Promise<number> {
-			return(Promise.resolve(known.filter(function(entry): boolean {
-				return(BigInt(entry.rowID) <= BigInt(rowID));
-			}).length));
-		},
 		historyHolds(account: string, blocksHash: string): Promise<boolean> {
 			return(Promise.resolve(histories[account]?.includes(blocksHash) ?? false));
-		},
-		close(): Promise<void> {
-			return(Promise.resolve());
 		}
 	});
 }
@@ -132,7 +123,7 @@ function serveAccount(running: Running, account: string, follower: readonly unkn
 	}
 }
 
-async function sweep(running: Running, store: FollowerStore, accounts: number) {
+async function sweep(running: Running, store: SweepStore, accounts: number) {
 	return(await sweepAccounts({
 		follower: httpSource(running.follower.endpoint),
 		representatives: running.representatives.map(function(api) {
@@ -307,7 +298,7 @@ describe('the sweep over the follower\'s accounts', function() {
 		await sweep(running, memoryStore({ [ACCOUNTS[0]]: [STAPLE], [ACCOUNTS[1]]: [STAPLE] }), 2);
 
 		const records = (await running.log.read()).records;
-		expect(records.map(function(record) {
+		expect(recordsOf(records, 'sweep').map(function(record) {
 			return(record.representative);
 		}).sort()).toEqual(running.representatives.map(function(api) {
 			return(api.endpoint);

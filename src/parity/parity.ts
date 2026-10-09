@@ -5,7 +5,7 @@ import { PeerPacer } from '../node/bootstrap-pacing.js';
 import { assertNever } from '../util/assert-never.js';
 import { httpSource, pacedSource } from './api-source.js';
 import type { APISource } from './api-source.js';
-import { compareChecksums } from './checksum.js';
+import { compareChecksums, crossCheckChecksum } from './checksum.js';
 import { FOLLOWER_LISTEN_IP, followerDatabaseURL, followerDirectory, MAINNET_REPRESENTATIVE_APIS, readFollowerSettings } from './follower-config.js';
 import { openFollowerStore } from './follower-store.js';
 import type { FollowerStore } from './follower-store.js';
@@ -31,8 +31,9 @@ const USAGE = [
 	'Compares the follower with the main network\'s representatives, reading from them with paced GETs only,',
 	'and records every comparison in the parity log (parity.jsonl in the follower\'s directory).',
 	'',
-	'  checksum  compare the follower\'s ledger checksum with each representative\'s',
-	'            --gap-ms <ms>      how long both must hold still to count (10000)',
+	'  checksum  check the follower\'s stored ledger checksum against the XOR of its main blocks, compare its',
+	'            block count with each representative\'s, and record each representative\'s checksum',
+	'            --gap-ms <ms>      how long both are read apart (10000)',
 	'  sweep     compare the state of the accounts the follower knows, from where the last sweep stopped',
 	'            --accounts <n>     how many accounts (100)',
 	'  report    run a checksum comparison and a sweep sample, then print the parity report as JSON;',
@@ -73,7 +74,8 @@ async function wait(milliseconds: number): Promise<void> {
 async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 	switch (command.kind) {
 		case 'checksum': {
-			const records = await compareChecksums({
+			const crossCheck = await crossCheckChecksum({ follower: tools.follower, store: tools.store });
+			const comparison = await compareChecksums({
 				follower: tools.follower,
 				representatives: tools.representatives,
 				progress: await tools.store.progress(),
@@ -83,6 +85,7 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 					return(sweepPointerOf(tools.log, tools.cursorPath));
 				}
 			});
+			const records = [crossCheck, ...comparison.checksums, ...comparison.blockCounts];
 			await tools.log.append(records);
 			process.stdout.write(`${JSON.stringify(records, null, '\t')}\n`);
 			return(0);

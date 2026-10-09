@@ -211,11 +211,14 @@ export async function compareAccount(comparison: AccountComparison): Promise<Swe
 	return({ kind: 'match', head: headOf(representativeState), staple });
 }
 
+/** What the sweep reads of the follower's storage. */
+export type SweepStore = Pick<FollowerStore, 'progress' | 'accountsAfter' | 'historyHolds'>;
+
 export type SweepSetup = {
 	readonly follower: APISource;
 	/** Each account is compared with one of them, in turn; their requests are paced by the caller. */
 	readonly representatives: readonly APISource[];
-	readonly store: FollowerStore;
+	readonly store: SweepStore;
 	readonly log: ParityLog;
 	readonly cursorPath: string;
 	/** How many accounts to walk past before stopping. */

@@ -94,7 +94,51 @@ export type SweepRecord = {
 	readonly outcome: SweepOutcome;
 };
 
-export type ParityRecord = ChecksumRecord | SweepRecord;
+/** Why a block count comparison does not count. */
+export type BlockCountNotComparableReason = Extract<NotComparableReason, 'no-completed-pass' | 'follower-unanswered' | 'representative-unanswered'>;
+
+export type BlockCountVerdict =
+	| { readonly kind: 'pass' }
+	| { readonly kind: 'fail'; readonly difference: number }
+	| { readonly kind: 'not-comparable-yet'; readonly reasons: readonly BlockCountNotComparableReason[] };
+
+/** The follower's block count against a representative's, read in the windows of a checksum comparison. */
+export type BlockCountRecord = {
+	readonly kind: 'block-count';
+	readonly at: string;
+	readonly representative: string;
+	readonly completedPass: string | null;
+	readonly follower: ChecksumWindow;
+	readonly representativeWindow: ChecksumWindow;
+	/** How far apart the two counts may be and still describe the same ledger, as reckoned for this comparison. */
+	readonly toleranceBlocks: number;
+	readonly verdict: BlockCountVerdict;
+};
+
+/** How the follower's stored checksum stands against the XOR of the blocks on its main ledger. */
+export type CrossCheckOutcome =
+	| { readonly kind: 'equal' }
+	/** They differ by the blocks of these staples, committed after the statistic was last written: the node had not synced them yet. */
+	| { readonly kind: 'unsynced'; readonly staples: readonly string[] }
+	/**
+	 * They differ by exactly the blocks of a run of staples committed one
+	 * after another, whose statistics the node never wrote, as a node that
+	 * stops without syncing leaves them (src/node/stats.ts).
+	 */
+	| { readonly kind: 'lost-run'; readonly firstSequence: string; readonly lastSequence: string; readonly staples: number; readonly firstMoment: string; readonly lastMoment: string }
+	| { readonly kind: 'unexplained'; readonly offset: string };
+
+export type CrossCheckRecord = {
+	readonly kind: 'cross-check';
+	readonly at: string;
+	/** The stored statistic and the XOR of every main block's hash, both "0x" and uppercase hexadecimal. */
+	readonly stored: string;
+	readonly folded: string;
+	readonly mainBlocks: number;
+	readonly outcome: CrossCheckOutcome;
+};
+
+export type ParityRecord = ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord;
 
 /** The records a log holds, and how many of its lines were not records, as the end of a line cut short by a crash. */
 export type ParityLogContents = {
@@ -158,6 +202,92 @@ function reasonOf(value: unknown): NotComparableReason | undefined {
 	}));
 }
 
+const BLOCK_COUNT_REASONS: readonly BlockCountNotComparableReason[] = ['no-completed-pass', 'follower-unanswered', 'representative-unanswered'];
+
+function blockCountVerdictOf(value: unknown): BlockCountVerdict | undefined {
+	if (!isFields(value)) {
+		return(undefined);
+	}
+	switch (value['kind']) {
+		case 'pass':
+			return({ kind: 'pass' });
+		case 'fail':
+			if (typeof value['difference'] !== 'number' || !Number.isSafeInteger(value['difference'])) {
+				return(undefined);
+			}
+			return({ kind: 'fail', difference: value['difference'] });
+		case 'not-comparable-yet': {
+			const reasons = listOf(value['reasons'], function(reason): BlockCountNotComparableReason | undefined {
+				return(BLOCK_COUNT_REASONS.find(function(known): boolean {
+					return(known === reason);
+				}));
+			});
+			if (reasons === undefined) {
+				return(undefined);
+			}
+			return({ kind: 'not-comparable-yet', reasons });
+		}
+		default:
+			return(undefined);
+	}
+}
+
+function blockCountRecordOf(value: Fields): BlockCountRecord | undefined {
+	const { at, representative, completedPass, toleranceBlocks } = value;
+	const follower = windowOf(value['follower']);
+	const representativeWindow = windowOf(value['representativeWindow']);
+	const verdict = blockCountVerdictOf(value['verdict']);
+	if (!isString(at) || !isString(representative) || !isStringOrNull(completedPass) || !isCount(toleranceBlocks) || follower === undefined || representativeWindow === undefined || verdict === undefined) {
+		return(undefined);
+	}
+	return({ kind: 'block-count', at, representative, completedPass, follower, representativeWindow, toleranceBlocks, verdict });
+}
+
+function crossCheckOutcomeOf(value: unknown): CrossCheckOutcome | undefined {
+	if (!isFields(value)) {
+		return(undefined);
+	}
+	switch (value['kind']) {
+		case 'equal':
+			return({ kind: 'equal' });
+		case 'unsynced': {
+			const staples = listOf(value['staples'], function(staple): string | undefined {
+				if (!isString(staple)) {
+					return(undefined);
+				}
+				return(staple);
+			});
+			if (staples === undefined) {
+				return(undefined);
+			}
+			return({ kind: 'unsynced', staples });
+		}
+		case 'lost-run': {
+			const { firstSequence, lastSequence, staples, firstMoment, lastMoment } = value;
+			if (!isString(firstSequence) || !isString(lastSequence) || !isCount(staples) || !isString(firstMoment) || !isString(lastMoment)) {
+				return(undefined);
+			}
+			return({ kind: 'lost-run', firstSequence, lastSequence, staples, firstMoment, lastMoment });
+		}
+		case 'unexplained':
+			if (!isString(value['offset'])) {
+				return(undefined);
+			}
+			return({ kind: 'unexplained', offset: value['offset'] });
+		default:
+			return(undefined);
+	}
+}
+
+function crossCheckRecordOf(value: Fields): CrossCheckRecord | undefined {
+	const { at, stored, folded, mainBlocks } = value;
+	const outcome = crossCheckOutcomeOf(value['outcome']);
+	if (!isString(at) || !isString(stored) || !isString(folded) || !isCount(mainBlocks) || outcome === undefined) {
+		return(undefined);
+	}
+	return({ kind: 'cross-check', at, stored, folded, mainBlocks, outcome });
+}
+
 function cursorOf(value: unknown): SweepCursor | undefined {
 	if (!isFields(value) || !isCount(value['lap']) || !isString(value['afterRowID'])) {
 		return(undefined);
@@ -190,6 +320,22 @@ function bisectOf(value: unknown): BisectAid | undefined {
 		return(undefined);
 	}
 	return({ followerBlockCount: value['followerBlockCount'], representativeBlockCount: value['representativeBlockCount'], sweep: { cursor, firstDivergence } });
+}
+
+/** Every element read, or nothing when the value is no list or one of its elements is unreadable. */
+export function listOf<Element>(value: unknown, read: (element: unknown) => Element | undefined): Element[] | undefined {
+	if (!Array.isArray(value)) {
+		return(undefined);
+	}
+	const elements: Element[] = [];
+	for (const element of value) {
+		const found = read(element);
+		if (found === undefined) {
+			return(undefined);
+		}
+		elements.push(found);
+	}
+	return(elements);
 }
 
 function checksumVerdictOf(value: unknown): ChecksumVerdict | undefined {
@@ -306,6 +452,10 @@ export function parityRecordOf(line: string): ParityRecord | undefined {
 	switch (value['kind']) {
 		case 'checksum':
 			return(checksumRecordOf(value));
+		case 'block-count':
+			return(blockCountRecordOf(value));
+		case 'cross-check':
+			return(crossCheckRecordOf(value));
 		case 'sweep':
 			return(sweepRecordOf(value));
 		default:

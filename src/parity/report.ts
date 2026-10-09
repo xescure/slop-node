@@ -1,8 +1,8 @@
 import { assertNever } from '../util/assert-never.js';
 import type { APISource } from './api-source.js';
-import { checksumsEqual, compareChecksums } from './checksum.js';
+import { checksumsEqual, compareChecksums, crossCheckChecksum } from './checksum.js';
 import type { FollowerProgress, FollowerStore } from './follower-store.js';
-import type { ChecksumRecord, Divergence, NotComparableReason, ParityLog, ParityLogContents, ParityRecord, SweepCursor, SweepPointer, SweepRecord } from './log.js';
+import type { BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, SweepCursor, SweepPointer, SweepRecord } from './log.js';
 import { readSweepCursor, sweepAccounts } from './sweep.js';
 
 /** A signal's verdict; a signal whose tool does not exist yet reports so rather than passing. */
@@ -24,17 +24,48 @@ export type ConfidenceBound =
 /** The first divergence a signal holds, with the staple and account to start from where it names them. */
 export type FirstDivergence = Divergence & {
 	readonly at: string;
-	readonly representative: string;
+	/** The representative compared with, or null for a check of the follower against itself. */
+	readonly representative: string | null;
+};
+
+/** A verdict of a signal or a part of one. */
+export type SignalVerdict = Exclude<Verdict, 'not-implemented'>;
+
+export type CrossCheckPart = {
+	readonly verdict: SignalVerdict;
+	readonly runs: number;
+	/** The latest cross-check, which the verdict is of. */
+	readonly latest: CrossCheckRecord | null;
+};
+
+export type BlockCountPart = {
+	readonly verdict: SignalVerdict;
+	readonly counts: { readonly comparisons: number; readonly comparable: number; readonly passed: number; readonly failed: number };
+	/** Why the latest comparisons did not count. */
+	readonly notComparableReasons: readonly BlockCountNotComparableReason[];
+};
+
+/**
+ * The representatives' checksums, which are statistics of their own nodes
+ * and differ among them (conformance/API.md, Differences), so they inform
+ * and decide nothing.
+ */
+export type RepresentativeChecksums = {
+	readonly comparisons: number;
+	/** Comparisons in which the follower and the representative held still and served the same checksum. */
+	readonly agreeing: number;
+	/** How many different checksums the representatives that held still served in the latest run. */
+	readonly distinctInLatestRun: number;
 };
 
 export type ChecksumSignal = {
-	readonly verdict: Exclude<Verdict, 'not-implemented'>;
-	readonly counts: { readonly comparisons: number; readonly comparable: number; readonly matched: number; readonly mismatched: number };
+	readonly verdict: SignalVerdict;
+	/** The follower's stored checksum against the XOR of its main blocks. */
+	readonly crossCheck: CrossCheckPart;
+	/** The follower's block count against the representatives'. */
+	readonly blockCount: BlockCountPart;
+	readonly representativeChecksums: RepresentativeChecksums;
 	readonly confidence: ConfidenceBound;
-	/** Why the latest comparisons did not count. */
-	readonly notComparableReasons: readonly NotComparableReason[];
-	/** How many different checksums the representatives that held still served in the latest run; more than one shows their statistics apart. */
-	readonly representativeChecksums: number;
 	readonly firstDivergence: FirstDivergence | null;
 };
 
@@ -88,68 +119,114 @@ function isoOrNull(moment: Date | undefined): string | null {
 	return(moment.toISOString());
 }
 
-function counted(record: ChecksumRecord): boolean {
-	return(record.verdict.kind !== 'not-comparable-yet');
+function heldStill(window: ChecksumWindow): window is Extract<ChecksumWindow, { kind: 'read' }> {
+	return(window.kind === 'read' && window.first.blockCount === window.second.blockCount && checksumsEqual(window.first.checksum, window.second.checksum));
 }
 
-/** The distinct values among the checksums of the representatives that held still across their windows. */
-function distinctChecksums(records: readonly ChecksumRecord[]): number {
-	const values = new Set<bigint>();
-	for (const record of records) {
-		const window = record.representativeWindow;
-		if (window.kind === 'read' && window.first.blockCount === window.second.blockCount && checksumsEqual(window.first.checksum, window.second.checksum)) {
-			values.add(BigInt(window.second.checksum));
+/** The records of the latest run: those written at the time of the last. */
+function latestRun<Record extends { readonly at: string }>(records: readonly Record[]): readonly Record[] {
+	const latestAt = records.at(-1)?.at;
+	return(records.filter(function(record): boolean {
+		return(record.at === latestAt);
+	}));
+}
+
+function representativeChecksumsOf(records: readonly ChecksumRecord[]): RepresentativeChecksums {
+	const agreeing = records.filter(function(record): boolean {
+		return(heldStill(record.follower) && heldStill(record.representativeWindow) && checksumsEqual(record.follower.second.checksum, record.representativeWindow.second.checksum));
+	});
+	const distinct = new Set<bigint>();
+	for (const record of latestRun(records)) {
+		if (heldStill(record.representativeWindow)) {
+			distinct.add(BigInt(record.representativeWindow.second.checksum));
 		}
 	}
-	return(values.size);
+	return({ comparisons: records.length, agreeing: agreeing.length, distinctInLatestRun: distinct.size });
 }
 
 /**
- * The verdict of the latest run in which a comparison counted: it passes
- * when the follower agreed with any representative it compared with. A
- * representative's checksum is a statistic of its own, which it folds in
- * after each commit and keeps apart from its ledger
- * [Keeta TS] index.js:69411-69416, 69001-69006, 74473-74497, and on the
- * main network the representatives served four different checksums and
- * block counts that held still for minutes (conformance/API.md,
- * Differences), so a disagreement with one is no evidence against the
- * follower while it agrees with another.
+ * The latest cross-check decides: a stored checksum equal to the fold, or
+ * apart from it only by staples it explains, passes.
  */
-function checksumSignalOf(records: readonly ChecksumRecord[]): ChecksumSignal {
-	const comparable = records.filter(counted);
-	const mismatched = comparable.filter(function(record): boolean {
+function crossCheckPartOf(records: readonly CrossCheckRecord[]): CrossCheckPart {
+	const latest = records.at(-1) ?? null;
+	if (latest === null) {
+		return({ verdict: 'not-comparable-yet', runs: 0, latest });
+	}
+	switch (latest.outcome.kind) {
+		case 'equal':
+		case 'unsynced':
+		case 'lost-run':
+			return({ verdict: 'pass', runs: records.length, latest });
+		case 'unexplained':
+			return({ verdict: 'fail', runs: records.length, latest });
+		default:
+			return(assertNever(latest.outcome));
+	}
+}
+
+/** The latest run decides: it fails when the follower's count is beyond the tolerance of any representative's, and passes when it is within that of every one that counted. */
+function blockCountPartOf(records: readonly BlockCountRecord[]): BlockCountPart {
+	const comparable = records.filter(function(record): boolean {
+		return(record.verdict.kind !== 'not-comparable-yet');
+	});
+	const failed = comparable.filter(function(record): boolean {
 		return(record.verdict.kind === 'fail');
-	});
-	const counts = { comparisons: records.length, comparable: comparable.length, matched: comparable.length - mismatched.length, mismatched: mismatched.length };
-	const latestAt = records.at(-1)?.at;
-	const latest = records.filter(function(record): boolean {
-		return(record.at === latestAt);
-	});
-	const notComparableReasons = [...new Set(latest.flatMap(function(record): readonly NotComparableReason[] {
+	}).length;
+	const counts = { comparisons: records.length, comparable: comparable.length, passed: comparable.length - failed, failed };
+	const latest = latestRun(records);
+	const notComparableReasons = [...new Set(latest.flatMap(function(record): readonly BlockCountNotComparableReason[] {
 		if (record.verdict.kind !== 'not-comparable-yet') {
 			return([]);
 		}
 		return(record.verdict.reasons);
 	}))];
-	const confidence: ConfidenceBound = { kind: 'not-sampled' };
-	const summary = { counts, confidence, notComparableReasons, representativeChecksums: distinctChecksums(latest) };
-	const latestCounted = comparable.at(-1)?.at;
-	if (latestCounted === undefined) {
-		return({ verdict: 'not-comparable-yet', ...summary, firstDivergence: null });
+	let verdict: SignalVerdict = 'not-comparable-yet';
+	if (latest.some(function(record): boolean {
+		return(record.verdict.kind === 'fail');
+	})) {
+		verdict = 'fail';
+	} else if (latest.some(function(record): boolean {
+		return(record.verdict.kind === 'pass');
+	})) {
+		verdict = 'pass';
 	}
-	const agreed = comparable.some(function(record): boolean {
-		return(record.at === latestCounted && record.verdict.kind === 'pass');
-	});
-	if (agreed) {
-		return({ verdict: 'pass', ...summary, firstDivergence: null });
+	return({ verdict, counts, notComparableReasons });
+}
+
+/** A failing part fails the signal, and it passes only when both parts pass. */
+function combined(left: SignalVerdict, right: SignalVerdict): SignalVerdict {
+	if (left === 'fail' || right === 'fail') {
+		return('fail');
 	}
+	if (left === 'pass' && right === 'pass') {
+		return('pass');
+	}
+	return('not-comparable-yet');
+}
+
+function checksumSignalOf(records: readonly ParityRecord[]): ChecksumSignal {
+	const crossCheck = crossCheckPartOf(recordsOf(records, 'cross-check'));
+	const blockCounts = recordsOf(records, 'block-count');
+	const blockCount = blockCountPartOf(blockCounts);
 	let firstDivergence: FirstDivergence | null = null;
-	const first = mismatched[0];
-	if (first?.verdict.kind === 'fail') {
-		const traced = first.verdict.bisect.sweep.firstDivergence;
-		firstDivergence = { at: first.at, representative: first.representative, field: 'checksum', account: traced?.account ?? '', staple: traced?.staple ?? null };
+	const latestCrossCheck = crossCheck.latest;
+	const failedCount = latestRun(blockCounts).find(function(record): boolean {
+		return(record.verdict.kind === 'fail');
+	});
+	if (crossCheck.verdict === 'fail' && latestCrossCheck !== null) {
+		firstDivergence = { at: latestCrossCheck.at, representative: null, account: '', field: 'ledgerChecksum', staple: null };
+	} else if (failedCount !== undefined) {
+		firstDivergence = { at: failedCount.at, representative: failedCount.representative, account: '', field: 'blockCount', staple: null };
 	}
-	return({ verdict: 'fail', ...summary, firstDivergence });
+	return({
+		verdict: combined(crossCheck.verdict, blockCount.verdict),
+		crossCheck,
+		blockCount,
+		representativeChecksums: representativeChecksumsOf(recordsOf(records, 'checksum')),
+		confidence: { kind: 'not-sampled' },
+		firstDivergence
+	});
 }
 
 /** Each account's latest comparison, and its latest record of any kind, in the order the accounts were first seen. */
@@ -240,15 +317,10 @@ function sweepSignalOf(records: readonly SweepRecord[], position: SweepPosition)
 	return({ verdict: 'fail', counts, confidence, firstDivergence: { ...first.outcome.divergence, at: first.at, representative: first.representative } });
 }
 
-function checksumRecords(records: readonly ParityRecord[]): readonly ChecksumRecord[] {
-	return(records.filter(function(record): record is ChecksumRecord {
-		return(record.kind === 'checksum');
-	}));
-}
-
-function sweepRecords(records: readonly ParityRecord[]): readonly SweepRecord[] {
-	return(records.filter(function(record): record is SweepRecord {
-		return(record.kind === 'sweep');
+/** The records of one kind. */
+export function recordsOf<Kind extends ParityRecord['kind']>(records: readonly ParityRecord[], kind: Kind): readonly Extract<ParityRecord, { readonly kind: Kind }>[] {
+	return(records.filter(function(record): record is Extract<ParityRecord, { readonly kind: Kind }> {
+		return(record.kind === kind);
 	}));
 }
 
@@ -273,8 +345,8 @@ export function parityReportOf(input: ReportInput): ParityReport {
 		follower: { completedPass: isoOrNull(input.progress.completedPass), heldBefore: isoOrNull(input.progress.heldBefore) },
 		logUnreadableLines: input.log.unreadableLines,
 		signals: {
-			checksum: checksumSignalOf(checksumRecords(records)),
-			sweep: sweepSignalOf(sweepRecords(records), input.sweep),
+			checksum: checksumSignalOf(records),
+			sweep: sweepSignalOf(recordsOf(records, 'sweep'), input.sweep),
 			apiDiff: { verdict: 'not-implemented' },
 			shadowVotes: { verdict: 'not-implemented' }
 		}
@@ -283,7 +355,7 @@ export function parityReportOf(input: ReportInput): ParityReport {
 
 /** Where the sweep stands: its cursor, and the first divergence it recorded. */
 export async function sweepPointerOf(log: ParityLog, cursorPath: string): Promise<SweepPointer> {
-	const first = sweepRecords((await log.read()).records).find(function(record): boolean {
+	const first = recordsOf((await log.read()).records, 'sweep').find(function(record): boolean {
 		return(record.outcome.kind === 'diverged');
 	});
 	let firstDivergence: Divergence | null = null;
@@ -320,7 +392,7 @@ export async function runParity(run: ParityRun): Promise<ParityReport> {
 			return(sweepPointerOf(run.log, run.cursorPath));
 		}
 	});
-	await run.log.append(checksums);
+	await run.log.append([await crossCheckChecksum({ follower: run.follower, store: run.store }), ...checksums.checksums, ...checksums.blockCounts]);
 	await sweepAccounts({ follower: run.follower, representatives: run.representatives, store: run.store, log: run.log, cursorPath: run.cursorPath, accounts: run.sampleAccounts, stopped: run.stopped });
 	const cursor = await readSweepCursor(run.cursorPath);
 	const sweep = { knownAccounts: await run.store.accountCount(), cursor, walkedThisLap: await run.store.accountsUpTo(cursor.afterRowID) };
