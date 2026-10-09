@@ -11,12 +11,14 @@ describe('the parity command line', function() {
 	test('names each command with its defaults', function() {
 		expect(parseParityCommand(['checksum'], HOME)).toEqual({ kind: 'checksum', directory: DIRECTORY, gapMilliseconds: 10_000 });
 		expect(parseParityCommand(['sweep'], HOME)).toEqual({ kind: 'sweep', directory: DIRECTORY, accounts: 100 });
-		expect(parseParityCommand(['report'], HOME)).toEqual({ kind: 'report', directory: DIRECTORY, sampleAccounts: 16, gapMilliseconds: 10_000 });
+		expect(parseParityCommand(['api-diff'], HOME)).toEqual({ kind: 'api-diff', directory: DIRECTORY, samplesPerStratum: 50, seed: undefined });
+		expect(parseParityCommand(['report'], HOME)).toEqual({ kind: 'report', directory: DIRECTORY, sampleAccounts: 16, apiSamples: 2, gapMilliseconds: 10_000 });
 	});
 
 	test('takes the options each command has', function() {
 		expect(parseParityCommand(['sweep', '--accounts', '300', '--directory', '/data/follower'], HOME)).toEqual({ kind: 'sweep', directory: '/data/follower', accounts: 300 });
-		expect(parseParityCommand(['report', '--sample', '4', '--gap-ms', '5000'], HOME)).toEqual({ kind: 'report', directory: DIRECTORY, sampleAccounts: 4, gapMilliseconds: 5000 });
+		expect(parseParityCommand(['report', '--sample', '4', '--api-samples', '1', '--gap-ms', '5000'], HOME)).toEqual({ kind: 'report', directory: DIRECTORY, sampleAccounts: 4, apiSamples: 1, gapMilliseconds: 5000 });
+		expect(parseParityCommand(['api-diff', '--samples', '300', '--seed', 'run-1'], HOME)).toEqual({ kind: 'api-diff', directory: DIRECTORY, samplesPerStratum: 300, seed: 'run-1' });
 	});
 
 	test('refuses what it does not understand', function() {
@@ -25,6 +27,7 @@ describe('the parity command line', function() {
 		expect(parseParityCommand(['sweep', '--gap-ms', '5000'], HOME)).toBeUndefined();
 		expect(parseParityCommand(['sweep', '--accounts', '0'], HOME)).toBeUndefined();
 		expect(parseParityCommand(['checksum', '--gap-ms'], HOME)).toBeUndefined();
+		expect(parseParityCommand(['api-diff', '--samples', '0'], HOME)).toBeUndefined();
 	});
 });
 

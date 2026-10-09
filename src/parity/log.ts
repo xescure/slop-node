@@ -1,5 +1,7 @@
 import { appendFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { stratumOf } from './strata.js';
+import type { Stratum } from './strata.js';
 
 /** The parity log, one JSON record per line, in the follower's directory. */
 export const PARITY_LOG_FILE = 'parity.jsonl';
@@ -138,7 +140,29 @@ export type CrossCheckRecord = {
 	readonly outcome: CrossCheckOutcome;
 };
 
-export type ParityRecord = ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord;
+/** The comparison of one sampled request's answers. */
+export type APIDiffOutcome =
+	| { readonly kind: 'match' }
+	/** The field is the path of the first that differs once both are normalized; the answers are kept as served. */
+	| { readonly kind: 'diverged'; readonly field: string; readonly follower: unknown; readonly representative: unknown }
+	/** Not compared: an account the answer reads may be held at different points. */
+	| { readonly kind: 'skipped'; readonly reason: 'moving'; readonly side: MovingSide; readonly detail: string }
+	| { readonly kind: 'skipped'; readonly reason: 'unanswered'; readonly detail: string };
+
+export type APIDiffRecord = {
+	readonly kind: 'api-diff';
+	readonly at: string;
+	readonly representative: string;
+	readonly stratum: Stratum;
+	/** The route of the document the request is of, and the request below the API's root. */
+	readonly route: string;
+	readonly path: string;
+	/** The kinds of behaviour the representative's answer shows, as the capture set is told apart by; none when it was not compared. */
+	readonly behaviours: readonly string[];
+	readonly outcome: APIDiffOutcome;
+};
+
+export type ParityRecord = ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | APIDiffRecord;
 
 /** The records a log holds, and how many of its lines were not records, as the end of a line cut short by a crash. */
 export type ParityLogContents = {
@@ -429,6 +453,46 @@ function sweepOutcomeOf(value: unknown): SweepOutcome | undefined {
 	}
 }
 
+function apiDiffOutcomeOf(value: unknown): APIDiffOutcome | undefined {
+	if (!isFields(value)) {
+		return(undefined);
+	}
+	switch (value['kind']) {
+		case 'match':
+			return({ kind: 'match' });
+		case 'diverged':
+			if (!isString(value['field'])) {
+				return(undefined);
+			}
+			return({ kind: 'diverged', field: value['field'], follower: value['follower'], representative: value['representative'] });
+		case 'skipped': {
+			const skipped = sweepOutcomeOf(value);
+			if (skipped?.kind !== 'skipped') {
+				return(undefined);
+			}
+			return(skipped);
+		}
+		default:
+			return(undefined);
+	}
+}
+
+function apiDiffRecordOf(value: Fields): APIDiffRecord | undefined {
+	const { at, representative, route, path } = value;
+	const stratum = stratumOf(value['stratum']);
+	const outcome = apiDiffOutcomeOf(value['outcome']);
+	const behaviours = listOf(value['behaviours'], function(behaviour): string | undefined {
+		if (!isString(behaviour)) {
+			return(undefined);
+		}
+		return(behaviour);
+	});
+	if (!isString(at) || !isString(representative) || !isString(route) || !isString(path) || behaviours === undefined || stratum === undefined || outcome === undefined) {
+		return(undefined);
+	}
+	return({ kind: 'api-diff', at, representative, stratum, route, path, behaviours, outcome });
+}
+
 function sweepRecordOf(value: Fields): SweepRecord | undefined {
 	const { at, representative, account, lap } = value;
 	const outcome = sweepOutcomeOf(value['outcome']);
@@ -458,6 +522,8 @@ export function parityRecordOf(line: string): ParityRecord | undefined {
 			return(crossCheckRecordOf(value));
 		case 'sweep':
 			return(sweepRecordOf(value));
+		case 'api-diff':
+			return(apiDiffRecordOf(value));
 		default:
 			return(undefined);
 	}

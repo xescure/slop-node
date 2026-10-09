@@ -6,8 +6,9 @@ import { startFakeAPI } from '../testing/fake-api.js';
 import { httpSource } from './api-source.js';
 import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-store.js';
 import { ParityLog } from './log.js';
-import type { BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, SweepOutcome, SweepRecord } from './log.js';
+import type { APIDiffOutcome, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, SweepOutcome, SweepRecord } from './log.js';
 import { parityReportOf, runParity } from './report.js';
+import type { Stratum } from './strata.js';
 
 const REPRESENTATIVE = 'https://rep1.example/api';
 const OTHER_REPRESENTATIVE = 'https://rep2.example/api';
@@ -45,12 +46,18 @@ function diverged(account: string, field: string): SweepOutcome {
 	return({ kind: 'diverged', divergence: { account, field, staple: STAPLE }, follower: {}, representative: {} });
 }
 
+const KNOWN_BEHAVIOUR = '/api/node/ledger/account/{account} 200 error=-';
+
+function apiDiff(at: string, stratum: Stratum, path: string, outcome: APIDiffOutcome, behaviours: readonly string[] = [KNOWN_BEHAVIOUR]): APIDiffRecord {
+	return({ kind: 'api-diff', at, representative: REPRESENTATIVE, stratum, route: '/api/node/ledger/account/{account}', path, behaviours, outcome });
+}
+
 function report(records: readonly ParityRecord[]) {
-	return(parityReportOf({ generatedAt: new Date('2026-10-09T08:00:00.000Z'), progress: PROGRESS, sweep: { knownAccounts: 10, cursor: { lap: 1, afterRowID: '7' }, walkedThisLap: 4 }, log: { records, unreadableLines: 0 } }));
+	return(parityReportOf({ generatedAt: new Date('2026-10-09T08:00:00.000Z'), progress: PROGRESS, sweep: { knownAccounts: 10, cursor: { lap: 1, afterRowID: '7' }, walkedThisLap: 4 }, log: { records, unreadableLines: 0 }, knownBehaviours: new Set([KNOWN_BEHAVIOUR]) }));
 }
 
 describe('the parity report', function() {
-	test('has nothing comparable in an empty log, and slots for the signals not implemented', function() {
+	test('has nothing comparable in an empty log', function() {
 		const empty = report([]);
 		expect(empty).toMatchObject({
 			generatedAt: '2026-10-09T08:00:00.000Z',
@@ -58,7 +65,7 @@ describe('the parity report', function() {
 			signals: {
 				checksum: { verdict: 'not-comparable-yet', firstDivergence: null },
 				sweep: { verdict: 'not-comparable-yet', firstDivergence: null, confidence: { kind: 'none' } },
-				apiDiff: { verdict: 'not-implemented' },
+				apiDiff: { verdict: 'not-comparable-yet', firstDivergence: null, newBehaviours: [] },
 				shadowVotes: { verdict: 'not-implemented' }
 			}
 		});
@@ -107,6 +114,38 @@ describe('the parity report', function() {
 		const other = { kind: 'read', first: { checksum: '0x2', blockCount: 2 }, second: { checksum: '0x02', blockCount: 2 } } as const;
 		const records = [checksum(at, FAIL), { ...checksum(at, FAIL, OTHER_REPRESENTATIVE), representativeWindow: other }, { ...checksum(at, FAIL, OTHER_REPRESENTATIVE), representativeWindow: READ }];
 		expect(report(records).signals.checksum).toMatchObject({ verdict: 'not-comparable-yet', representativeChecksums: { comparisons: 3, agreeing: 2, distinctInLatestRun: 2 } });
+	});
+
+	test('passes the API diff with the rule of three in each stratum, counting each request by its latest comparison', function() {
+		const path = `/node/ledger/account/${ACCOUNT}`;
+		const signal = report([
+			apiDiff('2026-10-09T01:00:00.000Z', 'token', path, { kind: 'diverged', field: 'body.info', follower: {}, representative: {} }),
+			apiDiff('2026-10-09T01:00:01.000Z', 'token', path, { kind: 'match' }),
+			apiDiff('2026-10-09T01:00:02.000Z', 'token', `${path}/head`, { kind: 'match' }),
+			apiDiff('2026-10-09T01:00:03.000Z', 'storage', path, { kind: 'skipped', reason: 'moving', side: 'representative', detail: 'recent' }),
+			apiDiff('2026-10-09T01:00:04.000Z', 'operation:SEND', '/vote/AB', { kind: 'match' }, ['/api/vote/{blockhash} 200 error=-', 'operation=SEND'])
+		]).signals.apiDiff;
+		expect(signal).toMatchObject({
+			verdict: 'pass',
+			counts: { requestsCompared: 3, matched: 3, diverged: 0, skippedMoving: 1, unanswered: 0, divergenceRecords: 1 },
+			newBehaviours: [{ behaviour: '/api/vote/{blockhash} 200 error=-', path: '/vote/AB' }, { behaviour: 'operation=SEND', path: '/vote/AB' }],
+			firstDivergence: null
+		});
+		expect(signal.strata.find(function(stratum) {
+			return(stratum.stratum === 'token');
+		})).toEqual({ stratum: 'token', requestsCompared: 2, diverged: 0, confidence: { kind: 'rule-of-three', samples: 2, level: 0.95, divergenceRateBelow: 1.5 } });
+		expect(signal.strata.find(function(stratum) {
+			return(stratum.stratum === 'storage');
+		})).toMatchObject({ requestsCompared: 0, confidence: { kind: 'none' } });
+	});
+
+	test('fails the API diff while a request\'s latest comparison diverges, naming it', function() {
+		const path = `/node/ledger/account/${ACCOUNT}`;
+		const signal = report([
+			apiDiff('2026-10-09T01:00:00.000Z', 'token', path, { kind: 'match' }),
+			apiDiff('2026-10-09T01:00:01.000Z', 'token', path, { kind: 'diverged', field: 'body.info', follower: {}, representative: {} })
+		]).signals.apiDiff;
+		expect(signal).toMatchObject({ verdict: 'fail', firstDivergence: { at: '2026-10-09T01:00:01.000Z', representative: REPRESENTATIVE, stratum: 'token', path, field: 'body.info' } });
 	});
 
 	test('passes the sweep with the rule of three over the accounts compared when none diverges', function() {
@@ -187,6 +226,10 @@ describe('a parity run', function() {
 			accountsUpTo: () => Promise.resolve(known.length),
 			historyHolds: () => Promise.resolve(false),
 			checksumSnapshot: () => Promise.resolve({ stored: 0n, folded: 0n, mainBlocks: 0, staples: [] }),
+			quietAccounts: () => Promise.resolve([]),
+			heldBlocks: () => Promise.resolve([]),
+			heldBlocksOfStaples: () => Promise.resolve([]),
+			newestStaples: () => Promise.resolve(new Map()),
 			close: () => Promise.resolve()
 		};
 
@@ -197,6 +240,7 @@ describe('a parity run', function() {
 			log,
 			cursorPath: join(directory, 'parity-sweep.json'),
 			sampleAccounts: 1,
+			apiDiff: { samplesPerStratum: 1, seed: 'test', edgeCaseStaples: [], knownBehaviours: new Set() },
 			gapMilliseconds: 10_000,
 			wait: () => Promise.resolve(),
 			stopped: new AbortController().signal
@@ -204,6 +248,7 @@ describe('a parity run', function() {
 
 		expect(result.signals.checksum).toMatchObject({ verdict: 'not-comparable-yet', crossCheck: { verdict: 'pass', runs: 1 }, blockCount: { counts: { comparisons: 1 }, notComparableReasons: ['no-completed-pass'] } });
 		expect(result.signals.sweep).toMatchObject({ verdict: 'pass', counts: { knownAccounts: 1, lap: 0, walkedThisLap: 1, accountsCompared: 2, matched: 2 } });
+		expect(result.signals.apiDiff).toMatchObject({ verdict: 'not-comparable-yet', counts: { requestsCompared: 0 } });
 		expect((await log.read()).records.map(function(record) {
 			return(record.kind);
 		})).toEqual(['sweep', 'cross-check', 'checksum', 'block-count', 'sweep']);

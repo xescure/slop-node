@@ -1,8 +1,13 @@
 #!/usr/bin/env node
+import { readFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { gunzipSync } from 'node:zlib';
+import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { setTimeout as delay } from 'node:timers/promises';
 import { PeerPacer } from '../node/bootstrap-pacing.js';
 import { assertNever } from '../util/assert-never.js';
+import { capturedBehaviours, sampleAPI } from './api-diff.js';
 import { httpSource, pacedSource } from './api-source.js';
 import type { APISource } from './api-source.js';
 import { compareChecksums, crossCheckChecksum } from './checksum.js';
@@ -36,9 +41,14 @@ const USAGE = [
 	'            --gap-ms <ms>      how long both are read apart (10000)',
 	'  sweep     compare the state of the accounts the follower knows, from where the last sweep stopped',
 	'            --accounts <n>     how many accounts (100)',
-	'  report    run a checksum comparison and a sweep sample, then print the parity report as JSON;',
-	'            exits 1 when a signal fails',
+	'  api-diff  send the same GET requests, drawn from what the follower holds within its reach, to the',
+	'            follower and to a representative, and compare the answers, stratum by stratum',
+	'            --samples <n>      how many requests of each stratum to compare (50)',
+	'            --seed <text>      fixes which requests are drawn (the time of the run)',
+	'  report    check the checksum and compare a sweep sample and an API diff sample, then print the',
+	'            parity report as JSON; exits 1 when a signal fails',
 	'            --sample <n>       how many accounts the sweep sample compares (16)',
+	'            --api-samples <n>  how many requests of each stratum the API diff sample compares (2)',
 	'            --gap-ms <ms>      as for checksum',
 	'',
 	'The directory is the follower\'s (~/.local/share/slop-node-follower); the follower must be up.',
@@ -50,6 +60,23 @@ function messageOf(error: unknown): string {
 		return(error.message);
 	}
 	return(String(error));
+}
+
+/** The repository the tool was built in, three levels above its build/parity/parity directory. */
+const REPOSITORY = new URL('../../../', import.meta.url);
+
+const CAPTURE_DIRECTORY = new URL('conformance/api/mainnet/', REPOSITORY);
+
+const EDGE_CASE_FIXTURE = new URL('conformance/mainnet/edge-cases.jsonl.gz', REPOSITORY);
+
+/** The edge-case staples, by the hash of their blocks; each line is the base64 of one staple as a bootstrap serves it. */
+async function edgeCaseStaples(): Promise<readonly string[]> {
+	const text = gunzipSync(await readFile(EDGE_CASE_FIXTURE)).toString('ascii');
+	return(text.split('\n').filter(function(line): boolean {
+		return(line !== '');
+	}).map(function(line): string {
+		return(new KeetaNet.lib.Vote.Staple(Buffer.from(line, 'base64')).blocksHash.toString());
+	}));
 }
 
 type Tools = {
@@ -95,8 +122,25 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 			process.stdout.write(`${JSON.stringify(summary, null, '\t')}\n`);
 			return(0);
 		}
+		case 'api-diff': {
+			const summary = await sampleAPI({
+				...tools,
+				samplesPerStratum: command.samplesPerStratum,
+				seed: command.seed ?? new Date().toISOString(),
+				edgeCaseStaples: await edgeCaseStaples(),
+				knownBehaviours: await capturedBehaviours(fileURLToPath(CAPTURE_DIRECTORY))
+			});
+			process.stdout.write(`${JSON.stringify(summary, null, '\t')}\n`);
+			return(0);
+		}
 		case 'report': {
-			const report = await runParity({ ...tools, sampleAccounts: command.sampleAccounts, gapMilliseconds: command.gapMilliseconds, wait });
+			const apiDiff = {
+				samplesPerStratum: command.apiSamples,
+				seed: new Date().toISOString(),
+				edgeCaseStaples: await edgeCaseStaples(),
+				knownBehaviours: await capturedBehaviours(fileURLToPath(CAPTURE_DIRECTORY))
+			};
+			const report = await runParity({ ...tools, sampleAccounts: command.sampleAccounts, apiDiff, gapMilliseconds: command.gapMilliseconds, wait });
 			process.stdout.write(`${JSON.stringify(report, null, '\t')}\n`);
 			if (anyFails(report)) {
 				return(1);

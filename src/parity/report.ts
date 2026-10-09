@@ -1,8 +1,12 @@
 import { assertNever } from '../util/assert-never.js';
+import { sampleAPI } from './api-diff.js';
+import type { APIDiffSetup } from './api-diff.js';
 import type { APISource } from './api-source.js';
 import { checksumsEqual, compareChecksums, crossCheckChecksum } from './checksum.js';
 import type { FollowerProgress, FollowerStore } from './follower-store.js';
-import type { BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, SweepCursor, SweepPointer, SweepRecord } from './log.js';
+import type { APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, SweepCursor, SweepPointer, SweepRecord } from './log.js';
+import { STRATA } from './strata.js';
+import type { Stratum } from './strata.js';
 import { readSweepCursor, sweepAccounts } from './sweep.js';
 
 /** A signal's verdict; a signal whose tool does not exist yet reports so rather than passing. */
@@ -95,6 +99,32 @@ export type SweepSignal = {
 
 export type PendingSignal = { readonly verdict: 'not-implemented' };
 
+/** Each stratum's requests, each counted by its latest comparison. */
+export type APIDiffStratum = {
+	readonly stratum: Stratum;
+	readonly requestsCompared: number;
+	readonly diverged: number;
+	readonly confidence: ConfidenceBound;
+};
+
+export type APIDiffSignal = {
+	readonly verdict: SignalVerdict;
+	readonly strata: readonly APIDiffStratum[];
+	readonly counts: {
+		readonly requestsCompared: number;
+		readonly matched: number;
+		readonly diverged: number;
+		/** Requests never compared, whose latest attempt found an account they read moving, or went unanswered. */
+		readonly skippedMoving: number;
+		readonly unanswered: number;
+		/** Every divergence recorded, each to be explained. */
+		readonly divergenceRecords: number;
+	};
+	/** Answers of a kind the capture set holds none of, each with a request that drew it, to be captured. */
+	readonly newBehaviours: readonly { readonly behaviour: string; readonly path: string }[];
+	readonly firstDivergence: { readonly at: string; readonly representative: string; readonly stratum: Stratum; readonly path: string; readonly field: string } | null;
+};
+
 export type ParityReport = {
 	readonly generatedAt: string;
 	readonly follower: { readonly completedPass: string | null; readonly heldBefore: string | null };
@@ -102,8 +132,7 @@ export type ParityReport = {
 	readonly signals: {
 		readonly checksum: ChecksumSignal;
 		readonly sweep: SweepSignal;
-		/** The sampled API diff (P4), not implemented yet. */
-		readonly apiDiff: PendingSignal;
+		readonly apiDiff: APIDiffSignal;
 		/** Shadow votes on live history (P5), not implemented yet. */
 		readonly shadowVotes: PendingSignal;
 	};
@@ -253,15 +282,6 @@ function latestByAccount(records: readonly SweepRecord[]): { readonly compared: 
 	return({ compared, attempted, everDiverged });
 }
 
-function sweepConfidenceOf(compared: number, diverged: number): ConfidenceBound {
-	if (compared === 0) {
-		return({ kind: 'none', why: 'no account compared yet' });
-	}
-	if (diverged > 0) {
-		return({ kind: 'observed', samples: compared, divergences: diverged });
-	}
-	return({ kind: 'rule-of-three', samples: compared, level: 0.95, divergenceRateBelow: RULE_OF_THREE / compared });
-}
 
 function sweepSignalOf(records: readonly SweepRecord[], position: SweepPosition): SweepSignal {
 	const { compared, attempted, everDiverged } = latestByAccount(records);
@@ -301,7 +321,7 @@ function sweepSignalOf(records: readonly SweepRecord[], position: SweepPosition)
 		resolvedDivergences: everDiverged.size - divergedNow.length,
 		divergenceRecords
 	};
-	const confidence = sweepConfidenceOf(latest.length, divergedNow.length);
+	const confidence = confidenceOf(latest.length, divergedNow.length, 'account');
 	if (latest.length === 0) {
 		return({ verdict: 'not-comparable-yet', counts, confidence, firstDivergence: null });
 	}
@@ -324,6 +344,92 @@ export function recordsOf<Kind extends ParityRecord['kind']>(records: readonly P
 	}));
 }
 
+function confidenceOf(compared: number, diverged: number, unit: string): ConfidenceBound {
+	if (compared === 0) {
+		return({ kind: 'none', why: `no ${unit} compared yet` });
+	}
+	if (diverged > 0) {
+		return({ kind: 'observed', samples: compared, divergences: diverged });
+	}
+	return({ kind: 'rule-of-three', samples: compared, level: 0.95, divergenceRateBelow: RULE_OF_THREE / compared });
+}
+
+/**
+ * Each request is counted by its latest comparison, so a request drawn
+ * again on a later run is one sample, and the rule of three bounds each
+ * stratum's rate of divergence over its distinct requests.
+ */
+function apiDiffSignalOf(records: readonly APIDiffRecord[], knownBehaviours: ReadonlySet<string>): APIDiffSignal {
+	const compared = new Map<string, APIDiffRecord>();
+	const attempted = new Map<string, APIDiffRecord>();
+	const newBehaviours = new Map<string, string>();
+	for (const record of records) {
+		const key = `${record.stratum} ${record.path}`;
+		attempted.set(key, record);
+		if (record.outcome.kind === 'skipped') {
+			continue;
+		}
+		compared.set(key, record);
+		for (const behaviour of record.behaviours) {
+			if (!knownBehaviours.has(behaviour) && !newBehaviours.has(behaviour)) {
+				newBehaviours.set(behaviour, record.path);
+			}
+		}
+	}
+	const latest = [...compared.values()];
+	const diverging = latest.filter(function(record): boolean {
+		return(record.outcome.kind === 'diverged');
+	});
+	let skippedMoving = 0;
+	let unanswered = 0;
+	for (const [key, record] of attempted) {
+		if (compared.has(key) || record.outcome.kind !== 'skipped') {
+			continue;
+		}
+		switch (record.outcome.reason) {
+			case 'moving':
+				skippedMoving++;
+				break;
+			case 'unanswered':
+				unanswered++;
+				break;
+			default:
+				assertNever(record.outcome);
+		}
+	}
+	const strata = STRATA.map(function(stratum): APIDiffStratum {
+		const own = latest.filter(function(record): boolean {
+			return(record.stratum === stratum);
+		});
+		const diverged = own.filter(function(record): boolean {
+			return(record.outcome.kind === 'diverged');
+		}).length;
+		return({ stratum, requestsCompared: own.length, diverged, confidence: confidenceOf(own.length, diverged, 'request') });
+	});
+	const counts = {
+		requestsCompared: latest.length,
+		matched: latest.length - diverging.length,
+		diverged: diverging.length,
+		skippedMoving,
+		unanswered,
+		divergenceRecords: records.filter(function(record): boolean {
+			return(record.outcome.kind === 'diverged');
+		}).length
+	};
+	const behaviours = [...newBehaviours].map(function([behaviour, path]) {
+		return({ behaviour, path });
+	});
+	const first = diverging[0];
+	if (first?.outcome.kind === 'diverged') {
+		return({ verdict: 'fail', strata, counts, newBehaviours: behaviours, firstDivergence: { at: first.at, representative: first.representative, stratum: first.stratum, path: first.path, field: first.outcome.field } });
+	}
+	let verdict: SignalVerdict = 'not-comparable-yet';
+	if (latest.length > 0) {
+		verdict = 'pass';
+	}
+	return({ verdict, strata, counts, newBehaviours: behaviours, firstDivergence: null });
+}
+
 /** Where the sweep stands among the accounts the follower knows. */
 export type SweepPosition = {
 	readonly knownAccounts: number;
@@ -336,6 +442,8 @@ export type ReportInput = {
 	readonly progress: FollowerProgress;
 	readonly sweep: SweepPosition;
 	readonly log: ParityLogContents;
+	/** The kinds of answer the capture set holds. */
+	readonly knownBehaviours: ReadonlySet<string>;
 };
 
 export function parityReportOf(input: ReportInput): ParityReport {
@@ -347,7 +455,7 @@ export function parityReportOf(input: ReportInput): ParityReport {
 		signals: {
 			checksum: checksumSignalOf(records),
 			sweep: sweepSignalOf(recordsOf(records, 'sweep'), input.sweep),
-			apiDiff: { verdict: 'not-implemented' },
+			apiDiff: apiDiffSignalOf(recordsOf(records, 'api-diff'), input.knownBehaviours),
 			shadowVotes: { verdict: 'not-implemented' }
 		}
 	});
@@ -374,12 +482,14 @@ export type ParityRun = {
 	readonly cursorPath: string;
 	/** How many accounts the fresh sweep sample compares. */
 	readonly sampleAccounts: number;
+	/** The fresh sample of the API diff: so many requests of each stratum, drawn as the seed fixes. */
+	readonly apiDiff: Pick<APIDiffSetup, 'samplesPerStratum' | 'seed' | 'edgeCaseStaples' | 'knownBehaviours'>;
 	readonly gapMilliseconds: number;
 	readonly wait: (milliseconds: number) => Promise<void>;
 	readonly stopped: AbortSignal;
 };
 
-/** Compares the checksum now and a sample of the sweep from its cursor, records both, and reports on the whole log. */
+/** Checks the checksum now, compares a sample of the sweep from its cursor and a sample of the API, records them, and reports on the whole log. */
 export async function runParity(run: ParityRun): Promise<ParityReport> {
 	const progress = await run.store.progress();
 	const checksums = await compareChecksums({
@@ -394,7 +504,8 @@ export async function runParity(run: ParityRun): Promise<ParityReport> {
 	});
 	await run.log.append([await crossCheckChecksum({ follower: run.follower, store: run.store }), ...checksums.checksums, ...checksums.blockCounts]);
 	await sweepAccounts({ follower: run.follower, representatives: run.representatives, store: run.store, log: run.log, cursorPath: run.cursorPath, accounts: run.sampleAccounts, stopped: run.stopped });
+	await sampleAPI({ ...run.apiDiff, follower: run.follower, representatives: run.representatives, store: run.store, log: run.log, stopped: run.stopped });
 	const cursor = await readSweepCursor(run.cursorPath);
 	const sweep = { knownAccounts: await run.store.accountCount(), cursor, walkedThisLap: await run.store.accountsUpTo(cursor.afterRowID) };
-	return(parityReportOf({ generatedAt: new Date(), progress: await run.store.progress(), sweep, log: await run.log.read() }));
+	return(parityReportOf({ generatedAt: new Date(), progress: await run.store.progress(), sweep, log: await run.log.read(), knownBehaviours: run.apiDiff.knownBehaviours }));
 }

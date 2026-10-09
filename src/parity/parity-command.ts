@@ -7,12 +7,19 @@ import { defaultFollowerDirectory, optionsOf, setting } from './follower-config.
 export type ParityCommand =
 	| { readonly kind: 'checksum'; readonly directory: string; readonly gapMilliseconds: number }
 	| { readonly kind: 'sweep'; readonly directory: string; readonly accounts: number }
-	| { readonly kind: 'report'; readonly directory: string; readonly sampleAccounts: number; readonly gapMilliseconds: number };
+	| { readonly kind: 'api-diff'; readonly directory: string; readonly samplesPerStratum: number; readonly seed: string | undefined }
+	| { readonly kind: 'report'; readonly directory: string; readonly sampleAccounts: number; readonly apiSamples: number; readonly gapMilliseconds: number };
 
 export const DEFAULT_SWEEP_ACCOUNTS = 100;
 
 /** The fresh sweep sample of a report: a few accounts for each representative, a minute or so at their pace. */
 export const DEFAULT_REPORT_SAMPLE_ACCOUNTS = 16;
+
+/** Requests of each stratum an API diff compares: by the rule of three, a divergence rate below 6% at 95% for each. */
+export const DEFAULT_API_SAMPLES = 50;
+
+/** The fresh API diff sample of a report: a couple of requests of each stratum, a minute or so at the representatives' pace. */
+export const DEFAULT_REPORT_API_SAMPLES = 2;
 
 const MAX_GAP_MILLISECONDS = 600_000;
 
@@ -31,8 +38,11 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 		case 'sweep':
 			valued = ['--directory', '--accounts'];
 			break;
+		case 'api-diff':
+			valued = ['--directory', '--samples', '--seed'];
+			break;
 		case 'report':
-			valued = ['--directory', '--sample', '--gap-ms'];
+			valued = ['--directory', '--sample', '--api-samples', '--gap-ms'];
 			break;
 		default:
 			return(undefined);
@@ -56,12 +66,20 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 			}
 			return({ kind: name, directory, accounts });
 		}
-		case 'report': {
-			const sampleAccounts = setting(options, '--sample', Number.MAX_SAFE_INTEGER, DEFAULT_REPORT_SAMPLE_ACCOUNTS);
-			if (sampleAccounts === undefined || gapMilliseconds === undefined) {
+		case 'api-diff': {
+			const samplesPerStratum = setting(options, '--samples', Number.MAX_SAFE_INTEGER, DEFAULT_API_SAMPLES);
+			if (samplesPerStratum === undefined) {
 				return(undefined);
 			}
-			return({ kind: name, directory, sampleAccounts, gapMilliseconds });
+			return({ kind: name, directory, samplesPerStratum, seed: options.get('--seed') });
+		}
+		case 'report': {
+			const sampleAccounts = setting(options, '--sample', Number.MAX_SAFE_INTEGER, DEFAULT_REPORT_SAMPLE_ACCOUNTS);
+			const apiSamples = setting(options, '--api-samples', Number.MAX_SAFE_INTEGER, DEFAULT_REPORT_API_SAMPLES);
+			if (sampleAccounts === undefined || apiSamples === undefined || gapMilliseconds === undefined) {
+				return(undefined);
+			}
+			return({ kind: name, directory, sampleAccounts, apiSamples, gapMilliseconds });
 		}
 		default:
 			return(assertNever(name));

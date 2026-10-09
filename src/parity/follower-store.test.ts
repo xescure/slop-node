@@ -197,4 +197,45 @@ describe('the follower\'s store, read from its database', function() {
 		const store = storeOf(await followerDatabase({}));
 		expect(await store.checksumSnapshot({ kind: 'newest', count: 4 })).toMatchObject({ stored: 0n, folded: 0n, mainBlocks: 0 });
 	});
+
+	test('draws quiet accounts of a kind with what their requests name, and the held blocks and staples', async function() {
+		const database = await followerDatabase({});
+		const pool = database.pool();
+		const [first = '', second = '', third = ''] = ACCOUNTS;
+		const quietTime = new Date('2025-12-01T00:00:00.000Z');
+		const recentTime = new Date('2026-02-01T00:00:00.000Z');
+		const RECENT_STAPLE = 'EF'.repeat(32);
+		const BLOCK = '12'.repeat(32);
+		await pool.query('UPDATE accounts SET key_type = 3 WHERE public_key = ANY($1)', [[first, second]]);
+		await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment) VALUES ($1, $2, $2)', [Buffer.from(RECENT_STAPLE, 'hex'), recentTime]);
+		await pool.query('INSERT INTO history (account_id, blocks_hash, staple_time) SELECT id, $2, $3 FROM accounts WHERE public_key = $1', [second, Buffer.from(RECENT_STAPLE, 'hex'), recentTime]);
+		await pool.query(`INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position)
+			SELECT $1, 'main', id, $1, 1, '\\x0102', $3, 0 FROM accounts WHERE public_key = $2`, [Buffer.from(BLOCK, 'hex'), first, Buffer.from(STAPLE, 'hex')]);
+		await pool.query('INSERT INTO chain (account_id, height, block_hash) SELECT id, 0, $2 FROM accounts WHERE public_key = $1', [first, Buffer.from(BLOCK, 'hex')]);
+		await pool.query('INSERT INTO balances (account_id, token_id, balance) SELECT a.id, t.id, 5 FROM accounts a, accounts t WHERE a.public_key = $1 AND t.public_key = $2', [first, second]);
+		await pool.query(`INSERT INTO acls (principal_id, entity_id, target_id, base_permissions, external_permissions)
+			SELECT a.id, e.id, e.id, 1, 0 FROM accounts a, accounts e WHERE a.public_key = $1 AND e.public_key = $2`, [first, third]);
+		await pool.query('INSERT INTO certificates (account_id, hash, certificate) SELECT id, $2, $3 FROM accounts WHERE public_key = $1', [first, Buffer.from('34'.repeat(32), 'hex'), Buffer.from('00', 'hex')]);
+		await database.endPools();
+		const store = storeOf(database);
+		const quietBefore = new Date('2026-01-01T00:00:00.000Z');
+
+		const tokens = await store.quietAccounts('token', quietBefore, 10, 'seed');
+		expect(tokens).toEqual([{ account: first, tokens: [second], certificates: ['34'.repeat(32)], entities: [third], chain: [{ hash: BLOCK, account: first, bytes: Buffer.from([1, 2]) }], history: [STAPLE] }]);
+		expect((await store.quietAccounts('certificates', quietBefore, 10, 'seed')).map(function(candidate) {
+			return(candidate.account);
+		})).toEqual([first]);
+		expect((await store.quietAccounts('permissions', quietBefore, 10, 'seed')).map(function(candidate) {
+			return(candidate.account);
+		})).toEqual([first]);
+		expect(await store.quietAccounts('storage', quietBefore, 10, 'seed')).toEqual([]);
+
+		expect(await store.heldBlocks('00'.repeat(32), quietBefore, 10)).toEqual([{ hash: BLOCK, account: first, bytes: Buffer.from([1, 2]) }]);
+		expect(await store.heldBlocks('13'.repeat(32), quietBefore, 10)).toEqual([]);
+		expect(await store.heldBlocks('00'.repeat(32), quietTime, 10)).toEqual([]);
+		expect(await store.heldBlocksOfStaples([STAPLE, OTHER_STAPLE], quietBefore)).toHaveLength(1);
+		expect(await store.heldBlocksOfStaples([OTHER_STAPLE], quietBefore)).toEqual([]);
+
+		expect(await store.newestStaples([first, second, third])).toEqual(new Map([[first, quietTime], [second, recentTime]]));
+	});
 });

@@ -1,8 +1,9 @@
-import { inflateSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { CAPTURE_DIRECTORY, jsonFiles, readCapture, requestPathOf } from '../conformance/api/captures.js';
 import { isJSONObject } from '../conformance/api/document.js';
+import { normalizedAll } from '../conformance/api/normalize.js';
+import type { Normalization } from '../conformance/api/normalize.js';
 import { loadMainnetFixture, mainnetReplayRepresentative } from '../conformance/mainnet/fixture.js';
 import { REPLAY_TIMEOUT_MILLISECONDS } from '../conformance/mainnet/head-replay.js';
 import { mainnetNodeConfig, replayOn } from '../conformance/mainnet/replay.js';
@@ -10,7 +11,6 @@ import { driverUnderTestNamed } from '../ledger/storage/suite/drivers.js';
 import { LocalNode } from '../node/local.js';
 import { request } from '../testing/local-node.js';
 import type { HTTPAnswer } from '../testing/local-node.js';
-import { assertNever } from '../util/assert-never.js';
 import { compareText } from '../util/compare-text.js';
 
 const lib = KeetaNet.lib;
@@ -20,36 +20,9 @@ const LOOPBACK = '127.0.0.1';
 /*
  * A node holding the mainnet head answers each captured request whose answer
  * the head determines, and its answer must be the representative's, but for
- * the normalized fields below. Every other capture is excluded with the
- * reason the head cannot determine it.
+ * the fields src/conformance/api/normalize.ts normalizes. Every other capture
+ * is excluded with the reason the head cannot determine it.
  */
-
-/**
- * The fields compared only once normalized, each because two
- * representatives holding the same ledger still answer it differently.
- */
-type Normalization =
-	/*
-	 * An internal failure is named only by an error ID, drawn afresh for each
-	 * failure, so no two answers share one.
-	 */
-	| 'error-id'
-	/*
-	 * A representative gives a history entry the time of its own vote in the
-	 * staple [Keeta TS] index.js:81061-81087. The replay's representative voted
-	 * in none of mainnet's staples, so its entries carry the votes' average;
-	 * "each side times a history entry by its own vote" checks both times.
-	 */
-	| 'staple-time'
-	/*
-	 * A staple's "$binary" is its DER compressed with zlib
-	 * [Keeta TS] index.js:81016-81027. Compression is not canonical: this node
-	 * rebuilds a staple from its blocks and votes and compresses it with zlib's
-	 * defaults, while the representative serves the same DER compressed
-	 * differently. The DER, which the client inflates and decodes, is compared
-	 * byte for byte instead.
-	 */
-	| 'staple-encoding';
 
 /** Why a capture is not something the head determines. */
 type Exclusion =
@@ -182,63 +155,6 @@ const QUIET_ACCOUNTS: readonly { readonly account: string; readonly evidence: st
 	{ account: MULTISIG, evidence: 'ledger-account-multisig.json' },
 	{ account: NETWORK_ADDRESS, evidence: 'ledger-account-network.json' }
 ];
-
-/** The base64 of the zlib header a staple's compressed bytes start with, 78 9C. */
-const ZLIB_BASE64_PREFIX = 'eJ';
-
-const ERROR_ID = /^Internal error occurred \(error ID: [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\)$/;
-
-function normalized(body: unknown, normalization: Normalization): unknown {
-	switch (normalization) {
-		case 'error-id': {
-			if (isJSONObject(body) && typeof body['message'] === 'string' && ERROR_ID.test(body['message'])) {
-				return({ ...body, message: 'Internal error occurred (error ID: <error ID>)' });
-			}
-			return(body);
-		}
-		case 'staple-time': {
-			if (!isJSONObject(body) || !Array.isArray(body['history'])) {
-				return(body);
-			}
-			return({
-				...body,
-				history: body['history'].map(function(entry: unknown): unknown {
-					if (!isJSONObject(entry)) {
-						return(entry);
-					}
-					return({ ...entry, $timestamp: '<the representative\'s own vote>' });
-				})
-			});
-		}
-		case 'staple-encoding':
-			return(inflatedStaples(body));
-		default:
-			return(assertNever(normalization));
-	}
-}
-
-/** The value with each zlib-compressed "$binary" in it, at any depth, replaced by the bytes it inflates to. */
-function inflatedStaples(value: unknown): unknown {
-	if (Array.isArray(value)) {
-		return(value.map(inflatedStaples));
-	}
-	if (!isJSONObject(value)) {
-		return(value);
-	}
-	const inflated: Record<string, unknown> = {};
-	for (const [name, entry] of Object.entries(value)) {
-		inflated[name] = inflatedStaples(entry);
-	}
-	const binary = value['$binary'];
-	if (typeof binary === 'string' && binary.startsWith(ZLIB_BASE64_PREFIX)) {
-		inflated['$binary'] = inflateSync(Buffer.from(binary, 'base64')).toString('base64');
-	}
-	return(inflated);
-}
-
-function normalizedAll(body: unknown, normalize: readonly Normalization[]): unknown {
-	return(normalize.reduce(normalized, body));
-}
 
 function field(body: unknown, name: string): unknown {
 	if (!isJSONObject(body)) {

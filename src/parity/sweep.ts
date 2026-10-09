@@ -99,10 +99,10 @@ export function firstDifference(follower: unknown, representative: unknown, path
 }
 
 /** An account's newest staple on a representative: the hash of its blocks, and the latest moment one of its votes was valid from. */
-type NewestStaple = { readonly staple: string; readonly latestVote: Date };
+export type NewestStaple = { readonly staple: string; readonly latestVote: Date };
 
 /** The newest staple of a page of history, nothing for an empty page, or an error for a page that is not one. */
-function newestStapleOf(page: unknown): NewestStaple | undefined {
+export function newestStapleOf(page: unknown): NewestStaple | undefined {
 	if (!isFields(page) || !Array.isArray(page['history'])) {
 		throw(new Error(`not a page of history: ${JSON.stringify(page).slice(0, 200)}`));
 	}
