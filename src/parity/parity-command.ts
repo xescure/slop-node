@@ -20,10 +20,11 @@ export const DEFAULT_REPORT_SAMPLE_ACCOUNTS = 16;
 export const DEFAULT_API_SAMPLES = 50;
 
 /**
- * Where the offline ledger of shadow votes keeps its state. Replaying the
- * follower's history into the memory driver outgrew a 3 GiB heap at 16,000
- * of 53,600 staples, so by default it is kept in a cluster of its own,
- * started for the run and removed after it.
+ * Where the offline ledger of shadow votes keeps its state. The main
+ * network's history names over a million accounts, most of them opened in
+ * October 2025, and replaying it into the memory driver outgrew a 2 GiB heap
+ * at 12,000 of 53,600 staples, so by default it is kept in a cluster of its
+ * own, started for the run and removed after it.
  */
 export type ShadowStorage = 'postgres' | 'memory';
 

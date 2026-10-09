@@ -159,6 +159,13 @@ export async function shadowVoteLive(setup: ShadowLiveSetup): Promise<ShadowLive
 				return(drainDeferral(ledger));
 			});
 			await adds.retry();
+			/*
+			 * The node's log keeps every entry, with the values it names, until
+			 * the node syncs [Keeta TS] index.js:71109-71122, 71377-71383, and
+			 * nothing else syncs an offline node, so its log would otherwise
+			 * hold every warning of the whole replay.
+			 */
+			await node.sync();
 			after = { stapleTime: last.stapleTime, blocksHash: keyOf(last.staple) };
 			setup.progress?.({ replayed, total, waiting: adds.waiting().length, reached: last.stapleTime.toISOString() });
 		}
