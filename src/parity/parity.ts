@@ -200,8 +200,8 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 					windowStaples: command.windowStaples,
 					storage: offline.storage,
 					progress(progress) {
-						const heapMebibytes = Math.round(process.memoryUsage().heapUsed / 1_048_576);
-						process.stderr.write(`replayed ${String(progress.replayed)} of ${String(progress.total)} staples, to ${progress.reached}; ${String(progress.waiting)} waiting for voting weight; heap ${String(heapMebibytes)} MiB\n`);
+						const heapMiB = Math.round(process.memoryUsage().heapUsed / 1_048_576);
+						process.stderr.write(`replayed ${String(progress.replayed)} of ${String(progress.total)} staples, to ${progress.reached}; ${String(progress.waiting)} waiting for voting weight; heap ${String(heapMiB)} MiB\n`);
 					}
 				});
 			} finally {
