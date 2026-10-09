@@ -412,6 +412,28 @@ describe('a bootstrap client', function() {
 		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
 	});
 
+	test('runs the ledger\'s garbage collection after each update, which applies staples deferred past the replay window, in a few short slices, and none once stopped', async function() {
+		const peer = await representative();
+		await addAll(peer.node, await sendsFrom(peer.network, 0, 2));
+		const late = await joiner({ bootstrapFrom: [peer.apiURL] });
+		const client = clientOf(late.node);
+		const collect = vi.spyOn(late.node.ledger, 'gc');
+
+		collect.mockResolvedValue(false);
+		await client.update();
+		expect(collect.mock.calls).toEqual([[2000]]);
+
+		collect.mockClear();
+		collect.mockResolvedValue(true);
+		await client.update();
+		expect(collect.mock.calls.length).toBe(5);
+
+		collect.mockClear();
+		await client.stop();
+		await client.update();
+		expect(collect).not.toHaveBeenCalled();
+	});
+
 	test('keeps trying the peers that fail, and catches up on the others meanwhile', async function() {
 		const peer = await representative();
 		const failing = await startFailingPeer();

@@ -55,6 +55,16 @@ const MINUTE_MILLISECONDS = 60_000;
  */
 const HELD_READ_MILLISECONDS = 2000;
 
+/**
+ * How long one slice of the ledger's garbage collection runs at most, in one
+ * transaction of its own [Keeta TS] index.js:67852-67861, 70517-70521, and how
+ * many slices follow each update at most: it holds the ledger to itself while
+ * it runs, so it is cut short rather than hold up the next update's adds.
+ */
+const GC_SLICE_MILLISECONDS = 2000;
+
+const GC_SLICES = 5;
+
 type UpdateResult = { complete: boolean };
 
 /** What an update's passes over one peer did: its requests, and the staples it was sent, by whether the node added them, held them already or queued them. */
@@ -350,6 +360,7 @@ export class BootstrapClient {
 				return(this.#catchUpLogged(endpoint, limit, fetcher, from));
 			});
 			this.#lastResults = [...results.values()];
+			await this.#collect();
 			const complete = sources.every(function(endpoint): boolean {
 				return(results.get(endpoint) === 'completed');
 			}) && !this.#stopping.signal.aborted;
@@ -357,6 +368,30 @@ export class BootstrapClient {
 			return({ complete });
 		} finally {
 			fetcher.close();
+		}
+	}
+
+	/**
+	 * Runs the ledger's garbage collection, which, besides what it collects,
+	 * applies each deferred staple whose awaited blocks are all held
+	 * (schema/CONTRACT.md, section 2.6). The ledger applies a deferred staple
+	 * when the block it awaits arrives, but only for as long as the replay
+	 * window allows, so of a long chain of staples a peer sent ahead of the
+	 * block they extend, as a pass over a range read ahead of the earliest
+	 * sends, only the collection applies the rest. Nothing else in the node runs it.
+	 */
+	async #collect(): Promise<void> {
+		for (let slice = 0; slice < GC_SLICES && !this.#stopped(); slice++) {
+			let more: boolean;
+			try {
+				more = await this.#node.ledger.gc(GC_SLICE_MILLISECONDS);
+			} catch (error: unknown) {
+				this.#node.log.warn(LOG_SOURCE, 'The ledger\'s garbage collection after a bootstrap update failed; it runs again after the next:', error);
+				return;
+			}
+			if (!more) {
+				return;
+			}
 		}
 	}
 
