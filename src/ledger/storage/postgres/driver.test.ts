@@ -1,18 +1,19 @@
 import { afterEach, describe, expect, inject, onTestFinished, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
+import type { GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type pg from 'pg';
-import { sendBlock } from '../../../testing/blocks.js';
+import { confirmedStaple, sendBlock } from '../../../testing/blocks.js';
 import { createTestNetwork, freezeClock } from '../../../testing/network.js';
 import type { TestNetwork } from '../../../testing/network.js';
 import { createDatabase } from '../../../testing/postgres.js';
 import type { TestDatabase } from '../../../testing/postgres.js';
 import { MemoryLedgerStorage } from '../memory/driver.js';
-import { DEFAULT_WEIGHTS, GENESIS_MOMENT, headOf, requireAt } from '../suite/support.js';
+import { blocksHashesOf, DEFAULT_WEIGHTS, GENESIS_MOMENT, headOf, requireAt } from '../suite/support.js';
 import type { TransactionOptions } from '../base.js';
 import { catchUpVotes, catchUpVotesAfter } from './confirmed-statements.js';
 import { PostgresLedgerStorage } from './driver.js';
-import type { PostgresTransaction } from './driver.js';
+import type { HistoryReindex, PostgresTransaction } from './driver.js';
 import type { PostgresPoolSource } from './pool.js';
 
 const lib = KeetaNet.lib;
@@ -540,5 +541,41 @@ describe('the Postgres driver', function() {
 		});
 
 		await expect(read).rejects.toThrow('integrity');
+	});
+
+	test('a history reindex lists each staple under exactly the accounts D18 names, and a second finds nothing to change', async function() {
+		const database = await ledgerDatabase();
+		freezeClock(GENESIS_MOMENT);
+		const network = await createTestNetwork({ representativeWeights: DEFAULT_WEIGHTS });
+		const storage = ownedStorageOn(database);
+		const ledger = network.createLedger(storage, requireAt(network.representatives, 0));
+		await ledger.add(network.genesis);
+		const sender = requireAt(network.users, 0);
+		const recipient = requireAt(network.users, 1);
+		const send = await sendBlock({ from: sender, previous: headOf(network.genesis, sender), to: recipient, amount: 1n, token: network.baseToken, network: network.network });
+		const [sent] = await ledger.add(await confirmedStaple([send], network.representatives));
+		if (sent === undefined) {
+			throw(new Error('the send was not applied'));
+		}
+		const historyOf = async function(account: GenericAccount): Promise<string[]> {
+			return(blocksHashesOf(await ledger.getHistory(account, null)));
+		};
+		const listedBefore = { token: await historyOf(network.baseToken), recipient: await historyOf(recipient) };
+		// As an earlier rule wrote it: the token the staple only moves lists it, and a row the rule lists is missing.
+		const pool = database.pool();
+		await pool.query('INSERT INTO history (account_id, blocks_hash, staple_time) SELECT accounts.id, staples.blocks_hash, staples.staple_time FROM accounts, staples WHERE accounts.public_key = $1 AND staples.blocks_hash = $2', [network.baseToken.publicKeyString.get(), Buffer.from(sent.blocksHash.toString(), 'hex')]);
+		await pool.query('DELETE FROM history USING accounts WHERE history.account_id = accounts.id AND accounts.public_key = $1 AND history.blocks_hash = $2', [recipient.publicKeyString.get(), Buffer.from(sent.blocksHash.toString(), 'hex')]);
+		expect(await historyOf(network.baseToken)).not.toEqual(listedBefore.token);
+		const context = { initialTrustedAccount: network.trustedSigner, baseToken: network.baseToken, networkAddress: network.networkAddress };
+
+		const progress: HistoryReindex[] = [];
+		expect(await storage.reindexHistory(context, function(done) {
+			progress.push(done);
+		})).toEqual({ staples: 2, removed: 1, added: 1 });
+
+		expect(progress).toEqual([{ staples: 2, removed: 1, added: 1 }]);
+		expect(await historyOf(network.baseToken)).toEqual(listedBefore.token);
+		expect(await historyOf(recipient)).toEqual(listedBefore.recipient);
+		expect(await storage.reindexHistory(context)).toEqual({ staples: 2, removed: 0, added: 0 });
 	});
 });

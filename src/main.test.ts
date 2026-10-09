@@ -352,6 +352,24 @@ describe('slop-node and failures nothing handles', function() {
 	});
 });
 
+describe('slop-node reindex-history', function() {
+	test('lists the ledger in Postgres anew, a ledger this build wrote unchanged', async function() {
+		const environment: Environment = { ...NODE, KEETANET_LOCAL_NODE_POSTGRES_URL: await createTestDatabaseURL() };
+		const genesis = startCLI(['genesis'], { ...environment, ...GENESIS });
+		expect(await genesis.exited).toEqual({ code: 0, signal: null });
+
+		const cli = startCLI(['reindex-history'], environment);
+		expect(await cli.exited).toEqual({ code: 0, signal: null });
+		expect(cli.stdout()).toBe('reindexed 1 staples: 0 history entries removed, 0 added\ndone: 1 staples, 0 history entries removed, 0 added\n');
+	});
+
+	test('is refused in memory', async function() {
+		const cli = startCLI(['reindex-history'], NODE);
+		expect(await cli.exited).toEqual({ code: 1, signal: null });
+		expect(cli.stderr()).toBe('slop-node: reindex-history needs KEETANET_LOCAL_NODE_POSTGRES_URL: a node in memory writes its history anew each time it starts\n');
+	});
+});
+
 describe('slop-node genesis', function() {
 	test('creates the network in Postgres, where the node then serves it', async function() {
 		const environment: Environment = { ...NODE, KEETANET_LOCAL_NODE_POSTGRES_URL: await createTestDatabaseURL() };

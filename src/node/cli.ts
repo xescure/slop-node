@@ -29,7 +29,7 @@ export type Output = {
 	readonly error: (text: string) => void;
 };
 
-const COMMANDS = ['run', 'genesis', 'clear-peers', 'help'] as const;
+const COMMANDS = ['run', 'genesis', 'clear-peers', 'reindex-history', 'help'] as const;
 
 type Command = typeof COMMANDS[number];
 
@@ -37,6 +37,7 @@ const COMMAND_HELP: Readonly<Record<Command, string>> = {
 	run: 'serve the API as a representative until SIGINT or SIGTERM',
 	genesis: 'add the first staple of a new network to the ledger in Postgres',
 	'clear-peers': 'make the node in Postgres forget every peer it remembers; run it while the node is stopped',
+	'reindex-history': 'list each staple of the ledger in Postgres in the history of the accounts it involves, as this build does; run it while the node is stopped',
 	help: 'print this text'
 };
 
@@ -291,6 +292,33 @@ async function clearPeers(config: EnvironmentConfig, output: Output): Promise<vo
 	}
 }
 
+/**
+ * Rewrites the ledger's history under the build's rule (schema/CONTRACT.md,
+ * D18), with the network's own base addresses and trusted account, which the
+ * effects of genesis depend on.
+ */
+async function reindexHistory(config: EnvironmentConfig, output: Output): Promise<void> {
+	const storage = openStorage(config.storage);
+	try {
+		switch (storage.kind) {
+			case 'memory':
+				throw(new ConfigError({ kind: 'history-in-memory' }));
+			case 'postgres': {
+				const { baseToken, networkAddress } = lib.Account.generateBaseAddresses(config.network.network);
+				const done = await storage.ledger.reindexHistory({ initialTrustedAccount: config.initialTrustedAccount, baseToken, networkAddress }, function(progress) {
+					output.out(`reindexed ${String(progress.staples)} staples: ${String(progress.removed)} history entries removed, ${String(progress.added)} added\n`);
+				});
+				output.out(`done: ${String(done.staples)} staples, ${String(done.removed)} history entries removed, ${String(done.added)} added\n`);
+				return;
+			}
+			default:
+				assertNever(storage);
+		}
+	} finally {
+		await closeStorage(storage);
+	}
+}
+
 /** The log levels that ask for the details of a failure. */
 const DETAILED_LOG_LEVELS: ReadonlySet<string> = new Set(['DEBUG', 'ALL']);
 
@@ -335,6 +363,9 @@ async function runCommand(command: Command, environment: Environment, output: Ou
 			return;
 		case 'clear-peers':
 			await clearPeers(getConfigFromEnv(environment), output);
+			return;
+		case 'reindex-history':
+			await reindexHistory(getConfigFromEnv(environment), output);
 			return;
 		default:
 			assertNever(command);

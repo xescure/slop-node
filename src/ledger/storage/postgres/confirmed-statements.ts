@@ -345,3 +345,39 @@ export const markInvolved: Statement<[AccountID[], Buffer]> = statement('mark_in
 export const appendHistory: Statement<[AccountID[], Buffer, Date]> = statement('append_history', `
 	INSERT INTO history (account_id, blocks_hash, staple_time)
 	SELECT account_id, $2, $3 FROM unnest($1::bigint[]) AS involved (account_id)`);
+
+export type ReindexedStaple = { readonly sequence: IntegerText; readonly blocks_hash: Buffer; readonly blocks: Buffer[] };
+
+/** The main staples after a sequence number, each with its blocks in staple order. */
+export const staplesToReindex: Statement<[string, number], ReindexedStaple> = statement('staples_to_reindex', `
+	WITH batch AS (
+		SELECT sequence, blocks_hash FROM staples WHERE sequence > $1 ORDER BY sequence LIMIT $2
+	)
+	SELECT batch.sequence, batch.blocks_hash, array_agg(blocks.bytes ORDER BY blocks.staple_position) AS blocks
+	FROM batch JOIN blocks ON blocks.staple = batch.blocks_hash
+	GROUP BY batch.sequence, batch.blocks_hash
+	ORDER BY batch.sequence`);
+
+/** Removes the history rows of the staples and accounts given in pairs, found by the history's own key. */
+export const removeHistoryRows: Statement<[Buffer[], string[]], { removed: IntegerText }> = statement('remove_history_rows', `
+	WITH removed AS (
+		DELETE FROM history
+		USING unnest($1::bytea[], $2::text[]) AS gone (blocks_hash, public_key)
+		JOIN accounts ON accounts.public_key = gone.public_key
+		JOIN staples ON staples.blocks_hash = gone.blocks_hash
+		WHERE history.account_id = accounts.id AND history.staple_time = staples.staple_time AND history.blocks_hash = gone.blocks_hash
+		RETURNING 1
+	)
+	SELECT count(*) AS removed FROM removed`);
+
+/** Adds the history rows of the staples and accounts given in pairs that are missing, under each staple's time. */
+export const addHistoryRows: Statement<[Buffer[], AccountID[]], { added: IntegerText }> = statement('add_history_rows', `
+	WITH added AS (
+		INSERT INTO history (account_id, blocks_hash, staple_time)
+		SELECT wanted.account_id, wanted.blocks_hash, staples.staple_time
+		FROM unnest($1::bytea[], $2::bigint[]) AS wanted (blocks_hash, account_id)
+		JOIN staples ON staples.blocks_hash = wanted.blocks_hash
+		ON CONFLICT DO NOTHING
+		RETURNING 1
+	)
+	SELECT count(*) AS added FROM added`);

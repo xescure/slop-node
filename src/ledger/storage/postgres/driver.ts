@@ -10,6 +10,7 @@ import { LedgerInternals } from '../../../upstream/internals.js';
 import { assertNever } from '../../../util/assert-never.js';
 import { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
 import type { CollectedDeferredStaples, LedgerCountsSnapshot, TransactionOptions } from '../base.js';
+import { historyAccountsOf } from '../confirmed.js';
 import type { AccountInfoUpdate, ConfirmedStapleChange } from '../confirmed.js';
 import { createIdempotentKeyError, createLedgerError, HistoryStartNotListed } from '../errors.js';
 import { voteExpirySlopMilliseconds } from '../expiry.js';
@@ -26,6 +27,7 @@ import {
 	aclsOfPrincipal,
 	addBalances,
 	addCertificate,
+	addHistoryRows,
 	addSupplies,
 	addWeights,
 	allHistory,
@@ -63,13 +65,15 @@ import {
 	ownersOf,
 	raiseHeads,
 	removeCertificate,
+	removeHistoryRows,
 	representativeOf,
 	setACL,
 	setDelegations,
+	staplesToReindex,
 	totalWeight,
 	weightOf
 } from './confirmed-statements.js';
-import type { ACLColumns, AccountInfoColumns, CatchUpVoteColumns, CertificateColumns } from './confirmed-statements.js';
+import type { ACLColumns, AccountInfoColumns, CatchUpVoteColumns, CertificateColumns, ReindexedStaple } from './confirmed-statements.js';
 import { checkIn, checkOut } from './connection.js';
 import { mapDatabaseError } from './errors.js';
 import { MigratedPostgresPool } from './pool.js';
@@ -308,6 +312,54 @@ function unexpiredSince(moment: Date): Date {
 
 function decodeBlock(bytes: Buffer): Block {
 	return(new lib.Block(bytes));
+}
+
+/** The ledger values an effect computation reads: who signs the opening blocks of genesis without permissions, and what genesis creates. */
+export type EffectContext = Parameters<typeof LedgerInternals.computeEffectOfBlocks>[1] & object;
+
+/** What a history reindex changed. */
+export type HistoryReindex = {
+	readonly staples: number;
+	readonly removed: number;
+	readonly added: number;
+};
+
+/** The staples a reindex reads and rewrites in one transaction; one of the main network's largest touches about a thousand accounts. */
+const REINDEX_BATCH_STAPLES = 200;
+
+/** The history rows a batch of staples should have, and those of accounts the staples touch but do not list. */
+function historyChangesOf(rows: readonly ReindexedStaple[], context: EffectContext): { listed: Map<Buffer, GenericAccount[]>; unlisted: Map<Buffer, string[]> } {
+	const listed = new Map<Buffer, GenericAccount[]>();
+	const unlisted = new Map<Buffer, string[]>();
+	for (const row of rows) {
+		const blocks = row.blocks.map(decodeBlock);
+		const effects = LedgerInternals.computeEffectOfBlocks(blocks, context);
+		const keys = historyAccountsOf(blocks, effects);
+		const listedAccounts: GenericAccount[] = [];
+		const unlistedKeys: string[] = [];
+		for (const account of effects.touched) {
+			if (keys.has(toAccountKey(account))) {
+				listedAccounts.push(account);
+			} else {
+				unlistedKeys.push(account.publicKeyString.get());
+			}
+		}
+		listed.set(row.blocks_hash, listedAccounts);
+		unlisted.set(row.blocks_hash, unlistedKeys);
+	}
+	return({ listed, unlisted });
+}
+
+function pairsOf<Value>(byStaple: ReadonlyMap<Buffer, readonly Value[]>): [Buffer[], Value[]] {
+	const staples: Buffer[] = [];
+	const values: Value[] = [];
+	for (const [staple, staplesValues] of byStaple) {
+		for (const value of staplesValues) {
+			staples.push(staple);
+			values.push(value);
+		}
+	}
+	return([staples, values]);
 }
 
 /*
@@ -679,6 +731,66 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 */
 	destroy(): Promise<void> {
 		return(this.#pool.destroy());
+	}
+
+	/**
+	 * Lists every main staple in the history of exactly the accounts D18
+	 * lists it under: removes the rows of the accounts a staple touches but
+	 * is not listed under, and adds the missing rows of those it is. A
+	 * database written under an earlier rule needs this once. It reads the
+	 * staples in batches, each rewritten in a transaction of its own, so
+	 * it may be stopped and run again; it is meant to run while no node
+	 * writes to the database. The progress hears the totals after each
+	 * batch.
+	 */
+	async reindexHistory(context: EffectContext, progress: (done: HistoryReindex) => void = ignoreOutcome): Promise<HistoryReindex> {
+		let done: HistoryReindex = { staples: 0, removed: 0, added: 0 };
+		let after = 0n;
+		for (;;) {
+			const transaction = await this.beginTransaction({ identifier: `reindex-history-after-${String(after)}`, readOnly: false });
+			let batch: { readonly last: bigint; readonly done: HistoryReindex } | undefined;
+			try {
+				batch = await this.#reindexBatch(transaction, context, after, done);
+			} catch (error: unknown) {
+				await transaction.abort();
+				throw(error);
+			}
+			await transaction.commit();
+			if (batch === undefined) {
+				return(done);
+			}
+			after = batch.last;
+			done = batch.done;
+			progress(done);
+		}
+	}
+
+	async #reindexBatch(transaction: PostgresTransaction, context: EffectContext, after: bigint, before: HistoryReindex): Promise<{ readonly last: bigint; readonly done: HistoryReindex } | undefined> {
+		const rows = await transaction.run(staplesToReindex, [toNumeric(after), REINDEX_BATCH_STAPLES]);
+		const last = rows.at(-1);
+		if (last === undefined) {
+			return(undefined);
+		}
+		const { listed, unlisted } = historyChangesOf(rows, context);
+		const removed = onlyRow(await transaction.run(removeHistoryRows, pairsOf(unlisted)));
+		const [listedStaples, listedAccounts] = pairsOf(listed);
+		const ids = await this.#intern(transaction, new Map(listedAccounts.map(function(account): [string, AccountKeyAlgorithm] {
+			return([account.publicKeyString.get(), account.keyType]);
+		})));
+		const added = onlyRow(await transaction.run(addHistoryRows, [listedStaples, listedAccounts.map(function(account): AccountID {
+			return(idOf(ids, account));
+		})]));
+		if (removed === undefined || added === undefined) {
+			throw(new Error('internal error: a history count returned no row'));
+		}
+		return({
+			last: fromInteger(last.sequence),
+			done: {
+				staples: before.staples + rows.length,
+				removed: before.removed + Number(fromInteger(removed.removed)),
+				added: before.added + Number(fromInteger(added.added))
+			}
+		});
 	}
 
 	async beginTransaction(options: TransactionOptions): Promise<PostgresTransaction> {

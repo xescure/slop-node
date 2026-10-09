@@ -140,6 +140,7 @@ export type ConfigProblem =
 	| { readonly kind: 'peers-on-keeta-network'; readonly network: Networks; readonly ledgerWriteMode: LedgerWriteMode; readonly variable: PeerVariable }
 	| { readonly kind: 'remembered-peers'; readonly network: Networks; readonly ledgerWriteMode: LedgerWriteMode; readonly arenas: readonly PeerArena[] }
 	| { readonly kind: 'peers-in-memory' }
+	| { readonly kind: 'history-in-memory' }
 	| { readonly kind: 'automatic-peers' }
 	| { readonly kind: 'peer-signature-invalid'; readonly key: string }
 	| { readonly kind: 'duplicate-peer'; readonly key: string }
@@ -178,6 +179,8 @@ function describeProblem(problem: ConfigProblem): string {
 			return(`the ${problem.network} network is Keeta's, and the store of KEETANET_LOCAL_NODE_POSTGRES_URL remembers peers (in ${problem.arenas.join(', ')}), which the node would reach even without KEETANET_LOCAL_NODE_MANUAL_PEERS: run "slop-node clear-peers" with the same environment to forget them, or set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to ${FOLLOWING_WRITE_MODES.join(' or ')} (it is ${problem.ledgerWriteMode})`);
 		case 'peers-in-memory':
 			return('clear-peers needs KEETANET_LOCAL_NODE_POSTGRES_URL: a node in memory forgets its peers when it stops');
+		case 'history-in-memory':
+			return('reindex-history needs KEETANET_LOCAL_NODE_POSTGRES_URL: a node in memory writes its history anew each time it starts');
 		case 'automatic-peers':
 			return(`KEETANET_LOCAL_NODE_MANUAL_PEERS=auto is not supported: this node finds no peers by itself, so list each as ${MANUAL_PEER_FORM}`);
 		case 'peer-signature-invalid':

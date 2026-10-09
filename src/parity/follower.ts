@@ -7,7 +7,9 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
+import * as KeetaNet from '@keetanetwork/keetanet-client';
 import pg from 'pg';
+import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
 import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RETRY_ARENA } from '../node/bootstrap-cursors.js';
 import { assertNever } from '../util/assert-never.js';
 import { checkFollowerEnvironment, FOLLOWER_DATABASE, FOLLOWER_LISTEN_IP, FOLLOWER_POSTGRES_USER, FOLLOWER_SETTINGS_FILE, followerDatabaseURL, followerDirectory, followerEnvironment, parseFollowerCommand, POSTGRES_PORT, POSTGRES_SOCKET_DIRECTORY, readFollowerSettings, readOrCreateSeed } from './follower-config.js';
@@ -90,6 +92,9 @@ const USAGE = [
 	'  reset-cursors',
 	'          with the node down, forget where it reached on each representative and the staples it',
 	'          queued for retry, keeping its ledger, so that the next "up" reads the history again',
+	'  reindex-history',
+	'          with the node down, list each staple it holds in the history of the accounts this build',
+	'          lists it under',
 	'',
 	'The directory holds the seed, the database, the logs and the settings (~/.local/share/slop-node-follower).',
 	'"up" needs the PostgreSQL server binaries, which "devenv shell" provides.',
@@ -448,22 +453,36 @@ async function down(directory: string): Promise<ExitCode> {
 const BOOTSTRAP_ARENAS: readonly string[] = [BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RETRY_ARENA];
 
 /**
- * Clears the bootstrap client's state while the node is down, starting the
- * follower's Postgres for it when it is not running and stopping it again.
- * A queued staple is read again with the history, and the ledger keeps every
- * staple it holds, which the passes then find held.
+ * Runs work on the follower's database while its node is down, starting the
+ * follower's Postgres for it when it is not running and stopping it again;
+ * undefined when the node is up.
  */
-async function resetCursors(directory: string): Promise<ExitCode> {
+async function withNodeDown<Result>(directory: string, work: () => Promise<Result>): Promise<Result | undefined> {
 	const node = await runningNode(directory);
 	if (node !== undefined) {
 		process.stderr.write(`the follower's node is up in ${directory} (process ${String(node)}); stop it first with "utils/follower down"\n`);
-		return(1);
+		return(undefined);
 	}
 	const wasRunning = await runningPostmaster(directory) !== undefined;
 	await startPostgres(directory);
-	let cleared: { readonly arena: string; readonly count: string }[];
 	try {
-		cleared = await withDatabase(FOLLOWER_DATABASE, directory, async function(client) {
+		return(await work());
+	} finally {
+		const postmaster = await runningPostmaster(directory);
+		if (!wasRunning && postmaster !== undefined) {
+			await stopProcess(postmaster, 'SIGINT', POSTGRES_STOP_MILLISECONDS);
+		}
+	}
+}
+
+/**
+ * Clears the bootstrap client's state while the node is down. A queued
+ * staple is read again with the history, and the ledger keeps every staple
+ * it holds, which the passes then find held.
+ */
+async function resetCursors(directory: string): Promise<ExitCode> {
+	const cleared = await withNodeDown(directory, function() {
+		return(withDatabase(FOLLOWER_DATABASE, directory, async function(client) {
 			await client.query('BEGIN');
 			try {
 				const counts = await client.query<{ arena: string; count: string }>('SELECT arena, count(*) AS count FROM kv_entries WHERE arena = ANY($1) GROUP BY arena ORDER BY arena', [BOOTSTRAP_ARENAS]);
@@ -474,12 +493,10 @@ async function resetCursors(directory: string): Promise<ExitCode> {
 				await client.query('ROLLBACK');
 				throw(error);
 			}
-		});
-	} finally {
-		const postmaster = await runningPostmaster(directory);
-		if (!wasRunning && postmaster !== undefined) {
-			await stopProcess(postmaster, 'SIGINT', POSTGRES_STOP_MILLISECONDS);
-		}
+		}));
+	});
+	if (cleared === undefined) {
+		return(1);
 	}
 	let summary = 'there was none';
 	if (cleared.length > 0) {
@@ -488,6 +505,39 @@ async function resetCursors(directory: string): Promise<ExitCode> {
 		}).join(', ');
 	}
 	process.stdout.write(`bootstrap state cleared in ${directory} (${summary}); the ledger is kept\n`);
+	return(0);
+}
+
+/** How many staples a reindex reads between two progress lines. */
+const REINDEX_PROGRESS_STAPLES = 10_000;
+
+/**
+ * Lists each staple the follower holds in the history of the accounts this
+ * build lists it under (schema/CONTRACT.md, D18), as the node's
+ * reindex-history command does, with the main network's base addresses and
+ * trusted account.
+ */
+async function reindexHistory(directory: string): Promise<ExitCode> {
+	const done = await withNodeDown(directory, async function() {
+		const storage = new PostgresLedgerStorage({ kind: 'connection-string', connectionString: followerDatabaseURL(directory) });
+		try {
+			const { baseToken, networkAddress } = KeetaNet.lib.Account.generateBaseAddresses(KeetaNet.Client.Config.NetworkIDs.main);
+			const { initialTrustedAccount } = KeetaNet.Client.Config.getDefaultConfig('main');
+			let reported = 0;
+			return(await storage.reindexHistory({ initialTrustedAccount, baseToken, networkAddress }, function(progress) {
+				if (progress.staples - reported >= REINDEX_PROGRESS_STAPLES) {
+					reported = progress.staples;
+					process.stdout.write(`reindexed ${String(progress.staples)} staples: ${String(progress.removed)} history entries removed, ${String(progress.added)} added\n`);
+				}
+			}));
+		} finally {
+			await storage.destroy();
+		}
+	});
+	if (done === undefined) {
+		return(1);
+	}
+	process.stdout.write(`history reindexed in ${directory}: ${String(done.staples)} staples, ${String(done.removed)} history entries removed, ${String(done.added)} added\n`);
 	return(0);
 }
 
@@ -722,6 +772,8 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
 				return(await logs(followerDirectory(command.directory, tmpdir()), command.log, command.lines, command.follow));
 			case 'reset-cursors':
 				return(await resetCursors(followerDirectory(command.directory, tmpdir())));
+			case 'reindex-history':
+				return(await reindexHistory(followerDirectory(command.directory, tmpdir())));
 			default:
 				return(assertNever(command));
 		}

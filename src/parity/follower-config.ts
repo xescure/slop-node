@@ -96,6 +96,8 @@ export type FollowerCommand =
 	| { readonly kind: 'status'; readonly directory: string }
 	/** Forget where the node reached on each representative and its retry queue, keeping its ledger, so that it reads the history again from the beginning. */
 	| { readonly kind: 'reset-cursors'; readonly directory: string }
+	/** List each staple the ledger holds in the history of the accounts this build lists it under, with the node down. */
+	| { readonly kind: 'reindex-history'; readonly directory: string }
 	| { readonly kind: 'logs'; readonly directory: string; readonly log: FollowerLog; readonly lines: number; readonly follow: boolean };
 
 export function defaultFollowerDirectory(home: string): string {
@@ -317,6 +319,7 @@ export function parseFollowerCommand(argv: readonly string[], home: string): Fol
 		case 'down':
 		case 'status':
 		case 'reset-cursors':
+		case 'reindex-history':
 			options = optionsOf(rest, ['--directory'], []);
 			break;
 		default:
@@ -334,6 +337,7 @@ export function parseFollowerCommand(argv: readonly string[], home: string): Fol
 		case 'down':
 		case 'status':
 		case 'reset-cursors':
+		case 'reindex-history':
 			return({ kind: name, directory });
 		default:
 			return(assertNever(name));
