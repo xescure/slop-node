@@ -12,7 +12,7 @@ import type { TestDatabase } from '../../../testing/postgres.js';
 import { MemoryLedgerStorage } from '../memory/driver.js';
 import { blocksHashesOf, checksumOf, DEFAULT_WEIGHTS, GENESIS_MOMENT, headOf, requireAt } from '../suite/support.js';
 import type { TransactionOptions } from '../base.js';
-import { catchUpVotes, catchUpVotesAfter } from './confirmed-statements.js';
+import { catchUpVotes, catchUpVotesAfter, foldLedgerChecksum } from './confirmed-statements.js';
 import { PostgresLedgerStorage } from './driver.js';
 import type { HistoryReindex, PostgresTransaction } from './driver.js';
 import type { PostgresPoolSource } from './pool.js';
@@ -389,7 +389,7 @@ describe('the Postgres driver', function() {
 		await storage.abortTransaction(transaction);
 
 		const versions = await database.pool().query<{ version: number }>('SELECT version FROM schema_version ORDER BY version');
-		expect(versions.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }]);
+		expect(versions.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }]);
 	});
 
 	test('destroy ends a pool the driver opened and leaves an injected pool to its owner', async function() {
@@ -657,8 +657,35 @@ describe('the Postgres driver', function() {
 		}));
 		expect((await pool.query('SELECT shard FROM ledger_checksum')).rowCount).toBe(256);
 
+		// Two transactions at once that fold into different rows find each row through the key, so neither reads what the other writes, however the table's statistics stand.
+		await pool.query('ANALYZE ledger_checksum');
+		const [first, second] = [await pool.connect(), await pool.connect()];
+		try {
+			for (const [client, shard] of [[first, 1], [second, 2]] as const) {
+				await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+				await client.query(foldLedgerChecksum.text, [shard, '01'.repeat(32)]);
+			}
+			await first.query('COMMIT');
+			await second.query('COMMIT');
+		} finally {
+			first.release();
+			second.release();
+		}
+		const plan = await pool.query<{ 'QUERY PLAN': string }>(`EXPLAIN ${foldLedgerChecksum.text.replace('$1', '7').replace('$2', '\'00\'')}`);
+		expect(plan.rows.map(function(row): string {
+			return(row['QUERY PLAN']);
+		}).join('\n')).toContain('Index Scan using ledger_checksum_pkey');
+		for (const shard of [1, 2]) {
+			expected.set(shard, (expected.get(shard) ?? 0n) ^ BigInt(`0x${'01'.repeat(32)}`));
+		}
+		let folded = 0n;
+		for (const value of expected.values()) {
+			folded ^= value;
+		}
+		expect((await storage.ledgerChecksum()).checksum).toBe(folded);
+
 		// A staple row that no write of the driver folded in is no part of what a read returns.
 		await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, checksum) VALUES ($1, $2, $2, repeat(\'1\', 256)::bit(256))', [Buffer.alloc(32, 7), GENESIS_MOMENT]);
-		expect((await storage.ledgerChecksum()).checksum).toBe(checksumOf([network.genesis, sent]));
+		expect((await storage.ledgerChecksum()).checksum).toBe(folded);
 	});
 });

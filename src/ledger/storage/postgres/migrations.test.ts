@@ -190,7 +190,7 @@ describe('applyMigrations', function() {
 		expect(buffers.rows).toEqual([{ key: '@buffer:other' }]);
 	});
 
-	test('version 8 keeps the ledger checksum folded from the staples\' checksums, in a row per first byte of their blocks hashes', async function() {
+	test('versions 8 and 9 keep the ledger checksum folded from the staples\' checksums, in a row per first byte of their blocks hashes', async function() {
 		const database = await freshDatabase();
 		const pool = database.pool();
 		const shipped = (await readdir(SCHEMA_MIGRATIONS)).sort();
@@ -219,6 +219,9 @@ describe('applyMigrations', function() {
 			return([[row.shard, value.toString(16)]]);
 		});
 		expect(nonZero).toEqual([[0x0a, '33'.repeat(32)], [0xff, '44'.repeat(32)]]);
+		// Version 9 keeps the rows, on pages filled to a tenth.
+		const options = await pool.query<{ reloptions: string[] | null }>('SELECT reloptions FROM pg_class WHERE relname = \'ledger_checksum\'');
+		expect(options.rows).toEqual([{ reloptions: ['fillfactor=10'] }]);
 	});
 
 	test('a migration runs without the session\'s statement timeout, which the session gets back afterwards', async function() {
