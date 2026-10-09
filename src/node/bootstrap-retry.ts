@@ -25,6 +25,16 @@ export const MAX_QUEUED_BYTES: number = 16 * 1024 * 1024;
 const DEEP_SCAN_SHARE = 1 / 10;
 
 /**
+ * The share of the queue's bounds a pass over a range read ahead of the
+ * earliest may fill (src/node/bootstrap-ranges.ts). Its staples may need
+ * staples of the ranges before it, which only those bring, so it waits once
+ * this much is queued; the pass over the earliest range, which reads on as a
+ * pass from where the last reached does, keeps the rest of that pass's share
+ * for the staples it reads before their dependencies.
+ */
+const AHEAD_SHARE = 1 / 2;
+
+/**
  * How long the ledger may refuse a staple before the node reports it, once,
  * as one it cannot apply although the network did: by then every staple a
  * page or two later has long been read.
@@ -72,8 +82,12 @@ const DEFAULT_BOUNDS: QueueBounds = { staples: MAX_QUEUED_STAPLES, bytes: MAX_QU
 /** Whether a staple a pass was sent was new to the node, one it held already, perhaps with other votes, or one the ledger refused and the queue holds. */
 export type Added = 'added' | 'held' | 'queued';
 
-/** Which pass adds a staple: one from where the last reached leaves the deep re-scans their share of the queue. */
-export type QueueUse = 'live' | 'deep';
+/**
+ * Which pass adds a staple: one from where the last reached, or over the
+ * earliest range, leaves the deep re-scans their share of the queue; one over
+ * a range read ahead of the earliest fills at most AHEAD_SHARE of it.
+ */
+export type QueueUse = 'live' | 'ahead' | 'deep';
 
 /**
  * The queue was full when the ledger refused one more staple. The staple is
@@ -117,6 +131,7 @@ export class RetryQueue<Staple extends NamedStaple> {
 	readonly #report: (entry: QueuedStaple<Staple>, age: number) => void;
 	readonly #bounds: QueueBounds;
 	readonly #liveBounds: QueueBounds;
+	readonly #aheadBounds: QueueBounds;
 	#entries: Promise<Map<string, QueuedStaple<Staple>>> | undefined;
 	#bytes = 0;
 	/** Whether a pass from where the last reached found no room since a staple last left the queue. */
@@ -131,6 +146,27 @@ export class RetryQueue<Staple extends NamedStaple> {
 		this.#report = report;
 		this.#bounds = bounds;
 		this.#liveBounds = { staples: bounds.staples - Math.ceil(bounds.staples * DEEP_SCAN_SHARE), bytes: bounds.bytes - Math.ceil(bounds.bytes * DEEP_SCAN_SHARE) };
+		this.#aheadBounds = { staples: Math.floor(bounds.staples * AHEAD_SHARE), bytes: Math.floor(bounds.bytes * AHEAD_SHARE) };
+	}
+
+	/** Whether a pass of that use finds room for one more refused staple, but for its size. */
+	async hasRoom(use: QueueUse): Promise<boolean> {
+		const entries = await this.#load();
+		const bounds = this.#boundsOf(use);
+		return(entries.size < bounds.staples && this.#bytes < bounds.bytes);
+	}
+
+	#boundsOf(use: QueueUse): QueueBounds {
+		switch (use) {
+			case 'live':
+				return(this.#liveBounds);
+			case 'ahead':
+				return(this.#aheadBounds);
+			case 'deep':
+				return(this.#bounds);
+			default:
+				return(assertNever(use));
+		}
 	}
 
 	/** Whether the queue stopped a pass from where the last reached, and no staple has left it since. */
@@ -153,7 +189,8 @@ export class RetryQueue<Staple extends NamedStaple> {
 	 * Adds the staple, or queues it when the ledger refuses it and does not
 	 * hold its blocks; one queued already is left to the retries. Throws
 	 * RetryQueueFull when the queue has no room for it, which, for a pass
-	 * from where the last reached, is short of the deep re-scans' share.
+	 * from where the last reached, is short of the deep re-scans' share, and
+	 * for one over a range read ahead, AHEAD_SHARE.
 	 */
 	async add(staple: Staple, use: QueueUse): Promise<Added> {
 		const entries = await this.#load();
@@ -246,17 +283,7 @@ export class RetryQueue<Staple extends NamedStaple> {
 		if (entries.has(key)) {
 			return;
 		}
-		let bounds: QueueBounds;
-		switch (use) {
-			case 'live':
-				bounds = this.#liveBounds;
-				break;
-			case 'deep':
-				bounds = this.#bounds;
-				break;
-			default:
-				return(assertNever(use));
-		}
+		const bounds = this.#boundsOf(use);
 		if (entries.size >= bounds.staples || this.#bytes + sizeOf(staple) > bounds.bytes) {
 			if (use === 'live') {
 				this.#stoppedLive = true;

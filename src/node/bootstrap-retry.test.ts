@@ -154,6 +154,31 @@ describe('a bootstrap retry queue', function() {
 		expect(queue.saturated()).toBe(false);
 	});
 
+	test('lets a pass over a range read ahead of the earliest fill half its bound, without saying it is saturated, and says whether each use finds room', async function() {
+		const list = staples([[], ...Array.from({ length: 11 }, function(): number[] {
+			return([0]);
+		})]);
+		const harness = new Harness();
+		const queue = harness.queue({ staples: 10, bytes: 1024 * 1024 });
+		for (const staple of list.slice(1, 6)) {
+			expect(await queue.add(staple, 'ahead')).toBe('queued');
+		}
+		expect(await queue.hasRoom('ahead')).toBe(false);
+		expect(await queue.hasRoom('live')).toBe(true);
+
+		await expect(queue.add(at(list, 6), 'ahead')).rejects.toThrow(RetryQueueFull);
+		expect(queue.saturated()).toBe(false);
+		for (const staple of list.slice(6, 10)) {
+			expect(await queue.add(staple, 'live')).toBe('queued');
+		}
+		expect(await queue.hasRoom('live')).toBe(false);
+		expect(await queue.hasRoom('deep')).toBe(true);
+
+		await harness.node.add(at(list, 0));
+		expect(await queue.retry()).toBe(9);
+		expect(await queue.hasRoom('ahead')).toBe(true);
+	});
+
 	test('keeps its staples in its store, so that a queue built on it after a restart applies them', async function() {
 		const list = staples([[3], [3], [3], []]);
 		const harness = new Harness();
