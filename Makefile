@@ -119,10 +119,13 @@ build/devnet/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts'
 
 # utils/follower and utils/parity run the follower's and the parity tools'
 # commands, tools beside the node rather than part of it, so they are built
-# apart from the distribution like the devnet's.
+# apart from the distribution like the devnet's. The parity tools open a ledger
+# of their own, whose driver reads the schema's migrations four directories
+# above its module, which under build/parity is build/schema.
 build/parity/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts') tsconfig.json tsconfig.parity.json node_modules/.patched
 	@[ -e build/parity/.done ] || rm -f build/parity/.tsbuildinfo
 	npm run tsc -- -p tsconfig.parity.json
+	ln -sfn ../schema build/schema
 	@touch build/parity/.done
 
 # The type checks cover the tests that the builds exclude, so they must not
