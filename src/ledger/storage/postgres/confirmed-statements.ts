@@ -171,8 +171,10 @@ export const mainStapleVotes: Statement<[Buffer[]], VoteColumns & { blocks_hash:
  * History is listed newest first by (staple time, blocks hash). A page after
  * a start continues below the start's own key, by row comparison against a
  * value computed once, so the index range starts there. The start's time is
- * looked up in the same history: a start that is not listed there leaves it
- * null, the comparison is then never true, and the page is empty (D8).
+ * its staple's, and the start must be listed in the same history under that
+ * whole key, which history_pkey finds without reading the account's other
+ * rows: a start that is not listed there leaves the time null, the comparison
+ * is then never true, and the page is empty (D8).
  */
 export const accountHistory: Statement<[string, number], { blocks_hash: Buffer }> = statement('account_history', `
 	SELECT history.blocks_hash
@@ -187,7 +189,9 @@ export const accountHistoryAfter: Statement<[string, Buffer, number], { blocks_h
 	WHERE history.account_id = (SELECT id FROM accounts WHERE public_key = $1)
 		AND (history.staple_time, history.blocks_hash) < (
 			(SELECT start.staple_time FROM history start
-				WHERE start.account_id = (SELECT id FROM accounts WHERE public_key = $1) AND start.blocks_hash = $2),
+				WHERE start.account_id = (SELECT id FROM accounts WHERE public_key = $1)
+					AND start.staple_time = (SELECT staples.staple_time FROM staples WHERE staples.blocks_hash = $2)
+					AND start.blocks_hash = $2),
 			$2::bytea)
 	ORDER BY history.staple_time DESC, history.blocks_hash DESC
 	LIMIT $3`);
