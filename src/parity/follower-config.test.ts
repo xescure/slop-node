@@ -160,6 +160,7 @@ describe('the follower\'s command line', function() {
 	test('defaults every setting', function() {
 		expect(parseFollowerCommand(['up'], home)).toEqual({ kind: 'up', settings: { ...DEFAULT_FOLLOWER_SETTINGS, directory: defaultFollowerDirectory(home) } });
 		expect(DEFAULT_FOLLOWER_SETTINGS.minIntervalMilliseconds).toBe(1000);
+		expect(DEFAULT_FOLLOWER_SETTINGS.maxHeapMegabytes).toBe(768);
 	});
 
 	test('takes the directory, port, pacing and heap of "up"', function() {

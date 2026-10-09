@@ -72,7 +72,7 @@ const USAGE = [
 	'          four representatives, with its own Postgres; both keep running in the background',
 	'          --port <port>             the node\'s API port on 127.0.0.1 (47380)',
 	'          --min-interval-ms <ms>    the rest each representative gets between two requests (1000)',
-	'          --max-heap-mb <MiB>       the node\'s V8 heap limit (1536)',
+	'          --max-heap-mb <MiB>       the node\'s V8 heap limit (768)',
 	'  status  print the follower\'s progress, its processes\' memory and its database\'s size, as JSON',
 	'  logs    print the end of the node\'s log, or with --postgres the database\'s',
 	'          --lines <count> (50), --follow',

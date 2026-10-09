@@ -43,7 +43,14 @@ export type FollowerSettings = {
 export const DEFAULT_FOLLOWER_SETTINGS: Omit<FollowerSettings, 'directory'> = {
 	port: 47380,
 	minIntervalMilliseconds: 1000,
-	maxHeapMegabytes: 1536
+	/*
+	 * Catching up on the main network, the node's live heap stayed about
+	 * 150 MiB, while its resident memory rose from 350 to 830 MiB within an
+	 * hour and fell back to about 530 MiB at a full collection: V8 lets
+	 * garbage build up in the old space, toward the limit, before it collects
+	 * it. A limit about five times the live heap bounds what it builds up.
+	 */
+	maxHeapMegabytes: 768
 };
 
 export type FollowerLog = 'node' | 'postgres';
