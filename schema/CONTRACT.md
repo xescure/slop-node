@@ -1065,6 +1065,29 @@ Provided by the base, not implemented by drivers. Logs a network integrity alarm
 
 **Postgres.** Called from step 2 of `persistConfirmedStaple`.
 
+### 4.3 The bootstrap stage
+
+```ts
+abstract bootstrapStage(): BootstrapStage;
+```
+
+Not part of upstream's interface. A node far behind reads its peers' history in ranges side by side, but adds it in the order of the staples' votes: the ledger judges each staple by the voting weight it holds when the staple is added [Keeta TS] index.js:69419-69423, 69761-69779, so history added out of that order can leave the ledger in a state no stretch of the history ever had, which refuses staples the network applied. The stage keeps what the bootstrap read until the node adds it (`src/node/bootstrap-stage.ts`). It lives outside every ledger transaction, and the ledger never reads it.
+
+`BootstrapStage` (`src/ledger/storage/stage.ts`) keeps staples by key, the `blocksHash` as `BlockHash.toString` spells it, each with its bytes as received and the moments its earliest and latest votes were made (their `validityFrom`):
+
+- `put(staples)` keeps each staple whose key it does not hold, and returns how many it kept and their bytes. A staple it holds keeps its first bytes.
+- `holds(key)` says whether it holds the key.
+- `firstBefore(moment, count)` returns up to `count` staples whose earliest vote was made before the moment, ascending by that moment, then by key: the order the node adds them in.
+- `lastFrom(moment, count)` returns up to `count` staples whose latest vote was made at or after the moment, ascending by that moment, then by key: those a peer keyed by votes lists from the moment (D8), which a bootstrap filter names.
+- `remove(keys)` drops the staples of those keys it holds, and returns how many it dropped and their bytes.
+- `counts()` returns how many staples it holds and their bytes.
+
+Each call's change is durable when it returns, as durable as the ledger: the memory driver keeps the stage in the process, beside its ledger. A staple leaves the stage only once the ledger or the bootstrap's retry queue holds it, so a stop between the two leaves it staged, and it is found held when added again.
+
+Tested by `stage.ts: "keeps each staple once, as the bytes it was given, and counts them and their bytes"`, `stage.ts: "lists the staples whose first vote was made before a moment by their first votes, then their keys, as many as asked for"`, `stage.ts: "lists the staples with a vote made at or after a moment by their last votes, for a filter to name"`, `stage.ts: "drops the staples it is told, and counts what it dropped"` and `stage.ts: "keeps what it staged apart from the ledger, which adds none of it"`.
+
+**Postgres.** From schema version 10, `bootstrap_stage` (`blocks_hash`, `first_vote_from`, `last_vote_from`, `bytes`), keyed by `blocks_hash`. Each call is one statement on a pooled connection outside any transaction. `put` inserts with `ON CONFLICT DO NOTHING`; `firstBefore` reads `bootstrap_stage_first_vote` (`first_vote_from`, `blocks_hash`) and `lastFrom` reads `bootstrap_stage_last_vote` (`last_vote_from`, `blocks_hash`), each in index order; byte counts are `octet_length(bytes)`.
+
 ## 5. Rules
 
 Each rule keeps its identifier, which comments in the source cite.
@@ -1401,6 +1424,7 @@ The Postgres driver keeps the ledger, and the Postgres key-value store the node'
 - **History.** From schema version 5, `history_pkey` (`account_id`, `staple_time`, `blocks_hash`) is the one index of `history`: a staple's time is fixed by its `blocksHash`, so the key is unique wherever the pair is, and it serves a page, read backward, and the look-up of its start.
 - **Deferral.** `deferred_staples` holds a deferred staple's bytes; `deferred_waits` the blocks it waits on; `deferred_blocks` the previous of each of its blocks, for the check that it can never apply, found by `previous` through `deferred_blocks_previous` from schema version 6; and, from schema version 6, `deferred_checks` the deferred staples that may be released or dead, which gc reads instead of every deferred staple.
 - **Serials.** The sequence `vote_serials` (section 3.6).
+- **Bootstrap stage.** From schema version 10, `bootstrap_stage` holds the staples a bootstrap read and has not added yet (section 4.3), which no ledger member reads.
 
 ### 6.2 Moments and the database clock
 
@@ -1449,6 +1473,7 @@ What another implementation must write, and can expect to read, in each column w
 | `votes.bytes` | `Vote.toBytes()`: the vote, an X.509 certificate signed by its issuer, as the bytes it was decoded from or sealed as [Keeta TS] index.js:80588-80590 |
 | `staples.bytes` | `VoteStaple.toBytes()` without an argument when the staple was applied: the compressed bytes it was received as, or, for a staple built in the process, upstream's compression of its encoding [Keeta TS] index.js:80976-80983, 81016-81027. Read back as those bytes (section 1, staple bytes). `NULL` only for a staple stored before schema version 3, which a reader rebuilds from its rows. No key is built from these bytes |
 | `deferred_staples.bytes` | `VoteStaple.toBytes()` without an argument: a zlib stream (RFC 1950) of the staple's ASN.1 encoding, the compressed bytes it was decoded from when it arrived compressed [Keeta TS] index.js:81016-81027. A reader inflates bytes that begin with a zlib header and reads any other bytes as the encoding itself [Keeta TS] index.js:79804-79817, 80969-81003, so a writer may store either. No key is built from these bytes |
+| `bootstrap_stage.bytes` | `VoteStaple.toBytes()` without an argument, as `deferred_staples.bytes`: the bytes the staple was received as. No key is built from these bytes |
 | `certificates.certificate` | `Certificate.toDER()`: the certificate's DER, as the bytes it was decoded from [Keeta TS] index.js:78102-78105 |
 | `certificates.intermediates` | `CertificateBundle.getDERBuffer()` of the operation's intermediate certificates: the DER of a `SEQUENCE OF Certificate`, or the bytes the bundle was decoded from, or `NULL` when the operation names none [Keeta TS] index.js:77436-77500 |
 | `hash32` columns | The 32 bytes of the hash: a block's `hash`, a staple's `blocksHash` (the hash of its blocks' hashes in vote order [Keeta TS] index.js:80126-80143), a certificate's `hash()` [Keeta TS] index.js:78134-78137, or an idempotent key, the hash of the account's key type byte and public key followed by the block's idempotent bytes [Keeta TS] index.js:62911-62918, 68920-68931. `previous` of an account's first block is its opening hash (section 1) |

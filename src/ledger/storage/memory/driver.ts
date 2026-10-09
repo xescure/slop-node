@@ -25,6 +25,8 @@ import type { AccountKey, BlockHashKey, IdempotentKeyString, StapleKey, VoteKey 
 import { DEFAULT_HISTORY_LIMIT, DEFAULT_VOTES_PER_PAGE, compareCatchUpPositions, decodeCatchUpKey, encodeCatchUpKey } from '../paging.js';
 import type { CatchUpPosition } from '../paging.js';
 import type { AccountInfoRow } from '../rows.js';
+import { MemoryBootstrapStage } from '../stage.js';
+import type { BootstrapStage } from '../stage.js';
 import { commitOverlay, createCommittedLedger, openOverlay } from './state.js';
 import type { BalanceRow, CommittedLedger, LedgerOverlay, SideVoteRow, StapleRow, TableOverlay } from './state.js';
 
@@ -313,6 +315,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	// Lives outside every transaction, so an aborted attempt's serial is never issued again.
 	#nextSerial = 1n;
 	#nextVoteSequence = 0n;
+	readonly #stage = new MemoryBootstrapStage();
 
 	async beginTransaction(options: TransactionOptions): Promise<MemoryTransaction> {
 		const release = await this.#lock.acquire();
@@ -730,6 +733,10 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 			transactionCount,
 			representativeCount
 		}));
+	}
+
+	bootstrapStage(): BootstrapStage {
+		return(this.#stage);
 	}
 
 	/* Read from the committed state, as the counts are. */

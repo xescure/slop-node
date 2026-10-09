@@ -19,6 +19,7 @@ import type { ConfirmedStapleChange } from './confirmed.js';
 import { createLedgerError, describeError, isKeetaNetError } from './errors.js';
 import { toBlockHashKey, toStapleKey } from './keys.js';
 import type { BlockHashKey, StapleKey } from './keys.js';
+import type { BootstrapStage } from './stage.js';
 
 /** The options Ledger passes when it opens a transaction. */
 export type TransactionOptions = Parameters<LedgerStorageAPI['beginTransaction']>[0];
@@ -443,6 +444,13 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * snapshot that holds them, as the ledger's counts are read.
 	 */
 	abstract ledgerChecksum(): Promise<LedgerChecksum>;
+
+	/**
+	 * Where the node's bootstrap keeps the staples it read and has not added
+	 * yet, outside every transaction, as durable as the ledger: a staple
+	 * leaves it only once the ledger holds it, or the retry queue does.
+	 */
+	abstract bootstrapStage(): BootstrapStage;
 
 	/** Makes the transaction's writes permanent and ends it. */
 	protected abstract commitStorage(transaction: Transaction): Promise<void>;

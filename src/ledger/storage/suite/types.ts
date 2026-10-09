@@ -2,7 +2,7 @@ import type { LedgerStorageDriverBase } from '../base.js';
 import type { FixtureFactory } from './support.js';
 
 /** The groups of the shared suite, one per file of cases. */
-export const SUITE_GROUPS = ['transactions', 'genesis', 'confirmed', 'deferral', 'votes', 'gc', 'stats', 'concurrency', 'canaries'] as const;
+export const SUITE_GROUPS = ['transactions', 'genesis', 'confirmed', 'deferral', 'votes', 'gc', 'stats', 'stage', 'concurrency', 'canaries'] as const;
 
 export type SuiteGroup = typeof SUITE_GROUPS[number];
 

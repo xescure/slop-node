@@ -18,6 +18,7 @@ import { toAccountKey, toBlockHashKey, toIdempotentKeyString } from '../keys.js'
 import type { AccountKey, StapleKey } from '../keys.js';
 import { DEFAULT_HISTORY_LIMIT, DEFAULT_VOTES_PER_PAGE, decodeCatchUpKey, encodeCatchUpKey } from '../paging.js';
 import type { AccountInfoRow } from '../rows.js';
+import type { BootstrapStage } from '../stage.js';
 import {
 	accountHistory,
 	accountHistoryAfter,
@@ -82,6 +83,7 @@ import { checkIn, checkOut } from './connection.js';
 import { mapDatabaseError } from './errors.js';
 import { MigratedPostgresPool } from './pool.js';
 import type { PostgresPoolSource } from './pool.js';
+import { PostgresBootstrapStage } from './stage.js';
 import {
 	deadDeferredStaples,
 	deferredStaplesWaitingOn,
@@ -743,10 +745,12 @@ function decodeDeferredStaple(row: DeferredStapleColumns): VoteStaple {
  */
 export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTransaction> implements LedgerStorageAPI {
 	readonly #pool: MigratedPostgresPool;
+	readonly #stage: PostgresBootstrapStage;
 
 	constructor(source: PostgresPoolSource) {
 		super();
 		this.#pool = new MigratedPostgresPool(source, 'storage driver');
+		this.#stage = new PostgresBootstrapStage(this.#pool);
 	}
 
 	/**
@@ -1284,6 +1288,10 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * reads one snapshot of the committed main ledger in as many rows whatever
 	 * its size; the moment is the middle of the span it ran in.
 	 */
+	bootstrapStage(): BootstrapStage {
+		return(this.#stage);
+	}
+
 	async ledgerChecksum(): Promise<LedgerChecksum> {
 		const { pool } = await this.#pool.connection();
 		const sent = Date.now();

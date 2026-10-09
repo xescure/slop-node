@@ -6,6 +6,7 @@ import { defineDeferralCases } from './suite/deferral.js';
 import { driversUnderTest } from './suite/drivers.js';
 import { defineGcCases } from './suite/gc.js';
 import { defineGenesisCases } from './suite/genesis.js';
+import { defineStageCases } from './suite/stage.js';
 import { defineStatsCases } from './suite/stats.js';
 import { defineTransactionCases } from './suite/transactions.js';
 import { SUITE_GROUPS } from './suite/types.js';
@@ -20,6 +21,7 @@ const defineGroup: Readonly<Record<SuiteGroup, (driver: DriverUnderTest) => void
 	votes: defineVoteCases,
 	gc: defineGcCases,
 	stats: defineStatsCases,
+	stage: defineStageCases,
 	concurrency: defineConcurrencyCases,
 	canaries: defineCanaryCases
 };
