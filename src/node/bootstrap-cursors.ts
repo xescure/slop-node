@@ -2,6 +2,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { KVStorageProvider } from '@keetanetwork/keetanet-client/lib/kv/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import type { DeepScan, PeerKeying, PeerProgress } from './bootstrap-pass.js';
+import type { BootstrapRange, RangeLayout, RangeStanding } from './bootstrap-ranges.js';
 import type { QueuedStaple, RetryStore } from './bootstrap-retry.js';
 
 const lib = KeetaNet.lib;
@@ -18,6 +19,11 @@ export const BOOTSTRAP_CURSOR_ARENA = 'bootstrapCursors';
 export const BOOTSTRAP_CAUGHT_UP_ARENA = 'bootstrapCaughtUp';
 
 const CAUGHT_UP_KEY = 'horizon';
+
+/** The arena that holds, under RANGES_KEY, the history the node reads in ranges while far behind, and where each range reached (src/node/bootstrap-ranges.ts). */
+export const BOOTSTRAP_RANGES_ARENA = 'bootstrapRanges';
+
+const RANGES_KEY = 'layout';
 
 /** The arena that holds the staples the ledger refused, by the hash of their blocks, until they apply (src/node/bootstrap-retry.ts). */
 export const BOOTSTRAP_RETRY_ARENA = 'bootstrapRetries';
@@ -76,6 +82,80 @@ function progressOf(value: unknown): PeerProgress | undefined {
 	return({ reached: new Date(reached), caughtUp, deepScanFrom: new Date(deepScanFrom), nextDeepScan: new Date(nextDeepScan), deepScan, keying });
 }
 
+/** A layout as stored: moments in milliseconds, and no peer as null. */
+type StoredLayout = {
+	readonly from: number;
+	readonly end: number;
+	readonly deepScanPeer: string;
+	readonly ranges: { readonly reached: number; readonly end: number; readonly peer: string | null }[];
+	readonly standings: Readonly<Record<string, { readonly failures: number; readonly benchedUntil: number | null }>>;
+};
+
+function rangeOf(value: unknown): BootstrapRange | undefined {
+	if (!isRecord(value)) {
+		return(undefined);
+	}
+	const { reached, end, peer } = value;
+	if (!isWholeNumber(reached) || !isWholeNumber(end) || (peer !== null && typeof peer !== 'string')) {
+		return(undefined);
+	}
+	return({ reached: new Date(reached), end: new Date(end), peer: peer ?? undefined });
+}
+
+function standingOf(value: unknown): RangeStanding | undefined {
+	if (!isRecord(value)) {
+		return(undefined);
+	}
+	const { failures, benchedUntil } = value;
+	if (!isWholeNumber(failures) || (benchedUntil !== null && !isWholeNumber(benchedUntil))) {
+		return(undefined);
+	}
+	let until: Date | undefined;
+	if (benchedUntil !== null) {
+		until = new Date(benchedUntil);
+	}
+	return({ failures, benchedUntil: until });
+}
+
+/** The layout as stored, or nothing when the node did not write it, as a cursor's. */
+function layoutOf(value: unknown): RangeLayout | undefined {
+	if (!isRecord(value)) {
+		return(undefined);
+	}
+	const { from, end, deepScanPeer, ranges, standings } = value;
+	if (!isWholeNumber(from) || !isWholeNumber(end) || typeof deepScanPeer !== 'string' || !Array.isArray(ranges) || !isRecord(standings)) {
+		return(undefined);
+	}
+	const read = ranges.map(rangeOf);
+	const readStandings = Object.entries(standings).map(function([peer, standing]): [string, RangeStanding | undefined] {
+		return([peer, standingOf(standing)]);
+	});
+	const everyRange = read.filter(function(range): range is BootstrapRange {
+		return(range !== undefined);
+	});
+	const everyStanding = readStandings.filter(function(entry): entry is [string, RangeStanding] {
+		return(entry[1] !== undefined);
+	});
+	if (everyRange.length !== read.length || everyStanding.length !== readStandings.length) {
+		return(undefined);
+	}
+	return({ from: new Date(from), end: new Date(end), deepScanPeer, ranges: everyRange, standings: Object.fromEntries(everyStanding) });
+}
+
+function storedLayout(layout: RangeLayout): StoredLayout {
+	return({
+		from: layout.from.getTime(),
+		end: layout.end.getTime(),
+		deepScanPeer: layout.deepScanPeer,
+		ranges: layout.ranges.map(function(range) {
+			return({ reached: range.reached.getTime(), end: range.end.getTime(), peer: range.peer ?? null });
+		}),
+		standings: Object.fromEntries(Object.entries(layout.standings).map(function([peer, standing]) {
+			return([peer, { failures: standing.failures, benchedUntil: standing.benchedUntil?.getTime() ?? null }]);
+		}))
+	});
+}
+
 function storedDeepScan(deepScan: DeepScan | undefined): StoredProgress['deepScan'] {
 	if (deepScan === undefined) {
 		return(null);
@@ -121,12 +201,26 @@ export class BootstrapCursors {
 		await this.#kv.set(BOOTSTRAP_CAUGHT_UP_ARENA, CAUGHT_UP_KEY, horizon.getTime());
 	}
 
-	/** Forgets every peer's progress, and that any pass completed; the staples queued for retry stay, as nothing reads them again. */
+	/** The history the node reads in ranges, or nothing while it reads none. */
+	async readLayout(): Promise<RangeLayout | undefined> {
+		return(layoutOf(await this.#kv.get(BOOTSTRAP_RANGES_ARENA, RANGES_KEY)));
+	}
+
+	async writeLayout(layout: RangeLayout | undefined): Promise<void> {
+		if (layout === undefined) {
+			await this.#kv.set(BOOTSTRAP_RANGES_ARENA, RANGES_KEY, undefined);
+			return;
+		}
+		await this.#kv.set(BOOTSTRAP_RANGES_ARENA, RANGES_KEY, storedLayout(layout));
+	}
+
+	/** Forgets every peer's progress, the ranges, and that any pass completed; the staples queued for retry stay, as nothing reads them again. */
 	async clear(): Promise<void> {
 		for (const endpoint of await this.#kv.list(BOOTSTRAP_CURSOR_ARENA)) {
 			await this.#kv.set(BOOTSTRAP_CURSOR_ARENA, endpoint, undefined);
 		}
 		await this.#kv.set(BOOTSTRAP_CAUGHT_UP_ARENA, CAUGHT_UP_KEY, undefined);
+		await this.#kv.set(BOOTSTRAP_RANGES_ARENA, RANGES_KEY, undefined);
 	}
 }
 

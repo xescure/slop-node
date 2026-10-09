@@ -10,11 +10,13 @@ import type { ClassSurface } from '../util/class-surface.js';
 import { BootstrapCursors, KVRetryStore } from './bootstrap-cursors.js';
 import { PageError, PageFetcher } from './bootstrap-page.js';
 import { PeerPacer } from './bootstrap-pacing.js';
-import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PrimingWindow, VOTE_KEY_TOLERANCE_MILLISECONDS, bootstrapPeer, completes } from './bootstrap-pass.js';
+import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PrimingWindow, VOTE_KEY_TOLERANCE_MILLISECONDS, bootstrapPeer, bootstrapRange, completes } from './bootstrap-pass.js';
 import type { PassAnswer, PassEvent, PassOutcome, PassRequest, PeerIO } from './bootstrap-pass.js';
 import { bootstrapPacingOf, bootstrapSources } from './bootstrap-peers.js';
 import type { BootstrapNode } from './bootstrap-peers.js';
-import { RetryQueue } from './bootstrap-retry.js';
+import { rangeResultOf, updateRanges } from './bootstrap-ranges.js';
+import type { RangeEvent, RangeIO, RangeResult, RangeTask } from './bootstrap-ranges.js';
+import { RetryQueue, RetryQueueFull } from './bootstrap-retry.js';
 import { MAX_NAMED } from './bootstrap-window.js';
 import type { Added, Offered, QueuedStaple } from './bootstrap-retry.js';
 import { nextUpdateDelay, updatePeers } from './bootstrap-update.js';
@@ -57,6 +59,19 @@ type UpdateResult = { complete: boolean };
 
 /** What an update's passes over one peer did: its requests, and the staples it was sent, by whether the node added them, held them already or queued them. */
 type PassTally = Record<'requests' | Added, number>;
+
+function describeRange(outcome: PassOutcome, task: RangeTask): string {
+	const range = `the range from ${task.reached.toISOString()} to ${task.end.toISOString()}`;
+	switch (outcome.kind) {
+		case 'drained':
+		case 'caught-up':
+			return(`read ${range}`);
+		case 'bounded':
+			return(`reached ${outcome.reached.toISOString()} within this update's bound (it continues on the next update), in ${range}`);
+		default:
+			return(assertNever(outcome));
+	}
+}
 
 function describeOutcome(outcome: PassOutcome): string {
 	switch (outcome.kind) {
@@ -309,8 +324,29 @@ export class BootstrapClient {
 				return(cursors.writeCaughtUp(horizon));
 			}
 		};
+		const retries = this.#retries;
+		const rangeIO: RangeIO = {
+			...io,
+			readLayout: function() {
+				return(cursors.readLayout());
+			},
+			writeLayout: function(layout) {
+				return(cursors.writeLayout(layout));
+			},
+			saturated: function() {
+				return(Promise.resolve(retries.saturated()));
+			},
+			roomAhead: function() {
+				return(retries.hasRoom('ahead'));
+			},
+			report: (event) => {
+				this.#reportRanges(event);
+			}
+		};
 		try {
-			const results = await updatePeers(sources, io, MAX_CONCURRENT_PASSES, (endpoint, from) => {
+			const results = await updateRanges(sources, rangeIO, (endpoint, task) => {
+				return(this.#readRangeLogged(endpoint, limit, fetcher, task));
+			}) ?? await updatePeers(sources, io, MAX_CONCURRENT_PASSES, (endpoint, from) => {
 				return(this.#catchUpLogged(endpoint, limit, fetcher, from));
 			});
 			this.#lastResults = [...results.values()];
@@ -353,7 +389,49 @@ export class BootstrapClient {
 	/** The update's passes over the peer, those over a peer it has no progress on starting from the moment given. */
 	async #catchUp(endpoint: string, limit: number, fetcher: PageFetcher, from: Date): Promise<PeerResult> {
 		const tally: PassTally = { requests: 0, added: 0, held: 0, queued: 0 };
-		const io: PeerIO<VoteStaple> = {
+		const io = this.#peerIO(endpoint, fetcher, tally);
+		const { live: outcome } = await bootstrapPeer(io, { limit, stagger: staggerOf(endpoint), from });
+		await this.#logPass(endpoint, describeOutcome(outcome), tally, completes(outcome));
+		return(resultOf(outcome));
+	}
+
+	/** An update's pass over a range of the peer's history (src/node/bootstrap-ranges.ts); a full retry queue holds it back rather than fail it, as does a stop. */
+	async #readRangeLogged(endpoint: string, limit: number, fetcher: PageFetcher, task: RangeTask): Promise<RangeResult> {
+		if (this.#stopped()) {
+			return('stopped');
+		}
+		const tally: PassTally = { requests: 0, added: 0, held: 0, queued: 0 };
+		try {
+			const outcome = await bootstrapRange(this.#peerIO(endpoint, fetcher, tally), task, { limit, stagger: staggerOf(endpoint), from: task.from });
+			await this.#logPass(endpoint, describeRange(outcome, task), tally, completes(outcome));
+			return(rangeResultOf(outcome));
+		} catch (error: unknown) {
+			if (this.#stopped()) {
+				this.#node.log.debug(LOG_SOURCE, `Stopped bootstrapping from ${endpoint}`);
+				return('stopped');
+			}
+			if (error instanceof RetryQueueFull) {
+				this.#node.log.info(LOG_SOURCE, `Bootstrap pass over ${endpoint} waits for room in the retry queue, in the range from ${task.reached.toISOString()} to ${task.end.toISOString()}: ${error.message}`);
+				return('throttled');
+			}
+			this.#node.log.warn(LOG_SOURCE, `Bootstrapping from ${endpoint} in the range from ${task.reached.toISOString()} to ${task.end.toISOString()} failed; it is tried again on the next update:`, error);
+			return('failed');
+		}
+	}
+
+	async #logPass(endpoint: string, outcome: string, tally: PassTally, complete: boolean): Promise<void> {
+		const summary = `Bootstrap pass over ${endpoint}: ${outcome} after ${String(tally.requests)} requests, ${String(tally.added)} staples added, ${String(tally.held)} held already, ${String(tally.queued)} queued for retry (${String(await this.#retries.size())} in the queue)`;
+		// Once caught up, a pass every period adds nothing, which an operator need not read.
+		if (tally.added > 0 || tally.queued > 0 || !complete) {
+			this.#node.log.info(LOG_SOURCE, summary);
+		} else {
+			this.#node.log.debug(LOG_SOURCE, summary);
+		}
+	}
+
+	/** How passes over the peer reach it and the node, counting what they do in the tally. */
+	#peerIO(endpoint: string, fetcher: PageFetcher, tally: PassTally): PeerIO<VoteStaple> {
+		return({
 			answers: keptFor(this.#answers, endpoint, function() {
 				return(new LongestAnswer());
 			}),
@@ -394,16 +472,7 @@ export class BootstrapClient {
 			writeProgress: (progress) => {
 				return(this.#cursors.write(endpoint, progress));
 			}
-		};
-		const { live: outcome } = await bootstrapPeer(io, { limit, stagger: staggerOf(endpoint), from });
-		const summary = `Bootstrap pass over ${endpoint}: ${describeOutcome(outcome)} after ${String(tally.requests)} requests, ${String(tally.added)} staples added, ${String(tally.held)} held already, ${String(tally.queued)} queued for retry (${String(await this.#retries.size())} in the queue)`;
-		// Once caught up, a pass every period adds nothing, which an operator need not read.
-		if (tally.added > 0 || tally.queued > 0 || !completes(outcome)) {
-			this.#node.log.info(LOG_SOURCE, summary);
-		} else {
-			this.#node.log.debug(LOG_SOURCE, summary);
-		}
-		return(resultOf(outcome));
+		});
 	}
 
 	async #page(fetcher: PageFetcher, endpoint: string, request: PassRequest): Promise<PassAnswer<VoteStaple>> {
@@ -480,6 +549,23 @@ export class BootstrapClient {
 				this.#crowdedAt.set(endpoint, start);
 				return;
 			}
+			default:
+				assertNever(event);
+		}
+	}
+
+	/** What the node reads in ranges while far behind (src/node/bootstrap-ranges.ts). */
+	#reportRanges(event: RangeEvent): void {
+		switch (event.kind) {
+			case 'laid-out':
+				this.#node.log.info(LOG_SOURCE, `Bootstrap: the node lacks the history from ${event.layout.from.toISOString()} to ${event.layout.end.toISOString()}, which its ${String(event.layout.ranges.length)} peers now read in as many ranges, side by side`);
+				return;
+			case 'benched':
+				this.#node.log.warn(LOG_SOURCE, `Bootstrap from ${event.peer}: its passes over a range failed too often in a row, so another peer reads the range, and it reads none until ${event.until.toISOString()}`);
+				return;
+			case 'read':
+				this.#node.log.info(LOG_SOURCE, `Bootstrap: the ranges from ${event.layout.from.toISOString()} to ${event.layout.end.toISOString()} are read; the peers are read from there on`);
+				return;
 			default:
 				assertNever(event);
 		}

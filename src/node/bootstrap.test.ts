@@ -367,6 +367,51 @@ describe('a bootstrap client', function() {
 		})));
 	});
 
+	test('reads the history it lacks in one range per peer, side by side, once it lacks more than a day of it, and then each peer from where the ranges end', async function() {
+		const day = 24 * 60 * 60_000;
+		const peer = await representative();
+		const cursor = new ChainCursor(peer.network.genesis);
+		const from = requireAt(peer.network.users, 0);
+		async function sendOne(): Promise<void> {
+			advanceClock(1000);
+			const block = cursor.append(await sendBlock({ from, to: RECIPIENT, amount: 1n, token: peer.network.baseToken, previous: cursor.previous(from), network: peer.network.network }));
+			await addAll(peer.node, [await confirmedStaple([block], peer.network.representatives)]);
+		}
+		await sendOne();
+		const first = await startRecordingPeer(peer.apiURL);
+		const second = await startRecordingPeer(peer.apiURL);
+		const late = await joiner({ bootstrapFrom: [first.apiURL, second.apiURL] });
+		const client = clientOf(late.node);
+		expect(await client.update()).toEqual({ complete: true });
+		const reached = Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS;
+		for (let days = 0; days < 3; days++) {
+			advanceClock(day);
+			await sendOne();
+			await sendOne();
+		}
+		const info = vi.spyOn(late.node.log, 'info');
+		const asked = [first.pages.length, second.pages.length];
+
+		expect(await client.update()).toEqual({ complete: false });
+		const end = Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS;
+		expect([first.pages[asked[0] ?? 0]?.start, second.pages[asked[1] ?? 0]?.start]).toEqual([
+			new Date(reached - 61_000).toISOString(),
+			new Date(Math.floor(reached + (end - reached) / 2) - 61_000).toISOString()
+		]);
+		const logged = info.mock.calls.map(function(call): string {
+			return(call.map(String).join(' '));
+		});
+		expect(logged.filter(function(line): boolean {
+			return(line.includes('in as many ranges') || line.includes('are read; the peers are read from there on'));
+		})).toEqual([
+			expect.stringContaining(`the history from ${new Date(reached).toISOString()} to ${new Date(end).toISOString()}, which its 2 peers now read in as many ranges`),
+			expect.stringContaining(`the ranges from ${new Date(reached).toISOString()} to ${new Date(end).toISOString()} are read`)
+		]);
+		expect(await client.update()).toEqual({ complete: true });
+
+		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
+	});
+
 	test('keeps trying the peers that fail, and catches up on the others meanwhile', async function() {
 		const peer = await representative();
 		const failing = await startFailingPeer();

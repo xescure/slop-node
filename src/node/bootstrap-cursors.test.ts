@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import { KVInternals } from '../upstream/internals.js';
-import { BOOTSTRAP_CURSOR_ARENA, BootstrapCursors } from './bootstrap-cursors.js';
+import { BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BootstrapCursors } from './bootstrap-cursors.js';
 import type { PeerProgress } from './bootstrap-pass.js';
+import type { RangeLayout } from './bootstrap-ranges.js';
 
 const ENDPOINT = 'https://representative.example/api';
 
@@ -45,6 +46,37 @@ describe('the bootstrap cursors', function() {
 		}
 
 		await kv.set(BOOTSTRAP_CURSOR_ARENA, ENDPOINT, { ...(await kv.get(BOOTSTRAP_CURSOR_ARENA, ENDPOINT) as object), keying: 'sideways' });
+		expect(await cursors.read(ENDPOINT)).toBeUndefined();
+	});
+
+	test('keep the ranges the node reads while far behind, which a reset forgets with the progress', async function() {
+		const kv = new KVInternals.KVStorageProviderMemory();
+		const cursors = new BootstrapCursors(kv);
+		const layout: RangeLayout = {
+			from: new Date(Date.UTC(2025, 11, 31)),
+			end: new Date(Date.UTC(2026, 9, 9, 3)),
+			deepScanPeer: ENDPOINT,
+			ranges: [
+				{ reached: new Date(Date.UTC(2025, 11, 31, 0, 2)), end: new Date(Date.UTC(2026, 2, 11)), peer: ENDPOINT },
+				{ reached: new Date(Date.UTC(2026, 2, 10, 23, 58, 59)), end: new Date(Date.UTC(2026, 9, 9, 3)), peer: undefined }
+			],
+			standings: {
+				[ENDPOINT]: { failures: 1, benchedUntil: undefined },
+				'https://other.example/api': { failures: 0, benchedUntil: new Date(Date.UTC(2026, 9, 9, 4)) }
+			}
+		};
+
+		expect(await cursors.readLayout()).toBeUndefined();
+		await cursors.write(ENDPOINT, PROGRESS);
+		await cursors.writeLayout(layout);
+		expect(await cursors.readLayout()).toEqual(layout);
+
+		await kv.set(BOOTSTRAP_RANGES_ARENA, 'layout', { ...(await kv.get(BOOTSTRAP_RANGES_ARENA, 'layout') as object), ranges: [{ reached: -1, end: 0, peer: null }] });
+		expect(await cursors.readLayout()).toBeUndefined();
+
+		await cursors.writeLayout(layout);
+		await cursors.clear();
+		expect(await cursors.readLayout()).toBeUndefined();
 		expect(await cursors.read(ENDPOINT)).toBeUndefined();
 	});
 });

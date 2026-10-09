@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import pg from 'pg';
-import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RETRY_ARENA } from '../node/bootstrap-cursors.js';
+import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RETRY_ARENA } from '../node/bootstrap-cursors.js';
 import { assertNever } from '../util/assert-never.js';
 import { checkFollowerEnvironment, FOLLOWER_LISTEN_IP, followerDirectory, followerEnvironment, parseFollowerCommand, POSTGRES_PORT, POSTGRES_SOCKET_DIRECTORY, readOrCreateSeed } from './follower-config.js';
 import type { FollowerLog, FollowerSettings } from './follower-config.js';
@@ -434,8 +434,8 @@ async function down(directory: string): Promise<ExitCode> {
 	return(code);
 }
 
-/** The arenas of the bootstrap client's state in the node's store (src/node/bootstrap-cursors.ts): its progress on each peer, the horizon of the first pass that completed, and the retry queue. */
-const BOOTSTRAP_ARENAS: readonly string[] = [BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_RETRY_ARENA];
+/** The arenas of the bootstrap client's state in the node's store (src/node/bootstrap-cursors.ts): its progress on each peer, the horizon of the first pass that completed, the ranges it reads while far behind, and the retry queue. */
+const BOOTSTRAP_ARENAS: readonly string[] = [BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RETRY_ARENA];
 
 /**
  * Clears the bootstrap client's state while the node is down, starting the
@@ -563,12 +563,39 @@ function bootstrapLogOf(log: string): { readonly perPeer: Record<string, PassTot
 	return({ perPeer, problems: problems.length, lastProblems: problems.slice(-PROBLEM_LINES_KEPT) });
 }
 
+/** The ranges the node reads while far behind, as stored, with their moments as dates; the stored value as it is when it is not one. */
+function rangesOf(value: unknown): unknown {
+	if (typeof value !== 'object' || value === null || !('ranges' in value) || !Array.isArray(value.ranges)) {
+		return(value ?? null);
+	}
+	const isoOf = function(moment: unknown): unknown {
+		if (typeof moment !== 'number') {
+			return(moment);
+		}
+		return(new Date(moment).toISOString());
+	};
+	const { from, end } = { from: undefined, end: undefined, ...value };
+	return({
+		...value,
+		from: isoOf(from),
+		end: isoOf(end),
+		ranges: value.ranges.map(function(range: unknown): unknown {
+			if (typeof range !== 'object' || range === null) {
+				return(range);
+			}
+			const { reached, end: rangeEnd } = { reached: undefined, end: undefined, ...range };
+			return({ ...range, reached: isoOf(reached), end: isoOf(rangeEnd) });
+		})
+	});
+}
+
 async function ledgerProgress(directory: string): Promise<unknown> {
 	return(await withDatabase(DATABASE, directory, async function(client) {
 		const staples = await client.query<{ count: string; newest_staple_time: Date | null; newest_moment: Date | null }>('SELECT count(*) AS count, max(staple_time) AS newest_staple_time, max(moment) AS newest_moment FROM staples');
 		const cursors = await client.query<{ key: string; value: unknown }>('SELECT key, value FROM kv_entries WHERE arena = $1 ORDER BY key', [BOOTSTRAP_CURSOR_ARENA]);
 		const size = await client.query<{ bytes: string }>('SELECT pg_database_size(current_database()) AS bytes');
 		const caughtUp = await client.query<{ value: unknown }>('SELECT value FROM kv_entries WHERE arena = $1', [BOOTSTRAP_CAUGHT_UP_ARENA]);
+		const ranges = await client.query<{ value: unknown }>('SELECT value FROM kv_entries WHERE arena = $1', [BOOTSTRAP_RANGES_ARENA]);
 		const queued = await client.query<{ code: string | null; count: string; oldest: string | null; reported: string }>(`
 			SELECT value->>'code' AS code, count(*) AS count, min((value->>'queuedAt')::bigint) AS oldest, count(*) FILTER (WHERE (value->>'reported')::boolean) AS reported
 			FROM kv_entries WHERE arena = $1 GROUP BY 1 ORDER BY 1`, [BOOTSTRAP_RETRY_ARENA]);
@@ -582,6 +609,7 @@ async function ledgerProgress(directory: string): Promise<unknown> {
 				return([cursor.key, cursor.value]);
 			})),
 			caughtUpHorizon: caughtUp.rows[0]?.value ?? null,
+			ranges: rangesOf(ranges.rows[0]?.value),
 			retryQueue: queued.rows.map(function(group) {
 				let oldestQueuedAt: string | null = null;
 				if (group.oldest !== null) {
