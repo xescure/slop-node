@@ -650,16 +650,16 @@ getHistory: (transaction: any, account: GenericAccount | null, start: VoteBlockH
 - **Ordering and paging.** Newest first in history order (D8):
   - The key is the ordered pair (staple time, `blocksHash`), descending (provisional: confirmed by the live parity checks). The staple time is `VoteStaple.timestamp()` with no argument, as an integer count of milliseconds since the Unix epoch [Keeta TS] index.js:81070-81096, and `blocksHash` is compared as unsigned bytes.
   - `start` is exclusive.
-  - A `start` that is unknown, or not in the listed history, gives `[]`.
+  - With an `account`, a `start` that is unknown, or no entry of that account's history, is refused with an error that has no code, which the API answers as an internal failure, as the main network's representatives do (`conformance/API.md`, Mainnet captures). With `account` `null`, a `start` that is unknown gives `[]`.
 - **Selector.** Main only.
 - **Tested by**:
-  - `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, unknown start empty"`
+  - `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, a start outside an account's history refused"`
   - `confirmed.ts: "a fractional page size is rounded up for votes and down for history"`
   - `confirmed.ts: "history orders staples by staple time, not by when they were applied"`
   - `confirmed.ts: "history breaks staple-time ties by blocks hash, descending, and pages across a tie"`
   - `confirmed.ts: "history orders by the mean vote time of a staple, not the earliest or any single representative's"`
   - `concurrency.ts: "concurrent adds of one staple apply it once"`
-- **Postgres.** The history key is stored with each row: `staple_time` (`timestamptz`, holding the staple time's whole milliseconds exactly) and `blocks_hash` (`bytea`, which compares as unsigned bytes). With an account: its `history` rows, `ORDER BY staple_time DESC, blocks_hash DESC LIMIT trunc(limit)`, through `history_pkey` (`account_id`, `staple_time`, `blocks_hash`) read backward. With `start`: the start's `staple_time` is first looked up, as its staple's (`staples_pkey`), and the start must be listed in the same account's history under that whole key (`history_pkey`); the page continues below it by row comparison, `(staple_time, blocks_hash) < (start time, start)`, so the index range begins at the start. A start not in that history leaves its time `NULL`, the comparison is never true, and the page is empty. With `account` `null`, the same over `staples` through `staples_history` (`staple_time DESC`, `blocks_hash DESC`), with the start looked up through `staples_pkey`. Another implementation must reproduce the key, the strict comparison and the empty page exactly. The plans are tested by `src/ledger/storage/postgres/plans.test.ts`.
+- **Postgres.** The history key is stored with each row: `staple_time` (`timestamptz`, holding the staple time's whole milliseconds exactly) and `blocks_hash` (`bytea`, which compares as unsigned bytes). With an account: its `history` rows, `ORDER BY staple_time DESC, blocks_hash DESC LIMIT trunc(limit)`, through `history_pkey` (`account_id`, `staple_time`, `blocks_hash`) read backward. With `start`: the start's `staple_time` is first looked up, as its staple's (`staples_pkey`), and the start must be listed in the same account's history under that whole key (`history_pkey`); the page continues below it by row comparison, `(staple_time, blocks_hash) < (start time, start)`, so the index range begins at the start. A start not in that history leaves its time `NULL`, the comparison is never true, and the page is empty; an empty page is then told from the end of the history by looking the start up in the account's `history` under its whole key (`history_pkey`), and refused when it is not there. With `account` `null`, the same over `staples` through `staples_history` (`staple_time DESC`, `blocks_hash DESC`), with the start looked up through `staples_pkey`. Another implementation must reproduce the key, the strict comparison and the empty page exactly. The plans are tested by `src/ledger/storage/postgres/plans.test.ts`.
 
 ### `getHeadBlocks`
 
@@ -1162,7 +1162,7 @@ The history key of a main staple is the ordered pair (staple time, `blocksHash`)
 - The client passes the previous page's `nextKey` as the next start [Keeta TS] index.js:58986-58990, and its fallback passes the last returned staple's ID [Keeta TS] index.js:58992-58994. Paging by the last returned staple works without duplicates only if `start` is exclusive.
 
 **Tested by**:
-- `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, unknown start empty"`
+- `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, a start outside an account's history refused"`
 - `confirmed.ts: "history orders staples by staple time, not by when they were applied"`
 - `confirmed.ts: "history breaks staple-time ties by blocks hash, descending, and pages across a tie"`
 - `confirmed.ts: "history orders by the mean vote time of a staple, not the earliest or any single representative's"`, where the votes of one staple carry different times
@@ -1327,7 +1327,7 @@ Sections 3.2 to 3.4, which also describe how the memory driver meets them.
 
 No member reads account rows, so their creation is untested.
 
-**Tested by** `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, unknown start empty"`, which also checks that a delegation does not touch the representative it names.
+**Tested by** `confirmed.ts: "history lists the staple for every touched account, newest first, exclusive start, a start outside an account's history refused"`, which also checks that a delegation does not touch the representative it names.
 
 ### D19. Statistics
 

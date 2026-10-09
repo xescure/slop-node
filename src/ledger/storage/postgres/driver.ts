@@ -11,7 +11,7 @@ import { assertNever } from '../../../util/assert-never.js';
 import { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
 import type { CollectedDeferredStaples, LedgerCountsSnapshot, TransactionOptions } from '../base.js';
 import type { AccountInfoUpdate, ConfirmedStapleChange } from '../confirmed.js';
-import { createIdempotentKeyError, createLedgerError } from '../errors.js';
+import { createIdempotentKeyError, createLedgerError, HistoryStartNotListed } from '../errors.js';
 import { voteExpirySlopMilliseconds } from '../expiry.js';
 import { toAccountKey, toBlockHashKey, toIdempotentKeyString } from '../keys.js';
 import type { AccountKey, StapleKey } from '../keys.js';
@@ -20,6 +20,7 @@ import type { AccountInfoRow } from '../rows.js';
 import {
 	accountHistory,
 	accountHistoryAfter,
+	accountHistoryLists,
 	accountInfoOf,
 	aclsOfEntity,
 	aclsOfPrincipal,
@@ -925,8 +926,9 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 
 	/*
 	 * Newest first by (staple time, blocks hash). The start is exclusive, so a
-	 * caller can pass the last staple of one page to get the next; a start
-	 * outside the listed history has no position and gives nothing (D8). A
+	 * caller can pass the last staple of one page to get the next. A start
+	 * that is no entry of an account's history is refused, and one outside
+	 * the whole ledger's history gives nothing (D8). A
 	 * fractional limit holds the whole entries it allows, as an array slice does.
 	 * [Keeta TS] index.js:69532-69548, 58992-58994, 81070-81096
 	 */
@@ -943,6 +945,10 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 			rows = await transaction.run(accountHistory, [publicKeyOf(account), limit]);
 		} else {
 			rows = await transaction.run(accountHistoryAfter, [publicKeyOf(account), hashBytes(start), limit]);
+			// An empty page follows the history's last entry, or a start that is none of its entries.
+			if (rows.length === 0 && !(await transaction.run(accountHistoryLists, [publicKeyOf(account), hashBytes(start)]))[0]?.listed) {
+				throw(new HistoryStartNotListed(account, start));
+			}
 		}
 		return(rows.map(function(row): VoteBlockHash {
 			return(new lib.Vote.VoteBlocksHash(row.blocks_hash));

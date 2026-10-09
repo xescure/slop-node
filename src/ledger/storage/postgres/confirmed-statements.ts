@@ -196,6 +196,15 @@ export const accountHistoryAfter: Statement<[string, Buffer, number], { blocks_h
 	ORDER BY history.staple_time DESC, history.blocks_hash DESC
 	LIMIT $3`);
 
+/** Whether the staple is an entry of the account's history, under its whole key, which history_pkey finds. */
+export const accountHistoryLists: Statement<[string, Buffer], { listed: boolean }> = statement('account_history_lists', `
+	SELECT EXISTS (
+		SELECT 1 FROM history start
+		WHERE start.account_id = (SELECT id FROM accounts WHERE public_key = $1)
+			AND start.staple_time = (SELECT staples.staple_time FROM staples WHERE staples.blocks_hash = $2)
+			AND start.blocks_hash = $2
+	) AS listed`);
+
 export const allHistory: Statement<[number], { blocks_hash: Buffer }> = statement('all_history', `
 	SELECT blocks_hash FROM staples
 	ORDER BY staple_time DESC, blocks_hash DESC

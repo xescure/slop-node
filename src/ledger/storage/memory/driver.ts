@@ -9,7 +9,7 @@ import { assertNever } from '../../../util/assert-never.js';
 import { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
 import type { CollectedDeferredStaples, LedgerCountsSnapshot, TransactionOptions } from '../base.js';
 import type { AccountInfoUpdate, ConfirmedStapleChange } from '../confirmed.js';
-import { createIdempotentKeyError, createLedgerError } from '../errors.js';
+import { createIdempotentKeyError, createLedgerError, HistoryStartNotListed } from '../errors.js';
 import { isVoteUnexpired } from '../expiry.js';
 import {
 	toACLScopeKey,
@@ -553,8 +553,9 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 
 	/*
 	 * Newest first by staple time. The start is exclusive, so a caller can
-	 * pass the last staple of one page to get the next; a start outside the
-	 * listed history has no position and gives nothing.
+	 * pass the last staple of one page to get the next. A start that is no
+	 * entry of an account's history is refused, and one outside the whole
+	 * ledger's history gives nothing (D8).
 	 * [Keeta TS] index.js:69532-69548, 58992-58994, 81070-81096
 	 */
 	async getHistory(transaction: MemoryTransaction, account: GenericAccount | null, start: VoteBlockHash | null, limit: number = DEFAULT_HISTORY_LIMIT): Promise<VoteBlockHash[]> {
@@ -568,6 +569,9 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 			const position = newestFirst.findIndex(function(row): boolean {
 				return(toStapleKey(row.blocksHash) === startKey);
 			});
+			if (position < 0 && account !== null) {
+				throw(new HistoryStartNotListed(account, start));
+			}
 			if (position < 0) {
 				return([]);
 			}

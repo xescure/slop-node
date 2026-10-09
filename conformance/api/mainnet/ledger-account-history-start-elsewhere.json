@@ -1,0 +1,18 @@
+{
+  "body": {
+    "error": true,
+    "message": "Internal error occurred (error ID: 3f93333d-6b9e-4d1e-a184-603a9c4dd723)"
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/account/keeta_aab66dscfdj2k2hrtzeseeofk4o6jiq77t5zijle6g2xgdtdck5wk6thxg4v35a/history",
+    "query": {
+      "limit": "1",
+      "start": "523E464AFA6C873AEAFA147923E94A8F9A9241C9C3A17DCD30F018E1CA68A722"
+    }
+  },
+  "status": 500
+}

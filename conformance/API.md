@@ -50,11 +50,11 @@ The vote request's lists have a lower bound where something enforces one: `block
 
 The capture was made on 2026-10-07 between 08:44:15 and 08:44:54 UTC from `https://rep1.main.network.api.keeta.com/api`, a representative of the Keeta mainnet, network `0x5382` [Keeta TS] index.js:61293-61298. `GET /api/node/version` reported the version `0.18.4+gbd3f30c7e7903e4990e5a283f15c23d0df18bbb4`. The three pages of the account's history were captured again from the same representative on 2026-10-07 between 09:16:09 and 09:16:12 UTC, with one staple to a page rather than two, since a single staple of this account can hold a block of several hundred operations.
 
-A third run, on 2026-10-07 between 10:36:51 and 10:39:24 UTC, captured the requests that probe how the representative reads limits, sides, starts and ends, and where paging stops (the rows of the table below from the bootstrap with a `start` that is no date onwards). It made 26 requests in three passes while their list was settled; each file holds the answer to the last request of its name.
+A third run, on 2026-10-07 between 10:36:51 and 10:39:24 UTC, captured the requests that probe how the representative reads limits, sides, starts and ends, and where paging stops (the rows of the table below from the bootstrap with a `start` that is no date up to the ledger's history after its oldest staple). It made 26 requests in three passes while their list was settled; each file holds the answer to the last request of its name.
 
-A fourth run, on 2026-10-09 at 07:34:10 UTC, captured the state of a storage account, an answer about a kind of account the earlier runs held none of.
+A fourth run, on 2026-10-09 at 07:34:10 UTC, captured the state of a storage account, an answer about a kind of account the earlier runs held none of. A fifth, on 2026-10-09 between 08:47:15 and 08:47:17 UTC, captured a page of an account's history from a start that is no entry of it, which the parity tools had seen a representative refuse, with the bootstrap it takes that start from.
 
-The capture made 50 HTTP GET requests, the second run 3, the third 26 and the fourth 1, one at a time with half a second between them, and nothing else: it published nothing, asked for no vote or quote and sent no peer message. `GET /api/node/ledger/clearstats` was not requested: it clears the representative's statistics, so it changes the representative's state although it is a GET.
+The capture made 50 HTTP GET requests, the second run 3, the third 26, the fourth 1 and the fifth 3, one at a time with half a second between them, and nothing else: it published nothing, asked for no vote or quote and sent no peer message. `GET /api/node/ledger/clearstats` was not requested: it clears the representative's statistics, so it changes the representative's state although it is a GET.
 
 The requests name accounts, blocks and a token that `mainnet/head.state.jsonl` lists, chosen by fixed rules:
 
@@ -91,6 +91,7 @@ Some requests name values that do not exist or are malformed, or probe where pag
 | the same range with `limit=2` | 200 | two blocks, and `nextKey` the `end` |
 | the ledger's history after its third-oldest staple, with no `limit`, and with `limit=2` | 200 | the two oldest staples, and `nextKey` the last of them |
 | the ledger's history after its oldest staple | 200 | no staples, and `nextKey` the `start` |
+| an account's history from a `start` that is no entry of it: a well-formed hash no staple has, or a staple of which the account is no part | 500 | only `error` and a message naming an error ID |
 
 A representative lists an account's balances by token, the permissions a principal holds by entity, the permissions on an entity by principal, and the votes for a block by `$id`, each in the order of the strings' character codes.
 
@@ -120,6 +121,12 @@ The fourth run was:
 
 ```
 utils/capture-api-responses --only ledger-account-storage conformance/mainnet/head.state.jsonl conformance/api/mainnet
+```
+
+The fifth run was:
+
+```
+utils/capture-api-responses --only node-bootstrap-votes-fractional-limit,ledger-account-history-unknown-start,ledger-account-history-start-elsewhere conformance/mainnet/head.state.jsonl conformance/api/mainnet
 ```
 
 The third run's requests, with the two they page from, are sent again by:

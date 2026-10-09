@@ -300,6 +300,11 @@ def capture(parameters, directory, selected):
 	start = next_key("ledger-account-history", page)
 	c.get("ledger-account-history-from-start", [*account, p.user, "history"], {"start": start, "limit": ACCOUNT_HISTORY_LIMIT})
 	c.get("ledger-account-history-start", [*account, p.user, "history", "start", start], {"limit": ACCOUNT_HISTORY_LIMIT})
+	c.get("ledger-account-history-unknown-start", [*account, p.user, "history"], {"start": UNKNOWN_HASH, "limit": ACCOUNT_HISTORY_LIMIT})
+	# The second staple of the network, which a bootstrap from the epoch
+	# returns second, holds no block of the user's, so it is no entry of the
+	# user's history.
+	c.get("ledger-account-history-start-elsewhere", [*account, p.user, "history"], {"start": last_staple_id("node-bootstrap-votes-fractional-limit", oldest), "limit": ACCOUNT_HISTORY_LIMIT})
 	c.get("ledger-account-history-limit-zero", [*account, p.user, "history"], {"limit": "0"})
 	c.get("ledger-account-history-limit-fractional", [*account, p.user, "history"], {"limit": "1.5"})
 	c.get("ledger-account-history-limit-below-one", [*account, p.user, "history"], {"limit": "0.5"})

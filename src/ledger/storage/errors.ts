@@ -1,6 +1,7 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
+import type { VoteBlockHash } from '@keetanetwork/keetanet-client/lib/vote.js';
 import type {
 	KeetaNetLedgerError,
 	KeetaNetLedgerIdempotentKeyError,
@@ -73,4 +74,18 @@ export function describeError(error: unknown): string {
 		return(error.message);
 	}
 	return(String(error));
+}
+
+/**
+ * A page of an account's history asked to start after a staple that is no
+ * entry of that history. The main network's representatives refuse it as an
+ * internal failure, an error without a code, rather than answer an empty
+ * page (conformance/API.md).
+ */
+export class HistoryStartNotListed extends Error {
+	override readonly name = 'HistoryStartNotListed';
+
+	constructor(account: GenericAccount, start: VoteBlockHash) {
+		super(`the staple ${start.toString()} is not in the history of ${account.publicKeyString.get()}`);
+	}
 }

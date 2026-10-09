@@ -110,6 +110,8 @@ const VERDICTS: Readonly<Record<string, Verdict>> = {
 	'ledger-account-history-limit-not-a-number.json': replayed(),
 	'ledger-account-history-limit-zero.json': replayed(),
 	'ledger-account-history-start.json': USER_LATER,
+	'ledger-account-history-start-elsewhere.json': replayed('error-id'),
+	'ledger-account-history-unknown-start.json': replayed('error-id'),
 	'ledger-account-history.json': USER_LATER,
 	'ledger-account-idempotent-unknown.json': replayed(),
 	'ledger-account-keypair.json': USER_LATER,

@@ -23,6 +23,7 @@ import {
 } from '../../../testing/blocks.js';
 import { computeConfirmedStapleChange } from '../confirmed.js';
 import type { ConfirmedStapleChange } from '../confirmed.js';
+import { HistoryStartNotListed } from '../errors.js';
 import { toBlockHashKey } from '../keys.js';
 import {
 	ChainCursor,
@@ -544,7 +545,7 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(await ledger.getIdempotentBlockHash(user, twice, 'main')).toBeNull();
 		});
 
-		test('history lists the staple for every touched account, newest first, exclusive start, unknown start empty', async function() {
+		test('history lists the staple for every touched account, newest first, exclusive start, a start outside an account\'s history refused', async function() {
 			const { network, ledger } = await startNetwork();
 			const first = requireAt(network.users, 0);
 			const second = requireAt(network.users, 1);
@@ -575,10 +576,21 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(blocksHashesOf(await ledger.getHistory(first, firstToSecond.blocksHash))).toEqual(blocksHashesOf([network.genesis]));
 			expect(await ledger.getHistory(first, network.genesis.blocksHash)).toEqual([]);
 			expect(blocksHashesOf(await ledger.getHistory(null, secondToThird.blocksHash, 1))).toEqual(blocksHashesOf([firstToSecond]));
-			expect(await ledger.getHistory(first, unknown.blocksHash)).toEqual([]);
+			// The main network's representatives refuse a start that is no entry of the account's history (conformance/API.md).
+			const refusalOf = async function(start: VoteStaple): Promise<unknown> {
+				try {
+					await ledger.getHistory(first, start.blocksHash);
+				} catch (error: unknown) {
+					// The ledger wraps the driver's error, which has no code, as its cause.
+					if (error instanceof Error) {
+						return(error.cause);
+					}
+				}
+				return(undefined);
+			};
+			expect(await refusalOf(unknown)).toBeInstanceOf(HistoryStartNotListed);
+			expect(await refusalOf(secondToThird)).toBeInstanceOf(HistoryStartNotListed);
 			expect(await ledger.getHistory(null, unknown.blocksHash)).toEqual([]);
-			// A staple the account is not part of is unknown to that account's history.
-			expect(await ledger.getHistory(first, secondToThird.blocksHash)).toEqual([]);
 		});
 
 		test('history orders staples by staple time, not by when they were applied', async function() {
