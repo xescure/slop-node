@@ -3,6 +3,7 @@ import type { Ledger, LedgerStorageAPI } from '@keetanetwork/keetanet-client/lib
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { mainnetNodeConfig } from '../conformance/mainnet/fixture.js';
 import { explainRefusal, shadowVoter, UnexplainedRefusal } from '../conformance/mainnet/shadow.js';
+import { recordNoTiming } from '../node/timing.js';
 import { assertNever } from '../util/assert-never.js';
 import type { FollowerStore, StapleKey } from './follower-store.js';
 import { atMoment } from './frozen-clock.js';
@@ -126,6 +127,7 @@ export async function shadowVoteLive(setup: ShadowLiveSetup): Promise<ShadowLive
 	const total = await setup.store.stapleCountBefore(end);
 	const windowStart = Math.max(0, total - setup.windowStaples);
 	const node = new lib.Node(mainnetNodeConfig(setup.storage()));
+	recordNoTiming(node.timing);
 	const { ledger } = node;
 	const voter = shadowVoter();
 	const adds = new WeightedAdds(ledger);
