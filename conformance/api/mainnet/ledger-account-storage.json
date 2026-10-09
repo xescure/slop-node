@@ -1,0 +1,73 @@
+{
+  "body": {
+    "account": "keeta_aqltdal4rshtky5iehd765y3mdjkcmku5d4ulo5fgonzqrxulwepnogq33mle",
+    "balances": [
+      {
+        "balance": "0xB4B8A600",
+        "token": "keeta_amca5kka2txyzatz7gqv3mc32ibwpp4dogbpksoclc42ate3iq56nemp25y5m"
+      },
+      {
+        "balance": "0x1393C6207",
+        "token": "keeta_amnkge74xitii5dsobstldatv3irmyimujfjotftx7plaaaseam4bntb7wnna"
+      },
+      {
+        "balance": "0x3C9A41DDDB1609A960000",
+        "token": "keeta_amoholo42ekzx7hoco44zqm4paoowbg2kxs5t7kv35q2vvh57czlh5pki6reo"
+      },
+      {
+        "balance": "0x2B2",
+        "token": "keeta_anf4krfbxp6srdhhovjjacpsgmtkk3biuibnazt5ajb5izjoam26w7oegeirk"
+      },
+      {
+        "balance": "0x14757FEAD568871D7F",
+        "token": "keeta_anqdilpazdekdu4acw65fj7smltcp26wbrildkqtszqvverljpwpezmd44ssg"
+      },
+      {
+        "balance": "0x3635C9ADC5DEA00000",
+        "token": "keeta_anvyixi4coiomjint2m2zyp5augq7nn3g2q4ikpfcenrinhl24o7japijaimc"
+      },
+      {
+        "balance": "0x7F1EEE202E53D4238D",
+        "token": "keeta_ao7nitutebhm2pkrfbtniepivaw324hecyb43wsxts5rrhi2p5ckgof37racm"
+      },
+      {
+        "balance": "0x1F482443",
+        "token": "keeta_apblhar4ncp3ln62wrygsn73pt3houuvj7ic47aarnolpcu67oqn4xqcji3au"
+      },
+      {
+        "balance": "0x71118170400",
+        "token": "keeta_apekny3rwbh5hhpigcvn4wxorbageyxopezaoryds627u7mncuf3ktob4snz4"
+      },
+      {
+        "balance": "0x49B9CA9A694340000",
+        "token": "keeta_apey3z7rvvorboznw4mj34ppdklp25bhcmi2jjsapxbjlsoh565ovzsa7caf2"
+      },
+      {
+        "balance": "0x29209080",
+        "token": "keeta_appez3qahkrlnevabva6a3ixschv2lg7li6ma4h6bgyc5hxw2ublr4txaggr4"
+      }
+    ],
+    "currentHeadBlock": "A0CCB19612E674417A0DE78087889FB7CF7E2CDEE5F837F3DE9DBE956DA3138F",
+    "currentHeadBlockHeight": "0x50BC",
+    "info": {
+      "account": "keeta_aqltdal4rshtky5iehd765y3mdjkcmku5d4ulo5fgonzqrxulwepnogq33mle",
+      "defaultPermission": [
+        "0x601",
+        "0x0"
+      ],
+      "description": "EVM Anchor Bridge Account",
+      "metadata": "",
+      "name": "EVM_ANCHOR"
+    },
+    "representative": null
+  },
+  "headers": {
+    "content-type": "application/json; charset=utf-8"
+  },
+  "request": {
+    "method": "GET",
+    "path": "/api/node/ledger/account/keeta_aqltdal4rshtky5iehd765y3mdjkcmku5d4ulo5fgonzqrxulwepnogq33mle",
+    "query": {}
+  },
+  "status": 200
+}

@@ -52,7 +52,9 @@ The capture was made on 2026-10-07 between 08:44:15 and 08:44:54 UTC from `https
 
 A third run, on 2026-10-07 between 10:36:51 and 10:39:24 UTC, captured the requests that probe how the representative reads limits, sides, starts and ends, and where paging stops (the rows of the table below from the bootstrap with a `start` that is no date onwards). It made 26 requests in three passes while their list was settled; each file holds the answer to the last request of its name.
 
-The capture made 50 HTTP GET requests, the second run 3 and the third 26, one at a time with half a second between them, and nothing else: it published nothing, asked for no vote or quote and sent no peer message. `GET /api/node/ledger/clearstats` was not requested: it clears the representative's statistics, so it changes the representative's state although it is a GET.
+A fourth run, on 2026-10-09 at 07:34:10 UTC, captured the state of a storage account, an answer about a kind of account the earlier runs held none of.
+
+The capture made 50 HTTP GET requests, the second run 3, the third 26 and the fourth 1, one at a time with half a second between them, and nothing else: it published nothing, asked for no vote or quote and sent no peer message. `GET /api/node/ledger/clearstats` was not requested: it clears the representative's statistics, so it changes the representative's state although it is a GET.
 
 The requests name accounts, blocks and a token that `mainnet/head.state.jsonl` lists, chosen by fixed rules:
 
@@ -60,6 +62,7 @@ The requests name accounts, blocks and a token that `mainnet/head.state.jsonl` l
 - the first account with a secp256k1 key, a chain, a representative and at least two balances, and the head block the dump gives it, which has since gained a successor
 - the network address
 - the multisig account, which is also the principal for the permission routes, with the base token as entity
+- the storage account with a chain
 - the representative with the most weight
 
 Where a request needs a value only an earlier response holds, it takes it from there: the `start` of a second history page is the `nextKey` of the first, as the client pages [Keeta TS] index.js:58986-58995; the `end` of a range of the chain is the `nextKey` of the chain page that starts at the account's head block in the head; and the `start` of the last pages of the ledger's history is the hash of the blocks of the second staple a bootstrap from the epoch returns, the SHA3-256 of its blocks' hashes [Keeta TS] index.js:80126-80135, 78985.
@@ -113,6 +116,12 @@ It needs only Python's standard library. It writes into a directory beside the o
 utils/capture-api-responses --only ledger-account-history,ledger-account-history-from-start,ledger-account-history-start conformance/mainnet/head.state.jsonl conformance/api/mainnet
 ```
 
+The fourth run was:
+
+```
+utils/capture-api-responses --only ledger-account-storage conformance/mainnet/head.state.jsonl conformance/api/mainnet
+```
+
 The third run's requests, with the two they page from, are sent again by:
 
 ```
@@ -131,7 +140,7 @@ utils/capture-api-responses --only node-bootstrap-votes-malformed-start,node-boo
 | `head_base_token.json`, `head_no_chain.json` | `GET /api/node/ledger/account/{account}/head` |
 | `representatives.json` | `GET /api/node/ledger/representatives` |
 
-They cover a storage account, which the capture does not request.
+They cover a storage account, which the capture requests only once, in the fourth run.
 
 ## Differences
 

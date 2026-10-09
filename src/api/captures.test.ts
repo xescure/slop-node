@@ -64,6 +64,9 @@ const MULTISIG = 'keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw
 
 const NETWORK_ADDRESS = 'keeta_alwerxoezkupzhifvpo5yvoazlsdqaweov66mokhq7xl4h5ow36v5xu6ek3js';
 
+/** The storage account the head names, whose chain moved on after the head. */
+const STORAGE = 'keeta_aqltdal4rshtky5iehd765y3mdjkcmku5d4ulo5fgonzqrxulwepnogq33mle';
+
 const USER_LATER = excluded({ kind: 'later-activity', account: USER, evidence: 'ledger-account-keypair.json' });
 
 const BASE_TOKEN_LATER = excluded({ kind: 'later-activity', account: BASE_TOKEN, evidence: 'ledger-account-token.json' });
@@ -114,6 +117,7 @@ const VERDICTS: Readonly<Record<string, Verdict>> = {
 	'ledger-account-multisig.json': replayed(),
 	'ledger-account-network.json': replayed(),
 	'ledger-account-pending.json': USER_LATER,
+	'ledger-account-storage.json': excluded({ kind: 'later-activity', account: STORAGE, evidence: 'ledger-account-storage.json' }),
 	'ledger-account-token.json': BASE_TOKEN_LATER,
 	'ledger-account-unknown.json': replayed(),
 	'ledger-accounts-malformed.json': USER_LATER,

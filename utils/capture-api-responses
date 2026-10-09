@@ -64,6 +64,7 @@ def fail(message):
 KEY_TYPE_ECDSA_SECP256K1 = 0
 KEY_TYPE_NETWORK = 2
 KEY_TYPE_TOKEN = 3
+KEY_TYPE_STORAGE = 4
 KEY_TYPE_MULTISIG = 7
 
 
@@ -113,6 +114,7 @@ class Parameters:
 		self.user_head = heads[self.user]["block"]
 		self.network = first("network address with a chain", (account for account in of_type(KEY_TYPE_NETWORK) if account in heads))
 		self.multisig = first("multisig account", of_type(KEY_TYPE_MULTISIG))
+		self.storage = first("storage account with a chain", (account for account in of_type(KEY_TYPE_STORAGE) if account in heads))
 		self.principal = self.multisig
 		self.entity = first(f"permission row of {self.multisig} on the base token", (
 			row["entity"] for row in rows if row["principal"] == self.principal and row["entity"] == self.token
@@ -283,6 +285,7 @@ def capture(parameters, directory, selected):
 	c.get("ledger-account-token", [*account, p.token])
 	c.get("ledger-account-network", [*account, p.network])
 	c.get("ledger-account-multisig", [*account, p.multisig])
+	c.get("ledger-account-storage", [*account, p.storage])
 	c.get("ledger-account-unknown", [*account, UNKNOWN_ACCOUNT])
 	c.get("ledger-account-malformed", [*account, MALFORMED_ACCOUNT])
 	c.get("ledger-account-head", [*account, p.user, "head"])
