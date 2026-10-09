@@ -361,6 +361,10 @@ describe('slop-node reindex-history', function() {
 		const cli = startCLI(['reindex-history'], environment);
 		expect(await cli.exited).toEqual({ code: 0, signal: null });
 		expect(cli.stdout()).toBe('reindexed 1 staples: 0 history entries removed, 0 added\ndone: 1 staples, 0 history entries removed, 0 added\n');
+
+		const again = startCLI(['reindex-history'], environment);
+		expect(await again.exited).toEqual({ code: 0, signal: null });
+		expect(again.stdout()).toMatch(/^done: 0 staples, 0 history entries removed, 0 added, resuming after the staple stored as [0-9]+\n$/);
 	});
 
 	test('is refused in memory', async function() {

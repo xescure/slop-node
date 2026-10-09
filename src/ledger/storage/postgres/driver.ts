@@ -42,11 +42,13 @@ import {
 	deleteSideIdempotentKeys,
 	foldLedgerChecksum,
 	headsOf,
+	historyReindexCursor,
 	insertChain,
 	insertMainBlocks,
 	insertMainIdempotentKeys,
 	insertMainVotes,
 	insertStaple,
+	keepHistoryReindexCursor,
 	mainBlock,
 	mainBlockHeight,
 	mainBlocksOrSuccessors,
@@ -319,12 +321,31 @@ function decodeBlock(bytes: Buffer): Block {
 /** The ledger values an effect computation reads: who signs the opening blocks of genesis without permissions, and what genesis creates. */
 export type EffectContext = Parameters<typeof LedgerInternals.computeEffectOfBlocks>[1] & object;
 
-/** What a history reindex changed. */
+/** What a history reindex changed, and the sequence number of the staple it resumed after, 0 when it began from the first. */
 export type HistoryReindex = {
+	readonly after: bigint;
 	readonly staples: number;
 	readonly removed: number;
 	readonly added: number;
 };
+
+/** The arena of the node's store that holds, under the rule's name, where a history reindex reached. */
+const HISTORY_REINDEX_ARENA = 'historyReindex';
+
+/**
+ * The rule of D18 this build lists staples under, which names the cursor of
+ * a reindex under it: a build with another rule reindexes from the first
+ * staple, while a reindex under this one resumes where the last stopped.
+ */
+const HISTORY_RULE = 'signers and effect accounts';
+
+/** Where a reindex under the rule reached, as stored, or the beginning when the node stored none. */
+function reindexedAfterOf(value: unknown): bigint {
+	if (typeof value !== 'object' || value === null || !('after' in value) || typeof value.after !== 'string' || !/^[0-9]+$/.test(value.after)) {
+		return(0n);
+	}
+	return(BigInt(value.after));
+}
 
 /** A ledger checksum is a block hash's width, 256 bits. */
 const CHECKSUM_HEX_DIGITS = 64;
@@ -752,14 +773,19 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * lists it under: removes the rows of the accounts a staple touches but
 	 * is not listed under, and adds the missing rows of those it is. A
 	 * database written under an earlier rule needs this once. It reads the
-	 * staples in batches and works out each batch's rows outside any
-	 * transaction, then rewrites them in a transaction of its own, so it may
-	 * be stopped and run again; it is meant to run while no node writes to
-	 * the database. The progress hears the totals after each batch.
+	 * staples in batches, in the order they were stored, and works out each
+	 * batch's rows outside any transaction, then rewrites them in a
+	 * transaction of its own, which also records the last staple of the batch
+	 * as where the reindex reached; so a reindex that was stopped, or one run
+	 * again, resumes after it. A node writes each staple's rows under the rule
+	 * of its build, so the staples it stores after a reindex need none. It is
+	 * meant to run while no node writes to the database. The progress hears
+	 * the totals after each batch.
 	 */
 	async reindexHistory(context: EffectContext, progress: (done: HistoryReindex) => void = ignoreOutcome): Promise<HistoryReindex> {
-		let done: HistoryReindex = { staples: 0, removed: 0, added: 0 };
-		let after = 0n;
+		const stored = await this.#pool.connection();
+		let after = reindexedAfterOf(onlyRow((await stored.pool.query<{ value: unknown }>({ name: historyReindexCursor.name, text: historyReindexCursor.text, values: [HISTORY_REINDEX_ARENA, HISTORY_RULE] })).rows)?.value);
+		let done: HistoryReindex = { after, staples: 0, removed: 0, added: 0 };
 		for (;;) {
 			const { pool } = await this.#pool.connection();
 			const rows = (await pool.query<ReindexedStaple>({ name: staplesToReindex.name, text: staplesToReindex.text, values: [toNumeric(after), REINDEX_BATCH_STAPLES] })).rows;
@@ -769,16 +795,18 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 			}
 			const { listed, unlisted } = historyChangesOf(rows, context);
 			const transaction = await this.beginTransaction({ identifier: `reindex-history-after-${String(after)}`, readOnly: false });
+			const reached = fromInteger(last.sequence);
 			let counts: { readonly removed: number; readonly added: number };
 			try {
 				counts = await this.#rewriteHistory(transaction, listed, unlisted);
+				await transaction.run(keepHistoryReindexCursor, [HISTORY_REINDEX_ARENA, HISTORY_RULE, JSON.stringify({ after: reached.toString() })]);
 			} catch (error: unknown) {
 				await transaction.abort();
 				throw(error);
 			}
 			await transaction.commit();
-			after = fromInteger(last.sequence);
-			done = { staples: done.staples + rows.length, removed: done.removed + counts.removed, added: done.added + counts.added };
+			after = reached;
+			done = { ...done, staples: done.staples + rows.length, removed: done.removed + counts.removed, added: done.added + counts.added };
 			progress(done);
 		}
 	}

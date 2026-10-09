@@ -544,7 +544,7 @@ describe('the Postgres driver', function() {
 		await expect(read).rejects.toThrow('integrity');
 	});
 
-	test('a history reindex lists each staple under exactly the accounts D18 names, and a second finds nothing to change', async function() {
+	test('a history reindex lists each staple under exactly the accounts D18 names, and a second resumes after the last', async function() {
 		const database = await ledgerDatabase();
 		freezeClock(GENESIS_MOMENT);
 		const network = await createTestNetwork({ representativeWeights: DEFAULT_WEIGHTS });
@@ -572,12 +572,43 @@ describe('the Postgres driver', function() {
 		const progress: HistoryReindex[] = [];
 		expect(await storage.reindexHistory(context, function(done) {
 			progress.push(done);
-		})).toEqual({ staples: 2, removed: 1, added: 1 });
+		})).toEqual({ after: 0n, staples: 2, removed: 1, added: 1 });
 
-		expect(progress).toEqual([{ staples: 2, removed: 1, added: 1 }]);
+		expect(progress).toEqual([{ after: 0n, staples: 2, removed: 1, added: 1 }]);
 		expect(await historyOf(network.baseToken)).toEqual(listedBefore.token);
 		expect(await historyOf(recipient)).toEqual(listedBefore.recipient);
-		expect(await storage.reindexHistory(context)).toEqual({ staples: 2, removed: 0, added: 0 });
+		const [last] = (await pool.query<{ sequence: string }>('SELECT max(sequence)::text AS sequence FROM staples')).rows;
+		expect(await storage.reindexHistory(context)).toEqual({ after: BigInt(last?.sequence ?? '0'), staples: 0, removed: 0, added: 0 });
+	});
+
+	test('a history reindex resumes after the staple one that was stopped reached', async function() {
+		const database = await ledgerDatabase();
+		freezeClock(GENESIS_MOMENT);
+		const network = await createTestNetwork({ representativeWeights: DEFAULT_WEIGHTS });
+		const storage = ownedStorageOn(database);
+		const ledger = network.createLedger(storage, requireAt(network.representatives, 0));
+		await ledger.add(network.genesis);
+		const sender = requireAt(network.users, 0);
+		const recipient = requireAt(network.users, 1);
+		const [sent] = await ledger.add(await confirmedStaple([await sendBlock({ from: sender, previous: headOf(network.genesis, sender), to: recipient, amount: 1n, token: network.baseToken, network: network.network })], network.representatives));
+		if (sent === undefined) {
+			throw(new Error('the send was not applied'));
+		}
+		const pool = database.pool();
+		const rowsOf = async function(staple: VoteStaple): Promise<number> {
+			const counted = await pool.query<{ count: string }>('SELECT count(*)::text AS count FROM history WHERE blocks_hash = $1', [Buffer.from(staple.blocksHash.toString(), 'hex')]);
+			return(Number(counted.rows[0]?.count ?? 0));
+		};
+		const listed = { genesis: await rowsOf(network.genesis), sent: await rowsOf(sent) };
+		// Both staples lose a row of their history, and a reindex stopped earlier reached the first.
+		await pool.query('DELETE FROM history USING (SELECT DISTINCT ON (blocks_hash) blocks_hash, account_id FROM history ORDER BY blocks_hash, account_id) AS one WHERE history.blocks_hash = one.blocks_hash AND history.account_id = one.account_id');
+		const [genesisRow] = (await pool.query<{ sequence: string }>('SELECT sequence::text AS sequence FROM staples WHERE blocks_hash = $1', [Buffer.from(network.genesis.blocksHash.toString(), 'hex')])).rows;
+		await pool.query('INSERT INTO kv_entries (arena, key, value) VALUES (\'historyReindex\', \'signers and effect accounts\', $1)', [JSON.stringify({ after: genesisRow?.sequence })]);
+		const context = { initialTrustedAccount: network.trustedSigner, baseToken: network.baseToken, networkAddress: network.networkAddress };
+
+		expect(await storage.reindexHistory(context)).toEqual({ after: BigInt(genesisRow?.sequence ?? '0'), staples: 1, removed: 0, added: 1 });
+
+		expect({ genesis: await rowsOf(network.genesis), sent: await rowsOf(sent) }).toEqual({ genesis: listed.genesis - 1, sent: listed.sent });
 	});
 
 	test('a node killed after its commits, before it writes its statistics, leaves a checksum covering every staple it committed', async function() {

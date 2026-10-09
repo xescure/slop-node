@@ -366,6 +366,14 @@ export const appendHistory: Statement<[AccountID[], Buffer, Date]> = statement('
 
 export type ReindexedStaple = { readonly sequence: IntegerText; readonly blocks_hash: Buffer; readonly blocks: Buffer[] };
 
+/** Where a history reindex under a rule reached, as the node's store keeps it (PostgresLedgerStorage.reindexHistory). */
+export const historyReindexCursor: Statement<[string, string], { readonly value: unknown }> = statement('history_reindex_cursor', `
+	SELECT value FROM kv_entries WHERE arena = $1 AND key = $2`);
+
+export const keepHistoryReindexCursor: Statement<[string, string, string]> = statement('keep_history_reindex_cursor', `
+	INSERT INTO kv_entries (arena, key, value) VALUES ($1, $2, $3::json)
+	ON CONFLICT (arena, key) DO UPDATE SET value = EXCLUDED.value, expires_at = NULL`);
+
 /** The main staples after a sequence number, each with its blocks in staple order. */
 export const staplesToReindex: Statement<[string, number], ReindexedStaple> = statement('staples_to_reindex', `
 	WITH batch AS (

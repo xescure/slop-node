@@ -308,7 +308,11 @@ async function reindexHistory(config: EnvironmentConfig, output: Output): Promis
 				const done = await storage.ledger.reindexHistory({ initialTrustedAccount: config.initialTrustedAccount, baseToken, networkAddress }, function(progress) {
 					output.out(`reindexed ${String(progress.staples)} staples: ${String(progress.removed)} history entries removed, ${String(progress.added)} added\n`);
 				});
-				output.out(`done: ${String(done.staples)} staples, ${String(done.removed)} history entries removed, ${String(done.added)} added\n`);
+				let resumed = '';
+				if (done.after > 0n) {
+					resumed = `, resuming after the staple stored as ${done.after.toString()}`;
+				}
+				output.out(`done: ${String(done.staples)} staples, ${String(done.removed)} history entries removed, ${String(done.added)} added${resumed}\n`);
 				return;
 			}
 			default:

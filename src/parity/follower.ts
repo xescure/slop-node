@@ -10,6 +10,7 @@ import { promisify } from 'node:util';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import pg from 'pg';
 import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
+import type { HistoryReindex } from '../ledger/storage/postgres/driver.js';
 import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RETRY_ARENA } from '../node/bootstrap-cursors.js';
 import { assertNever } from '../util/assert-never.js';
 import { checkFollowerEnvironment, FOLLOWER_DATABASE, FOLLOWER_LISTEN_IP, FOLLOWER_POSTGRES_USER, FOLLOWER_SETTINGS_FILE, followerDatabaseURL, followerDirectory, followerEnvironment, parseFollowerCommand, POSTGRES_PORT, POSTGRES_SOCKET_DIRECTORY, readFollowerSettings, readOrCreateSeed } from './follower-config.js';
@@ -508,6 +509,14 @@ async function resetCursors(directory: string): Promise<ExitCode> {
 	return(0);
 }
 
+/** What a reindex says of where it began, when it resumed after a staple. */
+function resumedText(done: HistoryReindex): string {
+	if (done.after === 0n) {
+		return('');
+	}
+	return(`, resuming after the staple stored as ${done.after.toString()}`);
+}
+
 /** How many staples a reindex reads between two progress lines. */
 const REINDEX_PROGRESS_STAPLES = 10_000;
 
@@ -537,7 +546,7 @@ async function reindexHistory(directory: string): Promise<ExitCode> {
 	if (done === undefined) {
 		return(1);
 	}
-	process.stdout.write(`history reindexed in ${directory}: ${String(done.staples)} staples, ${String(done.removed)} history entries removed, ${String(done.added)} added\n`);
+	process.stdout.write(`history reindexed in ${directory}: ${String(done.staples)} staples, ${String(done.removed)} history entries removed, ${String(done.added)} added${resumedText(done)}\n`);
 	return(0);
 }
 
