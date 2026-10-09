@@ -1144,12 +1144,30 @@ class Pass<Staple extends PassStaple> {
 		}
 	}
 
-	/** Whether the node holds or has queued every staple before the horizon: shown once the start has moved past it, or by the page, with no staple not named before it, reaching it. */
+	/**
+	 * Whether the node holds or has queued every staple before the horizon:
+	 * shown once the start has moved past it, or by the page, with no staple
+	 * not named before it, reaching it. A pass whose horizon is its end, a
+	 * deep re-scan or a pass over a range, sends no probe when no staple of
+	 * the page could show the horizon, as none can once the peer is known to
+	 * key by votes and the votes of the page were made before it: its horizon
+	 * lies in the past, and the peer would read, for each probe, through the
+	 * staples the node holds past it. A pass from where the last reached
+	 * probes a horizon just before the present, past which the peer holds
+	 * little.
+	 */
 	async #reachesHorizon(evidence: Evidence<Staple>, filter: Filter): Promise<boolean> {
 		if (this.#start >= this.#horizon) {
 			return(true);
 		}
 		if (filter.errorRate > ACCEPTED_ERROR_RATE) {
+			return(false);
+		}
+		const horizon = this.#horizon;
+		const mayShow = evidence.page.some(function(_staple, index): boolean {
+			return(shows(evidence, index, horizon));
+		});
+		if (!mayShow && this.#end === this.#horizon && evidence.keying.current !== 'unknown') {
 			return(false);
 		}
 		return(await this.#probe(this.#horizon, filter.serialized, evidence) !== undefined);
