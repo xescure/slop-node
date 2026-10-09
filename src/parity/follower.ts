@@ -604,6 +604,7 @@ async function ledgerProgress(directory: string): Promise<unknown> {
 		const staples = await client.query<{ count: string; newest_staple_time: Date | null; newest_moment: Date | null }>('SELECT count(*) AS count, max(staple_time) AS newest_staple_time, max(moment) AS newest_moment FROM staples');
 		const cursors = await client.query<{ key: string; value: unknown }>('SELECT key, value FROM kv_entries WHERE arena = $1 ORDER BY key', [BOOTSTRAP_CURSOR_ARENA]);
 		const size = await client.query<{ bytes: string }>('SELECT pg_database_size(current_database()) AS bytes');
+		const deferred = await client.query<{ count: string }>('SELECT count(*) AS count FROM deferred_staples');
 		const caughtUp = await client.query<{ value: unknown }>('SELECT value FROM kv_entries WHERE arena = $1', [BOOTSTRAP_CAUGHT_UP_ARENA]);
 		const ranges = await client.query<{ value: unknown }>('SELECT value FROM kv_entries WHERE arena = $1', [BOOTSTRAP_RANGES_ARENA]);
 		const queued = await client.query<{ code: string | null; count: string; oldest: string | null; reported: string }>(`
@@ -612,6 +613,7 @@ async function ledgerProgress(directory: string): Promise<unknown> {
 		const row = staples.rows[0];
 		return({
 			staples: Number(row?.count ?? 0),
+			deferredStaples: Number(deferred.rows[0]?.count ?? 0),
 			newestStapleTime: row?.newest_staple_time ?? null,
 			newestMoment: row?.newest_moment ?? null,
 			databaseMiB: Math.round(Number(size.rows[0]?.bytes ?? 0) / KIB_PER_MIB / KIB_PER_MIB),
