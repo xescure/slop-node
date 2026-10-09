@@ -115,6 +115,8 @@ export type SimulatedPeerOptions = {
 	 * once it has a staple to send [Keeta TS] index.js:69641-69647.
 	 */
 	readonly givesUpPastNamed?: number;
+	/** Moments from and before which what stands in front of the peer gives up on every request from a start between them that carries a filter, however small. */
+	readonly givesUpFilteredWithin?: { readonly from: number; readonly to: number };
 	/** How the peer keys and lists its staples: by when it applied them, as earlier versions of this node did, unless told otherwise. */
 	readonly keying?: SimulatedKeying;
 };
@@ -205,6 +207,7 @@ export class SimulatedPeer {
 	readonly #answersAtMost: number;
 	readonly #readsAtMost: number;
 	readonly #givesUpPastNamed: number;
+	readonly #givesUpFilteredWithin: { readonly from: number; readonly to: number } | undefined;
 	readonly #filters = new Map<string, BloomFilter>();
 	readonly #random = deterministicRandom(7);
 	#nextID = 0;
@@ -222,6 +225,7 @@ export class SimulatedPeer {
 		this.#answersAtMost = options.answersAtMost ?? Number.POSITIVE_INFINITY;
 		this.#readsAtMost = options.readsAtMost ?? Number.POSITIVE_INFINITY;
 		this.#givesUpPastNamed = options.givesUpPastNamed ?? Number.POSITIVE_INFINITY;
+		this.#givesUpFilteredWithin = options.givesUpFilteredWithin;
 		this.#keying = options.keying ?? { kind: 'applied' };
 		this.#voteKey = keyedWhenMade;
 		if (this.#keying.kind === 'votes' && this.#keying.keyedAt !== undefined) {
@@ -331,7 +335,10 @@ export class SimulatedPeer {
 			default:
 				return(assertNever(keying));
 		}
-		if (listing.leftOutFirst > this.#givesUpPastNamed) {
+		const stretch = this.#givesUpFilteredWithin;
+		const start = request.start.getTime();
+		const filteredWithin = stretch !== undefined && request.bloomFilter !== undefined && start >= stretch.from && start < stretch.to;
+		if (listing.leftOutFirst > this.#givesUpPastNamed || filteredWithin) {
 			this.#gaveUp++;
 			return({ kind: 'gave-up', reason: `the peer gave up on a request from ${request.start.toISOString()}` });
 		}

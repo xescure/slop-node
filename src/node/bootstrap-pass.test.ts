@@ -464,22 +464,26 @@ describe('a pass over a peer', function() {
 });
 
 describe('the staples a pass names ahead of its start', function() {
-	test('halve each time the peer gives up, down to a floor, and grow back slowly as it answers', function() {
+	test('halve each time the peer gives up, down to a floor, then go without a filter until a pass completes, and grow by passes', function() {
 		const window = new PrimingWindow();
-		const sizes = [window.size];
-		for (let gaveUp = 0; gaveUp < 6; gaveUp++) {
-			window.gaveUp();
-			sizes.push(window.size);
+		const given: string[] = [];
+		for (let gaveUp = 0; gaveUp < 5; gaveUp++) {
+			given.push(`${window.gaveUp()} ${String(window.size)}`);
 		}
-		expect(sizes).toEqual([128, 64, 32, 16, 8, 8, 8]);
+		expect(given).toEqual(['halved 64', 'halved 32', 'halved 16', 'halved 8', 'unfiltered 8']);
+		expect(window.unfiltered).toBe(true);
 
-		for (let page = 0; page < 20; page++) {
-			window.answered();
+		window.passed(false);
+		expect([window.unfiltered, window.size]).toEqual([true, 8]);
+		window.passed(true);
+		expect([window.unfiltered, window.size]).toEqual([false, 8]);
+		window.passed(false);
+		window.passed(true);
+		expect(window.size).toBe(24);
+		for (let pass = 0; pass < 20; pass++) {
+			window.passed(false);
 		}
 		expect(window.size).toBe(128);
-		window.gaveUp();
-		window.answered();
-		expect(window.size).toBe(72);
 	});
 });
 

@@ -115,23 +115,34 @@ export class LongestAnswer {
 }
 
 /**
- * How many staples the node holds a pass names to the peer ahead of where it
- * asks from (PeerIO.held), learned from the peer's answers.
+ * Whether passes over the peer send it a filter, and how many staples the
+ * node holds they name in it ahead of where they ask from (PeerIO.held),
+ * learned from the peer's answers.
  *
- * A peer runs out of time for a request only once it has a staple to send
- * [Keeta TS] index.js:69641-69647: one asked to leave out every staple ahead
- * of the start reads on until something in front of it gives up, as a
- * gateway that answers 504 does, or until the node stops waiting. So the
- * window halves whenever the peer gives up, down to PRIMING_FLOOR, and grows
- * back by PRIMING_STEP with each page it answers, up to PRIMING_CAP.
+ * A peer tests every staple it reads against the filter, and runs out of
+ * time for a request only once it has a staple to send
+ * [Keeta TS] index.js:69641-69647, so one sent a filter may read on until
+ * something in front of it gives up, as a gateway that answers 504 does, or
+ * until the node stops waiting. So the window halves whenever the peer gives
+ * up, down to PRIMING_FLOOR, and the pass fails; it grows by PRIMING_STEP
+ * after each pass over the peer the peer did not give up on, up to the cap.
+ * Once the peer gives up on a request with the window at the floor, the
+ * request is sent again with no filter at all, and so is every request to
+ * the peer from then on, until a pass over it completes; the window then
+ * opens again from the floor. Read with no filter, a page from the start is
+ * never empty, so a pass shows it holds everything before its horizon only
+ * by staples the peer applied after the horizon: against a peer that applies
+ * none, passes stay without a filter, holding all they read, until it does.
  *
- * Naming fewer loses nothing: a pass concludes only that the node holds or
- * has queued what it was sent or its filter named, and a staple left
- * unnamed is sent, and found held. It costs only what the peer sends again.
+ * Naming fewer, or nothing, loses nothing: a pass concludes only that the
+ * node holds or has queued what it was sent or its filter named, and a
+ * staple left unnamed is sent, and found held. It costs only what the peer
+ * sends again.
  */
 export class PrimingWindow {
 	readonly #cap: number;
 	#size: number;
+	#unfiltered = false;
 
 	/** Opens at the cap, PRIMING_CAP unless another is given. */
 	constructor(cap: number = PRIMING_CAP) {
@@ -143,11 +154,27 @@ export class PrimingWindow {
 		return(this.#size);
 	}
 
-	gaveUp(): void {
-		this.#size = Math.max(PRIMING_FLOOR, Math.floor(this.#size / 2));
+	/** Whether requests to the peer carry no filter. */
+	get unfiltered(): boolean {
+		return(this.#unfiltered);
 	}
 
-	answered(): void {
+	/** The peer gave up on a request that carried a filter: answers whether to send it again with none, the window being at its floor already. */
+	gaveUp(): 'unfiltered' | 'halved' {
+		if (this.#size <= PRIMING_FLOOR) {
+			this.#unfiltered = true;
+			return('unfiltered');
+		}
+		this.#size = Math.max(PRIMING_FLOOR, Math.floor(this.#size / 2));
+		return('halved');
+	}
+
+	/** A pass over the peer ended, at its bound or complete, without the peer giving up on it. */
+	passed(complete: boolean): void {
+		if (this.#unfiltered) {
+			this.#unfiltered = !complete;
+			return;
+		}
 		this.#size = Math.min(this.#cap, this.#size + PRIMING_STEP);
 	}
 }
@@ -169,7 +196,7 @@ const PRIMING_CAP = 128;
 /** The fewest held staples a pass names ahead of the start, however often the peer gave up. */
 const PRIMING_FLOOR = 8;
 
-/** How many more held staples a pass may name after each page the peer answers. */
+/** How many more held staples passes name after each pass the peer did not give up on. */
 const PRIMING_STEP = 8;
 
 /** Seeds a filter takes: integers its hash functions read exactly. */
@@ -274,6 +301,8 @@ export type PeerOutcome = {
 };
 
 const EPOCH = new Date(0);
+
+const UNFILTERED: Filter = { serialized: undefined, errorRate: 0 };
 
 function earlier(left: Date, right: Date): Date {
 	return(new Date(Math.min(left.getTime(), right.getTime())));
@@ -817,7 +846,8 @@ class Pass<Staple extends PassStaple> {
 			if (probesHorizonAfter(shortPages) && await this.#reachesHorizon(evidence, filter)) {
 				return({ kind: 'caught-up' });
 			}
-			const fits = this.#named.size + page.length <= BLOOM_CAPACITY;
+			// Read with no filter, the peer sends the same page from the same start again, so only a move makes progress.
+			const fits = !this.#io.priming.unfiltered && this.#named.size + page.length <= BLOOM_CAPACITY;
 			// A page cut by the peer's own limit read no further for the staples the filter names, so it calls for no early move.
 			const early = fits && shortPages >= 2 && this.#named.received > 0 && evidence.wholeBelow === page.length;
 			if (fits && !early) {
@@ -854,13 +884,21 @@ class Pass<Staple extends PassStaple> {
 		}
 	}
 
+	/** The filter naming those staples, or none once the peer is read without one (PrimingWindow), which names nothing by mistake. */
+	#filterOf(named: NamedStaples): Filter {
+		if (this.#io.priming.unfiltered) {
+			return(UNFILTERED);
+		}
+		return(named.filter(this.#seed()));
+	}
+
 	#exhausted(): boolean {
 		return(this.#requests >= MAX_PASS_REQUESTS || Date.now() - this.#began >= MAX_PASS_MILLISECONDS);
 	}
 
 	/** A page from the start, taken, or nothing when it was too large, and fewer staples are asked for from then on. */
 	async #list(): Promise<Listed<Staple> | undefined> {
-		const filter = this.#named.filter(this.#seed());
+		const filter = this.#filterOf(this.#named);
 		const answer = await this.#request(this.#start, this.#limit, filter.serialized);
 		if (answer === undefined) {
 			return(undefined);
@@ -919,12 +957,10 @@ class Pass<Staple extends PassStaple> {
 				this.#limit = Math.min(this.#limit, Math.ceil(limit / 2));
 				return(undefined);
 			case 'gave-up':
-				this.#io.priming.gaveUp();
-				throw(new Error(`${answer.reason}; the next pass names at most ${String(this.#io.priming.size)} staples the node holds ahead of its start`));
+				return(await this.#afterGivingUp(answer.reason, start, limit, bloomFilter));
 			default:
 				return(assertNever(answer));
 		}
-		this.#io.priming.answered();
 		const staples = answer.staples;
 		await this.#keying.observe(staples, start);
 		this.#known.learn(staples);
@@ -952,6 +988,22 @@ class Pass<Staple extends PassStaple> {
 		return({ staples, evidence });
 	}
 
+	/** Sends the request again with no filter once the window is at its floor (PrimingWindow); otherwise the pass fails, having halved it. */
+	async #afterGivingUp(reason: string, start: number, limit: number, bloomFilter: string | undefined): Promise<{ readonly staples: readonly Staple[]; readonly evidence: Evidence<Staple> } | undefined> {
+		if (bloomFilter === undefined) {
+			throw(new Error(`${reason}, though it carried no filter`));
+		}
+		const narrowed = this.#io.priming.gaveUp();
+		switch (narrowed) {
+			case 'unfiltered':
+				return(await this.#request(start, limit, undefined));
+			case 'halved':
+				throw(new Error(`${reason}; the next pass names at most ${String(this.#io.priming.size)} staples the node holds ahead of its start`));
+			default:
+				return(assertNever(narrowed));
+		}
+	}
+
 	/**
 	 * Adds or queues the staples a peer sent. A peer that sends a staple the
 	 * filter named ignores the filter, and would send it again forever; one
@@ -959,8 +1011,10 @@ class Pass<Staple extends PassStaple> {
 	 * filter names those votes from then on.
 	 */
 	async #take(page: readonly Staple[], named: NamedStaples = this.#named, resent?: string): Promise<Taken> {
+		// A request sent with no filter named nothing, which the peer then sends all the same.
+		const unfiltered = this.#io.priming.unfiltered;
 		const sent = page.find(function(staple) {
-			return(named.names(staple));
+			return(!unfiltered && named.names(staple));
 		});
 		if (sent !== undefined) {
 			throw(new Error(`the peer sent staple ${sent.blocksHash.toString()}, which the filter named, so it does not leave out what a filter names`));
@@ -1023,7 +1077,7 @@ class Pass<Staple extends PassStaple> {
 			return(keying === 'applied' || known.mayBeMadeSince(key, target.at - VOTE_KEY_TOLERANCE_MILLISECONDS));
 		});
 		named.forget(shownStaple);
-		const filter = named.filter(this.#seed());
+		const filter = this.#filterOf(named);
 		const answer = await this.#request(target.at, this.#limit, filter.serialized);
 		if (answer === undefined) {
 			return(undefined);
@@ -1113,7 +1167,7 @@ class Pass<Staple extends PassStaple> {
 			if (this.#exhausted()) {
 				return(false);
 			}
-			const filter = this.#named.filter(this.#seed());
+			const filter = this.#filterOf(this.#named);
 			if (to === undefined) {
 				const first = await this.#first(this.#start, filter.serialized);
 				if (first !== undefined) {
@@ -1370,6 +1424,9 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 	// Whatever the passes did, the staples they queued, and those queued before, are offered again, which also makes room in a queue that was full.
 	const [retried] = await Promise.allSettled([io.retry()]);
 	const liveOutcome = outcomeOf(liveResult);
+	if (liveOutcome !== undefined) {
+		io.priming.passed(completes(liveOutcome));
+	}
 	const deepOutcome = outcomeOf(deepResult);
 	await record(function(current) {
 		let next: PeerProgress = { ...current, caughtUp: false };

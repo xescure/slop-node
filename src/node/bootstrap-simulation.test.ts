@@ -79,14 +79,9 @@ class Follower {
 			answers = new LongestAnswer();
 			this.#answers.set(peer, answers);
 		}
-		let priming = this.#priming.get(peer);
-		if (priming === undefined) {
-			priming = new PrimingWindow();
-			this.#priming.set(peer, priming);
-		}
 		return({
 			answers,
-			priming,
+			priming: this.priming(peer),
 			page: function(request) {
 				return(peer.page(request));
 			},
@@ -114,6 +109,16 @@ class Follower {
 				return(Promise.resolve());
 			}
 		});
+	}
+
+	/** How passes over the peer name what the node holds, kept across them. */
+	priming(peer: SimulatedPeer): PrimingWindow {
+		let priming = this.#priming.get(peer);
+		if (priming === undefined) {
+			priming = new PrimingWindow();
+			this.#priming.set(peer, priming);
+		}
+		return(priming);
 	}
 
 	options(from: Date = new Date(0)): PassOptions {
@@ -996,6 +1001,29 @@ describe('bootstrapping against a peer keyed by votes, as the main network\'s re
 		// It halves from 128 below what the peer reads past, and growing back past it costs one more now and then.
 		expect(failed).toBeGreaterThan(0);
 		expect(failed).toBe(scenario.peer.gaveUp);
+	});
+
+	/*
+	 * Read without a filter, the main network's first representative answered
+	 * at once from a start where every request carrying the node's filter
+	 * timed out at its gateway, however few staples the filter named.
+	 */
+	test('reads with no filter, until a pass completes, a peer that gives up on every request carrying one from a stretch of its history', async function() {
+		freezeClock(new Date(NOW));
+		const count = 3000;
+		const first = NOW - HOUR - count * 10 * SECOND;
+		const scenario = new Scenario({ ...REPRESENTATIVE, givesUpFilteredWithin: { from: first + 1000 * 10 * SECOND, to: first + 1600 * 10 * SECOND } });
+		liveHistory(scenario.peer, count, 0.1, NOW - HOUR);
+		scenario.from = new Date(first - MINUTE);
+		// Read with no filter, a page from the start is never empty, so a pass shows it holds everything before its horizon only by staples applied after it.
+		scenario.trafficWhileRead = steady(0.2);
+
+		const failed = await scenario.untilCompleteThroughFailures(120);
+
+		expect(scenario.missing()).toEqual([]);
+		// The window halves four times to its floor, where the next give-up drops the filter.
+		expect(failed).toBe(4);
+		expect(scenario.follower.priming(scenario.peer)).toMatchObject({ unfiltered: false });
 	});
 
 	/** Staples made one a second over the hour before, each with four votes within a second, from a peer keyed by votes as given. */

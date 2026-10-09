@@ -470,14 +470,14 @@ describe('a bootstrap client', function() {
 		expect(warnings()[0]).toContain('which the filter named');
 	});
 
-	test('gives up on a request a peer does not answer in time, until the next update, which names half as many staples it holds ahead of its start', async function() {
+	test('gives up on a request a peer does not answer in time, until the next update', async function() {
 		const silent = await startSilentAPIPeer();
 		const late = await joiner({ bootstrapFrom: [silent.apiURL] });
 		const warnings = warningsOf(late.node);
 
 		expect(await clientOf(late.node, { timeout: 50 }).update()).toEqual({ complete: false });
 
-		expect(warnings()).toEqual([`BOOTSTRAP Bootstrapping from ${silent.apiURL} failed; it is tried again on the next update: Error: PageError: ${silent.apiURL} did not answer within 50 ms; the next pass names at most 64 staples the node holds ahead of its start`]);
+		expect(warnings()).toEqual([`BOOTSTRAP Bootstrapping from ${silent.apiURL} failed; it is tried again on the next update: Error: PageError: ${silent.apiURL} did not answer within 50 ms, though it carried no filter`]);
 	});
 
 	test('counts the updates in a row that drained every peer, and starts the count again after one that did not', async function() {
