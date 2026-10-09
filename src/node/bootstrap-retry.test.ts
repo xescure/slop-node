@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { advanceClock, freezeClock } from '../testing/network.js';
-import { SimulatedNode, SimulatedPeer, SimulatedRetryStore, simulatedRetries } from '../testing/simulated-peer.js';
+import { decodeSimulatedStaple, SimulatedNode, SimulatedPeer, SimulatedRetryStore, simulatedRetries } from '../testing/simulated-peer.js';
 import type { RefusalReport, SimulatedStaple } from '../testing/simulated-peer.js';
-import { REPORT_REFUSED_AFTER_MILLISECONDS, RetryQueueFull } from './bootstrap-retry.js';
+import { FIRST_BACKOFF_MILLISECONDS, REPORT_REFUSED_AFTER_MILLISECONDS, RetryQueueFull, sizeOf } from './bootstrap-retry.js';
 import type { QueueBounds } from './bootstrap-retry.js';
+import type { NamedStaple } from './bootstrap-window.js';
 
 const NOW = Date.UTC(2026, 9, 8, 12);
 const MINUTE = 60_000;
@@ -24,9 +25,10 @@ function at(list: readonly SimulatedStaple[], index: number): SimulatedStaple {
 	return(staple);
 }
 
-function idsOf(list: readonly SimulatedStaple[]): number[] {
+/** The IDs of simulated staples, as the queue names them by their bytes. */
+function idsOf(list: readonly NamedStaple[]): number[] {
 	return(list.map(function(staple): number {
-		return(staple.id);
+		return(decodeSimulatedStaple(staple.toBytes()).id);
 	}));
 }
 
@@ -84,7 +86,7 @@ describe('a bootstrap retry queue', function() {
 			throw(new Error('no staple'));
 		}
 		const harness = new Harness();
-		const queue = harness.queue({ staples: 1, bytes: refused.toBytes().byteLength });
+		const queue = harness.queue({ staples: 1, bytes: 1024 * 1024 });
 
 		expect(await Promise.all([queue.add(refused, 'deep'), queue.add(refused, 'deep')])).toEqual(['queued', 'queued']);
 
@@ -101,15 +103,18 @@ describe('a bootstrap retry queue', function() {
 		if (genesis === undefined || refused === undefined) {
 			throw(new Error('no staples'));
 		}
+		freezeClock(new Date(NOW));
 		const harness = new Harness();
 		const queue = harness.queue();
 		await harness.node.add(genesis);
 
 		expect(await queue.add(genesis, 'deep')).toBe('held');
 		expect(await queue.add(refused, 'deep')).toBe('queued');
-		// Its blocks arrive with other votes, as over P2P.
+		// Its blocks arrive with other votes, as over P2P, which nothing the queue watches for tells it.
 		vi.spyOn(harness.node, 'holds').mockReturnValue(true);
+		expect(await queue.retry()).toBe(0);
 
+		advanceClock(FIRST_BACKOFF_MILLISECONDS);
 		expect(await queue.retry()).toBe(1);
 		expect(await queue.size()).toBe(0);
 	});
@@ -126,7 +131,13 @@ describe('a bootstrap retry queue', function() {
 		expect(byCount.store.largest).toBe(2);
 
 		const byBytes = new Harness();
-		const bytesBound = byBytes.queue({ staples: 100, bytes: at(list, 0).toBytes().byteLength });
+		const sized = new Harness().queue();
+		await sized.add(at(list, 0), 'deep');
+		const [entry] = await sized.entries();
+		if (entry === undefined) {
+			throw(new Error('nothing queued'));
+		}
+		const bytesBound = byBytes.queue({ staples: 100, bytes: sizeOf(entry) });
 		await bytesBound.add(at(list, 0), 'deep');
 		await expect(bytesBound.add(at(list, 1), 'deep')).rejects.toThrow(RetryQueueFull);
 		expect(await bytesBound.size()).toBe(1);

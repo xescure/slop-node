@@ -17,6 +17,7 @@ import type { BootstrapNode } from './bootstrap-peers.js';
 import { rangeResultOf, updateRanges } from './bootstrap-ranges.js';
 import type { RangeEvent, RangeIO, RangeResult, RangeTask } from './bootstrap-ranges.js';
 import { RetryQueue, RetryQueueFull } from './bootstrap-retry.js';
+import { awaitedOf, landedOn, weightSufficesOn } from './retry-signals.js';
 import { MAX_NAMED } from './bootstrap-window.js';
 import type { Added, Offered, QueuedStaple } from './bootstrap-retry.js';
 import { nextUpdateDelay, updatePeers } from './bootstrap-update.js';
@@ -232,12 +233,19 @@ export class BootstrapClient {
 		this.timeout = positiveMilliseconds('timeout', config.timeout ?? DEFAULT_TIMEOUT_MILLISECONDS);
 		const kv = config.kv ?? new KVInternals.KVStorageProviderMemory();
 		this.#cursors = new BootstrapCursors(kv);
-		this.#retries = new RetryQueue({
+		this.#retries = new RetryQueue<VoteStaple>({
 			holds: (staple) => {
 				return(this.#holds(staple));
 			},
 			offer: (staple) => {
 				return(this.#offer(staple));
+			},
+			decode: function(bytes): VoteStaple {
+				return(new lib.Vote.Staple(bytes));
+			},
+			awaited: awaitedOf,
+			weightSuffices: (voterSets) => {
+				return(weightSufficesOn(this.#node.ledger, voterSets));
 			}
 		}, new KVRetryStore(kv), (entry, age) => {
 			this.#reportRefused(entry, age);
@@ -561,7 +569,7 @@ export class BootstrapClient {
 		for (const each of added) {
 			await this.#tell(each);
 		}
-		return({ kind: 'added' });
+		return({ kind: 'added', landed: landedOn(added) });
 	}
 
 	/**
@@ -607,8 +615,8 @@ export class BootstrapClient {
 	}
 
 	/** A staple the network applied that this node's ledger still refuses: the two diverge on it. */
-	#reportRefused(entry: QueuedStaple<VoteStaple>, age: number): void {
-		this.#node.log.warn(LOG_SOURCE, `bootstrap: staple refused for ${String(Math.floor(age / MINUTE_MILLISECONDS))} min: ${entry.code} (staple ${entry.staple.blocksHash.toString()})`);
+	#reportRefused(entry: QueuedStaple, age: number): void {
+		this.#node.log.warn(LOG_SOURCE, `bootstrap: staple refused for ${String(Math.floor(age / MINUTE_MILLISECONDS))} min: ${entry.code} (staple ${entry.key})`);
 	}
 
 	async #tell(staple: VoteStaple): Promise<void> {

@@ -3,7 +3,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { BloomFilter } from '@keetanetwork/keetanet-client/lib/utils/bloom.js';
 import type { PassAnswer, PassRequest, PassStaple } from '../node/bootstrap-pass.js';
 import { RetryQueue } from '../node/bootstrap-retry.js';
-import type { Added, Offered, QueuedStaple, QueueBounds, RetryStore } from '../node/bootstrap-retry.js';
+import type { Added, Awaited, Offered, QueuedStaple, QueueBounds, RetryStore } from '../node/bootstrap-retry.js';
 import { assertNever } from '../util/assert-never.js';
 import { advanceClock, freezeClock } from './network.js';
 
@@ -39,10 +39,22 @@ function nameOf(id: number): string {
 	return(`staple-${String(id)}`);
 }
 
+/** Each simulated staple by its bytes, which a retry queue keeps and decodes. */
+const stapleOfBytes = new WeakMap<ArrayBuffer, SimulatedStaple>();
+
+/** The staple of bytes a simulated staple gave. */
+export function decodeSimulatedStaple(bytes: ArrayBuffer): SimulatedStaple {
+	const staple = stapleOfBytes.get(bytes);
+	if (staple === undefined) {
+		throw(new Error('no simulated staple has these bytes'));
+	}
+	return(staple);
+}
+
 function simulatedStaple(id: number, moment: number, sequence: number, timestamp: number, needs: readonly number[], stamps: readonly number[], votes = 0): SimulatedStaple {
 	const bytes = stapleBytes(id, votes);
 	const name = nameOf(id);
-	return({
+	const staple: SimulatedStaple = {
 		id,
 		moment,
 		sequence,
@@ -59,7 +71,9 @@ function simulatedStaple(id: number, moment: number, sequence: number, timestamp
 		timestamp: function(): Date {
 			return(new Date(timestamp));
 		}
-	});
+	};
+	stapleOfBytes.set(bytes, staple);
+	return(staple);
 }
 
 function stampsOf(staple: SimulatedStaple): number[] {
@@ -580,14 +594,29 @@ export class SimulatedPeer {
 	}
 }
 
+/** The refusal of a staple whose voters lack weight [Keeta TS] index.js:69397-69400. */
+export const SIMULATED_WEIGHT_REFUSAL = 'LEDGER_INSUFFICIENT_VOTING_WEIGHT';
+
+/** The refusal of a staple that spends what its account does not hold. */
+export const SIMULATED_BALANCE_REFUSAL = 'LEDGER_INVALID_BALANCE';
+
 /**
  * What a simulated node holds: each staple added. As a ledger does, it
  * holds one staple per set of blocks, adds none whose blocks it holds, and
- * refuses one until it holds those it needs.
+ * refuses one until it holds those it needs: for want of its voters'
+ * weight, which the staples it needs give, unless it is one of those that
+ * spend a balance they credit.
  */
 export class SimulatedNode {
 	readonly #held = new Map<string, PassStaple>();
+	readonly #spending: ReadonlySet<number>;
 	#resent = 0;
+	#refused = 0;
+
+	/** The staples, by ID, refused for a balance rather than for weight while they lack what they need. */
+	constructor(spending: ReadonlySet<number> = new Set()) {
+		this.#spending = spending;
+	}
 
 	holds(staple: PassStaple): boolean {
 		return(this.#held.has(staple.blocksHash.toString()));
@@ -600,6 +629,11 @@ export class SimulatedNode {
 	/** The staples offered to add whose blocks were held already: what peers sent again. */
 	get resent(): number {
 		return(this.#resent);
+	}
+
+	/** The offers it refused for want of what the staple needs: each a transaction a ledger rolls back. */
+	get refused(): number {
+		return(this.#refused);
 	}
 
 	/** Adds a staple, which the node must accept. */
@@ -629,10 +663,23 @@ export class SimulatedNode {
 			return(!this.#held.has(nameOf(id)));
 		});
 		if (lacking) {
-			return(Promise.resolve({ kind: 'refused', code: 'LEDGER_INSUFFICIENT_VOTING_WEIGHT' }));
+			this.#refused++;
+			if (this.#spending.has(staple.id)) {
+				return(Promise.resolve({ kind: 'refused', code: SIMULATED_BALANCE_REFUSAL }));
+			}
+			return(Promise.resolve({ kind: 'refused', code: SIMULATED_WEIGHT_REFUSAL }));
 		}
 		this.#held.set(key, staple);
-		return(Promise.resolve({ kind: 'added' }));
+		return(Promise.resolve({ kind: 'added', landed: [key] }));
+	}
+
+	/** Whether it holds every staple named, as voters whose weight those staples give. */
+	weightSuffices(voterSets: readonly (readonly string[])[]): Promise<readonly boolean[]> {
+		return(Promise.resolve(voterSets.map((voters): boolean => {
+			return(voters.every((voter) => {
+				return(this.#held.has(voter));
+			}));
+		})));
 	}
 
 	/**
@@ -662,8 +709,8 @@ export class SimulatedNode {
 }
 
 /** A queue's store that a simulated node keeps in memory, and keeps across the queues built on it, as a restart does. */
-export class SimulatedRetryStore implements RetryStore<SimulatedStaple> {
-	readonly #entries = new Map<string, QueuedStaple<SimulatedStaple>>();
+export class SimulatedRetryStore implements RetryStore {
+	readonly #entries = new Map<string, QueuedStaple>();
 	#largest = 0;
 
 	/** The most staples it held at once. */
@@ -671,12 +718,12 @@ export class SimulatedRetryStore implements RetryStore<SimulatedStaple> {
 		return(this.#largest);
 	}
 
-	load(): Promise<QueuedStaple<SimulatedStaple>[]> {
+	load(): Promise<QueuedStaple[]> {
 		return(Promise.resolve([...this.#entries.values()]));
 	}
 
-	put(key: string, entry: QueuedStaple<SimulatedStaple>): Promise<void> {
-		this.#entries.set(key, entry);
+	put(entry: QueuedStaple): Promise<void> {
+		this.#entries.set(entry.key, entry);
 		this.#largest = Math.max(this.#largest, this.#entries.size);
 		return(Promise.resolve());
 	}
@@ -698,8 +745,19 @@ export function simulatedRetries(node: SimulatedNode, store: SimulatedRetryStore
 		},
 		offer: function(staple): Promise<Offered> {
 			return(node.offer(staple));
+		},
+		decode: decodeSimulatedStaple,
+		awaited: function(staple, code): Awaited {
+			const needed = staple.needs.map(nameOf);
+			if (code === SIMULATED_BALANCE_REFUSAL) {
+				return({ kind: 'accounts', accounts: needed });
+			}
+			return({ kind: 'weight', voters: needed });
+		},
+		weightSuffices: function(voterSets): Promise<readonly boolean[]> {
+			return(node.weightSuffices(voterSets));
 		}
 	}, store, function(entry, age): void {
-		reports.push({ id: entry.staple.id, code: entry.code, age });
+		reports.push({ id: decodeSimulatedStaple(entry.bytes).id, code: entry.code, age });
 	}, bounds));
 }

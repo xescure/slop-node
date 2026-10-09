@@ -6,7 +6,7 @@ import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PrimingWindow, MAX_PASS_M
 import type { PassEvent, PassOptions, PassOutcome, PeerIO, PeerOutcome, PeerProgress } from './bootstrap-pass.js';
 import { RANGE_OVERLAP_MILLISECONDS, rangeResultOf, updateRanges } from './bootstrap-ranges.js';
 import type { RangeEvent, RangeLayout, RangeResult } from './bootstrap-ranges.js';
-import { REPORT_REFUSED_AFTER_MILLISECONDS, RetryQueueFull } from './bootstrap-retry.js';
+import { backoffAfter, FIRST_BACKOFF_MILLISECONDS, LAST_BACKOFF_MILLISECONDS, REPORT_REFUSED_AFTER_MILLISECONDS, RetryQueueFull } from './bootstrap-retry.js';
 import type { QueueBounds, RetryQueue } from './bootstrap-retry.js';
 import { nextUpdateDelay, updatePeers } from './bootstrap-update.js';
 import type { PeerResult } from './bootstrap-update.js';
@@ -155,9 +155,10 @@ class Scenario {
 	/** Where the passes over the peer start before any has moved on. */
 	from = new Date(0);
 
-	constructor(options: SimulatedPeerOptions = {}, bounds?: QueueBounds) {
+	/** The staples, by ID, that the node refuses for a balance rather than for weight while they lack what they need. */
+	constructor(options: SimulatedPeerOptions = {}, bounds?: QueueBounds, spending: ReadonlySet<number> = new Set()) {
 		this.peer = new SimulatedPeer({ latency: LATENCY, keying, ...options });
-		this.follower = new Follower(bounds);
+		this.follower = new Follower(bounds, { node: new SimulatedNode(spending), retryStore: new SimulatedRetryStore(), progress: new Map() });
 		this.node = this.follower.node;
 	}
 
@@ -752,7 +753,9 @@ describe.each(ORDERINGS)('bootstrapping against a simulated peer that %s', { tim
 		await scenario.untilComplete(3);
 
 		expect(scenario.missing()).toEqual([refused.id]);
-		expect(await scenario.follower.retries.staples()).toEqual([refused]);
+		expect((await scenario.follower.retries.staples()).map(function(queued): string {
+			return(queued.blocksHash.toString());
+		})).toEqual([refused.blocksHash.toString()]);
 		expect(scenario.follower.reports.map(function({ id, code }): string {
 			return(`${String(id)} ${code}`);
 		})).toEqual([`${String(refused.id)} LEDGER_INSUFFICIENT_VOTING_WEIGHT`]);
@@ -761,6 +764,74 @@ describe.each(ORDERINGS)('bootstrapping against a simulated peer that %s', { tim
 			return(kind !== 'bounded');
 		})).toBe(true);
 		scenario.expectEveryUpdateBounded();
+	});
+
+	test('offers a staple refused for want of weight again only once its voters have the weight, however many pages come before the staple that gives it', async function() {
+		freezeClock(new Date(NOW));
+		const scenario = new Scenario({ answersAtMost: 50 });
+		const count = 800;
+		const genesis = count - 1;
+		// Every other staple needs genesis's weight, and the rest need nothing, so that every page adds some.
+		const waiting = function(index: number): boolean {
+			return(index % 2 === 0 && index !== genesis);
+		};
+		liveHistory(scenario.peer, count, 10, NOW - HOUR, noSkew, function(index): readonly number[] {
+			if (waiting(index)) {
+				return([genesis]);
+			}
+			return([]);
+		});
+
+		await scenario.untilComplete(10);
+
+		expect(scenario.missing()).toEqual([]);
+		expect(await scenario.follower.retries.size()).toBe(0);
+		// Each staple is refused at most as it arrives, and offered again only once genesis has given its voters weight.
+		expect(scenario.node.refused).toBeLessThanOrEqual(count / 2);
+	});
+
+	test('offers a staple refused for a balance again once a staple lands on an account it names, long before its wait has passed', async function() {
+		freezeClock(new Date(NOW));
+		const debits = Array.from({ length: 50 }, function(_unused, index): number {
+			return(index * 10);
+		});
+		const scenario = new Scenario({ answersAtMost: 50 }, undefined, new Set(debits));
+		liveHistory(scenario.peer, 1000, 10, NOW - HOUR, noSkew, function(index): readonly number[] {
+			if (debits.includes(index)) {
+				return([index + 500]);
+			}
+			return([]);
+		});
+
+		const began = Date.now();
+		await scenario.untilComplete(10);
+
+		expect(scenario.missing()).toEqual([]);
+		expect(scenario.node.refused).toBe(debits.length);
+		expect(Date.now() - began).toBeLessThan(FIRST_BACKOFF_MILLISECONDS);
+	});
+
+	test('offers a staple that stays refused again after a wait that doubles with each refusal, up to the longest, however often passes run', async function() {
+		freezeClock(new Date(NOW));
+		const scenario = new Scenario({ answersAtMost: 50 });
+		liveHistory(scenario.peer, 500, 10, NOW - HOUR);
+		scenario.peer.apply(NOW - HOUR, NOW - HOUR, [NEVER_APPLIED]);
+		liveHistory(scenario.peer, 500, 10, NOW - MINUTE);
+
+		await scenario.untilComplete(10);
+		const refusedAtFirst = scenario.node.refused;
+		await scenario.periodically(2 * HOUR);
+
+		let waits = 0;
+		let offers = 0;
+		for (let refusals = 1; waits + backoffAfter(refusals) <= 2 * HOUR; refusals++) {
+			waits += backoffAfter(refusals);
+			offers++;
+		}
+		// Updates run every minute, so each offer comes within a minute of when it is due.
+		expect(scenario.node.refused - refusedAtFirst).toBeGreaterThanOrEqual(offers - 1);
+		expect(scenario.node.refused - refusedAtFirst).toBeLessThanOrEqual(offers + 1);
+		expect(backoffAfter(offers)).toBe(LAST_BACKOFF_MILLISECONDS);
 	});
 
 	test('fails a pass rather than move past a refused staple its full queue has no room for, and moves on once the queue drains', async function() {

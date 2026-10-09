@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import { KVInternals } from '../upstream/internals.js';
-import { BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BootstrapCursors } from './bootstrap-cursors.js';
+import { BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RETRY_ARENA, BootstrapCursors, KVRetryStore } from './bootstrap-cursors.js';
 import type { PeerProgress } from './bootstrap-pass.js';
 import type { RangeLayout } from './bootstrap-ranges.js';
+import type { QueuedStaple } from './bootstrap-retry.js';
 
 const ENDPOINT = 'https://representative.example/api';
 
@@ -78,5 +79,35 @@ describe('the bootstrap cursors', function() {
 		await cursors.clear();
 		expect(await cursors.readLayout()).toBeUndefined();
 		expect(await cursors.read(ENDPOINT)).toBeUndefined();
+	});
+});
+
+describe('the bootstrap retry store', function() {
+	const bytes = Uint8Array.from([1, 2, 3, 4]).buffer;
+	const entry: QueuedStaple = { key: 'AB'.repeat(32), bytes, queuedAt: Date.UTC(2026, 9, 9, 15), code: 'LEDGER_INSUFFICIENT_VOTING_WEIGHT', reported: false, awaited: { kind: 'weight', voters: [ENDPOINT] } };
+
+	test('keeps a queued staple as its bytes, with what it awaits, under the hash of its blocks, until removed', async function() {
+		const store = new KVRetryStore(new KVInternals.KVStorageProviderMemory());
+
+		await store.put(entry);
+		await store.put({ ...entry, key: 'CD'.repeat(32), awaited: { kind: 'accounts', accounts: [ENDPOINT] } });
+		const loaded = await store.load();
+		expect(loaded).toHaveLength(2);
+		expect(loaded.map(function(each) {
+			return([each.key, Buffer.from(each.bytes).toString('hex'), each.awaited]);
+		})).toEqual([['AB'.repeat(32), '01020304', entry.awaited], ['CD'.repeat(32), '01020304', { kind: 'accounts', accounts: [ENDPOINT] }]]);
+
+		await store.remove(entry.key);
+		expect((await store.load()).map(function(each) {
+			return(each.key);
+		})).toEqual(['CD'.repeat(32)]);
+	});
+
+	test('reads a staple an earlier build queued without what it awaits as awaiting nothing the queue watches for', async function() {
+		const kv = new KVInternals.KVStorageProviderMemory();
+		await kv.set(BOOTSTRAP_RETRY_ARENA, entry.key, { staple: Buffer.from(bytes).toString('base64'), queuedAt: entry.queuedAt, code: entry.code, reported: true });
+
+		const [loaded] = await new KVRetryStore(kv).load();
+		expect(loaded).toMatchObject({ key: entry.key, queuedAt: entry.queuedAt, code: entry.code, reported: true, awaited: { kind: 'unknown' } });
 	});
 });

@@ -41,34 +41,77 @@ const AHEAD_SHARE = 1 / 2;
  */
 export const REPORT_REFUSED_AFTER_MILLISECONDS: number = 60 * 60_000;
 
+/**
+ * The shortest wait before a refused staple is offered again when nothing it
+ * awaits has come: about the time a pass takes for a page.
+ */
+export const FIRST_BACKOFF_MILLISECONDS: number = 30_000;
+
+/**
+ * The longest wait between two offers of a refused staple. Each refusal
+ * doubles the wait up to this, so a staple the network applied but this
+ * ledger never will is still offered twice an hour, and a full queue costs
+ * about as many refused transactions a minute as it holds staples divided
+ * by thirty.
+ */
+export const LAST_BACKOFF_MILLISECONDS: number = 30 * 60_000;
+
+/** How long after its last offer a staple refused that many times is offered again however nothing it awaits has come. */
+export function backoffAfter(refusals: number): number {
+	return(Math.min(FIRST_BACKOFF_MILLISECONDS * 2 ** Math.max(refusals - 1, 0), LAST_BACKOFF_MILLISECONDS));
+}
+
+/** What a refused staple waits for before it is worth offering again. */
+export type Awaited =
+	/** Voting weight: the voters, by public key, whose weight was too little [Keeta TS] index.js:69740-69760. */
+	| { readonly kind: 'weight'; readonly voters: readonly string[] }
+	/** A staple that lands on one of these accounts, by public key: a credit, a grant, the block a chain lacks. */
+	| { readonly kind: 'accounts'; readonly accounts: readonly string[] }
+	/** Nothing the queue watches for, as for a staple queued by an earlier build: only its wait makes it due. */
+	| { readonly kind: 'unknown' };
+
 /** What the ledger did with a staple offered to it. */
 export type Offered =
-	| { readonly kind: 'added' }
+	/** It added the staple, and any it released, which landed on these accounts, by public key. */
+	| { readonly kind: 'added'; readonly landed: readonly string[] }
 	/** It refused the staple, for the reason the code names. */
 	| { readonly kind: 'refused'; readonly code: string };
 
-/** The ledger a queue offers its staples to. */
+/** The ledger a queue offers its staples to, and how it reads a queued staple. */
 export type RetryLedger<Staple> = {
 	/** Whether it holds the staple's blocks, with these votes or others. */
 	holds(staple: Staple): Promise<boolean>;
 	offer(staple: Staple): Promise<Offered>;
+	/** The staple of bytes the queue kept, as toBytes gave them. */
+	decode(bytes: ArrayBuffer): Staple;
+	/** What a staple refused with the code awaits. */
+	awaited(staple: Staple, code: string): Awaited;
+	/**
+	 * For each set of voters, whether their weight would now let a staple
+	 * they voted for in, as the ledger's own check reads it, all from one
+	 * view of the ledger.
+	 */
+	weightSuffices(voterSets: readonly (readonly string[])[]): Promise<readonly boolean[]>;
 };
 
-/** A staple the ledger refused, waiting to be offered again. */
-export type QueuedStaple<Staple> = {
-	readonly staple: Staple;
+/** A staple the ledger refused, waiting to be offered again, kept as the bytes it came as. */
+export type QueuedStaple = {
+	/** The hash of its blocks, which names it in the queue. */
+	readonly key: string;
+	readonly bytes: ArrayBuffer;
 	/** When the ledger first refused it, on the node's clock. */
 	readonly queuedAt: number;
 	/** Why the ledger refused it the last time. */
 	readonly code: string;
 	/** Whether it was reported as refused for long. */
 	readonly reported: boolean;
+	readonly awaited: Awaited;
 };
 
 /** Where a queue keeps its staples, by the hash of their blocks, so that they outlive the process. */
-export type RetryStore<Staple> = {
-	load(): Promise<readonly QueuedStaple<Staple>[]>;
-	put(key: string, entry: QueuedStaple<Staple>): Promise<void>;
+export type RetryStore = {
+	load(): Promise<readonly QueuedStaple[]>;
+	put(entry: QueuedStaple): Promise<void>;
 	remove(key: string): Promise<void>;
 };
 
@@ -105,13 +148,51 @@ function keyOf(staple: NamedStaple): string {
 	return(staple.blocksHash.toString());
 }
 
-function sizeOf(staple: NamedStaple): number {
-	return(staple.toBytes().byteLength);
+/** What an entry holds in memory, which the bound in bytes counts: its bytes and the accounts it names. */
+export function sizeOf(entry: QueuedStaple): number {
+	let named = 0;
+	switch (entry.awaited.kind) {
+		case 'weight':
+			named = entry.awaited.voters.length;
+			break;
+		case 'accounts':
+			named = entry.awaited.accounts.length;
+			break;
+		case 'unknown':
+			break;
+		default:
+			assertNever(entry.awaited);
+	}
+	return(entry.bytes.byteLength + named * ACCOUNT_KEY_BYTES);
 }
 
-function earliestFirst<Staple>(left: QueuedStaple<Staple>, right: QueuedStaple<Staple>): number {
+/** About what a public key string of an account takes in memory. */
+const ACCOUNT_KEY_BYTES = 128;
+
+function earliestFirst(left: QueuedStaple, right: QueuedStaple): number {
 	return(left.queuedAt - right.queuedAt);
 }
+
+/** A queued staple as the passes name it to a peer: by the bytes it came as. */
+function namedOf(entry: QueuedStaple): NamedStaple {
+	return({
+		blocksHash: { toString: function(): string {
+			return(entry.key);
+		} },
+		toBytes: function(): ArrayBuffer {
+			return(entry.bytes);
+		}
+	});
+}
+
+/** An entry with when the queue last offered it, which nothing keeps across a restart. */
+type Waiting = {
+	entry: QueuedStaple;
+	/** How often the ledger refused it since the queue was built; none for an entry loaded from the store, which waits as one refused once. */
+	refusals: number;
+	/** When it was last offered, or for an entry loaded from the store, when the queue loaded it. */
+	lastOffered: number;
+};
 
 /**
  * Staples the ledger refused that it does not hold, offered to it again
@@ -121,26 +202,36 @@ function earliestFirst<Staple>(left: QueuedStaple<Staple>, right: QueuedStaple<S
  * causal, so the ledger refuses a staple whose dependencies come later: the
  * voting weight of genesis or a delegation, a credit a debit spends, a
  * token's supply. Such a staple is not held, but it is not lost either: it
- * stays here, durably, and is offered again after each page that added a
- * staple and at the end of each pass, round after round while a round
- * applies any, since one applied can let others through.
+ * stays here, durably, as the bytes it came as, and is offered again when
+ * what it awaits may have come, and otherwise after a wait that doubles
+ * with each refusal, up to LAST_BACKOFF_MILLISECONDS, so that it is offered
+ * again forever. A staple refused for want of voting weight is due once its
+ * voters' weight suffices, as the ledger reads it; one refused for anything
+ * else once a staple the queue adds lands on an account it names. Retries
+ * run after each page that added a staple and at the end of each pass,
+ * round after round while a round applies any, since one applied can let
+ * others through. A staple is decoded only to be offered.
  */
 export class RetryQueue<Staple extends NamedStaple> {
 	readonly #ledger: RetryLedger<Staple>;
-	readonly #store: RetryStore<Staple>;
-	readonly #report: (entry: QueuedStaple<Staple>, age: number) => void;
+	readonly #store: RetryStore;
+	readonly #report: (entry: QueuedStaple, age: number) => void;
 	readonly #bounds: QueueBounds;
 	readonly #liveBounds: QueueBounds;
 	readonly #aheadBounds: QueueBounds;
-	#entries: Promise<Map<string, QueuedStaple<Staple>>> | undefined;
+	#entries: Promise<Map<string, Waiting>> | undefined;
 	#bytes = 0;
+	/** The entries awaiting a staple on each account, by account. */
+	readonly #watching = new Map<string, Set<string>>();
+	/** The entries a staple landed on an account of since they were last offered. */
+	readonly #landed = new Set<string>();
 	/** Whether a pass from where the last reached found no room since a staple last left the queue. */
 	#stoppedLive = false;
 	/** Retries run one after another, so that a staple is offered by one at a time. */
 	#retrying: Promise<unknown> = Promise.resolve();
 
 	/** The report hears, once, of each staple refused for longer than REPORT_REFUSED_AFTER_MILLISECONDS, and for how long. */
-	constructor(ledger: RetryLedger<Staple>, store: RetryStore<Staple>, report: (entry: QueuedStaple<Staple>, age: number) => void, bounds: QueueBounds = DEFAULT_BOUNDS) {
+	constructor(ledger: RetryLedger<Staple>, store: RetryStore, report: (entry: QueuedStaple, age: number) => void, bounds: QueueBounds = DEFAULT_BOUNDS) {
 		this.#ledger = ledger;
 		this.#store = store;
 		this.#report = report;
@@ -178,10 +269,17 @@ export class RetryQueue<Staple extends NamedStaple> {
 		return((await this.#load()).size);
 	}
 
-	/** The staples queued, the earliest refused first. */
-	async staples(): Promise<Staple[]> {
-		return([...(await this.#load()).values()].map(function(entry): Staple {
-			return(entry.staple);
+	/** The staples queued, the earliest refused first, named by the bytes they came as. */
+	async staples(): Promise<NamedStaple[]> {
+		return([...(await this.#load()).values()].map(function({ entry }): NamedStaple {
+			return(namedOf(entry));
+		}));
+	}
+
+	/** The staples queued, the earliest refused first, as kept. */
+	async entries(): Promise<QueuedStaple[]> {
+		return([...(await this.#load()).values()].map(function({ entry }): QueuedStaple {
+			return(entry);
 		}));
 	}
 
@@ -204,6 +302,7 @@ export class RetryQueue<Staple extends NamedStaple> {
 		const offered = await this.#ledger.offer(staple);
 		switch (offered.kind) {
 			case 'added':
+				this.#land(offered.landed);
 				return('added');
 			case 'refused':
 				if (await this.#ledger.holds(staple)) {
@@ -216,7 +315,7 @@ export class RetryQueue<Staple extends NamedStaple> {
 		}
 	}
 
-	/** Offers every queued staple again, round after round while a round applies any, and answers how many left the queue, applied or held by other means. */
+	/** Offers again every queued staple that is due, round after round while a round applies any, and answers how many left the queue, applied or held by other means. */
 	retry(): Promise<number> {
 		const run = this.#retrying.then(() => {
 			return(this.#retryNow());
@@ -233,8 +332,8 @@ export class RetryQueue<Staple extends NamedStaple> {
 		let progressed = true;
 		while (progressed) {
 			progressed = false;
-			for (const [key, entry] of [...entries]) {
-				if (await this.#settled(entries, key, entry)) {
+			for (const [key, waiting] of await this.#due(entries)) {
+				if (await this.#settled(entries, key, waiting)) {
 					applied++;
 					progressed = true;
 				}
@@ -244,21 +343,59 @@ export class RetryQueue<Staple extends NamedStaple> {
 		return(applied);
 	}
 
+	/**
+	 * The entries due now, the earliest refused first: those whose wait
+	 * since their last offer has passed, those a staple landed on an account
+	 * of, and those awaiting weight that their voters now have.
+	 */
+	async #due(entries: Map<string, Waiting>): Promise<[string, Waiting][]> {
+		const now = Date.now();
+		const due = new Set<string>();
+		const weighed: [string, readonly string[]][] = [];
+		for (const [key, waiting] of entries) {
+			const { awaited } = waiting.entry;
+			if (now >= waiting.lastOffered + backoffAfter(waiting.refusals) || this.#landed.has(key)) {
+				due.add(key);
+			} else if (awaited.kind === 'weight') {
+				weighed.push([key, awaited.voters]);
+			}
+		}
+		if (weighed.length > 0) {
+			const suffices = await this.#ledger.weightSuffices(weighed.map(function([, voters]) {
+				return(voters);
+			}));
+			for (const [index, [key]] of weighed.entries()) {
+				if (suffices[index] === true) {
+					due.add(key);
+				}
+			}
+		}
+		return([...entries].filter(function([key]): boolean {
+			return(due.has(key));
+		}));
+	}
+
 	/** Whether the staple left the queue: applied now, or held by the ledger already. */
-	async #settled(entries: Map<string, QueuedStaple<Staple>>, key: string, entry: QueuedStaple<Staple>): Promise<boolean> {
-		if (!await this.#ledger.holds(entry.staple)) {
-			const offered = await this.#ledger.offer(entry.staple);
+	async #settled(entries: Map<string, Waiting>, key: string, waiting: Waiting): Promise<boolean> {
+		const staple = this.#ledger.decode(waiting.entry.bytes);
+		if (!await this.#ledger.holds(staple)) {
+			const offered = await this.#ledger.offer(staple);
 			switch (offered.kind) {
 				case 'added':
+					this.#land(offered.landed);
 					break;
-				case 'refused':
-					if (await this.#ledger.holds(entry.staple)) {
+				case 'refused': {
+					if (await this.#ledger.holds(staple)) {
 						break;
 					}
-					if (offered.code !== entry.code) {
-						await this.#put(entries, key, { ...entry, code: offered.code });
+					this.#landed.delete(key);
+					waiting.refusals++;
+					waiting.lastOffered = Date.now();
+					if (offered.code !== waiting.entry.code || waiting.entry.awaited.kind === 'unknown') {
+						await this.#put(entries, { ...waiting.entry, code: offered.code, awaited: this.#ledger.awaited(staple, offered.code) });
 					}
 					return(false);
+				}
 				default:
 					return(assertNever(offered));
 			}
@@ -267,59 +404,109 @@ export class RetryQueue<Staple extends NamedStaple> {
 		return(true);
 	}
 
-	async #reportRefusedForLong(entries: Map<string, QueuedStaple<Staple>>): Promise<void> {
+	/** Marks due the entries that await a staple on any of the accounts. */
+	#land(accounts: readonly string[]): void {
+		for (const account of accounts) {
+			for (const key of this.#watching.get(account) ?? []) {
+				this.#landed.add(key);
+			}
+		}
+	}
+
+	async #reportRefusedForLong(entries: Map<string, Waiting>): Promise<void> {
 		const now = Date.now();
-		for (const [key, entry] of [...entries]) {
+		for (const { entry } of [...entries.values()]) {
 			const age = now - entry.queuedAt;
 			if (!entry.reported && age >= REPORT_REFUSED_AFTER_MILLISECONDS) {
 				this.#report(entry, age);
-				await this.#put(entries, key, { ...entry, reported: true });
+				await this.#put(entries, { ...entry, reported: true });
 			}
 		}
 	}
 
 	/** Queues the staple, unless another pass, sent it too, queued it meanwhile. */
-	async #enqueue(entries: Map<string, QueuedStaple<Staple>>, key: string, staple: Staple, code: string, use: QueueUse): Promise<void> {
+	async #enqueue(entries: Map<string, Waiting>, key: string, staple: Staple, code: string, use: QueueUse): Promise<void> {
 		if (entries.has(key)) {
 			return;
 		}
+		const now = Date.now();
+		const entry: QueuedStaple = { key, bytes: staple.toBytes(), queuedAt: now, code, reported: false, awaited: this.#ledger.awaited(staple, code) };
 		const bounds = this.#boundsOf(use);
-		if (entries.size >= bounds.staples || this.#bytes + sizeOf(staple) > bounds.bytes) {
+		if (entries.size >= bounds.staples || this.#bytes + sizeOf(entry) > bounds.bytes) {
 			if (use === 'live') {
 				this.#stoppedLive = true;
 			}
 			throw(new RetryQueueFull(key, bounds));
 		}
-		this.#bytes += sizeOf(staple);
-		await this.#put(entries, key, { staple, queuedAt: Date.now(), code, reported: false });
+		this.#track({ entry, refusals: 1, lastOffered: now }, entries);
+		await this.#store.put(entry);
 	}
 
-	async #put(entries: Map<string, QueuedStaple<Staple>>, key: string, entry: QueuedStaple<Staple>): Promise<void> {
-		entries.set(key, entry);
-		await this.#store.put(key, entry);
+	/** Replaces an entry's record, keeping when it was last offered. */
+	async #put(entries: Map<string, Waiting>, entry: QueuedStaple): Promise<void> {
+		const waiting = entries.get(entry.key);
+		if (waiting === undefined) {
+			return;
+		}
+		this.#untrack(waiting);
+		this.#track({ ...waiting, entry }, entries);
+		await this.#store.put(entry);
 	}
 
-	async #remove(entries: Map<string, QueuedStaple<Staple>>, key: string): Promise<void> {
-		const entry = entries.get(key);
-		if (entry === undefined) {
+	async #remove(entries: Map<string, Waiting>, key: string): Promise<void> {
+		const waiting = entries.get(key);
+		if (waiting === undefined) {
 			return;
 		}
 		entries.delete(key);
-		this.#bytes -= sizeOf(entry.staple);
+		this.#untrack(waiting);
+		this.#landed.delete(key);
 		this.#stoppedLive = false;
 		await this.#store.remove(key);
 	}
 
+	#track(waiting: Waiting, entries: Map<string, Waiting>): void {
+		const { entry } = waiting;
+		entries.set(entry.key, waiting);
+		this.#bytes += sizeOf(entry);
+		if (entry.awaited.kind !== 'accounts') {
+			return;
+		}
+		for (const account of entry.awaited.accounts) {
+			let watchers = this.#watching.get(account);
+			if (watchers === undefined) {
+				watchers = new Set();
+				this.#watching.set(account, watchers);
+			}
+			watchers.add(entry.key);
+		}
+	}
+
+	#untrack(waiting: Waiting): void {
+		const { entry } = waiting;
+		this.#bytes -= sizeOf(entry);
+		if (entry.awaited.kind !== 'accounts') {
+			return;
+		}
+		for (const account of entry.awaited.accounts) {
+			const watchers = this.#watching.get(account);
+			watchers?.delete(entry.key);
+			if (watchers?.size === 0) {
+				this.#watching.delete(account);
+			}
+		}
+	}
+
 	/** The queue, read from the store once; a read that fails is tried again by the next caller. */
-	#load(): Promise<Map<string, QueuedStaple<Staple>>> {
+	#load(): Promise<Map<string, Waiting>> {
 		if (this.#entries !== undefined) {
 			return(this.#entries);
 		}
 		const loading = this.#store.load().then((stored) => {
-			const entries = new Map<string, QueuedStaple<Staple>>();
+			const entries = new Map<string, Waiting>();
+			const loadedAt = Date.now();
 			for (const entry of [...stored].sort(earliestFirst)) {
-				entries.set(keyOf(entry.staple), entry);
-				this.#bytes += sizeOf(entry.staple);
+				this.#track({ entry, refusals: 0, lastOffered: loadedAt }, entries);
 			}
 			return(entries);
 		});

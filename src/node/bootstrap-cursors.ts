@@ -1,11 +1,8 @@
-import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { KVStorageProvider } from '@keetanetwork/keetanet-client/lib/kv/index.js';
-import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import { assertNever } from '../util/assert-never.js';
 import type { DeepScan, PeerKeying, PeerProgress } from './bootstrap-pass.js';
 import type { BootstrapRange, RangeLayout, RangeStanding } from './bootstrap-ranges.js';
-import type { QueuedStaple, RetryStore } from './bootstrap-retry.js';
-
-const lib = KeetaNet.lib;
+import type { Awaited, QueuedStaple, RetryStore } from './bootstrap-retry.js';
 
 /**
  * The arena that holds, for each representative the node bootstraps from,
@@ -225,16 +222,54 @@ export class BootstrapCursors {
 	}
 }
 
-/** A queued staple as stored: its bytes in base64. */
+/** A queued staple as stored: its bytes in base64, and what it awaits, which an earlier build did not store. */
 type StoredQueued = {
 	readonly staple: string;
 	readonly queuedAt: number;
 	readonly code: string;
 	readonly reported: boolean;
+	readonly awaited: StoredAwaited;
 };
 
-/** The staple of a stored value, or nothing when the node did not write it. */
-function queuedOf(value: unknown): QueuedStaple<VoteStaple> | undefined {
+/** What a queued staple awaits, as JSON. */
+type StoredAwaited = { kind: 'weight'; voters: string[] } | { kind: 'accounts'; accounts: string[] } | { kind: 'unknown' };
+
+function storedAwaited(awaited: Awaited): StoredAwaited {
+	switch (awaited.kind) {
+		case 'weight':
+			return({ kind: awaited.kind, voters: [...awaited.voters] });
+		case 'accounts':
+			return({ kind: awaited.kind, accounts: [...awaited.accounts] });
+		case 'unknown':
+			return({ kind: awaited.kind });
+		default:
+			return(assertNever(awaited));
+	}
+}
+
+function isStringList(value: unknown): value is readonly string[] {
+	return(Array.isArray(value) && value.every(function(item): boolean {
+		return(typeof item === 'string');
+	}));
+}
+
+/** What a stored staple awaits, or nothing the queue watches for when the node did not store it. */
+function awaitedOf(value: unknown): Awaited {
+	if (!isRecord(value)) {
+		return({ kind: 'unknown' });
+	}
+	const { kind, voters, accounts } = value;
+	if (kind === 'weight' && isStringList(voters)) {
+		return({ kind, voters });
+	}
+	if (kind === 'accounts' && isStringList(accounts)) {
+		return({ kind, accounts });
+	}
+	return({ kind: 'unknown' });
+}
+
+/** The queued staple of a stored value under its key, or nothing when the node did not write it. */
+function queuedOf(key: string, value: unknown): QueuedStaple | undefined {
 	if (!isRecord(value)) {
 		return(undefined);
 	}
@@ -242,15 +277,12 @@ function queuedOf(value: unknown): QueuedStaple<VoteStaple> | undefined {
 	if (typeof staple !== 'string' || !isWholeNumber(queuedAt) || typeof code !== 'string' || typeof reported !== 'boolean') {
 		return(undefined);
 	}
-	try {
-		return({ staple: new lib.Vote.Staple(staple), queuedAt, code, reported });
-	} catch {
-		return(undefined);
-	}
+	const bytes = Buffer.from(staple, 'base64');
+	return({ key, bytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), queuedAt, code, reported, awaited: awaitedOf(value['awaited']) });
 }
 
 /** The staples queued for retry, kept in the node's store so that a restart loses none. */
-export class KVRetryStore implements RetryStore<VoteStaple> {
+export class KVRetryStore implements RetryStore {
 	readonly #kv: KVStorageProvider;
 
 	constructor(kv: KVStorageProvider) {
@@ -258,9 +290,9 @@ export class KVRetryStore implements RetryStore<VoteStaple> {
 	}
 
 	/** A value the node did not write counts as none, as a cursor's does. */
-	async load(): Promise<QueuedStaple<VoteStaple>[]> {
-		return(Object.values(await this.#kv.getAll(BOOTSTRAP_RETRY_ARENA)).flatMap(function(value): QueuedStaple<VoteStaple>[] {
-			const queued = queuedOf(value);
+	async load(): Promise<QueuedStaple[]> {
+		return(Object.entries(await this.#kv.getAll(BOOTSTRAP_RETRY_ARENA)).flatMap(function([key, value]): QueuedStaple[] {
+			const queued = queuedOf(key, value);
 			if (queued === undefined) {
 				return([]);
 			}
@@ -268,14 +300,15 @@ export class KVRetryStore implements RetryStore<VoteStaple> {
 		}));
 	}
 
-	async put(key: string, entry: QueuedStaple<VoteStaple>): Promise<void> {
+	async put(entry: QueuedStaple): Promise<void> {
 		const stored: StoredQueued = {
-			staple: Buffer.from(entry.staple.toBytes()).toString('base64'),
+			staple: Buffer.from(entry.bytes).toString('base64'),
 			queuedAt: entry.queuedAt,
 			code: entry.code,
-			reported: entry.reported
+			reported: entry.reported,
+			awaited: storedAwaited(entry.awaited)
 		};
-		await this.#kv.set(BOOTSTRAP_RETRY_ARENA, key, stored);
+		await this.#kv.set(BOOTSTRAP_RETRY_ARENA, entry.key, stored);
 	}
 
 	async remove(key: string): Promise<void> {

@@ -745,7 +745,8 @@ describe('a bootstrap client', function() {
 			copies.push(made);
 			return(made);
 		});
-		expect((await request(peer, '/node/ledger/checksum')).status).toBe(200);
+		// The statistics route reads the ledger, whose work the request's copy times.
+		expect((await request(peer, '/node/stats')).status).toBe(200);
 		expect(copies).toHaveLength(1);
 		expect(timedSections(requireAt(copies, 0))).toBeGreaterThan(0);
 	});
