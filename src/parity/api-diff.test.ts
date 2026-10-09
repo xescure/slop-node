@@ -8,7 +8,7 @@ import type { TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js'
 import { sendBlock, setRepresentativeBlock } from '../testing/blocks.js';
 import { startFakeAPI } from '../testing/fake-api.js';
 import type { FakeAPI } from '../testing/fake-api.js';
-import { accountRequests, behavioursOf, blockRequests, capturedBehaviours, GET_ROUTES, getRoutesOf, operationsOf, routeOf, sampleAPI, shuffled } from './api-diff.js';
+import { accountRequests, behaviorsOf, blockRequests, capturedBehaviors, GET_ROUTES, getRoutesOf, operationsOf, routeOf, sampleAPI, shuffled } from './api-diff.js';
 import type { APIDiffStore } from './api-diff.js';
 import { httpSource } from './api-source.js';
 import type { AccountCandidate, AccountKind, FollowerProgress, HeldBlock } from './follower-store.js';
@@ -104,18 +104,18 @@ describe('the requests drawn', function() {
 	});
 });
 
-describe('the behaviour of an answer', function() {
+describe('the behavior of an answer', function() {
 	test('is its route with its status and error code, the kind of account it is about, and each operation it serves', async function() {
 		const block = await heldSend();
 		const served = { status: 200, body: { blockhash: block.hash, block: { operations: [{ type: 0 }, { type: 7 }] } } };
-		expect(behavioursOf(`/node/ledger/block/${block.hash}`, served)).toEqual(['/api/node/ledger/block/{blockhash} 200 error=-', 'operation=RECEIVE', 'operation=SEND']);
-		expect(behavioursOf(`/node/ledger/account/${TOKEN}/acl/granted`, { status: 500, body: { error: true, code: 'API_INVALID_SIDE' } })).toEqual(['/api/node/ledger/account/{account}/acl/granted 500 error=API_INVALID_SIDE', 'account=TOKEN']);
-		expect(behavioursOf('/node/ledger/account/keeta_not-an-account', { status: 500, body: { error: true } })).toEqual(['/api/node/ledger/account/{account} 500 error=internal', 'account=malformed']);
-		expect(behavioursOf('/elsewhere', { status: 404, body: 'Cannot GET /elsewhere' })).toEqual([]);
+		expect(behaviorsOf(`/node/ledger/block/${block.hash}`, served)).toEqual(['/api/node/ledger/block/{blockhash} 200 error=-', 'operation=RECEIVE', 'operation=SEND']);
+		expect(behaviorsOf(`/node/ledger/account/${TOKEN}/acl/granted`, { status: 500, body: { error: true, code: 'API_INVALID_SIDE' } })).toEqual(['/api/node/ledger/account/{account}/acl/granted 500 error=API_INVALID_SIDE', 'account=TOKEN']);
+		expect(behaviorsOf('/node/ledger/account/keeta_not-an-account', { status: 500, body: { error: true } })).toEqual(['/api/node/ledger/account/{account} 500 error=internal', 'account=malformed']);
+		expect(behaviorsOf('/elsewhere', { status: 404, body: 'Cannot GET /elsewhere' })).toEqual([]);
 	});
 
 	test('of every capture is known, and covers several routes', async function() {
-		const known = await capturedBehaviours(fileURLToPath(new URL('../../conformance/api/mainnet/', import.meta.url)));
+		const known = await capturedBehaviors(fileURLToPath(new URL('../../conformance/api/mainnet/', import.meta.url)));
 		expect(known.size).toBeGreaterThan(20);
 		expect(known).toContain('account=MULTISIG');
 		expect(known).toContain('operation=SEND');
@@ -164,7 +164,7 @@ async function running(): Promise<Running> {
 	return({ follower: await startFakeAPI(), representative: await startFakeAPI(), log: new ParityLog(join(directory, 'parity.jsonl')) });
 }
 
-async function sample(setup: Running, store: APIDiffStore, samplesPerStratum: number, knownBehaviours: ReadonlySet<string> = new Set()) {
+async function sample(setup: Running, store: APIDiffStore, samplesPerStratum: number, knownBehaviors: ReadonlySet<string> = new Set()) {
 	const summary = await sampleAPI({
 		follower: httpSource(setup.follower.endpoint),
 		representatives: [httpSource(setup.representative.endpoint)],
@@ -173,7 +173,7 @@ async function sample(setup: Running, store: APIDiffStore, samplesPerStratum: nu
 		samplesPerStratum,
 		seed: 'test',
 		edgeCaseStaples: [],
-		knownBehaviours,
+		knownBehaviors,
 		stopped: new AbortController().signal
 	});
 	return({ summary, records: recordsOf((await setup.log.read()).records, 'api-diff') });
@@ -267,9 +267,9 @@ describe('sampling the API', function() {
 		expect(new Set(records.map(function(record) {
 			return(record.stratum);
 		}))).toEqual(new Set(['operation:SEND', 'operation:SET_REP']));
-		expect(summary.newBehaviours).toContainEqual({ behaviour: 'operation=SEND', path: `/node/ledger/block/${send.hash}` });
-		expect(summary.newBehaviours.map(function(found) {
-			return(found.behaviour);
+		expect(summary.newBehaviors).toContainEqual({ behavior: 'operation=SEND', path: `/node/ledger/block/${send.hash}` });
+		expect(summary.newBehaviors.map(function(found) {
+			return(found.behavior);
 		})).not.toContain('operation=SET_REP');
 	});
 });

@@ -159,8 +159,8 @@ export type APIDiffRecord = {
 	/** The route of the document the request is of, and the request below the API's root. */
 	readonly route: string;
 	readonly path: string;
-	/** The kinds of behaviour the representative's answer shows, as the capture set is told apart by; none when it was not compared. */
-	readonly behaviours: readonly string[];
+	/** The kinds of behavior the representative's answer shows, as the capture set is told apart by; none when it was not compared. */
+	readonly behaviors: readonly string[];
 	readonly outcome: APIDiffOutcome;
 };
 
@@ -516,11 +516,11 @@ function apiDiffRecordOf(value: Fields): APIDiffRecord | undefined {
 	const { at, representative, route, path } = value;
 	const stratum = stratumOf(value['stratum']);
 	const outcome = apiDiffOutcomeOf(value['outcome']);
-	const behaviours = listOf(value['behaviours'], textOf);
-	if (!isString(at) || !isString(representative) || !isString(route) || !isString(path) || behaviours === undefined || stratum === undefined || outcome === undefined) {
+	const behaviors = listOf(value['behaviors'], textOf);
+	if (!isString(at) || !isString(representative) || !isString(route) || !isString(path) || behaviors === undefined || stratum === undefined || outcome === undefined) {
 		return(undefined);
 	}
-	return({ kind: 'api-diff', at, representative, stratum, route, path, behaviours, outcome });
+	return({ kind: 'api-diff', at, representative, stratum, route, path, behaviors, outcome });
 }
 
 function textOf(value: unknown): string | undefined {

@@ -46,14 +46,14 @@ function diverged(account: string, field: string): SweepOutcome {
 	return({ kind: 'diverged', divergence: { account, field, staple: STAPLE }, follower: {}, representative: {} });
 }
 
-const KNOWN_BEHAVIOUR = '/api/node/ledger/account/{account} 200 error=-';
+const KNOWN_BEHAVIOR = '/api/node/ledger/account/{account} 200 error=-';
 
-function apiDiff(at: string, stratum: Stratum, path: string, outcome: APIDiffOutcome, behaviours: readonly string[] = [KNOWN_BEHAVIOUR]): APIDiffRecord {
-	return({ kind: 'api-diff', at, representative: REPRESENTATIVE, stratum, route: '/api/node/ledger/account/{account}', path, behaviours, outcome });
+function apiDiff(at: string, stratum: Stratum, path: string, outcome: APIDiffOutcome, behaviors: readonly string[] = [KNOWN_BEHAVIOR]): APIDiffRecord {
+	return({ kind: 'api-diff', at, representative: REPRESENTATIVE, stratum, route: '/api/node/ledger/account/{account}', path, behaviors, outcome });
 }
 
 function report(records: readonly ParityRecord[]) {
-	return(parityReportOf({ generatedAt: new Date('2026-10-09T08:00:00.000Z'), progress: PROGRESS, sweep: { knownAccounts: 10, cursor: { lap: 1, afterRowID: '7' }, walkedThisLap: 4 }, log: { records, unreadableLines: 0 }, knownBehaviours: new Set([KNOWN_BEHAVIOUR]) }));
+	return(parityReportOf({ generatedAt: new Date('2026-10-09T08:00:00.000Z'), progress: PROGRESS, sweep: { knownAccounts: 10, cursor: { lap: 1, afterRowID: '7' }, walkedThisLap: 4 }, log: { records, unreadableLines: 0 }, knownBehaviors: new Set([KNOWN_BEHAVIOR]) }));
 }
 
 describe('the parity report', function() {
@@ -65,7 +65,7 @@ describe('the parity report', function() {
 			signals: {
 				checksum: { verdict: 'not-comparable-yet', firstDivergence: null },
 				sweep: { verdict: 'not-comparable-yet', firstDivergence: null, confidence: { kind: 'none' } },
-				apiDiff: { verdict: 'not-comparable-yet', firstDivergence: null, newBehaviours: [] },
+				apiDiff: { verdict: 'not-comparable-yet', firstDivergence: null, newBehaviors: [] },
 				shadowVotes: { verdict: 'not-comparable-yet', runs: 0, latest: null, firstDivergence: null }
 			}
 		});
@@ -128,7 +128,7 @@ describe('the parity report', function() {
 		expect(signal).toMatchObject({
 			verdict: 'pass',
 			counts: { requestsCompared: 3, matched: 3, diverged: 0, skippedMoving: 1, unanswered: 0, divergenceRecords: 1 },
-			newBehaviours: [{ behaviour: '/api/vote/{blockhash} 200 error=-', path: '/vote/AB' }, { behaviour: 'operation=SEND', path: '/vote/AB' }],
+			newBehaviors: [{ behavior: '/api/vote/{blockhash} 200 error=-', path: '/vote/AB' }, { behavior: 'operation=SEND', path: '/vote/AB' }],
 			firstDivergence: null
 		});
 		expect(signal.strata.find(function(stratum) {
@@ -259,7 +259,7 @@ describe('a parity run', function() {
 			log,
 			cursorPath: join(directory, 'parity-sweep.json'),
 			sampleAccounts: 1,
-			apiDiff: { samplesPerStratum: 1, seed: 'test', edgeCaseStaples: [], knownBehaviours: new Set() },
+			apiDiff: { samplesPerStratum: 1, seed: 'test', edgeCaseStaples: [], knownBehaviors: new Set() },
 			gapMilliseconds: 10_000,
 			wait: () => Promise.resolve(),
 			stopped: new AbortController().signal

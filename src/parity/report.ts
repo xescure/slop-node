@@ -135,7 +135,7 @@ export type APIDiffSignal = {
 		readonly divergenceRecords: number;
 	};
 	/** Answers of a kind the capture set holds none of, each with a request that drew it, to be captured. */
-	readonly newBehaviours: readonly { readonly behaviour: string; readonly path: string }[];
+	readonly newBehaviors: readonly { readonly behavior: string; readonly path: string }[];
 	readonly firstDivergence: { readonly at: string; readonly representative: string; readonly stratum: Stratum; readonly path: string; readonly field: string } | null;
 };
 
@@ -372,10 +372,10 @@ function confidenceOf(compared: number, diverged: number, unit: string): Confide
  * again on a later run is one sample, and the rule of three bounds each
  * stratum's rate of divergence over its distinct requests.
  */
-function apiDiffSignalOf(records: readonly APIDiffRecord[], knownBehaviours: ReadonlySet<string>): APIDiffSignal {
+function apiDiffSignalOf(records: readonly APIDiffRecord[], knownBehaviors: ReadonlySet<string>): APIDiffSignal {
 	const compared = new Map<string, APIDiffRecord>();
 	const attempted = new Map<string, APIDiffRecord>();
-	const newBehaviours = new Map<string, string>();
+	const newBehaviors = new Map<string, string>();
 	for (const record of records) {
 		const key = `${record.stratum} ${record.path}`;
 		attempted.set(key, record);
@@ -383,9 +383,9 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], knownBehaviours: Rea
 			continue;
 		}
 		compared.set(key, record);
-		for (const behaviour of record.behaviours) {
-			if (!knownBehaviours.has(behaviour) && !newBehaviours.has(behaviour)) {
-				newBehaviours.set(behaviour, record.path);
+		for (const behavior of record.behaviors) {
+			if (!knownBehaviors.has(behavior) && !newBehaviors.has(behavior)) {
+				newBehaviors.set(behavior, record.path);
 			}
 		}
 	}
@@ -429,18 +429,18 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], knownBehaviours: Rea
 			return(record.outcome.kind === 'diverged');
 		}).length
 	};
-	const behaviours = [...newBehaviours].map(function([behaviour, path]) {
-		return({ behaviour, path });
+	const behaviors = [...newBehaviors].map(function([behavior, path]) {
+		return({ behavior, path });
 	});
 	const first = diverging[0];
 	if (first?.outcome.kind === 'diverged') {
-		return({ verdict: 'fail', strata, counts, newBehaviours: behaviours, firstDivergence: { at: first.at, representative: first.representative, stratum: first.stratum, path: first.path, field: first.outcome.field } });
+		return({ verdict: 'fail', strata, counts, newBehaviors: behaviors, firstDivergence: { at: first.at, representative: first.representative, stratum: first.stratum, path: first.path, field: first.outcome.field } });
 	}
 	let verdict: Verdict = 'not-comparable-yet';
 	if (latest.length > 0) {
 		verdict = 'pass';
 	}
-	return({ verdict, strata, counts, newBehaviours: behaviours, firstDivergence: null });
+	return({ verdict, strata, counts, newBehaviors: behaviors, firstDivergence: null });
 }
 
 /** The latest run decides: a staple of its window refused without a classified explanation, or not applied at all, fails it. */
@@ -492,7 +492,7 @@ export type ReportInput = {
 	readonly sweep: SweepPosition;
 	readonly log: ParityLogContents;
 	/** The kinds of answer the capture set holds. */
-	readonly knownBehaviours: ReadonlySet<string>;
+	readonly knownBehaviors: ReadonlySet<string>;
 };
 
 export function parityReportOf(input: ReportInput): ParityReport {
@@ -504,7 +504,7 @@ export function parityReportOf(input: ReportInput): ParityReport {
 		signals: {
 			checksum: checksumSignalOf(records),
 			sweep: sweepSignalOf(recordsOf(records, 'sweep'), input.sweep),
-			apiDiff: apiDiffSignalOf(recordsOf(records, 'api-diff'), input.knownBehaviours),
+			apiDiff: apiDiffSignalOf(recordsOf(records, 'api-diff'), input.knownBehaviors),
 			shadowVotes: shadowVotesSignalOf(recordsOf(records, 'shadow-live'))
 		}
 	});
@@ -532,7 +532,7 @@ export type ParityRun = {
 	/** How many accounts the fresh sweep sample compares. */
 	readonly sampleAccounts: number;
 	/** The fresh sample of the API diff: so many requests of each stratum, drawn as the seed fixes. */
-	readonly apiDiff: Pick<APIDiffSetup, 'samplesPerStratum' | 'seed' | 'edgeCaseStaples' | 'knownBehaviours'>;
+	readonly apiDiff: Pick<APIDiffSetup, 'samplesPerStratum' | 'seed' | 'edgeCaseStaples' | 'knownBehaviors'>;
 	readonly gapMilliseconds: number;
 	readonly wait: (milliseconds: number) => Promise<void>;
 	readonly stopped: AbortSignal;
@@ -556,5 +556,5 @@ export async function runParity(run: ParityRun): Promise<ParityReport> {
 	await sampleAPI({ ...run.apiDiff, follower: run.follower, representatives: run.representatives, store: run.store, log: run.log, stopped: run.stopped });
 	const cursor = await readSweepCursor(run.cursorPath);
 	const sweep = { knownAccounts: await run.store.accountCount(), cursor, walkedThisLap: await run.store.accountsUpTo(cursor.afterRowID) };
-	return(parityReportOf({ generatedAt: new Date(), progress: await run.store.progress(), sweep, log: await run.log.read(), knownBehaviours: run.apiDiff.knownBehaviours }));
+	return(parityReportOf({ generatedAt: new Date(), progress: await run.store.progress(), sweep, log: await run.log.read(), knownBehaviors: run.apiDiff.knownBehaviors }));
 }

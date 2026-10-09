@@ -8,7 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { PeerPacer } from '../node/bootstrap-pacing.js';
 import { assertNever } from '../util/assert-never.js';
-import { capturedBehaviours, sampleAPI } from './api-diff.js';
+import { capturedBehaviors, sampleAPI } from './api-diff.js';
 import { httpSource, pacedSource } from './api-source.js';
 import type { APISource } from './api-source.js';
 import { compareChecksums, crossCheckChecksum } from './checksum.js';
@@ -134,7 +134,7 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 				samplesPerStratum: command.samplesPerStratum,
 				seed: command.seed ?? new Date().toISOString(),
 				edgeCaseStaples: await edgeCaseStaples(),
-				knownBehaviours: await capturedBehaviours(fileURLToPath(CAPTURE_DIRECTORY))
+				knownBehaviors: await capturedBehaviors(fileURLToPath(CAPTURE_DIRECTORY))
 			});
 			process.stdout.write(`${JSON.stringify(summary, null, '\t')}\n`);
 			return(0);
@@ -150,7 +150,7 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 				samplesPerStratum: command.apiSamples,
 				seed: new Date().toISOString(),
 				edgeCaseStaples: await edgeCaseStaples(),
-				knownBehaviours: await capturedBehaviours(fileURLToPath(CAPTURE_DIRECTORY))
+				knownBehaviors: await capturedBehaviors(fileURLToPath(CAPTURE_DIRECTORY))
 			};
 			const report = await runParity({ ...tools, sampleAccounts: command.sampleAccounts, apiDiff, gapMilliseconds: command.gapMilliseconds, wait });
 			process.stdout.write(`${JSON.stringify(report, null, '\t')}\n`);

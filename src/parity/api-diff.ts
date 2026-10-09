@@ -525,13 +525,13 @@ function operationsServed(value: unknown): readonly string[] {
 }
 
 /**
- * The kinds of behaviour an answer shows, as the capture set is told apart
+ * The kinds of behavior an answer shows, as the capture set is told apart
  * by: its route with its status and error code, the kind of account it is
  * about, and each type of operation of the blocks it serves, which every
  * route serializes alike. Each is told apart from the others, so that a
  * new combination of known ones is not new.
  */
-export function behavioursOf(path: string, answer: APIAnswer): readonly string[] {
+export function behaviorsOf(path: string, answer: APIAnswer): readonly string[] {
 	const matched = routeOf(path);
 	if (matched === undefined) {
 		return([]);
@@ -543,20 +543,20 @@ export function behavioursOf(path: string, answer: APIAnswer): readonly string[]
 			error = answer.body['code'];
 		}
 	}
-	const behaviours = [`${matched.route} ${String(answer.status)} error=${error}`];
+	const behaviors = [`${matched.route} ${String(answer.status)} error=${error}`];
 	const named = matched.parameters['account'];
 	if (named !== undefined) {
-		behaviours.push(`account=${keyTypeOf(named)}`);
+		behaviors.push(`account=${keyTypeOf(named)}`);
 	}
 	for (const operation of [...new Set(operationsServed(answer.body))].sort()) {
-		behaviours.push(`operation=${operation}`);
+		behaviors.push(`operation=${operation}`);
 	}
-	return(behaviours);
+	return(behaviors);
 }
 
-/** The behaviours of the capture set, which conformance/API.md describes; a capture of a path outside the sampled routes has none. */
-export async function capturedBehaviours(directory: string): Promise<ReadonlySet<string>> {
-	const behaviours = new Set<string>();
+/** The behaviors of the capture set, which conformance/API.md describes; a capture of a path outside the sampled routes has none. */
+export async function capturedBehaviors(directory: string): Promise<ReadonlySet<string>> {
+	const behaviors = new Set<string>();
 	for (const name of (await readdir(directory)).filter(function(file): boolean {
 		return(file.endsWith('.json'));
 	})) {
@@ -564,11 +564,11 @@ export async function capturedBehaviours(directory: string): Promise<ReadonlySet
 		if (!isFields(capture) || !isFields(capture['request']) || typeof capture['request']['path'] !== 'string' || typeof capture['status'] !== 'number') {
 			throw(new Error(`${name} is not a capture`));
 		}
-		for (const behaviour of behavioursOf(capture['request']['path'].replace(/^\/api/, ''), { status: capture['status'], body: capture['body'] })) {
-			behaviours.add(behaviour);
+		for (const behavior of behaviorsOf(capture['request']['path'].replace(/^\/api/, ''), { status: capture['status'], body: capture['body'] })) {
+			behaviors.add(behavior);
 		}
 	}
-	return(behaviours);
+	return(behaviors);
 }
 
 export type APIDiffSetup = {
@@ -583,7 +583,7 @@ export type APIDiffSetup = {
 	readonly seed: string;
 	/** The edge-case staples, by the hash of their blocks. */
 	readonly edgeCaseStaples: readonly string[];
-	readonly knownBehaviours: ReadonlySet<string>;
+	readonly knownBehaviors: ReadonlySet<string>;
 	readonly stopped: AbortSignal;
 };
 
@@ -601,7 +601,7 @@ export type APIDiffSummary = {
 	readonly quietBefore: string | null;
 	readonly strata: readonly StratumSummary[];
 	/** Answers of a kind the capture set holds none of, each with a request that drew it. */
-	readonly newBehaviours: readonly { readonly behaviour: string; readonly path: string }[];
+	readonly newBehaviors: readonly { readonly behavior: string; readonly path: string }[];
 };
 
 /** Read through a call, as a signal is aborted while the sampler awaits. */
@@ -625,12 +625,12 @@ export async function sampleAPI(setup: APIDiffSetup): Promise<APIDiffSummary> {
 	const strata: StratumSummary[] = [];
 	const { heldBefore } = await setup.store.progress();
 	if (heldBefore === undefined) {
-		return({ quietBefore: null, strata, newBehaviours: [] });
+		return({ quietBefore: null, strata, newBehaviors: [] });
 	}
 	const quietBefore = new Date(heldBefore.getTime() - QUIET_MARGIN_MILLISECONDS);
 	const plan = await samplingPlan(setup.store, quietBefore, setup.samplesPerStratum, setup.seed, setup.edgeCaseStaples);
 	const quiet = new QuietAccounts(setup.store, quietBefore);
-	const newBehaviours = new Map<string, string>();
+	const newBehaviors = new Map<string, string>();
 	for (const stratum of STRATA) {
 		const requests = plan.get(stratum) ?? [];
 		const counts = { ...emptySummary(stratum, requests.length) };
@@ -642,16 +642,16 @@ export async function sampleAPI(setup: APIDiffSetup): Promise<APIDiffSummary> {
 					return;
 				}
 				const { outcome, representativeAnswer } = await compareRequest(request, setup.follower, representative, quiet);
-				let behaviours: readonly string[] = [];
+				let behaviors: readonly string[] = [];
 				if (representativeAnswer !== undefined && outcome.kind !== 'skipped') {
-					behaviours = behavioursOf(request.path, representativeAnswer);
+					behaviors = behaviorsOf(request.path, representativeAnswer);
 				}
-				for (const behaviour of behaviours) {
-					if (!setup.knownBehaviours.has(behaviour) && !newBehaviours.has(behaviour)) {
-						newBehaviours.set(behaviour, request.path);
+				for (const behavior of behaviors) {
+					if (!setup.knownBehaviors.has(behavior) && !newBehaviors.has(behavior)) {
+						newBehaviors.set(behavior, request.path);
 					}
 				}
-				const record: APIDiffRecord = { kind: 'api-diff', at: new Date().toISOString(), representative: representative.endpoint, stratum, route: request.route, path: request.path, behaviours, outcome };
+				const record: APIDiffRecord = { kind: 'api-diff', at: new Date().toISOString(), representative: representative.endpoint, stratum, route: request.route, path: request.path, behaviors, outcome };
 				await setup.log.append([record]);
 				switch (outcome.kind) {
 					case 'match':
@@ -679,8 +679,8 @@ export async function sampleAPI(setup: APIDiffSetup): Promise<APIDiffSummary> {
 	return({
 		quietBefore: quietBefore.toISOString(),
 		strata,
-		newBehaviours: [...newBehaviours].map(function([behaviour, path]) {
-			return({ behaviour, path });
+		newBehaviors: [...newBehaviors].map(function([behavior, path]) {
+			return({ behavior, path });
 		})
 	});
 }
