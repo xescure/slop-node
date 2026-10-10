@@ -47,7 +47,12 @@ const PRIVATE_DIRECTORY = 0o700;
  * database as of an earlier commit, and the catch-up cursors live in the same
  * database, so none survives the staples it moved past, which are fetched
  * again. Statement statistics are kept, to profile the node's queries against
- * the real ledger.
+ * the real ledger. Every transaction is serializable (schema/CONTRACT.md,
+ * D19), and its predicate locks come from one table the size of the limit
+ * per transaction times the connections; with the default 64, the offline
+ * ledger of shadow votes (utils/parity shadow), in a database of the same
+ * cluster, ran it out within a minute beside the node, failing transactions
+ * of both, while a few megabytes more hold a thousand per transaction.
  */
 const POSTGRES_SETTINGS: Readonly<Record<string, string>> = {
 	listen_addresses: '\'\'',
@@ -67,6 +72,7 @@ const POSTGRES_SETTINGS: Readonly<Record<string, string>> = {
 	min_wal_size: '\'1GB\'',
 	wal_compression: 'lz4',
 	shared_preload_libraries: '\'pg_stat_statements\'',
+	max_pred_locks_per_transaction: '1024',
 	track_io_timing: 'on',
 	timezone: '\'UTC\''
 };
