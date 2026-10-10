@@ -13,3 +13,4 @@ CLAUDE.md
 utils/__pycache__/
 /result
 /result-*
+/.stryker/

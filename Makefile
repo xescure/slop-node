@@ -53,6 +53,11 @@ help:
 	@echo "  conformance    - Regenerates the vote-decision corpus, and the mainnet"
 	@echo "                   head state, shadow-vote exceptions and edge-case"
 	@echo "                   outcomes in conformance/"
+	@echo "  mutation       - Mutation-tests one module against its own tests, and"
+	@echo "                   checks that every surviving mutant is triaged in"
+	@echo "                   mutation/equivalent.md; it runs for an hour or more,"
+	@echo "                   so it is not part of test"
+	@echo "                   Specify MODULE=<name>, a module of stryker.config.mjs"
 	@echo "  parity         - Compares the running follower with the main network's"
 	@echo "                   representatives and prints the parity report; it reads"
 	@echo "                   from them, so it is not part of test"
@@ -149,6 +154,17 @@ devnet-test: dist/.done build/devnet/.done
 conformance: node_modules/.patched
 	SLOP_NODE_UPDATE_CONFORMANCE=1 npm run vitest -- run --config .vitest.config.js src/conformance/corpus.test.ts src/conformance/mainnet/head.memory.test.ts
 
+# Stryker reruns a module's tests once per mutant, which takes an hour or
+# more, so it is never part of test. It reads the module from the
+# environment, and validates it there.
+mutation-usage:
+	@echo "Usage: make mutation MODULE=<name>" >&2
+	@exit 2
+
+mutation: $(if $(MODULE),node_modules/.patched build/utils/.done,mutation-usage)
+	SLOP_NODE_MUTATION_MODULE='$(MODULE)' npm run stryker -- run stryker.config.mjs
+	node build/utils/mutation/main.js --report '.stryker/$(MODULE)/report.json' --triage mutation/equivalent.md
+
 # The parity report reads from the main network's representatives and needs
 # the follower running, so it is never part of test.
 parity: build/parity/.done
@@ -214,8 +230,8 @@ clean:
 	rm -rf dist build .coverage
 
 distclean: clean
-	rm -rf node_modules .nvmrc reference
+	rm -rf node_modules .nvmrc reference .stryker
 
-.PHONY: all help test devnet-test conformance parity do-lint reference reference-diff reference-diff-usage clean distclean
+.PHONY: all help test devnet-test conformance mutation mutation-usage parity do-lint reference reference-diff reference-diff-usage clean distclean
 
 endif
