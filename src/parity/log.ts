@@ -98,8 +98,13 @@ export type SweepRecord = {
 	readonly outcome: SweepOutcome;
 };
 
-/** Why a block count comparison does not count. */
-export type BlockCountNotComparableReason = Extract<NotComparableReason, 'no-completed-pass' | 'follower-unanswered' | 'representative-unanswered'>;
+/**
+ * Why a block count comparison does not count. Until the follower has
+ * completed a pass and added every staple it staged, its ledger stands at
+ * an earlier point of the history than the representatives', and counts
+ * fewer blocks for that alone.
+ */
+export type BlockCountNotComparableReason = Extract<NotComparableReason, 'no-completed-pass' | 'follower-unanswered' | 'representative-unanswered'> | 'stage-not-empty';
 
 export type BlockCountVerdict =
 	| { readonly kind: 'pass' }
@@ -112,6 +117,8 @@ export type BlockCountRecord = {
 	readonly at: string;
 	readonly representative: string;
 	readonly completedPass: string | null;
+	/** Staples the follower had staged and not added yet, or null in a record of a build that did not read them. */
+	readonly staged: number | null;
 	readonly follower: ChecksumWindow;
 	readonly representativeWindow: ChecksumWindow;
 	/** How far apart the two counts may be and still describe the same ledger, as reckoned for this comparison. */
@@ -276,7 +283,7 @@ function reasonOf(value: unknown): NotComparableReason | undefined {
 	}));
 }
 
-const BLOCK_COUNT_REASONS: readonly BlockCountNotComparableReason[] = ['no-completed-pass', 'follower-unanswered', 'representative-unanswered'];
+const BLOCK_COUNT_REASONS: readonly BlockCountNotComparableReason[] = ['no-completed-pass', 'stage-not-empty', 'follower-unanswered', 'representative-unanswered'];
 
 function blockCountVerdictOf(value: unknown): BlockCountVerdict | undefined {
 	if (!isFields(value)) {
@@ -308,13 +315,14 @@ function blockCountVerdictOf(value: unknown): BlockCountVerdict | undefined {
 
 function blockCountRecordOf(value: Fields): BlockCountRecord | undefined {
 	const { at, representative, completedPass, toleranceBlocks } = value;
+	const staged = value['staged'] ?? null;
 	const follower = windowOf(value['follower']);
 	const representativeWindow = windowOf(value['representativeWindow']);
 	const verdict = blockCountVerdictOf(value['verdict']);
-	if (!isString(at) || !isString(representative) || !isStringOrNull(completedPass) || !isCount(toleranceBlocks) || follower === undefined || representativeWindow === undefined || verdict === undefined) {
+	if (!isString(at) || !isString(representative) || !isStringOrNull(completedPass) || !(staged === null || isCount(staged)) || !isCount(toleranceBlocks) || follower === undefined || representativeWindow === undefined || verdict === undefined) {
 		return(undefined);
 	}
-	return({ kind: 'block-count', at, representative, completedPass, follower, representativeWindow, toleranceBlocks, verdict });
+	return({ kind: 'block-count', at, representative, completedPass, staged, follower, representativeWindow, toleranceBlocks, verdict });
 }
 
 function mismatchedStapleOf(value: unknown): MismatchedStapleRecord | undefined {

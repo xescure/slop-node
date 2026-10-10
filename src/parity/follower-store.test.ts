@@ -146,12 +146,21 @@ describe('the follower\'s store, read from its database', function() {
 	test('reads the bootstrap progress the node stored', async function() {
 		const stored = { from: 1000, end: 9000, deepScanPeer: PEER, ranges: [{ reached: 2500, end: 4000, peer: PEER }], standings: {} };
 		const store = storeOf(await followerDatabase({ caughtUp: 7000, layout: stored, cursors: { [PEER]: storedProgress(8000), [OTHER_PEER]: storedProgress(3000) } }));
-		expect(await store.progress()).toEqual({ completedPass: new Date(7000), heldBefore: new Date(2500) });
+		expect(await store.progress()).toEqual({ completedPass: new Date(7000), heldBefore: new Date(2500), staged: 0 });
 	});
 
 	test('reads no progress from a node that stored none', async function() {
 		const store = storeOf(await followerDatabase({ cursors: { [PEER]: storedProgress(4000), [OTHER_PEER]: { written: 'by another version' } } }));
-		expect(await store.progress()).toEqual({ completedPass: undefined, heldBefore: new Date(4000) });
+		expect(await store.progress()).toEqual({ completedPass: undefined, heldBefore: new Date(4000), staged: 0 });
+	});
+
+	test('counts the staples staged and not added yet', async function() {
+		const database = await followerDatabase({ caughtUp: 7000 });
+		const pool = database.pool();
+		const moment = new Date('2026-07-01T00:00:00.000Z');
+		await pool.query('INSERT INTO bootstrap_stage (blocks_hash, first_vote_from, last_vote_from, bytes) VALUES ($1, $2, $2, $3), ($4, $2, $2, $3)', [Buffer.from(STAPLE, 'hex'), moment, Buffer.from([1]), Buffer.from(OTHER_STAPLE, 'hex')]);
+		await database.endPools();
+		expect(await storeOf(database).progress()).toMatchObject({ completedPass: new Date(7000), staged: 2 });
 	});
 
 	test('opens sessions that cannot write to the follower\'s database', async function() {

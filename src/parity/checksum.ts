@@ -140,16 +140,27 @@ function spreadOf(windows: readonly ChecksumWindow[]): number {
 	return(Math.max(...counts) - Math.min(...counts));
 }
 
+function isoOrNull(moment: Date | undefined): string | null {
+	if (moment === undefined) {
+		return(null);
+	}
+	return(moment.toISOString());
+}
+
 /**
  * The follower's count must be within the floor of the representative's,
  * widened by how far the representatives count apart and by what either
  * side added within its window, as the two may have been read at different
  * points of the same ledger.
  */
-function blockCountRecordOf(at: string, completedPass: string | null, follower: ChecksumWindow, representative: string, representativeWindow: ChecksumWindow, spread: number): BlockCountRecord {
+function blockCountRecordOf(at: string, progress: FollowerProgress, follower: ChecksumWindow, representative: string, representativeWindow: ChecksumWindow, spread: number): BlockCountRecord {
 	const reasons: BlockCountNotComparableReason[] = [];
+	const completedPass = isoOrNull(progress.completedPass);
 	if (completedPass === null) {
 		reasons.push('no-completed-pass');
+	}
+	if (progress.staged > 0) {
+		reasons.push('stage-not-empty');
 	}
 	if (follower.kind === 'unanswered') {
 		reasons.push('follower-unanswered');
@@ -168,7 +179,7 @@ function blockCountRecordOf(at: string, completedPass: string | null, follower: 
 			verdict = { kind: 'fail', difference };
 		}
 	}
-	return({ kind: 'block-count', at, representative, completedPass, follower, representativeWindow, toleranceBlocks, verdict });
+	return({ kind: 'block-count', at, representative, completedPass, staged: progress.staged, follower, representativeWindow, toleranceBlocks, verdict });
 }
 
 export type ChecksumComparisonRecords = {
@@ -181,8 +192,10 @@ export type ChecksumComparisonRecords = {
  * Reads the follower's checksum and block count, then each
  * representative's, waits out the gap, and reads each representative and
  * then the follower again, so that the follower's window holds every
- * representative's. A comparison counts only once the follower has
- * completed a bootstrap pass and neither side moved within its window.
+ * representative's. A checksum comparison counts only once the follower
+ * has completed a bootstrap pass and neither side moved within its window;
+ * a block count comparison, once the follower has also added every staple
+ * it staged.
  */
 export async function compareChecksums(comparison: ChecksumComparison): Promise<ChecksumComparisonRecords> {
 	const at = new Date().toISOString();
@@ -193,16 +206,13 @@ export async function compareChecksums(comparison: ChecksumComparison): Promise<
 		return(windowOf(source, representativesFirst[index] ?? { kind: 'unanswered', error: 'not read' }));
 	}));
 	const follower = await windowOf(comparison.follower, followerFirst);
-	let completedPass: string | null = null;
-	if (comparison.progress.completedPass !== undefined) {
-		completedPass = comparison.progress.completedPass.toISOString();
-	}
+	const completedPass = isoOrNull(comparison.progress.completedPass);
 	const checksums: ChecksumRecord[] = [];
 	const blockCounts: BlockCountRecord[] = [];
 	const spread = spreadOf(representativeWindows);
 	for (const [index, source] of comparison.representatives.entries()) {
 		const representativeWindow = representativeWindows[index] ?? { kind: 'unanswered', error: 'not read' };
-		blockCounts.push(blockCountRecordOf(at, completedPass, follower, source.endpoint, representativeWindow, spread));
+		blockCounts.push(blockCountRecordOf(at, comparison.progress, follower, source.endpoint, representativeWindow, spread));
 		checksums.push({
 			kind: 'checksum',
 			at,

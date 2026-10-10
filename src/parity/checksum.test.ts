@@ -8,9 +8,12 @@ import type { SweepPointer } from './log.js';
 
 const GAP = 10_000;
 
-const COMPLETED: FollowerProgress = { completedPass: new Date('2026-10-09T05:00:00.000Z'), heldBefore: new Date('2026-10-09T05:00:00.000Z') };
+const COMPLETED: FollowerProgress = { completedPass: new Date('2026-10-09T05:00:00.000Z'), heldBefore: new Date('2026-10-09T05:00:00.000Z'), staged: 0 };
 
-const CATCHING_UP: FollowerProgress = { completedPass: undefined, heldBefore: new Date('2025-12-31T00:00:00.000Z') };
+const CATCHING_UP: FollowerProgress = { completedPass: undefined, heldBefore: new Date('2025-12-31T00:00:00.000Z'), staged: 0 };
+
+/** A pass has completed, so the follower read everything, but it has not added all it read. */
+const APPLYING: FollowerProgress = { ...COMPLETED, staged: 339_533 };
 
 const POINTER: SweepPointer = { cursor: { lap: 0, afterRowID: '12' }, firstDivergence: null };
 
@@ -192,6 +195,26 @@ describe('comparing the follower\'s block count with each representative\'s', fu
 		const { blockCounts } = await compareAll(running, COMPLETED);
 
 		expect(blockCounts[0]?.verdict).toEqual({ kind: 'fail', difference: -(BLOCK_COUNT_FLOOR + 1) });
+	});
+
+	test('does not count while the follower has staples staged, though a pass has completed', async function() {
+		const running = await setup(1);
+		serveReadings(running.follower, [['0x1', 207_002]]);
+		serveReadings(running.representatives[0] ?? running.follower, [['0x2', 935_782]]);
+
+		const { blockCounts } = await compareAll(running, APPLYING);
+
+		expect(blockCounts[0]).toMatchObject({ staged: 339_533, completedPass: '2026-10-09T05:00:00.000Z', verdict: { kind: 'not-comparable-yet', reasons: ['stage-not-empty'] } });
+	});
+
+	test('counts once the follower has completed a pass and added everything it staged', async function() {
+		const running = await setup(1);
+		serveReadings(running.follower, [['0x1', 935_700]]);
+		serveReadings(running.representatives[0] ?? running.follower, [['0x2', 935_782]]);
+
+		const { blockCounts } = await compareAll(running, COMPLETED);
+
+		expect(blockCounts[0]).toMatchObject({ staged: 0, verdict: { kind: 'pass' } });
 	});
 
 	test('does not count before the follower has completed a bootstrap pass, or without an answer', async function() {

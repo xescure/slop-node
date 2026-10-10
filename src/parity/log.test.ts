@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import { ParityLog, parityLogPath } from './log.js';
-import type { ChecksumRecord, CrossCheckRecord, ParityRecord, SweepRecord } from './log.js';
+import type { BlockCountRecord, ChecksumRecord, CrossCheckRecord, ParityRecord, SweepRecord } from './log.js';
 
 const REPRESENTATIVE = 'https://rep1.example/api';
 const ACCOUNT = 'keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai';
@@ -44,6 +44,18 @@ const CROSS_CHECKS: readonly CrossCheckRecord[] = [
 	{ kind: 'cross-check', at: CHECKSUM.at, stored: '0x1', folded: '0x3', mainBlocks: 4, outcome: { kind: 'lost-run', firstSequence: '1', lastSequence: '18', staples: 18, firstMoment: CHECKSUM.at, lastMoment: CHECKSUM.at } }
 ];
 
+const BLOCK_COUNT: BlockCountRecord = {
+	kind: 'block-count',
+	at: CHECKSUM.at,
+	representative: REPRESENTATIVE,
+	completedPass: '2026-10-09T05:00:00.000Z',
+	staged: 339_533,
+	follower: { kind: 'read', first: { checksum: '0xAB', blockCount: 207_002 }, second: { checksum: '0xAB', blockCount: 207_002 } },
+	representativeWindow: { kind: 'read', first: { checksum: '0xCD', blockCount: 935_782 }, second: { checksum: '0xCD', blockCount: 935_782 } },
+	toleranceBlocks: 120,
+	verdict: { kind: 'not-comparable-yet', reasons: ['stage-not-empty'] }
+};
+
 const directories: string[] = [];
 
 async function scratchLog(): Promise<ParityLog> {
@@ -65,11 +77,20 @@ describe('the parity log', function() {
 
 	test('reads back every kind of record it was given, in order', async function() {
 		const log = await scratchLog();
-		const records: readonly ParityRecord[] = [CHECKSUM, ...SWEEPS, FAILED_CHECKSUM, ...CROSS_CHECKS];
+		const records: readonly ParityRecord[] = [CHECKSUM, ...SWEEPS, FAILED_CHECKSUM, ...CROSS_CHECKS, BLOCK_COUNT];
 		await log.append(records.slice(0, 2));
 		await log.append(records.slice(2));
 
 		expect(await log.read()).toEqual({ records, unreadableLines: 0 });
+	});
+
+	test('reads a block count recorded before the stage was read as one that names no staged staples', async function() {
+		const log = await scratchLog();
+		const { staged, ...older } = BLOCK_COUNT;
+		expect(staged).toBe(339_533);
+		await appendFile(log.path, `${JSON.stringify({ ...older, verdict: { kind: 'fail', difference: -728_780 } })}\n`);
+
+		expect(await log.read()).toEqual({ records: [{ ...older, staged: null, verdict: { kind: 'fail', difference: -728_780 } }], unreadableLines: 0 });
 	});
 
 	test('counts a line cut short, or one it does not know, apart from the records', async function() {

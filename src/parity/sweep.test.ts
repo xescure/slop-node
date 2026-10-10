@@ -66,7 +66,7 @@ function history(staple: string, votedAt: readonly Date[]): unknown {
  * in its history the staples listed, the newest of them from the moment
  * given or, by default, quiet since long before the follower's reach.
  */
-function memoryStore(histories: Readonly<Record<string, readonly string[]>>, progress: FollowerProgress = { completedPass: undefined, heldBefore: HELD_BEFORE }, newest: Readonly<Record<string, Date>> = {}): SweepStore {
+function memoryStore(histories: Readonly<Record<string, readonly string[]>>, progress: FollowerProgress = { completedPass: undefined, heldBefore: HELD_BEFORE, staged: 0 }, newest: Readonly<Record<string, Date>> = {}): SweepStore {
 	const known: KnownAccount[] = Object.entries(histories).map(function([account, staples], index): KnownAccount {
 		let newestStaple: Date | undefined;
 		if (staples.length > 0) {
@@ -222,7 +222,7 @@ describe('the sweep over the follower\'s accounts', function() {
 		const account = ACCOUNTS[0];
 		serveAccount(running, account, [state(account, '0x10')], state(account, '0x10'), history(STAPLE, [QUIET_VOTE]));
 
-		const summary = await sweep(running, memoryStore({ [account]: [STAPLE] }, { completedPass: undefined, heldBefore: undefined }), 1);
+		const summary = await sweep(running, memoryStore({ [account]: [STAPLE] }, { completedPass: undefined, heldBefore: undefined, staged: 0 }), 1);
 
 		expect(summary).toMatchObject({ walked: 1, movingOnFollower: 1, compared: 0, skipped: 0 });
 		expect(await outcomes(running)).toEqual([]);

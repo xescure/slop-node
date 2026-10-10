@@ -16,7 +16,7 @@ const ACCOUNT = 'keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemq
 const OTHER_ACCOUNT = 'keeta_aabk62tezl4whordlviamlx3zrdgux6lk63cghay45vkzdatyemzvqqjuj5resa';
 const STAPLE = 'A0'.repeat(32);
 
-const PROGRESS: FollowerProgress = { completedPass: undefined, heldBefore: new Date('2025-12-31T00:00:00.000Z') };
+const PROGRESS: FollowerProgress = { completedPass: undefined, heldBefore: new Date('2025-12-31T00:00:00.000Z'), staged: 0 };
 
 const READ = { kind: 'read', first: { checksum: '0x1', blockCount: 1 }, second: { checksum: '0x1', blockCount: 1 } } as const;
 
@@ -31,7 +31,7 @@ function crossCheck(at: string, outcome: CrossCheckOutcome): CrossCheckRecord {
 }
 
 function blockCount(at: string, verdict: BlockCountVerdict, representative: string = REPRESENTATIVE): BlockCountRecord {
-	return({ kind: 'block-count', at, representative, completedPass: null, follower: READ, representativeWindow: READ, toleranceBlocks: 100, verdict });
+	return({ kind: 'block-count', at, representative, completedPass: null, staged: 0, follower: READ, representativeWindow: READ, toleranceBlocks: 100, verdict });
 }
 
 function swept(at: string, account: string, outcome: SweepOutcome): SweepRecord {

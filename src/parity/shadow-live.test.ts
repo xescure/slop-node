@@ -28,7 +28,7 @@ function servedInOrder(staples: readonly VoteStaple[]): ShadowLiveStore {
 		}) + 1);
 	};
 	return({
-		progress: () => Promise.resolve({ completedPass: undefined, heldBefore: new Date(lastMoment + 2 * HOUR) }),
+		progress: () => Promise.resolve({ completedPass: undefined, heldBefore: new Date(lastMoment + 2 * HOUR), staged: 0 }),
 		stapleCountBefore: (before) => Promise.resolve(held.filter(function(entry) {
 			return(entry.stapleTime < before);
 		}).length),
@@ -124,7 +124,7 @@ describe('shadow votes on the follower\'s history', function() {
 
 	test('vote on nothing before the follower has read anything', async function() {
 		const record = await shadowVoteLive({
-			store: { progress: () => Promise.resolve({ completedPass: undefined, heldBefore: undefined }), stapleCountBefore: () => Promise.resolve(0), staplesBefore: () => Promise.resolve([]) },
+			store: { progress: () => Promise.resolve({ completedPass: undefined, heldBefore: undefined, staged: 0 }), stapleCountBefore: () => Promise.resolve(0), staplesBefore: () => Promise.resolve([]) },
 			windowStaples: 10,
 			storage: () => new MemoryLedgerStorage()
 		});

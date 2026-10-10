@@ -143,7 +143,7 @@ export type APIDiffSignal = {
 
 export type ParityReport = {
 	readonly generatedAt: string;
-	readonly follower: { readonly completedPass: string | null; readonly heldBefore: string | null };
+	readonly follower: { readonly completedPass: string | null; readonly heldBefore: string | null; readonly staged: number };
 	readonly logUnreadableLines: number;
 	readonly signals: {
 		readonly checksum: ChecksumSignal;
@@ -511,7 +511,7 @@ export function parityReportOf(input: ReportInput): ParityReport {
 	const { records } = input.log;
 	return({
 		generatedAt: input.generatedAt.toISOString(),
-		follower: { completedPass: isoOrNull(input.progress.completedPass), heldBefore: isoOrNull(input.progress.heldBefore) },
+		follower: { completedPass: isoOrNull(input.progress.completedPass), heldBefore: isoOrNull(input.progress.heldBefore), staged: input.progress.staged },
 		logUnreadableLines: input.log.unreadableLines,
 		signals: {
 			checksum: checksumSignalOf(records),

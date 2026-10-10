@@ -18,7 +18,18 @@ export type FollowerProgress = {
 	 * read from none.
 	 */
 	readonly heldBefore: Date | undefined;
+	/** Staples read and waiting in the bootstrap stage to be added in the order of their votes (schema/CONTRACT.md, section 4.3). */
+	readonly staged: number;
 };
+
+/**
+ * The follower holds what the representatives hold once a pass has
+ * completed and it added everything it read; until then its ledger stands
+ * at an earlier point of the history.
+ */
+export function caughtUp(progress: FollowerProgress): boolean {
+	return(progress.completedPass !== undefined && progress.staged === 0);
+}
 
 /** An account the follower's ledger names, with the row that orders the sweep over them. */
 export type KnownAccount = {
@@ -273,6 +284,8 @@ const NEWEST_STAPLES = `
 	SELECT a.public_key, (SELECT max(h.staple_time) FROM history h WHERE h.account_id = a.id) AS newest_staple
 	FROM accounts a WHERE a.public_key = ANY($1::text[])`;
 
+const STAGED = 'SELECT count(*) AS count FROM bootstrap_stage';
+
 const STAPLE_COUNT_BEFORE = 'SELECT count(*) AS count FROM staples WHERE staple_time < $1';
 
 /** The history index orders staples by time and hash, newest first, so it is read backwards. */
@@ -408,7 +421,8 @@ export function openFollowerStore(connectionString: string): FollowerStore {
 			}).filter(function(peer): peer is PeerProgress {
 				return(peer !== undefined);
 			});
-			return({ completedPass, heldBefore: heldBeforeOf(layoutOf(layout.rows[0]?.value), peers) });
+			const staged = await pool.query<{ count: string }>(STAGED);
+			return({ completedPass, heldBefore: heldBeforeOf(layoutOf(layout.rows[0]?.value), peers), staged: Number(staged.rows[0]?.count ?? 0) });
 		},
 		async accountsAfter(rowID: string, count: number): Promise<readonly KnownAccount[]> {
 			const result = await pool.query<{ id: string; public_key: string; newest_staple: Date | null }>(ACCOUNTS_AFTER, [rowID, count]);
