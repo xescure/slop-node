@@ -14,7 +14,7 @@ import { historyAccountsOf } from '../confirmed.js';
 import type { AccountInfoUpdate, ConfirmedStapleChange } from '../confirmed.js';
 import { createIdempotentKeyError, createLedgerError, HistoryStartNotListed } from '../errors.js';
 import { voteExpirySlopMilliseconds } from '../expiry.js';
-import { toAccountKey, toBlockHashKey, toIdempotentKeyString } from '../keys.js';
+import { parseAccountKey, toAccountKey, toBlockHashKey, toIdempotentKeyString } from '../keys.js';
 import type { AccountKey, StapleKey } from '../keys.js';
 import { DEFAULT_HISTORY_LIMIT, DEFAULT_VOTES_PER_PAGE, decodeCatchUpKey, encodeCatchUpKey } from '../paging.js';
 import type { AccountInfoRow } from '../rows.js';
@@ -500,13 +500,12 @@ function resolveAccount<T extends AccountKeyAlgorithm>(account: Account<T> | str
 function accountsNamedBy(change: ConfirmedStapleChange): Map<string, AccountKeyAlgorithm> {
 	const named = new Map<string, AccountKeyAlgorithm>();
 	function add(account: GenericAccount | string): void {
-		let resolved: GenericAccount;
 		if (typeof account === 'string') {
-			resolved = lib.Account.fromPublicKeyString(account);
+			const { key, keyType } = parseAccountKey(account);
+			named.set(key, keyType);
 		} else {
-			resolved = account;
+			named.set(account.publicKeyString.get(), account.keyType);
 		}
-		named.set(resolved.publicKeyString.get(), resolved.keyType);
 	}
 	for (const block of change.staple.blocks) {
 		add(block.account);

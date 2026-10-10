@@ -1,5 +1,5 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import type { GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
+import type { AccountKeyAlgorithm, GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { IdempotentKey } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { ACLRow } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
@@ -42,8 +42,52 @@ export type ACLScopeKey = string & { readonly __aclScopeKey: never };
  * [Keeta TS] index.js:62709-62714
  */
 export function toAccountKey(account: GenericAccount | string): AccountKey {
+	if (typeof account === 'string') {
+		return(parseAccountKey(account).key);
+	}
 	// The brand marks the canonical form that toPublicKeyString produces.
 	return(KeetaNet.lib.Account.toPublicKeyString(account) as AccountKey);
+}
+
+/** What a string naming an account names, as upstream parses it: the account's key, and its key type. */
+export type ParsedAccountKey = {
+	readonly key: AccountKey;
+	readonly keyType: AccountKeyAlgorithm;
+};
+
+/*
+ * Parsing a string into an account derives its key and checks its checksum,
+ * which a staple of the main network that names hundreds of accounts by
+ * string pays for each of them as often as its write names them. The parse
+ * depends on the string alone, so a kept parse never goes stale; the oldest
+ * is dropped once this many are kept.
+ */
+const PARSED_ACCOUNT_KEYS_KEPT = 65536;
+
+const parsedAccountKeys = new Map<string, ParsedAccountKey>();
+
+/**
+ * The account a string names, parsed as toPublicKeyString parses it
+ * [Keeta TS] index.js:62696-62714, once for as long as the parse is kept.
+ */
+export function parseAccountKey(account: string): ParsedAccountKey {
+	const kept = parsedAccountKeys.get(account);
+	if (kept !== undefined) {
+		return(kept);
+	}
+	const parsed = KeetaNet.lib.Account.toAccount(account);
+	// The brand marks the canonical form that toPublicKeyString produces.
+	const key = parsed.publicKeyString.get() as AccountKey;
+	if (parsedAccountKeys.size >= PARSED_ACCOUNT_KEYS_KEPT) {
+		// A Map iterates in the order its keys were set, so the first is the oldest.
+		const oldest = parsedAccountKeys.keys().next();
+		if (oldest.done !== true) {
+			parsedAccountKeys.delete(oldest.value);
+		}
+	}
+	const entry: ParsedAccountKey = { key, keyType: parsed.keyType };
+	parsedAccountKeys.set(account, entry);
+	return(entry);
 }
 
 export function toBlockHashKey(hash: BlockHash): BlockHashKey {

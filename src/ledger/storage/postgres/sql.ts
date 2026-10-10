@@ -1,6 +1,7 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
+import { toAccountKey } from '../keys.js';
 import type { StapleKey } from '../keys.js';
 
 const lib = KeetaNet.lib;
@@ -56,7 +57,7 @@ export function toBlockHash(bytes: Buffer): BlockHash {
 }
 
 export function publicKeyOf(account: GenericAccount | string): string {
-	return(lib.Account.toPublicKeyString(account));
+	return(toAccountKey(account));
 }
 
 export function bytesOf(buffer: ArrayBuffer): Buffer {
