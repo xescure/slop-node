@@ -110,6 +110,11 @@ export type FollowerCommand =
 	 * before is kept under another name.
 	 */
 	| { readonly kind: 'restage'; readonly directory: string }
+	/**
+	 * Copy the follower's database, as it stands, into a new database of its
+	 * cluster, stopping its node for the copy and starting it again after.
+	 */
+	| { readonly kind: 'snapshot'; readonly directory: string }
 	| { readonly kind: 'logs'; readonly directory: string; readonly log: FollowerLog; readonly lines: number; readonly follow: boolean };
 
 export function defaultFollowerDirectory(home: string): string {
@@ -333,6 +338,7 @@ export function parseFollowerCommand(argv: readonly string[], home: string): Fol
 		case 'reset-cursors':
 		case 'reindex-history':
 		case 'restage':
+		case 'snapshot':
 			options = optionsOf(rest, ['--directory'], []);
 			break;
 		default:
@@ -352,6 +358,7 @@ export function parseFollowerCommand(argv: readonly string[], home: string): Fol
 		case 'reset-cursors':
 		case 'reindex-history':
 		case 'restage':
+		case 'snapshot':
 			return({ kind: name, directory });
 		default:
 			return(assertNever(name));

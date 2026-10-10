@@ -104,6 +104,10 @@ const USAGE = [
 	'  restage with the node down, move every staple the ledger holds, has deferred or queued into the',
 	'          bootstrap stage of a new database, with where the bootstrap reached, so that the node adds',
 	'          them again in the order of their votes; the database before is kept under another name',
+	'  snapshot',
+	'          copy the follower\'s database as it stands into a new database of its cluster, named for',
+	'          the time, stopping its node for the copy and starting it again after, as a base for',
+	'          "utils/parity shadow --base"',
 	'',
 	'The directory holds the seed, the database, the logs and the settings (~/.local/share/slop-node-follower).',
 	'"up" needs the PostgreSQL server binaries, which "devenv shell" provides.',
@@ -424,6 +428,25 @@ async function stopProcess(processID: number, signal: NodeJS.Signals, millisecon
 	return({ kind: 'exited', milliseconds: Date.now() - signalled });
 }
 
+/** Stops the node, saying how; 1 when it had to be killed. */
+async function stopNode(directory: string, node: number): Promise<ExitCode> {
+	let code: ExitCode = 0;
+	const stopped = await stopProcess(node, 'SIGTERM', NODE_STOP_MILLISECONDS);
+	switch (stopped.kind) {
+		case 'exited':
+			process.stdout.write(`the node stopped ${String(stopped.milliseconds)} ms after SIGTERM\n`);
+			break;
+		case 'killed':
+			process.stderr.write(`the node did not stop within ${String(NODE_STOP_MILLISECONDS)} ms and was killed\n`);
+			code = 1;
+			break;
+		default:
+			assertNever(stopped);
+	}
+	await rm(join(directory, NODE_PID_FILE), { force: true });
+	return(code);
+}
+
 async function down(directory: string): Promise<ExitCode> {
 	const node = await runningNode(directory);
 	const postmaster = await runningPostmaster(directory);
@@ -433,19 +456,7 @@ async function down(directory: string): Promise<ExitCode> {
 	}
 	let code: ExitCode = 0;
 	if (node !== undefined) {
-		const stopped = await stopProcess(node, 'SIGTERM', NODE_STOP_MILLISECONDS);
-		switch (stopped.kind) {
-			case 'exited':
-				process.stdout.write(`the node stopped ${String(stopped.milliseconds)} ms after SIGTERM\n`);
-				break;
-			case 'killed':
-				process.stderr.write(`the node did not stop within ${String(NODE_STOP_MILLISECONDS)} ms and was killed\n`);
-				code = 1;
-				break;
-			default:
-				assertNever(stopped);
-		}
-		await rm(join(directory, NODE_PID_FILE), { force: true });
+		code = await stopNode(directory, node);
 	}
 	if (postmaster !== undefined) {
 		// SIGINT is Postgres' fast shutdown: it ends the sessions and checkpoints.
@@ -613,6 +624,53 @@ async function restageFollower(directory: string): Promise<ExitCode> {
 	const { restaged, before } = done;
 	process.stdout.write(`restaged ${directory}: ${String(restaged.staged.staples)} staples (${String(Math.round(restaged.staged.bytes / KIB_PER_MIB / KIB_PER_MIB))} MiB) staged of ${String(restaged.held)} held, ${String(restaged.deferred)} deferred and ${String(restaged.queued)} queued; the database before is kept as ${before}\n`);
 	return(0);
+}
+
+/** The name a snapshot of the follower's database is kept under: when it was taken, to the second. */
+function snapshotDatabase(at: Date): string {
+	return(`${FOLLOWER_DATABASE}_snapshot_${at.toISOString().replace(/[^0-9]/g, '').slice(0, 14)}`);
+}
+
+/**
+ * Copies the follower's database into a new database of its cluster. A copy
+ * needs no session on the database it copies, so the node is stopped for it
+ * and started again with the settings it last ran with; its Postgres keeps
+ * running, so the buffer pool it filled stays warm. The copy is made file by
+ * file, which reads the database once instead of logging every page of it.
+ */
+async function snapshotFollower(directory: string): Promise<ExitCode> {
+	const node = await runningNode(directory);
+	const settings = await readFollowerSettings(directory);
+	if (node !== undefined && settings === undefined) {
+		throw(new Error(`the node in ${directory} runs without the settings "up" writes`));
+	}
+	const wasRunning = await runningPostmaster(directory) !== undefined;
+	let code: ExitCode = 0;
+	if (node !== undefined) {
+		code = await stopNode(directory, node);
+	}
+	await startPostgres(directory);
+	const name = snapshotDatabase(new Date());
+	const started = Date.now();
+	try {
+		await withDatabase('postgres', directory, async function(client) {
+			await client.query(`CREATE DATABASE ${name} TEMPLATE ${FOLLOWER_DATABASE} STRATEGY FILE_COPY`);
+		});
+		process.stdout.write(`the follower's database is copied into ${name} in ${String(Date.now() - started)} ms\n`);
+	} finally {
+		if (node !== undefined && settings !== undefined) {
+			const restarted = await up(settings);
+			if (restarted !== 0) {
+				code = restarted;
+			}
+		} else if (!wasRunning) {
+			const postmaster = await runningPostmaster(directory);
+			if (postmaster !== undefined) {
+				await stopProcess(postmaster, 'SIGINT', POSTGRES_STOP_MILLISECONDS);
+			}
+		}
+	}
+	return(code);
 }
 
 type Memory = { readonly rssMiB: number; readonly pssMiB: number };
@@ -857,6 +915,8 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
 				return(await reindexHistory(followerDirectory(command.directory, tmpdir())));
 			case 'restage':
 				return(await restageFollower(followerDirectory(command.directory, tmpdir())));
+			case 'snapshot':
+				return(await snapshotFollower(followerDirectory(command.directory, tmpdir())));
 			default:
 				return(assertNever(command));
 		}
