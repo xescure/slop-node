@@ -160,21 +160,23 @@ export async function writeStorage<Result>(storage: LedgerStorageDriverBase, wri
 }
 
 /**
- * Makes the driver fail just after it has written the staple, when the base
- * stops it waiting as a deferred staple, the way a lost connection could. The
- * base calls its primitives through the instance, so a method set on the
- * instance reaches every driver without knowing its class. The function it
- * returns puts the driver's own primitive back.
+ * Runs the action just after the driver has written the staple, when the base
+ * stops it waiting as a deferred staple. The base calls its primitives
+ * through the instance, so a method set on the instance reaches every driver
+ * without knowing its class. The function it returns puts the driver's own
+ * primitive back.
  */
-export function failAfterPersisting(storage: LedgerStorageDriverBase, staple: VoteStaple): () => void {
+export function afterPersisting(storage: LedgerStorageDriverBase, staples: readonly VoteStaple[], action: (staple: StapleKey) => void): () => void {
 	const removeDeferredStaple: unknown = Reflect.get(storage, 'removeDeferredStaple');
 	if (typeof removeDeferredStaple !== 'function') {
 		throw(new Error('the driver has no removeDeferredStaple primitive'));
 	}
-	const failing = toStapleKey(staple.blocksHash);
+	const watched = new Set<StapleKey>(staples.map(function(staple): StapleKey {
+		return(toStapleKey(staple.blocksHash));
+	}));
 	Reflect.set(storage, 'removeDeferredStaple', async function(transaction: LedgerDriverTransaction, blocksHash: StapleKey): Promise<void> {
-		if (blocksHash === failing) {
-			throw(new Error(`injected failure after persisting ${blocksHash}`));
+		if (watched.has(blocksHash)) {
+			action(blocksHash);
 		}
 		const removed: unknown = Reflect.apply(removeDeferredStaple, storage, [transaction, blocksHash]);
 		await removed;
@@ -184,26 +186,55 @@ export function failAfterPersisting(storage: LedgerStorageDriverBase, staple: Vo
 	});
 }
 
+/** Makes the driver fail just after it has written the staple, the way a lost connection could. */
+export function failAfterPersisting(storage: LedgerStorageDriverBase, staple: VoteStaple): () => void {
+	return(afterPersisting(storage, [staple], function(blocksHash): void {
+		throw(new Error(`injected failure after persisting ${blocksHash}`));
+	}));
+}
+
+/**
+ * Moves the clock on by that much once, just after the driver has written the
+ * first of the staples, as a slow write would.
+ */
+export function slowPersisting(storage: LedgerStorageDriverBase, staples: readonly VoteStaple[], milliseconds: number): () => void {
+	let slowed = false;
+	return(afterPersisting(storage, staples, function(): void {
+		if (!slowed) {
+			slowed = true;
+			advanceClock(milliseconds);
+		}
+	}));
+}
+
 type Logger = NonNullable<TestLedgerOptions['log']>;
 
-/** Keeps the error lines a ledger logs, so a case can count them. */
+function linesMentioning(lines: readonly string[], staple: VoteStaple): string[] {
+	const key = staple.blocksHash.toString();
+	return(lines.filter(function(line): boolean {
+		return(line.includes(key));
+	}));
+}
+
+/** Keeps the warning and error lines a ledger logs, so a case can count them. */
 export class RecordingLog implements Logger {
 	readonly errors: string[] = [];
+	readonly warnings: string[] = [];
 
 	log(..._input: unknown[]): void {
-		// Only errors are kept.
+		// Only warnings and errors are kept.
 	}
 
 	debug(..._input: unknown[]): void {
-		// Only errors are kept.
+		// Only warnings and errors are kept.
 	}
 
 	info(..._input: unknown[]): void {
-		// Only errors are kept.
+		// Only warnings and errors are kept.
 	}
 
-	warn(..._input: unknown[]): void {
-		// Only errors are kept.
+	warn(...input: unknown[]): void {
+		this.warnings.push(input.map(String).join(' '));
 	}
 
 	error(...input: unknown[]): void {
@@ -211,10 +242,11 @@ export class RecordingLog implements Logger {
 	}
 
 	errorsMentioning(staple: VoteStaple): string[] {
-		const key = staple.blocksHash.toString();
-		return(this.errors.filter(function(line): boolean {
-			return(line.includes(key));
-		}));
+		return(linesMentioning(this.errors, staple));
+	}
+
+	warningsMentioning(staple: VoteStaple): string[] {
+		return(linesMentioning(this.warnings, staple));
 	}
 }
 

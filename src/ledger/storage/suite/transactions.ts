@@ -6,8 +6,8 @@ import { LedgerInternals } from '../../../upstream/internals.js';
 import { freezeClock } from '../../../testing/network.js';
 import type { TestNetwork } from '../../../testing/network.js';
 import { confirmedStaple, sendBlock } from '../../../testing/blocks.js';
-import { isVoteLive, voteExpirySlopMilliseconds } from '../expiry.js';
-import { GENESIS_MOMENT, headOf, requireAt, useFixtures } from './support.js';
+import { isVoteLive, isVoteUnexpired, voteExpirySlopMilliseconds } from '../expiry.js';
+import { GENESIS_MOMENT, TESTING_KEY, headOf, requireAt, useFixtures } from './support.js';
 import type { DriverUnderTest } from './types.js';
 
 const lib = KeetaNet.lib;
@@ -54,7 +54,7 @@ export function defineTransactionCases(driver: DriverUnderTest): void {
 			const unbound = await driver.create();
 			try {
 				const transaction = await unbound.beginTransaction({ identifier: 'suite-unbound', readOnly: false });
-				await expect(unbound.adjust(transaction, network.genesis, effects)).rejects.toThrow('storage driver used before Ledger called init()');
+				await expect(unbound.adjust(transaction, network.genesis, effects)).rejects.toMatchObject({ name: 'StorageDriverNotInitializedError', message: 'storage driver used before Ledger called init()' });
 				await unbound.abortTransaction(transaction);
 			} finally {
 				await driver.destroy(unbound);
@@ -88,7 +88,7 @@ export function defineTransactionCases(driver: DriverUnderTest): void {
 			const transaction = await storage.beginTransaction({ identifier: 'suite-finished', readOnly: true });
 			await storage.commitTransaction(transaction);
 
-			await expect(storage.getBalance(transaction, requireAt(network.users, 0), network.baseToken)).rejects.toThrow();
+			await expect(storage.getBalance(transaction, requireAt(network.users, 0), network.baseToken)).rejects.toThrow('transaction suite-finished is already committed');
 			// An answer the driver knows without reading still needs an open transaction.
 			await expect(storage.listACLsByPrincipal(transaction, requireAt(network.users, 0), [])).rejects.toThrow();
 			await expect(storage.abortTransaction(transaction)).rejects.toThrow();
@@ -97,9 +97,28 @@ export function defineTransactionCases(driver: DriverUnderTest): void {
 			const aborted = await storage.beginTransaction({ identifier: 'suite-aborted', readOnly: true });
 			await storage.abortTransaction(aborted);
 
-			await expect(storage.getBalance(aborted, requireAt(network.users, 0), network.baseToken)).rejects.toThrow();
+			await expect(storage.getBalance(aborted, requireAt(network.users, 0), network.baseToken)).rejects.toThrow('transaction suite-aborted is already aborted');
 			await expect(storage.commitTransaction(aborted)).rejects.toThrow();
 			await expect(storage.abortTransaction(aborted)).rejects.toThrow();
+		});
+
+		// [Keeta TS] index.js:68974-68980
+		test('a transaction may write only when it is opened to, as upstream\'s transactions', async function() {
+			const { storage } = await startNetwork();
+			const unsaid = await storage.beginTransaction({ identifier: 'suite-unsaid' });
+			await storage.abortTransaction(unsaid);
+			const writing = await storage.beginTransaction({ identifier: 'suite-writing', readOnly: false });
+			await storage.abortTransaction(writing);
+
+			expect([unsaid.readOnly, writing.readOnly]).toEqual([true, false]);
+		});
+
+		test('the test hooks answer to their key alone', async function() {
+			const { storage } = await startNetwork();
+
+			expect(function() {
+				return(storage._Testing(`${TESTING_KEY}-guess`));
+			}).toThrow('This is a testing only method');
 		});
 
 		test('concurrent calls within one transaction keep every write', async function() {
@@ -221,6 +240,16 @@ export function defineTransactionCases(driver: DriverUnderTest): void {
 			expect(permanent.$permanent).toBe(true);
 			expect(judgeAround(temporary, edge)).toEqual(expected);
 			expect(judgeAround(permanent, edge)).toEqual(expected);
+		});
+
+		test('a permanent vote stays unexpired past the end of its validity', async function() {
+			const { network } = await startNetwork();
+			const block = await firstUserSend(network);
+			const permanent = await new lib.Vote.Builder(requireAt(network.representatives, 0), [block]).seal(1n, null);
+			const afterValidity = new Date(permanent.validityTo.getTime() + voteExpirySlopMilliseconds + 1);
+
+			expect(permanent.$permanent).toBe(true);
+			expect(isVoteUnexpired(permanent, afterValidity)).toBe(true);
 		});
 	});
 }

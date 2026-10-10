@@ -101,5 +101,53 @@ export function defineStageCases(driver: DriverUnderTest): void {
 
 			expect(await fixture.ledger.getVoteStaplesAfter(new Date(0), 10)).toEqual([]);
 		});
+
+		test('orders staples of one moment by their keys, whatever order they were put in, and drops exactly the one it is told', async function() {
+			const fixture = await startNetwork();
+			const { network } = fixture;
+			const stage = fixture.storage.bootstrapStage();
+			const user = requireAt(network.users, 0);
+			const staples = [network.genesis];
+			for (const amount of [1n, 2n, 3n, 4n]) {
+				staples.push(await confirmedStaple([await sendBlock({ from: user, previous: headOf(network.genesis, user), to: requireAt(network.users, 1), amount, token: network.baseToken, network: network.network })], network.representatives));
+			}
+			const sorted = keysOf(staples.map(function(staple): StagedStaple {
+				return(staged(staple, 0));
+			})).sort();
+			// Neither in key order nor against it.
+			const order = [2, 0, 4, 1, 3].map(function(rank): VoteStaple {
+				const staple = staples.find(function(candidate): boolean {
+					return(candidate.blocksHash.toString() === sorted[rank]);
+				});
+				if (staple === undefined) {
+					throw(new Error(`no staple of rank ${String(rank)}`));
+				}
+				return(staple);
+			});
+			for (const staple of order) {
+				await stage.put([staged(staple, 1000)]);
+			}
+			const listed = async function(): Promise<{ readonly first: string[]; readonly last: string[] }> {
+				return({ first: keysOf(await stage.firstBefore(new Date(1001), 10)), last: keysOf(await stage.lastFrom(new Date(1000), 10)) });
+			};
+
+			expect(await listed()).toEqual({ first: sorted, last: sorted });
+
+			const middle = sorted[2] ?? '';
+			expect((await stage.remove([middle])).staples).toBe(1);
+			const kept = sorted.filter(function(key): boolean {
+				return(key !== middle);
+			});
+			expect(await listed()).toEqual({ first: kept, last: kept });
+
+			// Staged again, it is listed once.
+			await stage.put(order.filter(function(staple): boolean {
+				return(staple.blocksHash.toString() === middle);
+			}).map(function(staple): StagedStaple {
+				return(staged(staple, 1000));
+			}));
+			expect(await listed()).toEqual({ first: sorted, last: sorted });
+			expect((await stage.counts()).staples).toBe(sorted.length);
+		});
 	});
 }

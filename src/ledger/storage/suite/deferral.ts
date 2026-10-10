@@ -1,10 +1,13 @@
 import { describe, expect, test } from 'vitest';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
-import { confirmedStaple, sendBlock } from '../../../testing/blocks.js';
+import * as KeetaNet from '@keetanetwork/keetanet-client';
+import { confirmedStaple, sendBlock, setRepresentativeBlock } from '../../../testing/blocks.js';
 import { advanceClock } from '../../../testing/network.js';
 import type { TestNetwork } from '../../../testing/network.js';
 import type { LedgerStorageDriverBase } from '../base.js';
 import {
+	DEFAULT_WEIGHTS,
+	RecordingLog,
 	TESTING_KEY,
 	blockHashesOf,
 	blocksHashesOf,
@@ -16,9 +19,27 @@ import {
 	orphanedSideRowsOf,
 	readStorage,
 	requireAt,
+	slowPersisting,
 	useFixtures
 } from './support.js';
 import type { DriverUnderTest } from './types.js';
+
+const lib = KeetaNet.lib;
+
+const NEWCOMER_SEED = '5c2e8a7d4b1f9036e2d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7f6';
+
+// Upstream's documented default for LedgerConfig.heapProcessWindowMs.
+const DEFAULT_REPLAY_WINDOW_MILLISECONDS = 5000;
+
+function sendOf(network: TestNetwork, user: number, previous: BlockHash, amount: bigint): Promise<Block> {
+	const from = requireAt(network.users, user);
+	const to = requireAt(network.users, (user + 1) % network.users.length);
+	return(sendBlock({ from, previous, to, amount, token: network.baseToken, network: network.network }));
+}
+
+function sendFromGenesisOf(network: TestNetwork, user: number, amount: bigint): Promise<Block> {
+	return(sendOf(network, user, headOf(network.genesis, requireAt(network.users, user)), amount));
+}
 
 type UserChain = {
 	readonly first: Block;
@@ -139,7 +160,8 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 		});
 
 		test('a replayed staple whose idempotent key is taken stays deferred while its trigger applies', async function() {
-			const { network, storage, ledger } = await startNetwork();
+			const log = new RecordingLog();
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { log });
 			const from = requireAt(network.users, 0);
 			const to = requireAt(network.users, 1);
 			const idempotent = btoa('order-1');
@@ -171,6 +193,9 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			expect(await ledger.getBalance(to, network.baseToken)).toBe(303n);
 			expect(blocksHashesOf(await ledger.getHistory(from, null))).toEqual(blocksHashesOf([triggerStaple, keyedStaple, network.genesis]));
 			expect((await ledger.getIdempotentBlockHash(from, idempotent, 'main'))?.toString()).toBe(keyed.hash.toString());
+			expect(log.errorsMentioning(reusedStaple).map(function(line): string {
+				return(line.slice(0, line.indexOf('it stays deferred')));
+			})).toEqual([`ledger replaying deferred staple ${reusedStaple.blocksHash.toString()} failed; `]);
 		});
 
 		test('deferred staple applies exactly once when its previous arrives', async function() {
@@ -351,6 +376,95 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			}
 			expect(await deferredWaitingOn(storage, trigger.hash)).toEqual(blocksHashesOf([loser.staple]));
 			expect(await ledger.getBalance(user, network.baseToken)).toBe(400n - 1n - winner.amount);
+		});
+
+		test('a waiter that an earlier waiter\'s replay applied is not replayed again', async function() {
+			const log = new RecordingLog();
+			const { network, ledger } = await startNetwork(DEFAULT_WEIGHTS, { log });
+			await ledger.add(network.genesis);
+			const [first, second] = await Promise.all([sendFromGenesisOf(network, 0, 1n), sendFromGenesisOf(network, 1, 1n)]);
+			const trigger = await confirmedStaple([first, second], network.representatives);
+			const onFirst = await sendOf(network, 0, first.hash, 2n);
+			const earlier = await confirmedStaple([onFirst], network.representatives);
+			// Released by the trigger and by the earlier waiter alike.
+			const later = await confirmedStaple([await sendOf(network, 1, second.hash, 3n), await sendOf(network, 0, onFirst.hash, 4n)], network.representatives);
+			expect(await ledger.add(later)).toEqual([]);
+			expect(await ledger.add(earlier)).toEqual([]);
+
+			expect(blocksHashesOf(await ledger.add(trigger))).toEqual(blocksHashesOf([trigger, earlier, later]));
+			expect(log.errors).toEqual([]);
+		});
+
+		test('a deferred staple waits only on the previous blocks it lacks, and gc applies it once they arrive', async function() {
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0 });
+			await ledger.add(network.genesis);
+			const newcomer = lib.Account.fromSeed(NEWCOMER_SEED, 0);
+			const missing = await sendFromGenesisOf(network, 0, 1n);
+			const onMissing = await sendOf(network, 0, missing.hash, 2n);
+			const present = headOf(network.genesis, requireAt(network.users, 1));
+			const opening = await setRepresentativeBlock({ account: newcomer, representative: requireAt(network.representatives, 0), previous: null, network: network.network });
+			// An opening block, a chain of two inside the staple, and a block whose previous is on main.
+			const waiting = await confirmedStaple([opening, onMissing, await sendOf(network, 0, onMissing.hash, 3n), await sendOf(network, 1, present, 4n)], network.representatives);
+			expect(await ledger.add(waiting)).toEqual([]);
+
+			expect(await deferredWaitingOn(storage, missing.hash)).toEqual(blocksHashesOf([waiting]));
+			for (const notAwaited of [opening.previous, onMissing.hash, present]) {
+				expect(await deferredWaitingOn(storage, notAwaited)).toEqual([]);
+			}
+
+			// A zero window replays nothing as the missing block arrives.
+			const missingStaple = await confirmedStaple([missing], network.representatives);
+			expect(blocksHashesOf(await ledger.add(missingStaple))).toEqual(blocksHashesOf([missingStaple]));
+			expect(await ledger.gc()).toBe(false);
+			expect(hashOf(await ledger.getBlock(opening.hash, 'main'))).toBe(hashOf(opening));
+			expect(await deferredWaitingOn(storage, missing.hash)).toEqual([]);
+		});
+
+		test('a replayed staple that still lacks a previous stays deferred as it was, and waits on less once added again', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			await ledger.add(network.genesis);
+			const [firstMissing, secondMissing] = await Promise.all([sendFromGenesisOf(network, 0, 1n), sendFromGenesisOf(network, 1, 1n)]);
+			const waiting = await confirmedStaple([await sendOf(network, 0, firstMissing.hash, 2n), await sendOf(network, 1, secondMissing.hash, 3n)], network.representatives);
+			expect(await ledger.add(waiting)).toEqual([]);
+			const firstStaple = await confirmedStaple([firstMissing], network.representatives);
+
+			// Replay never defers again [Keeta TS] index.js:67722-67725.
+			expect(blocksHashesOf(await ledger.add(firstStaple))).toEqual(blocksHashesOf([firstStaple]));
+			expect(await deferredWaitingOn(storage, firstMissing.hash)).toEqual(blocksHashesOf([waiting]));
+			expect(await deferredWaitingOn(storage, secondMissing.hash)).toEqual(blocksHashesOf([waiting]));
+
+			expect(await ledger.add(waiting)).toEqual([]);
+			expect(await deferredWaitingOn(storage, firstMissing.hash)).toEqual([]);
+			expect(await deferredWaitingOn(storage, secondMissing.hash)).toEqual(blocksHashesOf([waiting]));
+			const secondStaple = await confirmedStaple([secondMissing], network.representatives);
+			expect(blocksHashesOf(await ledger.add(secondStaple))).toEqual(blocksHashesOf([secondStaple, waiting]));
+		});
+
+		test('replay stops once the default window is spent, and warns of each waiter it leaves', async function() {
+			const log = new RecordingLog();
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { log });
+			await ledger.add(network.genesis);
+			const [first, second] = await Promise.all([sendFromGenesisOf(network, 0, 1n), sendFromGenesisOf(network, 1, 1n)]);
+			const trigger = await confirmedStaple([first, second], network.representatives);
+			const waiters = await Promise.all([sendOf(network, 0, first.hash, 2n), sendOf(network, 1, second.hash, 3n)].map(async function(block) {
+				return(await confirmedStaple([await block], network.representatives));
+			}));
+			for (const waiter of waiters) {
+				expect(await ledger.add(waiter)).toEqual([]);
+			}
+			// Whichever waiter replays first spends the whole window.
+			slowPersisting(storage, waiters, DEFAULT_REPLAY_WINDOW_MILLISECONDS);
+
+			const applied = await ledger.add(trigger);
+
+			expect(applied).toHaveLength(2);
+			const left = waiters.filter(function(waiter): boolean {
+				return(!blocksHashesOf(applied).includes(waiter.blocksHash.toString()));
+			});
+			expect(left).toHaveLength(1);
+			expect(left.map(function(waiter): string[] {
+				return(log.warningsMentioning(waiter));
+			})).toEqual([[`ledger deferred staple replay window elapsed; ${left[0]?.blocksHash.toString() ?? ''} stays deferred`]]);
 		});
 	});
 }

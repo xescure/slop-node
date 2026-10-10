@@ -23,7 +23,8 @@ import {
 	readStorageAt,
 	TESTING_KEY,
 	requireAt,
-	useFixtures
+	useFixtures,
+	writeStorage
 } from './support.js';
 import type { FixtureFactory } from './support.js';
 import type { DriverUnderTest, SuiteCase } from './types.js';
@@ -113,6 +114,21 @@ async function successorVotes(ledger: Ledger, previous: readonly BlockHash[], fr
 	return(Object.fromEntries(previous.map(function(hash) {
 		return([hash.toString(), identitiesOf(found[hash.toString()])]);
 	})));
+}
+
+/** Stores another representative's vote as pending, through the driver alone. */
+function storePendingVote(storage: LedgerStorageDriverBase, vote: Vote, blocks: readonly Block[]): Promise<void> {
+	return(writeStorage(storage, function(transaction) {
+		return(storage.addPendingVote(transaction, lib.Vote.Staple.fromVotesAndBlocks([vote], [...blocks])));
+	}));
+}
+
+/** Whichever of the two blocks has the greater hash as its key spells it, then the other. */
+function byHashDescending(left: Block, right: Block): readonly [Block, Block] {
+	if (left.hash.toString() > right.hash.toString()) {
+		return([left, right]);
+	}
+	return([right, left]);
 }
 
 /** Kept as data, so that the suite's meta-test can also run them against a deliberately broken driver. */
@@ -478,6 +494,85 @@ export const voteLifecycleCases: readonly SuiteCase[] = [
 
 			expect(vote.serial > quote.serial).toBe(true);
 			expect(identitiesOf(await ledger.getVotes(send.hash, 'side'))).toEqual([vote.$uid]);
+		}
+	},
+	{
+		name: 'the pending successor of a previous is the block of the latest vote, and of the greater hash between votes made together, whatever the order they were stored in',
+		async run(startNetwork: FixtureFactory): Promise<void> {
+			const { network, storage, ledger, startPeer } = await startNetwork();
+			await ledger.add(network.genesis);
+			const peers = [await startPeer(1), await startPeer(2)];
+			const [firstPeer, secondPeer] = peers;
+			if (firstPeer === undefined || secondPeer === undefined) {
+				throw(new Error('two peers expected'));
+			}
+			const previousOf = function(user: number): BlockHash {
+				return(headOf(network.genesis, requireAt(network.users, user)));
+			};
+			const competitors = async function(user: number): Promise<readonly [Block, Block]> {
+				const from = requireAt(network.users, user);
+				const to = requireAt(network.users, (user + 1) % network.users.length);
+				const send = function(amount: bigint): Promise<Block> {
+					return(sendBlock({ from, previous: previousOf(user), to, amount, token: network.baseToken, network: network.network }));
+				};
+				return(byHashDescending(await send(5n), await send(7n)));
+			};
+			// Made together, and stored greater hash first under one previous, lesser first under the other.
+			const [greaterFirst, lesserSecond] = await competitors(0);
+			const [greaterSecond, lesserFirst] = await competitors(1);
+			await storePendingVote(storage, await firstPeer.vote([greaterFirst]), [greaterFirst]);
+			await storePendingVote(storage, await secondPeer.vote([lesserSecond]), [lesserSecond]);
+			await storePendingVote(storage, await firstPeer.vote([lesserFirst]), [lesserFirst]);
+			await storePendingVote(storage, await secondPeer.vote([greaterSecond]), [greaterSecond]);
+			// The later vote is stored first.
+			const [earlier, later] = await Promise.all([3n, 4n].map(function(amount) {
+				return(sendBlock({ from: requireAt(network.users, 2), previous: previousOf(2), to: requireAt(network.users, 0), amount, token: network.baseToken, network: network.network }));
+			}));
+			if (earlier === undefined || later === undefined) {
+				throw(new Error('two blocks expected'));
+			}
+			const earlierVote = await firstPeer.vote([earlier]);
+			advanceClock(1000);
+			await storePendingVote(storage, await secondPeer.vote([later]), [later]);
+			await storePendingVote(storage, earlierVote, [earlier]);
+
+			expect(await readStorage(storage, async function(transaction) {
+				return(await Promise.all([0, 1, 2].map(async function(user) {
+					return(hashOf(await storage.getBlockFromPrevious(transaction, previousOf(user), 'side')));
+				})));
+			})).toEqual([hashOf(greaterFirst), hashOf(greaterSecond), hashOf(later)]);
+		}
+	},
+	{
+		name: 'a vote on a chain of two blocks names each as the pending successor of its own previous',
+		async run(startNetwork: FixtureFactory): Promise<void> {
+			const { network, ledger } = await startNetwork();
+			await ledger.add(network.genesis);
+			const genesisHead = headOf(network.genesis, requireAt(network.users, 0));
+			const first = await sendFromFirstUser(network, genesisHead, 5n);
+			const second = await sendFromFirstUser(network, first.hash, 7n);
+
+			await ledger.vote([first, second]);
+
+			expect(hashOf(await ledger.getBlockFromPrevious(genesisHead, 'side'))).toBe(hashOf(first));
+			expect(hashOf(await ledger.getBlockFromPrevious(first.hash, 'side'))).toBe(hashOf(second));
+		}
+	},
+	{
+		name: 'a pending vote on a block already on main stores no side copy of it',
+		async run(startNetwork: FixtureFactory): Promise<void> {
+			const { network, storage, ledger, startPeer } = await startNetwork();
+			await ledger.add(network.genesis);
+			const peer = await startPeer(1);
+			const send = await sendFromFirstUser(network, headOf(network.genesis, requireAt(network.users, 0)), 5n);
+			const peerVote = await peer.vote([send]);
+			await ledger.add(await confirmedStaple([send], network.representatives));
+
+			await storePendingVote(storage, peerVote, [send]);
+
+			expect(await ledger.getBlock(send.hash, 'side')).toBeNull();
+			expect(hashOf(await ledger.getBlock(send.hash, 'both'))).toBe(hashOf(send));
+			expect(await orphanedSideRowsOf(storage)).toBe(0);
 		}
 	}
 ];

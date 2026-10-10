@@ -26,9 +26,11 @@ import {
 	readStorage,
 	readStorageAt,
 	requireAt,
+	slowPersisting,
 	useFixtures,
 	writeStorage
 } from './support.js';
+import type { NetworkFixture } from './support.js';
 import type { DriverUnderTest } from './types.js';
 
 const lib = KeetaNet.lib;
@@ -89,6 +91,70 @@ async function voteOursPermanent(network: TestNetwork, ours: Ledger, peers: read
 	});
 	const ourPermanent = await ours.vote([send, fee], temporary);
 	return({ send, fee, ourTemporary, ourPermanent });
+}
+
+// Upstream's documented default for LedgerConfig.heapProcessWindowMs.
+const DEFAULT_REPLAY_WINDOW_MILLISECONDS = 5000;
+
+type CertificateChain = {
+	readonly entity: Account;
+	readonly grant: Block;
+	readonly after: Block;
+	readonly triggerStaple: VoteStaple;
+	readonly grantStaple: VoteStaple;
+	readonly afterStaple: VoteStaple;
+	readonly heldStaple: VoteStaple;
+};
+
+/*
+ * A grant to a certificate the node lacks fails until the holder adds it
+ * (D15), so the grant stays deferred past its trigger, with a send waiting on
+ * it; the holder then adds the certificate, which releases the grant to gc.
+ */
+async function grantReleasedByCertificate(network: TestNetwork, ledger: Ledger): Promise<CertificateChain> {
+	const entity = requireAt(network.users, 0);
+	const holder = requireAt(network.users, 1);
+	const cursor = new ChainCursor(network.genesis);
+	const certificate = await certificateFor(holder, 11);
+	const trigger = cursor.append(await sendFrom(network, 0, headOf(network.genesis, entity), 1n));
+	const grant = cursor.append(await modifyPermissionsBlock({
+		account: entity,
+		previous: cursor.previous(entity),
+		network: network.network,
+		principal: { usingCertificate: true, certificateHash: certificate.hash(), certificateAccount: holder },
+		method: lib.Block.AdjustMethod.ADD,
+		permissions: new lib.Permissions(['ACCESS'])
+	}));
+	const after = cursor.append(await sendFrom(network, 0, grant.hash, 2n));
+	const [triggerStaple, grantStaple, afterStaple] = await Promise.all([trigger, grant, after].map(function(block) {
+		return(confirmedStaple([block], network.representatives));
+	}));
+	if (triggerStaple === undefined || grantStaple === undefined || afterStaple === undefined) {
+		throw(new Error('three staples expected'));
+	}
+	expect(await ledger.add(afterStaple)).toEqual([]);
+	expect(await ledger.add(grantStaple)).toEqual([]);
+	// The grant's replay fails, so it stays deferred, and the send after it keeps waiting on it.
+	expect(blocksHashesOf(await ledger.add(triggerStaple))).toEqual(blocksHashesOf([triggerStaple]));
+	const heldStaple = await confirmedStaple([cursor.append(await manageCertificateBlock({ account: holder, previous: cursor.previous(holder), network: network.network, method: lib.Block.AdjustMethod.ADD, certificateOrHash: certificate }))], network.representatives);
+	await ledger.add(heldStaple);
+	return({ entity, grant, after, triggerStaple, grantStaple, afterStaple, heldStaple });
+}
+
+/*
+ * A staple whose idempotent key an earlier block took: released by its
+ * trigger, it fails on every retry. A zero window leaves it waiting.
+ */
+async function releasedButFailing({ network, ledger }: Pick<NetworkFixture, 'network' | 'ledger'>): Promise<VoteStaple> {
+	const idempotent = btoa('taken-order');
+	await ledger.add(network.genesis);
+	const keyed = await sendFromGenesis(network, 0, 1n, idempotent);
+	const trigger = await sendFrom(network, 0, keyed.hash, 2n);
+	const reused = await confirmedStaple([await sendFrom(network, 0, trigger.hash, 4n, idempotent)], network.representatives);
+	expect(await ledger.add(reused)).toEqual([]);
+	await ledger.add(await confirmedStaple([keyed], network.representatives));
+	await ledger.add(await confirmedStaple([trigger], network.representatives));
+	return(reused);
 }
 
 async function sideRowsOf(transaction: LedgerDriverTransaction, storage: LedgerStorageDriverBase, block: Block): Promise<SideRows> {
@@ -353,34 +419,8 @@ export function defineGcCases(driver: DriverUnderTest): void {
 
 		test('gc counts a deferred chain its retry releases in the checksum', async function() {
 			const { network, startNode } = await startNetwork();
-			const entity = requireAt(network.users, 0);
-			const holder = requireAt(network.users, 1);
-			const cursor = new ChainCursor(network.genesis);
 			const { node } = await startNode(0);
-			const certificate = await certificateFor(holder, 11);
-			const trigger = cursor.append(await sendFrom(network, 0, headOf(network.genesis, entity), 1n));
-			// Granting to a certificate the node lacks fails until the holder adds it (D15).
-			const grant = cursor.append(await modifyPermissionsBlock({
-				account: entity,
-				previous: cursor.previous(entity),
-				network: network.network,
-				principal: { usingCertificate: true, certificateHash: certificate.hash(), certificateAccount: holder },
-				method: lib.Block.AdjustMethod.ADD,
-				permissions: new lib.Permissions(['ACCESS'])
-			}));
-			const after = cursor.append(await sendFrom(network, 0, grant.hash, 2n));
-			const [triggerStaple, grantStaple, afterStaple] = await Promise.all([trigger, grant, after].map(function(block) {
-				return(confirmedStaple([block], network.representatives));
-			}));
-			if (triggerStaple === undefined || grantStaple === undefined || afterStaple === undefined) {
-				throw(new Error('three staples expected'));
-			}
-			expect(await node.ledger.add(afterStaple)).toEqual([]);
-			expect(await node.ledger.add(grantStaple)).toEqual([]);
-			// The grant's replay fails, so it stays deferred, and the send after it keeps waiting on it.
-			expect(blocksHashesOf(await node.ledger.add(triggerStaple))).toEqual(blocksHashesOf([triggerStaple]));
-			const heldStaple = await confirmedStaple([cursor.append(await manageCertificateBlock({ account: holder, previous: cursor.previous(holder), network: network.network, method: lib.Block.AdjustMethod.ADD, certificateOrHash: certificate }))], network.representatives);
-			await node.ledger.add(heldStaple);
+			const { entity, after, triggerStaple, grantStaple, afterStaple, heldStaple } = await grantReleasedByCertificate(network, node.ledger);
 			expect(await ledgerChecksumOf(node)).toBe(checksumOf([network.genesis, triggerStaple, heldStaple]));
 
 			// One retry applies the grant, and the default window replays the send waiting on it.
@@ -389,6 +429,186 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			expect(hashOf(await node.ledger.getHeadBlock(entity, 'main'))).toBe(hashOf(after));
 			expect(await node.ledger.getBalance(entity, network.baseToken)).toBe(397n);
 			expect(await ledgerChecksumOf(node)).toBe(checksumOf([network.genesis, triggerStaple, heldStaple, grantStaple, afterStaple]));
+		});
+
+		test('a gc retry replays what its staple releases in the same batch', async function() {
+			const log = new RecordingLog();
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { log });
+			await ledger.add(network.genesis);
+			const { entity, after } = await grantReleasedByCertificate(network, ledger);
+
+			expect(await writeStorage(storage, function(transaction) {
+				return(storage._Testing(TESTING_KEY).gcBatch(transaction, 1));
+			})).toBe(false);
+
+			expect(hashOf(await ledger.getHeadBlock(entity, 'main'))).toBe(hashOf(after));
+			expect(log.warnings).toEqual([]);
+		});
+
+		test('a gc retry replays what it releases until the default window is spent, and a later batch applies the rest', async function() {
+			const log = new RecordingLog();
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { log });
+			await ledger.add(network.genesis);
+			const { entity, after, grantStaple, afterStaple } = await grantReleasedByCertificate(network, ledger);
+			slowPersisting(storage, [grantStaple], DEFAULT_REPLAY_WINDOW_MILLISECONDS);
+
+			expect(await ledger.gc()).toBe(false);
+
+			expect(log.warningsMentioning(afterStaple)).toHaveLength(1);
+			expect(hashOf(await ledger.getHeadBlock(entity, 'main'))).toBe(hashOf(after));
+			expect(log.errorsMentioning(afterStaple)).toEqual([]);
+		});
+
+		test('a gc batch retries a failing staple once, and logs each failure', async function() {
+			const log = new RecordingLog();
+			const fixture = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0, log });
+			const { storage } = fixture;
+			const failing = await releasedButFailing(fixture);
+
+			expect(await writeStorage(storage, async function(transaction) {
+				const hooks = storage._Testing(TESTING_KEY);
+				return([await hooks.gcBatch(transaction, 1), await hooks.gcBatch(transaction, 1)]);
+			})).toEqual([false, false]);
+
+			expect(log.errorsMentioning(failing).map(function(line): string {
+				return(line.slice(0, line.indexOf('it stays deferred')));
+			})).toEqual([`ledger retrying deferred staple ${failing.blocksHash.toString()} failed; `]);
+			expect(await deferredWaitingOn(storage, requireAt(failing.blocks, 0).previous)).toEqual(blocksHashesOf([failing]));
+		});
+
+		test('a failing gc retry needs no log to stay deferred', async function() {
+			const fixture = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0 });
+			const failing = await releasedButFailing(fixture);
+
+			expect(await fixture.ledger.gc()).toBe(false);
+
+			expect(await deferredWaitingOn(fixture.storage, requireAt(failing.blocks, 0).previous)).toEqual(blocksHashesOf([failing]));
+		});
+
+		test('a gc retry passes over a staple only part of whose awaited blocks have arrived', async function() {
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0 });
+			await ledger.add(network.genesis);
+			const [firstMissing, secondMissing, thirdMissing] = await Promise.all([0, 1, 2].map(function(user) {
+				return(sendFromGenesis(network, user, 1n));
+			}));
+			if (firstMissing === undefined || secondMissing === undefined || thirdMissing === undefined) {
+				throw(new Error('three blocks expected'));
+			}
+			const partial = await confirmedStaple([await sendFrom(network, 0, firstMissing.hash, 2n), await sendFrom(network, 1, secondMissing.hash, 2n)], network.representatives);
+			const released = await sendFrom(network, 2, thirdMissing.hash, 2n);
+			const releasedStaple = await confirmedStaple([released], network.representatives);
+			for (const staple of [partial, releasedStaple]) {
+				expect(await ledger.add(staple)).toEqual([]);
+			}
+			for (const block of [firstMissing, thirdMissing]) {
+				await ledger.add(await confirmedStaple([block], network.representatives));
+			}
+
+			expect(await writeStorage(storage, function(transaction) {
+				return(storage._Testing(TESTING_KEY).gcBatch(transaction, 1));
+			})).toBe(false);
+
+			expect(hashOf(await ledger.getHeadBlock(requireAt(network.users, 2), 'main'))).toBe(hashOf(released));
+			expect(await deferredWaitingOn(storage, secondMissing.hash)).toEqual(blocksHashesOf([partial]));
+		});
+
+		test('gc drops a staple that a retry in the same batch kills, though only one of its blocks competes', async function() {
+			const log = new RecordingLog();
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0, log });
+			await ledger.add(network.genesis);
+			const trigger = await sendFromGenesis(network, 0, 1n);
+			// Each fork's second block extends a chain nothing else touches.
+			const forks = await Promise.all([1, 2].map(async function(user) {
+				return(await confirmedStaple([await sendFrom(network, 0, trigger.hash, BigInt(user) + 4n), await sendFromGenesis(network, user, 1n)], network.representatives));
+			}));
+			for (const fork of forks) {
+				expect(await ledger.add(fork)).toEqual([]);
+			}
+			await ledger.add(await confirmedStaple([trigger], network.representatives));
+
+			expect(await ledger.gc()).toBe(false);
+
+			const dropped = [];
+			for (const fork of forks) {
+				if (await ledger.getBlock(requireAt(fork.blocks, 0).hash, 'main') === null) {
+					dropped.push(fork);
+				}
+			}
+			expect(dropped).toHaveLength(1);
+			expect(dropped.map(function(fork): string[] {
+				return(log.errorsMentioning(fork));
+			})).toEqual([[`ledger network integrity alarm: dropped deferred staple ${dropped[0]?.blocksHash.toString() ?? ''}, which conflicts with confirmed history and can never apply`]]);
+			expect(await deferredWaitingOn(storage, trigger.hash)).toEqual([]);
+		});
+
+		test('a gc batch drops at most its limit of dead staples, and says more remain', async function() {
+			const log = new RecordingLog();
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0, log });
+			await ledger.add(network.genesis);
+			await ledger.add(await confirmedStaple([await sendFromGenesis(network, 0, 5n)], network.representatives));
+			// Each competes with the confirmed send, and waits on a block this node lacks.
+			const dead = await Promise.all([1, 2].map(async function(user) {
+				const missing = await sendFromGenesis(network, user, 1n);
+				return(await confirmedStaple([await sendFromGenesis(network, 0, BigInt(user) + 6n), await sendFrom(network, user, missing.hash, 2n)], network.representatives));
+			}));
+			for (const staple of dead) {
+				expect(await ledger.add(staple)).toEqual([]);
+			}
+			const reported = function(): number {
+				return(dead.filter(function(staple): boolean {
+					return(log.errorsMentioning(staple).length > 0);
+				}).length);
+			};
+
+			expect(await writeStorage(storage, async function(transaction) {
+				const hooks = storage._Testing(TESTING_KEY);
+				const first = await hooks.gcBatch(transaction, 1);
+				const reportedByFirst = reported();
+				return([first, reportedByFirst, await hooks.gcBatch(transaction, 1), reported()]);
+			})).toEqual([true, 1, false, 2]);
+		});
+
+		test('a gc batch collects at most its limit of obsolete side votes', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			await ledger.add(network.genesis);
+			const votedAt = new Date();
+			const expiring = [await ledger.vote([await sendFromGenesis(network, 1, 1n)]), await ledger.vote([await sendFromGenesis(network, 2, 1n)])];
+			advancePastExpiry(requireAt(expiring, 1));
+			const batchOfOne = function(): Promise<boolean> {
+				return(writeStorage(storage, function(transaction) {
+					return(storage._Testing(TESTING_KEY).gcBatch(transaction, 1));
+				}));
+			};
+			const storedAtVote = function(): Promise<number> {
+				return(readStorageAt(storage, votedAt, async function(transaction) {
+					let stored = 0;
+					for (const vote of expiring) {
+						if (await storage.getVotes(transaction, requireAt(vote.blocks, 0), 'side') !== null) {
+							stored++;
+						}
+					}
+					return(stored);
+				}));
+			};
+
+			expect(await batchOfOne()).toBe(true);
+			expect(await storedAtVote()).toBe(1);
+			expect(await batchOfOne()).toBe(false);
+			expect(await storedAtVote()).toBe(0);
+		});
+
+		test('gc collects our vote on a staple once the previous of any one of its blocks has a confirmed successor', async function() {
+			const { network, ledger } = await startNetwork();
+			await ledger.add(network.genesis);
+			const contested = await sendFromGenesis(network, 0, 5n);
+			const uncontested = await sendFromGenesis(network, 1, 5n);
+			await ledger.vote([contested, uncontested]);
+			await ledger.add(await confirmedStaple([await sendFromGenesis(network, 0, 7n)], network.representatives));
+
+			expect(await ledger.gc()).toBe(false);
+
+			expect(await ledger.getVotes(uncontested.hash, 'side')).toBeNull();
+			expect(await ledger.getBlock(uncontested.hash, 'side')).toBeNull();
 		});
 
 		test('gc drops deferred staples that can never apply and reports each once', async function() {

@@ -5,7 +5,7 @@ import type { LedgerStatistics } from '@keetanetwork/keetanet-client/lib/ledger/
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { advanceClock } from '../../../testing/network.js';
 import { confirmedStaple, sendBlock, setRepresentativeBlock } from '../../../testing/blocks.js';
-import { LEDGER_CHECKSUM_KEY } from '../base.js';
+import { nodeLedgerChecksum } from '../base.js';
 import { blocksHashesOf, checksumOf, failAfterPersisting, headOf, requireAt, useFixtures } from './support.js';
 import type { DriverUnderTest } from './types.js';
 
@@ -111,6 +111,9 @@ export function defineStatsCases(driver: DriverUnderTest): void {
 			const stats = await node.ledger.stats();
 
 			expect(stats.db).toEqual({ retries: 0 });
+			// Ledger.run counts each retry under the ledger's statistics [Keeta TS] index.js:70379.
+			node.stats.incr('ledger', 'dbRetries', 2);
+			expect((await node.ledger.stats()).db).toEqual({ retries: 2 });
 			expect(Object.keys(stats.settlementTimes).sort()).toEqual(Object.keys(lib.Stats.placeholderTimingData()).sort());
 			expect(stats.settlementTimes['1000ms']).toEqual({ count: 1, range: lib.Stats.placeholderTimingData()['1000ms'].range });
 			expect(stats.settlementTimes['100ms'].count).toBe(0);
@@ -156,7 +159,27 @@ export function defineStatsCases(driver: DriverUnderTest): void {
 			await node.stats.sync();
 
 			expect((await storage.ledgerChecksum()).checksum).toBe(checksumOf([network.genesis, staple]));
-			expect((await node.stats.getXor(LEDGER_CHECKSUM_KEY)).toBigInt()).toBe(0n);
+			// The statistic upstream's ledger folds every applied block into [Keeta TS] index.js:69437.
+			expect((await node.stats.getXor('ledgerChecksum')).toBigInt()).toBe(0n);
+		});
+
+		test('a node whose storage is not built on the driver base reports the checksum its statistics hold', async function() {
+			const { startNode } = await startNetwork();
+			const { node, storage } = await startNode(0);
+			// Not the driver's own checksum, which covers genesis.
+			const folded = 0x5eedn;
+			node.stats.xor('ledgerChecksum', folded);
+			// Seen through a proxy that hides its class, the driver is any upstream storage.
+			const foreign = new Proxy(storage, {
+				getPrototypeOf: function(): object {
+					return(Object.prototype);
+				}
+			});
+
+			const reported = await nodeLedgerChecksum({ config: { ...node.config, ledger: { ...node.config.ledger, storageDriver: foreign } }, ledger: node.ledger, stats: node.stats });
+
+			expect(reported.checksum).toBe(folded);
+			expect(Number.isNaN(reported.moment.getTime())).toBe(false);
 		});
 	});
 }

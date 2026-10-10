@@ -17,6 +17,7 @@ import {
 	createTokenBlock,
 	manageCertificateBlock,
 	modifyPermissionsBlock,
+	multisigSendBlock,
 	sendBlock,
 	setInfoBlock,
 	setRepresentativeBlock,
@@ -28,7 +29,9 @@ import { HistoryStartNotListed } from '../errors.js';
 import { toBlockHashKey } from '../keys.js';
 import {
 	ChainCursor,
+	DEFAULT_WEIGHTS,
 	GENESIS_MOMENT,
+	RecordingLog,
 	TESTING_KEY,
 	certificateFor,
 	certificateIssuedBy,
@@ -82,6 +85,10 @@ function summarizeACL(row: ACLRow): ACLSummary {
 
 function byTarget(left: ACLSummary, right: ACLSummary): number {
 	return(left.target.localeCompare(right.target));
+}
+
+function byPrincipal(left: ACLSummary, right: ACLSummary): number {
+	return(left.principal.localeCompare(right.principal));
 }
 
 function byBlocksHashDescending(left: VoteStaple, right: VoteStaple): number {
@@ -253,17 +260,22 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(await ledger.votingPower()).toBe(1000n);
 			expect(await headHash(ledger, token)).toBe(burned.hash.toString());
 
+			// Even an administrator of the token is no owner of it.
+			await ledger.add(await confirmedStaple([cursor.append(await modifyPermissionsBlock({ account: token, signer: owner, previous: cursor.previous(token), network: network.network, principal: holder, method: lib.Block.AdjustMethod.SET, permissions: new lib.Permissions(['ADMIN']) }))], network.representatives));
 			const owners = await readStorage(storage, async function(transaction) {
 				return({
 					any: await storage.listOwners(transaction, token),
 					onToken: await storage.listOwners(transaction, token, token),
-					onHolder: await storage.listOwners(transaction, token, holder)
+					onHolder: await storage.listOwners(transaction, token, holder),
+					// The storage contract takes an account as its public key string too.
+					infoByKey: await storage.getAccountInfo(transaction, token.publicKeyString.get())
 				});
 			});
+			expect(owners.infoByKey).toMatchObject({ supply: 90n });
 			expect(publicKeysOf(owners.any)).toEqual([owner.publicKeyString.get()]);
 			expect(publicKeysOf(owners.onToken)).toEqual([owner.publicKeyString.get()]);
 			expect(owners.onHolder).toEqual([]);
-			expect((await ledger.listACLsByEntity(token)).map(summarizeACL)).toEqual([rowFor(owner, token, token, ['OWNER'])]);
+			expect((await ledger.listACLsByEntity(token)).map(summarizeACL).sort(byPrincipal)).toEqual([rowFor(owner, token, token, ['OWNER']), rowFor(holder, token, token, ['ADMIN'])].sort(byPrincipal));
 			expect(await ledger.listACLsByEntity(token, { principalType: 'CERTIFICATE' })).toEqual([]);
 		});
 
@@ -440,8 +452,9 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			const { multisig } = multisigCreated;
 			cursor.append(multisigCreated.block);
 
+			await ledger.add(await confirmedStaple([created.block, described, minted], network.representatives));
+			expect(await ledger.getAccountInfo(token)).toMatchObject({ name: 'FIRST', description: 'first', metadata: 'b25l' });
 			await addEach(ledger, [
-				await confirmedStaple([created.block, described, minted], network.representatives),
 				await confirmedStaple([renamed], network.representatives),
 				await confirmedStaple([multisigCreated.block], network.representatives)
 			]);
@@ -941,8 +954,9 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(caughtUp.map(bytesOf)).toEqual([network.genesis, received, later].map(bytesOf));
 		});
 
-		test('fork in confirmed history is rejected with LEDGER_PREVIOUS_ALREADY_USED', async function() {
-			const { network, ledger } = await startNetwork();
+		test('fork in confirmed history is rejected with LEDGER_PREVIOUS_ALREADY_USED, and raises an alarm', async function() {
+			const log = new RecordingLog();
+			const { network, ledger } = await startNetwork(DEFAULT_WEIGHTS, { log });
 			const user = requireAt(network.users, 0);
 			const other = requireAt(network.users, 1);
 			const genesisHead = headOf(network.genesis, user);
@@ -954,8 +968,15 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			const twinFork = await sendBlock({ from: other, previous: headOf(network.genesis, other), to: user, amount: 2n, token: network.baseToken, network: network.network });
 			await ledger.add(await confirmedStaple([kept], network.representatives));
 
-			for (const conflicting of [[fork], [reopened], [twin, twinFork]]) {
-				await expect(ledger.add(await confirmedStaple(conflicting, network.representatives))).rejects.toMatchObject({ code: 'LEDGER_PREVIOUS_ALREADY_USED', shouldRetry: false });
+			const conflicts = [
+				{ blocks: [fork], refused: fork, reason: `previous already has the confirmed successor ${kept.hash.toString()}` },
+				{ blocks: [reopened], refused: reopened, reason: `opening block for an account whose chain already ends at ${kept.hash.toString()}` },
+				{ blocks: [twin, twinFork], refused: twinFork, reason: 'another block of the same staple has the same previous' }
+			];
+			for (const { blocks, refused, reason } of conflicts) {
+				const message = `confirmed block ${refused.hash.toString()} conflicts with confirmed history: ${reason}`;
+				await expect(ledger.add(await confirmedStaple(blocks, network.representatives))).rejects.toMatchObject({ code: 'LEDGER_PREVIOUS_ALREADY_USED', shouldRetry: false, message });
+				expect(log.errors).toContain(`ledger network integrity alarm: ${message}`);
 			}
 
 			expect(await headHash(ledger, user)).toBe(kept.hash.toString());
@@ -1002,8 +1023,10 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 				};
 				const hooks = storage._Testing(TESTING_KEY);
 
-				await expect(hooks.persist(transaction, await changeAtKeptHeight(keptStaple))).rejects.toMatchObject({ code: 'LEDGER_BLOCK_ALREADY_EXISTS', shouldRetry: false });
-				await expect(hooks.persist(transaction, await changeAtKeptHeight(forkStaple))).rejects.toMatchObject({ code: 'LEDGER_PREVIOUS_ALREADY_USED', shouldRetry: false });
+				const duplicate = hooks.persist(transaction, await changeAtKeptHeight(keptStaple));
+				await expect(duplicate).rejects.toMatchObject({ code: 'LEDGER_BLOCK_ALREADY_EXISTS', shouldRetry: false });
+				await expect(duplicate).rejects.toThrow('Block Already Exists');
+				await expect(hooks.persist(transaction, await changeAtKeptHeight(forkStaple))).rejects.toMatchObject({ code: 'LEDGER_PREVIOUS_ALREADY_USED', shouldRetry: false, message: `confirmed block ${fork.hash.toString()} conflicts with confirmed history: previous already has the confirmed successor ${kept.hash.toString()}` });
 
 				// A refused change leaves nothing behind in the transaction.
 				expect(await storage.getBlock(transaction, fork.hash, 'main')).toBeNull();
@@ -1137,6 +1160,79 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect((await ledger.listACLsByEntity(entity, { principalType: 'CERTIFICATE' })).map(summarizeACL)).toEqual([expected]);
 			expect(await ledger.listACLsByEntity(entity, { principalType: 'ACCOUNT' })).toEqual([]);
 			expect((await ledger.listACLsByPrincipal({ usingCertificate: true, certificate: certificate.hash(), certificateAccount: holder })).map(summarizeACL)).toEqual([expected]);
+		});
+
+		test('reads of what an account does not hold answer zero or nothing, and a balance spent to zero is left out', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			const spender = requireAt(network.users, 0);
+			const receiver = requireAt(network.users, 1);
+			const cursor = new ChainCursor(network.genesis);
+			await ledger.add(network.genesis);
+			const notHeld = (await createTokenBlock({ owner: spender, previous: cursor.previous(spender), network: network.network })).token;
+			const balance = await ledger.getBalance(spender, network.baseToken);
+			await ledger.add(await confirmedStaple([cursor.append(await sendBlock({ from: spender, previous: cursor.previous(spender), to: receiver, amount: balance, token: network.baseToken, network: network.network }))], network.representatives));
+
+			expect(await ledger.getBalance(spender, network.baseToken)).toBe(0n);
+			expect(await ledger.getAllBalances(spender)).toEqual([]);
+			// The receiver holds the base token, and not this one.
+			expect(await ledger.getBalance(receiver, notHeld)).toBe(0n);
+			expect(await readStorage(storage, async function(transaction) {
+				return({
+					everywhere: await storage.listACLsByPrincipal(transaction, receiver),
+					onToken: await storage.listACLsByPrincipal(transaction, receiver, [notHeld])
+				});
+			})).toEqual({ everywhere: [], onToken: [] });
+		});
+
+		test('catch-up reads the default page size when no options are given', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			await ledger.add(network.genesis);
+
+			const page = await readStorage(storage, function(transaction) {
+				return(storage.getVotesAfter(transaction, GENESIS_MOMENT));
+			});
+
+			expect(staplesOfPage(page)).toEqual(network.genesis.votes.map(function(): string {
+				return(network.genesis.blocksHash.toString());
+			}));
+			expect(page.nextKey).toBeUndefined();
+		});
+
+		test('staples are found by their blocks on the main ledger only', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			await ledger.add(network.genesis);
+			const blocks = network.genesis.blocks.map(function(block) {
+				return(block.hash);
+			});
+
+			const found = await readStorage(storage, function(transaction) {
+				return(storage.getVoteStaplesFromBlockHash(transaction, blocks, 'main'));
+			});
+
+			expect(blocksHashesOf(found)).toEqual(blocksHashesOf([network.genesis]));
+			await expect(readStorage(storage, function(transaction) {
+				return(storage.getVoteStaplesFromBlockHash(transaction, blocks, 'side'));
+			})).rejects.toThrow('internal error: staples are found by their blocks on the main ledger only, not on \'side\'');
+		});
+
+		test('history lists a staple a multisig signs under each signer that signs for it', async function() {
+			const { network, ledger } = await startNetwork();
+			await ledger.add(network.genesis);
+			const owner = requireAt(network.users, 0);
+			const receiver = requireAt(network.users, 1);
+			const signers = [lib.Account.fromSeed(NEWCOMER_SEED, 1), lib.Account.fromSeed(NEWCOMER_SEED, 2)];
+			const cursor = new ChainCursor(network.genesis);
+			const { block: creation, multisig } = await createMultisigBlock({ owner, signers, quorum: 2n, previous: cursor.previous(owner), network: network.network });
+			cursor.append(creation);
+			const delegated = cursor.append(await modifyPermissionsBlock({ account: owner, previous: cursor.previous(owner), network: network.network, principal: multisig, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['SEND_ON_BEHALF']), target: network.baseToken }));
+			const created = await confirmedStaple([creation, delegated], network.representatives);
+			advanceClock(1000);
+			const signed = await confirmedStaple([cursor.append(await multisigSendBlock({ from: owner, signer: [multisig, signers], to: receiver, amount: 1n, token: network.baseToken, previous: cursor.previous(owner), network: network.network }))], network.representatives);
+			await addEach(ledger, [created, signed]);
+
+			for (const signer of [multisig, ...signers]) {
+				expect(blocksHashesOf(await ledger.getHistory(signer, null))).toContain(signed.blocksHash.toString());
+			}
 		});
 	});
 }
