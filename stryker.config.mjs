@@ -6,14 +6,31 @@ const module = selectedModule();
 
 const incrementalFile = `.stryker/${module.name}/incremental.json`;
 
+/*
+ * Everything outside the mutated files and the test files that can change a
+ * run's outcome: Stryker's incremental mode notices a change to a mutated file
+ * or to a test file it ran, and nothing else.
+ */
+const UNTRACKED_INPUTS = [
+	// The modules the tests import, such as the storage suite's cases.
+	'src/**/*.ts',
+	// The Postgres driver's runs migrate their databases from these.
+	'schema/migrations/*.sql',
+	// The installed upstream and how it is patched.
+	'package-lock.json',
+	'patches/**',
+	// How the runs are configured.
+	'stryker.config.mjs',
+	'mutation/*.js',
+	'.vitest.config.js'
+];
+
 /**
- * Stryker's incremental mode notices a change to a mutated file or to a test
- * file it ran, but not to the other modules those run, such as the storage
- * suite's cases, which drivers.test.ts only imports. Once one of them is newer
- * than the last run, every mutant runs again.
+ * Whether an input Stryker does not track is newer than the last run, after
+ * which every mutant runs again.
  * @returns {boolean}
  */
-function sourcesChangedSinceLastRun() {
+function inputsChangedSinceLastRun() {
 	let lastRun;
 	try {
 		lastRun = statSync(incrementalFile).mtimeMs;
@@ -24,7 +41,7 @@ function sourcesChangedSinceLastRun() {
 		throw(error);
 	}
 	const tracked = new Set(globSync([...module.mutate]));
-	return(globSync('src/**/*.ts').some(function(path) {
+	return(globSync(UNTRACKED_INPUTS).some(function(path) {
 		return(!path.endsWith('.test.ts') && !tracked.has(path) && statSync(path).mtimeMs > lastRun);
 	}));
 }
@@ -51,7 +68,7 @@ export default {
 	 */
 	incremental: true,
 	incrementalFile,
-	force: sourcesChangedSinceLastRun(),
+	force: inputsChangedSinceLastRun(),
 	tempDirName: '.stryker/tmp',
 	cleanTempDir: 'always',
 	reporters: ['progress', 'clear-text', 'json', 'html'],

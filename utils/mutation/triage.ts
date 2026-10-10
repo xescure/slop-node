@@ -6,8 +6,26 @@ export const MUTANT_STATUSES = ['Killed', 'Survived', 'NoCoverage', 'Timeout', '
 
 export type MutantStatus = typeof MUTANT_STATUSES[number];
 
-/** Where a mutant sits, and what it does there, as a triage entry names it. */
+/**
+ * Which mutant an entry names: where its replaced code starts and ends, its
+ * mutator, and its replacement, so that no other mutant of the same mutator
+ * at the same place can pass under the entry's reason.
+ */
 export type MutantPlace = string & { readonly __mutantPlace: never };
+
+/** A position in a source file, as Stryker reports it: both one-based. */
+export type SourcePosition = {
+	readonly line: number;
+	readonly column: number;
+};
+
+export type MutantIdentity = {
+	readonly file: string;
+	readonly start: SourcePosition;
+	readonly end: SourcePosition;
+	readonly mutatorName: string;
+	readonly replacement: string;
+};
 
 export type ReportedMutant = {
 	readonly place: MutantPlace;
@@ -48,8 +66,13 @@ export type Assessment = {
 /** The lowest score a module may have after triage. */
 export const MINIMUM_SCORE = 90;
 
-export function placeOf(file: string, line: number, column: number, mutatorName: string): MutantPlace {
-	return(`${file}:${String(line)}:${String(column)} ${mutatorName}` as MutantPlace);
+function positionText({ line, column }: SourcePosition): string {
+	return(`${String(line)}:${String(column)}`);
+}
+
+/** The mutant as an entry spells it, the replacement as a JSON string. */
+export function placeOf({ file, start, end, mutatorName, replacement }: MutantIdentity): MutantPlace {
+	return(`${file}:${positionText(start)}-${positionText(end)} ${mutatorName} ${JSON.stringify(replacement)}` as MutantPlace);
 }
 
 type JSONObject = { readonly [key: string]: unknown };
@@ -89,6 +112,21 @@ function stringAt(object: JSONObject, name: string, where: string): string {
 	return(value);
 }
 
+// A replacement may be empty, as when a statement is removed.
+function textAt(object: JSONObject, name: string, where: string): string {
+	const value = field(object, name, where);
+	if (typeof value !== 'string') {
+		throw(new Error(`${where}.${name} is not a string`));
+	}
+	return(value);
+}
+
+function positionAt(object: JSONObject, name: string, where: string): SourcePosition {
+	const position = objectAt(object, name, where);
+	const positionWhere = `${where}.${name}`;
+	return({ line: positiveIntegerAt(position, 'line', positionWhere), column: positiveIntegerAt(position, 'column', positionWhere) });
+}
+
 function isMutantStatus(value: string): value is MutantStatus {
 	return(MUTANT_STATUSES.some(function(status): boolean {
 		return(status === value);
@@ -115,13 +153,19 @@ export function parseReport(report: unknown): ReportedMutant[] {
 			if (!isObject(mutant)) {
 				throw(new Error(`${mutantWhere} is not an object`));
 			}
-			const start = objectAt(objectAt(mutant, 'location', mutantWhere), 'start', `${mutantWhere}.location`);
+			const location = objectAt(mutant, 'location', mutantWhere);
 			const status = stringAt(mutant, 'status', mutantWhere);
 			if (!isMutantStatus(status)) {
 				throw(new Error(`${mutantWhere}.status is the unknown status ${status}`));
 			}
 			mutants.push({
-				place: placeOf(file, positiveIntegerAt(start, 'line', `${mutantWhere}.location.start`), positiveIntegerAt(start, 'column', `${mutantWhere}.location.start`), stringAt(mutant, 'mutatorName', mutantWhere)),
+				place: placeOf({
+					file,
+					start: positionAt(location, 'start', `${mutantWhere}.location`),
+					end: positionAt(location, 'end', `${mutantWhere}.location`),
+					mutatorName: stringAt(mutant, 'mutatorName', mutantWhere),
+					replacement: textAt(mutant, 'replacement', mutantWhere)
+				}),
 				file,
 				status
 			});
@@ -130,12 +174,37 @@ export function parseReport(report: unknown): ReportedMutant[] {
 	return(mutants);
 }
 
-const ENTRY = /^- (?<file>[^\s:]+):(?<line>[1-9][0-9]*):(?<column>[1-9][0-9]*) (?<mutator>[A-Za-z]+) (?<triage>equivalent|harmless): (?<reason>\S.*)$/;
+const POSITION = '([1-9][0-9]*):([1-9][0-9]*)';
+
+const ENTRY = new RegExp(`^- ([^\\s:]+):${POSITION}-${POSITION} ([A-Za-z]+) ("(?:[^"\\\\]|\\\\.)*") (equivalent|harmless): (\\S.*)$`);
+
+function triageClassOf(text: string | undefined): TriageClass | undefined {
+	switch (text) {
+		case 'equivalent':
+		case 'harmless':
+			return(text);
+		default:
+			return(undefined);
+	}
+}
+
+function replacementOf(json: string): string | undefined {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(json);
+	} catch {
+		return(undefined);
+	}
+	if (typeof parsed !== 'string') {
+		return(undefined);
+	}
+	return(parsed);
+}
 
 /**
  * The entries of a triage list: every line that starts with "- " is one, as
- * "- <file>:<line>:<column> <mutator> <equivalent|harmless>: <reason>".
- * Other lines are prose.
+ * "- <file>:<line>:<column>-<line>:<column> <mutator> <replacement as a JSON
+ * string> <equivalent|harmless>: <reason>". Other lines are prose.
  */
 export function parseTriage(text: string): TriageEntry[] {
 	const entries: TriageEntry[] = [];
@@ -144,19 +213,25 @@ export function parseTriage(text: string): TriageEntry[] {
 		if (!line.startsWith('- ')) {
 			continue;
 		}
-		const groups = ENTRY.exec(line)?.groups;
-		const file = groups?.['file'];
-		const lineNumber = groups?.['line'];
-		const column = groups?.['column'];
-		const mutator = groups?.['mutator'];
-		const triage = groups?.['triage'];
-		const reason = groups?.['reason'];
-		if (file === undefined || lineNumber === undefined || column === undefined || mutator === undefined || reason === undefined || (triage !== 'equivalent' && triage !== 'harmless')) {
-			throw(new Error(`line ${String(index + 1)} of the triage list is not "- <file>:<line>:<column> <mutator> <equivalent|harmless>: <reason>": ${line}`));
+		const where = `line ${String(index + 1)} of the triage list`;
+		const [, file, startLine, startColumn, endLine, endColumn, mutatorName, replacement, triageText, reason] = ENTRY.exec(line) ?? [];
+		const triage = triageClassOf(triageText);
+		if (file === undefined || startLine === undefined || startColumn === undefined || endLine === undefined || endColumn === undefined || mutatorName === undefined || replacement === undefined || triage === undefined || reason === undefined) {
+			throw(new Error(`${where} is not "- <file>:<line>:<column>-<line>:<column> <mutator> <replacement as a JSON string> <equivalent|harmless>: <reason>": ${line}`));
 		}
-		const place = placeOf(file, Number(lineNumber), Number(column), mutator);
+		const parsedReplacement = replacementOf(replacement);
+		if (parsedReplacement === undefined) {
+			throw(new Error(`${where} has a replacement that is not a JSON string: ${line}`));
+		}
+		const place = placeOf({
+			file,
+			start: { line: Number(startLine), column: Number(startColumn) },
+			end: { line: Number(endLine), column: Number(endColumn) },
+			mutatorName,
+			replacement: parsedReplacement
+		});
 		if (seen.has(place)) {
-			throw(new Error(`line ${String(index + 1)} of the triage list names ${place} again`));
+			throw(new Error(`${where} names ${place} again`));
 		}
 		seen.add(place);
 		entries.push({ place, file, triage, reason });
