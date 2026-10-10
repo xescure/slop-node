@@ -369,10 +369,10 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			await ledger.add(network.genesis);
 			const delegation = cursor.append(await setRepresentativeBlock({ account: entity, representative: second, previous: cursor.previous(entity), network: network.network }));
 			const grant = cursor.append(await modifyPermissionsBlock({ account: entity, previous: cursor.previous(entity), network: network.network, principal, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['ACCESS']) }));
-			const regrant = cursor.append(await modifyPermissionsBlock({ account: entity, previous: cursor.previous(entity), network: network.network, principal, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['SEND_ON_BEHALF']) }));
+			const widening = cursor.append(await modifyPermissionsBlock({ account: entity, previous: cursor.previous(entity), network: network.network, principal, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['SEND_ON_BEHALF']) }));
 			const spend = cursor.append(await sendBlock({ from: entity, previous: cursor.previous(entity), to: requireAt(network.users, 2), amount: 10n, token: network.baseToken, network: network.network }));
 			const first = await confirmedStaple([delegation, grant], network.representatives);
-			const later = await confirmedStaple([regrant, spend], network.representatives);
+			const later = await confirmedStaple([widening, spend], network.representatives);
 
 			const applied = await ledger.run('suite-reads-earlier-staple', async function(transaction) {
 				expect(await transaction.listACLsByPrincipal(principal, [entity])).toEqual([]);
