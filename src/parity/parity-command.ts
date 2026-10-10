@@ -8,7 +8,7 @@ export type ParityCommand =
 	| { readonly kind: 'checksum'; readonly directory: string; readonly gapMilliseconds: number }
 	| { readonly kind: 'sweep'; readonly directory: string; readonly accounts: number }
 	| { readonly kind: 'api-diff'; readonly directory: string; readonly samplesPerStratum: number; readonly seed: string | undefined }
-	| { readonly kind: 'shadow'; readonly directory: string; readonly windowStaples: number; readonly storage: ShadowStorage }
+	| { readonly kind: 'shadow'; readonly directory: string; readonly base: string | undefined; readonly informationalEvery: number; readonly batchStaples: number; readonly restart: boolean }
 	| { readonly kind: 'report'; readonly directory: string; readonly sampleAccounts: number; readonly apiSamples: number; readonly gapMilliseconds: number };
 
 export const DEFAULT_SWEEP_ACCOUNTS = 100;
@@ -20,18 +20,18 @@ export const DEFAULT_REPORT_SAMPLE_ACCOUNTS = 16;
 export const DEFAULT_API_SAMPLES = 50;
 
 /**
- * Where the offline ledger of shadow votes keeps its state. The main
- * network's history names over a million accounts, most of them opened in
- * October 2025, and replaying it into the memory driver outgrew a 2 GiB heap
- * at 12,000 of 53,600 staples, so by default it is kept in a cluster of its
- * own, started for the run and removed after it.
+ * One in so many staples voted for before the scoped window is put to a
+ * shadow vote: a vote costs about what adding the staple does, so this adds
+ * a tenth to the replay of that history, and still votes on thousands of
+ * staples of each month of it.
  */
-export type ShadowStorage = 'postgres' | 'memory';
+export const DEFAULT_INFORMATIONAL_EVERY = 10;
 
-const SHADOW_STORAGES: readonly ShadowStorage[] = ['postgres', 'memory'];
+/** Staples replayed between two saves of a shadow-vote run's standing. */
+export const DEFAULT_SHADOW_BATCH = 500;
 
-/** The staples shadow-voted on: the newest of the follower's reach, enough to hold every kind of staple a day of the main network carries. */
-export const DEFAULT_SHADOW_WINDOW = 1000;
+/** A database of the follower's cluster, as Postgres names one without quotes. */
+const DATABASE_NAME = /^[a-z_][a-z0-9_]{0,62}$/;
 
 /** The fresh API diff sample of a report: a couple of requests of each stratum, a minute or so at the representatives' pace. */
 export const DEFAULT_REPORT_API_SAMPLES = 2;
@@ -46,6 +46,7 @@ const MAX_GAP_MILLISECONDS = 600_000;
 export function parseParityCommand(argv: readonly string[], home: string): ParityCommand | undefined {
 	const [name, ...rest] = argv;
 	let valued: readonly string[];
+	let flags: readonly string[] = [];
 	switch (name) {
 		case 'checksum':
 			valued = ['--directory', '--gap-ms'];
@@ -57,7 +58,8 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 			valued = ['--directory', '--samples', '--seed'];
 			break;
 		case 'shadow':
-			valued = ['--directory', '--window', '--storage'];
+			valued = ['--directory', '--base', '--informational-every', '--batch'];
+			flags = ['--restart'];
 			break;
 		case 'report':
 			valued = ['--directory', '--sample', '--api-samples', '--gap-ms'];
@@ -65,7 +67,7 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 		default:
 			return(undefined);
 	}
-	const options = optionsOf(rest, valued, []);
+	const options = optionsOf(rest, valued, flags);
 	if (options === undefined) {
 		return(undefined);
 	}
@@ -92,15 +94,13 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 			return({ kind: name, directory, samplesPerStratum, seed: options.get('--seed') });
 		}
 		case 'shadow': {
-			const windowStaples = setting(options, '--window', Number.MAX_SAFE_INTEGER, DEFAULT_SHADOW_WINDOW);
-			const named = options.get('--storage') ?? 'postgres';
-			const storage = SHADOW_STORAGES.find(function(known): boolean {
-				return(known === named);
-			});
-			if (windowStaples === undefined || storage === undefined) {
+			const informationalEvery = setting(options, '--informational-every', Number.MAX_SAFE_INTEGER, DEFAULT_INFORMATIONAL_EVERY);
+			const batchStaples = setting(options, '--batch', 100_000, DEFAULT_SHADOW_BATCH);
+			const base = options.get('--base');
+			if (informationalEvery === undefined || batchStaples === undefined || (base !== undefined && !DATABASE_NAME.test(base))) {
 				return(undefined);
 			}
-			return({ kind: name, directory, windowStaples, storage });
+			return({ kind: name, directory, base, informationalEvery, batchStaples, restart: options.has('--restart') });
 		}
 		case 'report': {
 			const sampleAccounts = setting(options, '--sample', Number.MAX_SAFE_INTEGER, DEFAULT_REPORT_SAMPLE_ACCOUNTS);
@@ -118,6 +118,14 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 /** Held by the one parity tool that may run at a time in a follower's directory. */
 export const PARITY_LOCK_FILE = 'parity.lock';
 
+/**
+ * Held by the one shadow-vote run that may run at a time in a follower's
+ * directory. A run sends no request to the representatives, so it does not
+ * hold the parity tools' lock, and the report may read its records while it
+ * runs.
+ */
+export const SHADOW_LOCK_FILE = 'shadow.lock';
+
 function isAlive(processID: number): boolean {
 	try {
 		process.kill(processID, 0);
@@ -134,8 +142,8 @@ function isAlive(processID: number): boolean {
  * one may run at a time for the pace to hold across all of them. A lock
  * left by a process that has exited is taken over.
  */
-export async function lockParity(directory: string, processID: number = process.pid): Promise<() => Promise<void>> {
-	const path = join(directory, PARITY_LOCK_FILE);
+export async function lockParity(directory: string, processID: number = process.pid, file: string = PARITY_LOCK_FILE): Promise<() => Promise<void>> {
+	const path = join(directory, file);
 	for (let attempt = 0; attempt < 2; attempt++) {
 		try {
 			const file = await open(path, 'wx');

@@ -97,8 +97,10 @@ export type HeldStaple = {
 	readonly stapleTime: Date;
 };
 
-/** Where a read of staples in history order resumes: after the staple at this time with this hash of its blocks. */
-export type StapleKey = { readonly stapleTime: Date; readonly blocksHash: string };
+/** A main staple with its place in the order the follower's ledger added its staples. */
+export type SequencedStaple = HeldStaple & {
+	readonly sequence: bigint;
+};
 
 /** What the parity tools read of the follower's own storage. */
 export type FollowerStore = {
@@ -120,10 +122,14 @@ export type FollowerStore = {
 	heldBlocks(fromHash: string, before: Date, count: number): Promise<readonly HeldBlock[]>;
 	/** The main blocks of those staples, by the hash of their blocks, that are before the moment. */
 	heldBlocksOfStaples(blocksHashes: readonly string[], before: Date): Promise<readonly HeldBlock[]>;
-	/** How many main staples there are before the moment. */
-	stapleCountBefore(before: Date): Promise<number>;
-	/** Main staples before the moment, oldest first by time and then by the hash of their blocks, after the key, at most the count of them. */
-	staplesBefore(before: Date, after: StapleKey | undefined, count: number): Promise<readonly HeldStaple[]>;
+	/** Where the newest main staple stands in the order the ledger added them, 0 when it holds none. */
+	lastSequence(): Promise<bigint>;
+	/** The hash of the blocks of the main staple at the place, or nothing when none is there. */
+	stapleAt(sequence: bigint): Promise<string | undefined>;
+	/** Main staples after the first place and up to the last, in the order the ledger added them, at most the count of them. */
+	staplesAfter(after: bigint, through: bigint, count: number): Promise<readonly SequencedStaple[]>;
+	/** The main staples of these hashes of their blocks, in the order the ledger added them. */
+	staplesOf(blocksHashes: readonly string[]): Promise<readonly SequencedStaple[]>;
 	/** The time of each account's newest staple, none for an account without history. */
 	newestStaples(accounts: readonly string[]): Promise<ReadonlyMap<string, Date>>;
 	close(): Promise<void>;
@@ -286,13 +292,28 @@ const NEWEST_STAPLES = `
 
 const STAGED = 'SELECT count(*) AS count FROM bootstrap_stage';
 
-const STAPLE_COUNT_BEFORE = 'SELECT count(*) AS count FROM staples WHERE staple_time < $1';
+const LAST_SEQUENCE = 'SELECT max(sequence)::text AS sequence FROM staples';
 
-/** The history index orders staples by time and hash, newest first, so it is read backwards. */
-const STAPLES_BEFORE = `
-	SELECT blocks_hash, staple_time, bytes FROM staples
-	WHERE staple_time < $1 AND (staple_time, blocks_hash) > ($2, $3)
-	ORDER BY staple_time, blocks_hash LIMIT $4`;
+const STAPLE_AT = 'SELECT blocks_hash FROM staples WHERE sequence = $1';
+
+const STAPLES_AFTER = `
+	SELECT blocks_hash, staple_time, bytes, sequence::text AS sequence FROM staples
+	WHERE sequence > $1 AND sequence <= $2
+	ORDER BY sequence LIMIT $3`;
+
+const STAPLES_OF = `
+	SELECT blocks_hash, staple_time, bytes, sequence::text AS sequence FROM staples
+	WHERE blocks_hash = ANY($1::bytea[])
+	ORDER BY sequence`;
+
+type SequencedStapleRow = { blocks_hash: Buffer; staple_time: Date; bytes: Buffer | null; sequence: string };
+
+async function sequencedStaplesOf(pool: pg.Pool, rows: readonly SequencedStapleRow[]): Promise<SequencedStaple[]> {
+	const held = await heldStaplesOf(pool, rows);
+	return(held.map(function(staple, index): SequencedStaple {
+		return({ ...staple, sequence: BigInt(rows[index]?.sequence ?? '0') });
+	}));
+}
 
 const REBUILT_STAPLE_BLOCKS = `
 	SELECT staple, bytes FROM blocks WHERE ledger = 'main' AND staple = ANY($1::bytea[]) ORDER BY staple, staple_position`;
@@ -471,14 +492,28 @@ export function openFollowerStore(connectionString: string): FollowerStore {
 			});
 			return((await pool.query<HeldBlockRow>(HELD_BLOCKS_OF_STAPLES, [keys, before])).rows.map(heldBlockOf));
 		},
-		async stapleCountBefore(before: Date): Promise<number> {
-			const result = await pool.query<{ count: string }>(STAPLE_COUNT_BEFORE, [before]);
-			return(Number(result.rows[0]?.count ?? 0));
+		async lastSequence(): Promise<bigint> {
+			const result = await pool.query<{ sequence: string | null }>(LAST_SEQUENCE);
+			return(BigInt(result.rows[0]?.sequence ?? '0'));
 		},
-		async staplesBefore(before: Date, after: StapleKey | undefined, count: number): Promise<readonly HeldStaple[]> {
-			const from = after ?? { stapleTime: new Date(0), blocksHash: '' };
-			const rows = await pool.query<{ blocks_hash: Buffer; staple_time: Date; bytes: Buffer | null }>(STAPLES_BEFORE, [before, from.stapleTime, Buffer.from(from.blocksHash, 'hex'), count]);
-			return(await heldStaplesOf(pool, rows.rows));
+		async stapleAt(sequence: bigint): Promise<string | undefined> {
+			const result = await pool.query<{ blocks_hash: Buffer }>(STAPLE_AT, [sequence.toString()]);
+			const row = result.rows[0];
+			if (row === undefined) {
+				return(undefined);
+			}
+			return(hexOfBytes(row.blocks_hash));
+		},
+		async staplesAfter(after: bigint, through: bigint, count: number): Promise<readonly SequencedStaple[]> {
+			const rows = await pool.query<SequencedStapleRow>(STAPLES_AFTER, [after.toString(), through.toString(), count]);
+			return(await sequencedStaplesOf(pool, rows.rows));
+		},
+		async staplesOf(blocksHashes: readonly string[]): Promise<readonly SequencedStaple[]> {
+			const keys = blocksHashes.map(function(hash): Buffer {
+				return(Buffer.from(hash, 'hex'));
+			});
+			const rows = await pool.query<SequencedStapleRow>(STAPLES_OF, [keys]);
+			return(await sequencedStaplesOf(pool, rows.rows));
 		},
 		async newestStaples(accounts: readonly string[]): Promise<ReadonlyMap<string, Date>> {
 			const result = await pool.query<{ public_key: string; newest_staple: Date | null }>(NEWEST_STAPLES, [accounts]);

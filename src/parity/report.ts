@@ -4,8 +4,9 @@ import type { APIDiffSetup } from './api-diff.js';
 import type { APISource } from './api-source.js';
 import { checksumsEqual, compareChecksums, crossCheckChecksum } from './checksum.js';
 import type { FollowerProgress, FollowerStore } from './follower-store.js';
+import { SHADOW_REFUSAL_REASONS, SHADOW_REFUSAL_RELEASES } from '../conformance/mainnet/shadow.js';
 import type { ShadowRefusalReason } from '../conformance/mainnet/shadow.js';
-import type { APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, ShadowLiveRecord, SweepCursor, SweepPointer, SweepRecord } from './log.js';
+import type { APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, ShadowBase, ShadowRunCost, ShadowRunRecord, ShadowTarget, ShadowWindowTally, SweepCursor, SweepPointer, SweepRecord } from './log.js';
 import { STRATA } from './strata.js';
 import type { Stratum } from './strata.js';
 import { readSweepCursor, sweepAccounts } from './sweep.js';
@@ -95,23 +96,46 @@ export type SweepSignal = {
 	readonly firstDivergence: FirstDivergence | null;
 };
 
-/** The latest shadow-vote run, the refusals of its window counted by the difference that explains them. */
+/** Why shadow votes do not decide yet. */
+export type ShadowNotComparableReason =
+	| 'no-run'
+	/** The latest run has not replayed up to its target yet. */
+	| 'run-incomplete'
+	/** The target was fixed before the follower held every staple voted for before its reach, so the window may lack some. */
+	| 'follower-not-caught-up'
+	/** The run started from a snapshot holding staples of the scoped window, which it cannot put to a vote. */
+	| 'base-within-window'
+	/** The run met no staple of the scoped window. */
+	| 'window-empty';
+
+/** A window's refusals by the classified difference that explains them, with the release that changed the rule. */
+export type ShadowWindowSummary = Omit<ShadowWindowTally, 'explained' | 'firstUnexplained'> & {
+	readonly explained: Readonly<Partial<Record<ShadowRefusalReason, { readonly refusals: number; readonly changedIn: string | null }>>>;
+};
+
+/**
+ * The latest run of the resumable shadow votes: the scoped window decides,
+ * every staple of it voted on; the informational window is counted apart.
+ */
 export type ShadowVotesSignal = {
 	readonly verdict: Verdict;
 	readonly runs: number;
+	readonly notComparableReasons: readonly ShadowNotComparableReason[];
 	readonly latest: {
 		readonly at: string;
-		readonly replayed: number;
-		readonly windowStaples: number;
-		readonly windowFrom: string | null;
-		readonly windowTo: string | null;
-		readonly voted: number;
-		readonly explained: Readonly<Partial<Record<ShadowRefusalReason, number>>>;
-		readonly unexplained: number;
-		readonly deferredInWindow: number;
+		readonly scope: { readonly release: string; readonly from: string };
+		readonly base: ShadowBase;
+		readonly target: ShadowTarget;
+		readonly reached: string;
+		readonly complete: boolean;
+		readonly scoped: ShadowWindowSummary;
+		readonly informational: ShadowWindowSummary & { readonly every: number };
 		readonly refusedForWeight: number;
-		readonly unappliedBeforeWindow: number;
+		readonly unapplied: number;
+		readonly cost: ShadowRunCost;
 	} | null;
+	/** Of the refusals in the scoped window that no classified difference explains. */
+	readonly confidence: ConfidenceBound;
 	readonly firstDivergence: { readonly at: string; readonly staple: string; readonly code: string; readonly why: string } | null;
 };
 
@@ -449,46 +473,75 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], knownBehaviors: Read
 	return({ verdict, strata, counts, newBehaviors: behaviors, firstDivergence: null });
 }
 
-/** The latest run decides: a staple of its window refused without a classified explanation, or a staple not applied at all, fails it. */
-function shadowVotesSignalOf(records: readonly ShadowLiveRecord[]): ShadowVotesSignal {
+function windowSummaryOf(tally: ShadowWindowTally): ShadowWindowSummary {
+	const explained: Partial<Record<ShadowRefusalReason, { readonly refusals: number; readonly changedIn: string | null }>> = {};
+	for (const reason of SHADOW_REFUSAL_REASONS) {
+		const refusals = tally.explained[reason];
+		if (refusals !== undefined) {
+			explained[reason] = { refusals, changedIn: SHADOW_REFUSAL_RELEASES[reason] };
+		}
+	}
+	return({ replayed: tally.replayed, shadowVoted: tally.shadowVoted, voted: tally.voted, explained, unexplained: tally.unexplained, votedFrom: tally.votedFrom, votedTo: tally.votedTo });
+}
+
+function shadowNotComparableReasonsOf(latest: ShadowRunRecord): ShadowNotComparableReason[] {
+	const reasons: ShadowNotComparableReason[] = [];
+	if (!latest.complete) {
+		reasons.push('run-incomplete');
+	}
+	if (!latest.target.followerCaughtUp) {
+		reasons.push('follower-not-caught-up');
+	}
+	if (latest.base.scopedStaples > 0) {
+		reasons.push('base-within-window');
+	}
+	if (latest.scoped.shadowVoted === 0) {
+		reasons.push('window-empty');
+	}
+	return(reasons);
+}
+
+/**
+ * The latest run decides. A refusal in the scoped window that no classified
+ * difference explains fails it at once; so does a staple the replay could
+ * not apply, once the run is complete, since the follower's ledger applied
+ * it there. It passes only once the run has voted on every staple of the
+ * window, up to a target fixed while the follower held every staple voted
+ * for before its reach. The informational window decides nothing.
+ */
+function shadowVotesSignalOf(records: readonly ShadowRunRecord[]): ShadowVotesSignal {
 	const latest = records.at(-1);
 	if (latest === undefined) {
-		return({ verdict: 'not-comparable-yet', runs: 0, latest: null, firstDivergence: null });
-	}
-	const explained: Partial<Record<ShadowRefusalReason, number>> = {};
-	for (const refusal of latest.explained) {
-		explained[refusal.reason] = (explained[refusal.reason] ?? 0) + 1;
+		return({ verdict: 'not-comparable-yet', runs: 0, notComparableReasons: ['no-run'], latest: null, confidence: { kind: 'none', why: 'no shadow-vote run yet' }, firstDivergence: null });
 	}
 	const summary = {
 		at: latest.at,
-		replayed: latest.replayed,
-		windowStaples: latest.windowStaples,
-		windowFrom: latest.windowFrom,
-		windowTo: latest.windowTo,
-		voted: latest.voted,
-		explained,
-		unexplained: latest.unexplained.length,
-		deferredInWindow: latest.deferredInWindow.length,
+		scope: latest.scope,
+		base: latest.base,
+		target: latest.target,
+		reached: latest.reached.sequence,
+		complete: latest.complete,
+		scoped: windowSummaryOf(latest.scoped),
+		informational: { ...windowSummaryOf(latest.informational), every: latest.informationalEvery },
 		refusedForWeight: latest.refusedForWeight,
-		unappliedBeforeWindow: latest.unappliedBeforeWindow.length
+		unapplied: latest.unapplied.length,
+		cost: latest.cost
 	};
-	const [refused] = latest.unexplained;
+	const confidence = confidenceOf(latest.scoped.shadowVoted, latest.scoped.unexplained, 'staple of the scoped window');
+	const notComparableReasons = shadowNotComparableReasonsOf(latest);
+	const signal = { runs: records.length, notComparableReasons, latest: summary, confidence };
+	const [refused] = latest.scoped.firstUnexplained;
 	if (refused !== undefined) {
-		return({ verdict: 'fail', runs: records.length, latest: summary, firstDivergence: { at: latest.at, staple: refused.blocksHash, code: refused.code, why: `${refused.message}: ${refused.why}` } });
+		return({ ...signal, verdict: 'fail', firstDivergence: { at: latest.at, staple: refused.blocksHash, code: refused.code, why: `${refused.message}: ${refused.why}` } });
 	}
-	const [deferred] = latest.deferredInWindow;
-	if (deferred !== undefined) {
-		return({ verdict: 'fail', runs: records.length, latest: summary, firstDivergence: { at: latest.at, staple: deferred, code: 'deferred', why: 'the replay could not apply the staple' } });
+	const [unapplied] = latest.unapplied;
+	if (latest.complete && unapplied !== undefined) {
+		return({ ...signal, verdict: 'fail', firstDivergence: { at: latest.at, staple: unapplied.blocksHash, code: unapplied.why, why: 'the replay never applied the staple, which the follower\'s ledger applied at that place' } });
 	}
-	const [unapplied] = latest.unappliedBeforeWindow;
-	if (unapplied !== undefined) {
-		return({ verdict: 'fail', runs: records.length, latest: summary, firstDivergence: { at: latest.at, staple: unapplied, code: 'LEDGER_INSUFFICIENT_VOTING_WEIGHT', why: 'the replay never applied the staple, which comes before the window' } });
+	if (notComparableReasons.length > 0) {
+		return({ ...signal, verdict: 'not-comparable-yet', firstDivergence: null });
 	}
-	let verdict: Verdict = 'not-comparable-yet';
-	if (latest.windowStaples > 0) {
-		verdict = 'pass';
-	}
-	return({ verdict, runs: records.length, latest: summary, firstDivergence: null });
+	return({ ...signal, verdict: 'pass', firstDivergence: null });
 }
 
 /** Where the sweep stands among the accounts the follower knows. */
@@ -517,7 +570,7 @@ export function parityReportOf(input: ReportInput): ParityReport {
 			checksum: checksumSignalOf(records),
 			sweep: sweepSignalOf(recordsOf(records, 'sweep'), input.sweep),
 			apiDiff: apiDiffSignalOf(recordsOf(records, 'api-diff'), input.knownBehaviors),
-			shadowVotes: shadowVotesSignalOf(recordsOf(records, 'shadow-live'))
+			shadowVotes: shadowVotesSignalOf(recordsOf(records, 'shadow-run'))
 		}
 	});
 }

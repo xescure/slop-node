@@ -197,7 +197,7 @@ export type UnexplainedShadowRefusal = {
 	readonly why: string;
 };
 
-/** Shadow votes on a window of the follower's history, replayed from its first staple into an offline ledger. */
+/** Shadow votes on a window of the follower's history, replayed from its first staple into an offline ledger, as builds before the version-scoped run recorded them. */
 export type ShadowLiveRecord = {
 	readonly kind: 'shadow-live';
 	readonly at: string;
@@ -219,7 +219,121 @@ export type ShadowLiveRecord = {
 	readonly unappliedBeforeWindow: readonly string[];
 };
 
-export type ParityRecord = ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | APIDiffRecord | ShadowLiveRecord;
+/**
+ * Which staples shadow votes decide parity on: those first voted for once
+ * the release the main network's representatives run was published, whose
+ * rules differ from 0.18.7's only by the classified fixes; the earlier ones
+ * were voted under older rules and inform only.
+ */
+export type ShadowWindow = 'scoped' | 'informational';
+
+export const SHADOW_WINDOWS: readonly ShadowWindow[] = ['scoped', 'informational'];
+
+/** How the offline ledger answered a staple put to its vote. */
+export type ShadowVoteOutcome =
+	| { readonly kind: 'voted' }
+	| { readonly kind: 'explained'; readonly reason: ShadowRefusalReason; readonly code: string }
+	| { readonly kind: 'unexplained'; readonly code: string; readonly message: string; readonly why: string };
+
+/** One shadow vote, as the run's journal keeps it. */
+export type ShadowVoteEntry = {
+	/** The staple's place in the order the follower's ledger added its staples, as decimal text. */
+	readonly sequence: string;
+	readonly blocksHash: string;
+	readonly window: ShadowWindow;
+	/** When the staple's earliest vote was made. */
+	readonly votedFrom: string;
+	readonly outcome: ShadowVoteOutcome;
+};
+
+/** The most refusals no classified difference explains that a window lists; the rest are counted. */
+export const UNEXPLAINED_LISTED = 20;
+
+/** What the replay found in one window. */
+export type ShadowWindowTally = {
+	/** Staples of the window the replay added. */
+	readonly replayed: number;
+	/** Of them, the staples put to a shadow vote first. */
+	readonly shadowVoted: number;
+	readonly voted: number;
+	/** Refusals, by the classified difference that explains them. */
+	readonly explained: Readonly<Partial<Record<ShadowRefusalReason, number>>>;
+	readonly unexplained: number;
+	/** The first of them, at most UNEXPLAINED_LISTED. */
+	readonly firstUnexplained: readonly UnexplainedShadowRefusal[];
+	/** When the earliest vote of the window's earliest and latest staples replayed was made. */
+	readonly votedFrom: string | null;
+	readonly votedTo: string | null;
+};
+
+/** What the offline ledger started from. */
+export type ShadowBase = {
+	/** The snapshot of the follower's database it is a copy of, or null for an empty ledger. */
+	readonly database: string | null;
+	/** The follower's place of the snapshot's newest staple, "0" for an empty ledger, and that staple's hash. */
+	readonly sequence: string;
+	readonly blocksHash: string | null;
+	/** Staples of the snapshot within the scoped window, which the run cannot put to a vote. */
+	readonly scopedStaples: number;
+};
+
+/** How far the run goes. */
+export type ShadowTarget = {
+	/** The follower's place of its newest staple when the run was started. */
+	readonly sequence: string;
+	readonly fixedAt: string;
+	/** Whether the follower had then completed a pass and added everything it staged, so that it held every staple voted for before its reach. */
+	readonly followerCaughtUp: boolean;
+	readonly heldBefore: string | null;
+};
+
+/** A staple the replay added that the offline ledger has not applied: one refused for want of voting weight, or one deferred until the block it builds on comes. */
+export type UnappliedStaple = {
+	readonly sequence: string;
+	readonly blocksHash: string;
+	readonly why: 'voting-weight' | 'deferred';
+};
+
+/**
+ * Where a resumable shadow-vote run stands: what it replayed of the
+ * follower's ledger, in the order that ledger added its staples, and what
+ * the votes found, by window.
+ */
+export type ShadowRunState = {
+	/** The release the scoped window begins with, and when it was published. */
+	readonly scope: { readonly release: string; readonly from: string };
+	/** One in so many staples of the informational window is put to a vote. */
+	readonly informationalEvery: number;
+	readonly base: ShadowBase;
+	readonly target: ShadowTarget;
+	/** The last staple replayed, by its place and hash; the base's at first. */
+	readonly reached: { readonly sequence: string; readonly blocksHash: string | null };
+	readonly scoped: ShadowWindowTally;
+	readonly informational: ShadowWindowTally;
+	/** Staples refused at first for want of voting weight, and tried again as more were added. */
+	readonly refusedForWeight: number;
+	readonly unapplied: readonly UnappliedStaple[];
+};
+
+/** What one invocation of a run cost. */
+export type ShadowRunCost = {
+	readonly seconds: number;
+	readonly staples: number;
+	readonly shadowVotes: number;
+	/** The process's peak resident memory. */
+	readonly maxResidentMiB: number;
+};
+
+/** A resumable run's standing after one of its invocations. */
+export type ShadowRunRecord = ShadowRunState & {
+	readonly kind: 'shadow-run';
+	readonly at: string;
+	/** Whether the run replayed up to its target. */
+	readonly complete: boolean;
+	readonly cost: ShadowRunCost;
+};
+
+export type ParityRecord = ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | APIDiffRecord | ShadowLiveRecord | ShadowRunRecord;
 
 /** The records a log holds, and how many of its lines were not records, as the end of a line cut short by a crash. */
 export type ParityLogContents = {
@@ -604,6 +718,168 @@ function shadowLiveRecordOf(value: Fields): ShadowLiveRecord | undefined {
 	return({ kind: 'shadow-live', at, replayed, windowStaples, windowFrom, windowTo, voted, explained, unexplained, deferredInWindow, refusedForWeight, unappliedBeforeWindow });
 }
 
+function reasonCountsOf(value: unknown): Partial<Record<ShadowRefusalReason, number>> | undefined {
+	if (!isFields(value)) {
+		return(undefined);
+	}
+	const counts: Partial<Record<ShadowRefusalReason, number>> = {};
+	for (const [name, count] of Object.entries(value)) {
+		const reason = SHADOW_REFUSAL_REASONS.find(function(known): boolean {
+			return(known === name);
+		});
+		if (reason === undefined || !isCount(count)) {
+			return(undefined);
+		}
+		counts[reason] = count;
+	}
+	return(counts);
+}
+
+function shadowWindowTallyOf(value: unknown): ShadowWindowTally | undefined {
+	if (!isFields(value)) {
+		return(undefined);
+	}
+	const { replayed, shadowVoted, voted, unexplained, votedFrom, votedTo } = value;
+	const explained = reasonCountsOf(value['explained']);
+	const firstUnexplained = listOf(value['firstUnexplained'], unexplainedShadowRefusalOf);
+	if (!isCount(replayed) || !isCount(shadowVoted) || !isCount(voted) || !isCount(unexplained) || !isStringOrNull(votedFrom) || !isStringOrNull(votedTo) || explained === undefined || firstUnexplained === undefined) {
+		return(undefined);
+	}
+	return({ replayed, shadowVoted, voted, explained, unexplained, firstUnexplained, votedFrom, votedTo });
+}
+
+function shadowWindowOf(value: unknown): ShadowWindow | undefined {
+	return(SHADOW_WINDOWS.find(function(known): boolean {
+		return(known === value);
+	}));
+}
+
+function shadowVoteOutcomeOf(value: unknown): ShadowVoteOutcome | undefined {
+	if (!isFields(value)) {
+		return(undefined);
+	}
+	switch (value['kind']) {
+		case 'voted':
+			return({ kind: 'voted' });
+		case 'explained': {
+			const reason = SHADOW_REFUSAL_REASONS.find(function(known): boolean {
+				return(known === value['reason']);
+			});
+			if (reason === undefined || !isString(value['code'])) {
+				return(undefined);
+			}
+			return({ kind: 'explained', reason, code: value['code'] });
+		}
+		case 'unexplained': {
+			const { code, message, why } = value;
+			if (!isString(code) || !isString(message) || !isString(why)) {
+				return(undefined);
+			}
+			return({ kind: 'unexplained', code, message, why });
+		}
+		default:
+			return(undefined);
+	}
+}
+
+/** The shadow vote a journal line holds, or nothing when it holds none this version writes. */
+export function shadowVoteEntryOf(value: unknown): ShadowVoteEntry | undefined {
+	if (!isFields(value)) {
+		return(undefined);
+	}
+	const { sequence, blocksHash, votedFrom } = value;
+	const window = shadowWindowOf(value['window']);
+	const outcome = shadowVoteOutcomeOf(value['outcome']);
+	if (!isString(sequence) || !isString(blocksHash) || !isString(votedFrom) || window === undefined || outcome === undefined) {
+		return(undefined);
+	}
+	return({ sequence, blocksHash, window, votedFrom, outcome });
+}
+
+function shadowBaseOf(value: unknown): ShadowBase | undefined {
+	if (!isFields(value)) {
+		return(undefined);
+	}
+	const { database, sequence, blocksHash, scopedStaples } = value;
+	if (!isStringOrNull(database) || !isString(sequence) || !isStringOrNull(blocksHash) || !isCount(scopedStaples)) {
+		return(undefined);
+	}
+	return({ database, sequence, blocksHash, scopedStaples });
+}
+
+function shadowTargetOf(value: unknown): ShadowTarget | undefined {
+	if (!isFields(value)) {
+		return(undefined);
+	}
+	const { sequence, fixedAt, followerCaughtUp, heldBefore } = value;
+	if (!isString(sequence) || !isString(fixedAt) || typeof followerCaughtUp !== 'boolean' || !isStringOrNull(heldBefore)) {
+		return(undefined);
+	}
+	return({ sequence, fixedAt, followerCaughtUp, heldBefore });
+}
+
+function unappliedStapleOf(value: unknown): UnappliedStaple | undefined {
+	if (!isFields(value)) {
+		return(undefined);
+	}
+	const { sequence, blocksHash, why } = value;
+	if (!isString(sequence) || !isString(blocksHash) || (why !== 'voting-weight' && why !== 'deferred')) {
+		return(undefined);
+	}
+	return({ sequence, blocksHash, why });
+}
+
+/** The state a run's cursor or record holds, or nothing when it holds none this version writes. */
+export function shadowRunStateOf(value: unknown): ShadowRunState | undefined {
+	if (!isFields(value)) {
+		return(undefined);
+	}
+	const { scope, informationalEvery, reached, refusedForWeight } = value;
+	const base = shadowBaseOf(value['base']);
+	const target = shadowTargetOf(value['target']);
+	const scoped = shadowWindowTallyOf(value['scoped']);
+	const informational = shadowWindowTallyOf(value['informational']);
+	const unapplied = listOf(value['unapplied'], unappliedStapleOf);
+	if (!isFields(scope) || !isString(scope['release']) || !isString(scope['from']) || !isFields(reached) || !isString(reached['sequence']) || !isStringOrNull(reached['blocksHash'])) {
+		return(undefined);
+	}
+	if (!isCount(informationalEvery) || informationalEvery === 0 || !isCount(refusedForWeight) || base === undefined || target === undefined || scoped === undefined || informational === undefined || unapplied === undefined) {
+		return(undefined);
+	}
+	return({
+		scope: { release: scope['release'], from: scope['from'] },
+		informationalEvery,
+		base,
+		target,
+		reached: { sequence: reached['sequence'], blocksHash: reached['blocksHash'] },
+		scoped,
+		informational,
+		refusedForWeight,
+		unapplied
+	});
+}
+
+function shadowRunCostOf(value: unknown): ShadowRunCost | undefined {
+	if (!isFields(value)) {
+		return(undefined);
+	}
+	const { seconds, staples, shadowVotes, maxResidentMiB } = value;
+	if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0 || !isCount(staples) || !isCount(shadowVotes) || !isCount(maxResidentMiB)) {
+		return(undefined);
+	}
+	return({ seconds, staples, shadowVotes, maxResidentMiB });
+}
+
+function shadowRunRecordOf(value: Fields): ShadowRunRecord | undefined {
+	const state = shadowRunStateOf(value);
+	const cost = shadowRunCostOf(value['cost']);
+	const { at, complete } = value;
+	if (state === undefined || cost === undefined || !isString(at) || typeof complete !== 'boolean') {
+		return(undefined);
+	}
+	return({ kind: 'shadow-run', at, ...state, complete, cost });
+}
+
 function sweepRecordOf(value: Fields): SweepRecord | undefined {
 	const { at, representative, account, lap } = value;
 	const outcome = sweepOutcomeOf(value['outcome']);
@@ -637,6 +913,8 @@ export function parityRecordOf(line: string): ParityRecord | undefined {
 			return(apiDiffRecordOf(value));
 		case 'shadow-live':
 			return(shadowLiveRecordOf(value));
+		case 'shadow-run':
+			return(shadowRunRecordOf(value));
 		default:
 			return(undefined);
 	}

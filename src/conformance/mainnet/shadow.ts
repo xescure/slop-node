@@ -80,7 +80,8 @@ export function refusalOf(error: unknown): LedgerRefusal {
 	throw(new Error('the shadow vote failed without a decision', { cause: error }));
 }
 
-async function shadowVote(staple: VoteStaple, ledger: Ledger): Promise<ShadowVote> {
+/** The ledger's vote on the staple's blocks, which must run with the clock at the staple's moment. */
+export async function shadowVote(staple: VoteStaple, ledger: Ledger): Promise<ShadowVote> {
 	if (Date.now() !== staple.timestamp().valueOf()) {
 		throw(new Error(`a shadow vote on ${staple.blocksHash.toString()} runs with the clock away from the staple's timestamp`));
 	}

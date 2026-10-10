@@ -6,7 +6,7 @@ import { startFakeAPI } from '../testing/fake-api.js';
 import { httpSource } from './api-source.js';
 import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-store.js';
 import { ParityLog } from './log.js';
-import type { APIDiffOutcome, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, ShadowLiveRecord, SweepOutcome, SweepRecord } from './log.js';
+import type { APIDiffOutcome, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, ShadowRunRecord, ShadowWindowTally, SweepOutcome, SweepRecord } from './log.js';
 import { parityReportOf, runParity } from './report.js';
 import type { Stratum } from './strata.js';
 
@@ -52,6 +52,30 @@ function apiDiff(at: string, stratum: Stratum, path: string, outcome: APIDiffOut
 	return({ kind: 'api-diff', at, representative: REPRESENTATIVE, stratum, route: '/api/node/ledger/account/{account}', path, behaviors, outcome });
 }
 
+const TALLY_EMPTY: ShadowWindowTally = { replayed: 0, shadowVoted: 0, voted: 0, explained: {}, unexplained: 0, firstUnexplained: [], votedFrom: null, votedTo: null };
+
+const TALLY_SCOPED: ShadowWindowTally = { replayed: 30_000, shadowVoted: 30_000, voted: 29_990, explained: { 'self-requirement-return': 10 }, unexplained: 0, firstUnexplained: [], votedFrom: '2026-07-24T20:40:00.000Z', votedTo: '2026-10-10T09:00:00.000Z' };
+
+/** A complete run from a snapshot taken before the scoped window, up to a target fixed with the follower caught up. */
+function shadowRun(at: string, changes: Partial<ShadowRunRecord>): ShadowRunRecord {
+	return({
+		kind: 'shadow-run',
+		at,
+		scope: { release: '0.18.4', from: '2026-07-24T20:33:26.082Z' },
+		informationalEvery: 10,
+		base: { database: 'follower_snapshot_20261010080000', sequence: '220000', blocksHash: STAPLE, scopedStaples: 0 },
+		target: { sequence: '420000', fixedAt: '2026-10-10T10:00:00.000Z', followerCaughtUp: true, heldBefore: '2026-10-10T09:59:00.000Z' },
+		reached: { sequence: '420000', blocksHash: STAPLE },
+		scoped: TALLY_SCOPED,
+		informational: { replayed: 170_000, shadowVoted: 17_000, voted: 16_000, explained: { 'send-recipient-access': 990 }, unexplained: 10, firstUnexplained: [], votedFrom: '2026-05-20T00:00:00.000Z', votedTo: '2026-07-24T20:30:00.000Z' },
+		refusedForWeight: 0,
+		unapplied: [],
+		complete: true,
+		cost: { seconds: 3600, staples: 200_000, shadowVotes: 47_000, maxResidentMiB: 900 },
+		...changes
+	});
+}
+
 function report(records: readonly ParityRecord[]) {
 	return(parityReportOf({ generatedAt: new Date('2026-10-09T08:00:00.000Z'), progress: PROGRESS, sweep: { knownAccounts: 10, cursor: { lap: 1, afterRowID: '7' }, walkedThisLap: 4 }, log: { records, unreadableLines: 0 }, knownBehaviors: new Set([KNOWN_BEHAVIOR]) }));
 }
@@ -66,7 +90,7 @@ describe('the parity report', function() {
 				checksum: { verdict: 'not-comparable-yet', firstDivergence: null },
 				sweep: { verdict: 'not-comparable-yet', firstDivergence: null, confidence: { kind: 'none' } },
 				apiDiff: { verdict: 'not-comparable-yet', firstDivergence: null, newBehaviors: [] },
-				shadowVotes: { verdict: 'not-comparable-yet', runs: 0, latest: null, firstDivergence: null }
+				shadowVotes: { verdict: 'not-comparable-yet', runs: 0, notComparableReasons: ['no-run'], latest: null, firstDivergence: null }
 			}
 		});
 	});
@@ -154,22 +178,52 @@ describe('the parity report', function() {
 		expect(signal).toMatchObject({ verdict: 'fail', firstDivergence: { at: '2026-10-09T01:00:01.000Z', representative: REPRESENTATIVE, stratum: 'token', path, field: 'body.info' } });
 	});
 
-	test('gives shadow votes the verdict of the latest run, failing on a refusal no classified difference explains', function() {
-		const run = function(at: string, unexplained: ShadowLiveRecord['unexplained'], deferredInWindow: readonly string[] = []): ShadowLiveRecord {
-			return({ kind: 'shadow-live', at, replayed: 50, windowStaples: 10, windowFrom: at, windowTo: at, voted: 8 - unexplained.length, explained: [{ blocksHash: STAPLE, reason: 'self-requirement-return', code: 'LEDGER_INVALID_PERMISSIONS' }, { blocksHash: STAPLE, reason: 'self-requirement-return', code: 'LEDGER_INVALID_PERMISSIONS' }], unexplained, deferredInWindow, refusedForWeight: 1, unappliedBeforeWindow: [] });
-		};
-		const refusal = { blocksHash: STAPLE, code: 'LEDGER_PREVIOUS_NOT_SEEN', message: 'no previous', why: 'only a permission refusal is explained' };
-		const failed = run('2026-10-09T01:00:00.000Z', [refusal]);
-		const passed = run('2026-10-09T02:00:00.000Z', []);
-		expect(report([failed, passed]).signals.shadowVotes).toEqual({
+	test('passes shadow votes only once the latest run voted on the whole scoped window, up to a target fixed with the follower caught up', function() {
+		const passed = shadowRun('2026-10-10T12:00:00.000Z', {});
+		expect(report([shadowRun('2026-10-10T11:00:00.000Z', { complete: false }), passed]).signals.shadowVotes).toEqual({
 			verdict: 'pass',
 			runs: 2,
-			latest: { at: passed.at, replayed: 50, windowStaples: 10, windowFrom: passed.at, windowTo: passed.at, voted: 8, explained: { 'self-requirement-return': 2 }, unexplained: 0, deferredInWindow: 0, refusedForWeight: 1, unappliedBeforeWindow: 0 },
+			notComparableReasons: [],
+			latest: {
+				at: passed.at,
+				scope: passed.scope,
+				base: passed.base,
+				target: passed.target,
+				reached: '420000',
+				complete: true,
+				scoped: { replayed: 30_000, shadowVoted: 30_000, voted: 29_990, explained: { 'self-requirement-return': { refusals: 10, changedIn: '0.18.5' } }, unexplained: 0, votedFrom: '2026-07-24T20:40:00.000Z', votedTo: '2026-10-10T09:00:00.000Z' },
+				informational: { replayed: 170_000, shadowVoted: 17_000, voted: 16_000, explained: { 'send-recipient-access': { refusals: 990, changedIn: '0.18.0' } }, unexplained: 10, votedFrom: '2026-05-20T00:00:00.000Z', votedTo: '2026-07-24T20:30:00.000Z', every: 10 },
+				refusedForWeight: 0,
+				unapplied: 0,
+				cost: passed.cost
+			},
+			confidence: { kind: 'rule-of-three', samples: 30_000, level: 0.95, divergenceRateBelow: 0.0001 },
 			firstDivergence: null
 		});
-		expect(report([passed, failed]).signals.shadowVotes).toMatchObject({ verdict: 'fail', firstDivergence: { at: failed.at, staple: STAPLE, code: 'LEDGER_PREVIOUS_NOT_SEEN' } });
-		expect(report([run('2026-10-09T03:00:00.000Z', [], [STAPLE])]).signals.shadowVotes).toMatchObject({ verdict: 'fail', firstDivergence: { staple: STAPLE, code: 'deferred' } });
-		expect(report([{ ...passed, unappliedBeforeWindow: [STAPLE] }]).signals.shadowVotes).toMatchObject({ verdict: 'fail', firstDivergence: { staple: STAPLE, code: 'LEDGER_INSUFFICIENT_VOTING_WEIGHT' } });
+	});
+
+	test('keeps shadow votes not comparable, with the reasons, until the run can decide', function() {
+		expect(report([]).signals.shadowVotes).toMatchObject({ verdict: 'not-comparable-yet', notComparableReasons: ['no-run'] });
+		const pending = shadowRun('2026-10-10T05:00:00.000Z', { complete: false, target: { sequence: '90000', fixedAt: '2026-10-10T05:00:00.000Z', followerCaughtUp: false, heldBefore: null } });
+		expect(report([pending]).signals.shadowVotes).toMatchObject({ verdict: 'not-comparable-yet', notComparableReasons: ['run-incomplete', 'follower-not-caught-up'] });
+		const late = shadowRun('2026-10-10T12:00:00.000Z', { base: { database: 'follower_snapshot_20261010090000', sequence: '400000', blocksHash: STAPLE, scopedStaples: 12 }, scoped: TALLY_EMPTY });
+		expect(report([late]).signals.shadowVotes).toMatchObject({ verdict: 'not-comparable-yet', notComparableReasons: ['base-within-window', 'window-empty'] });
+	});
+
+	test('fails shadow votes on a refusal in the scoped window no classified difference explains, while the run is under way', function() {
+		const refusal = { blocksHash: STAPLE, code: 'LEDGER_INVALID_PERMISSIONS', message: 'no access', why: '0 reasons explain the refusal' };
+		const failed = shadowRun('2026-10-10T07:00:00.000Z', { complete: false, scoped: { ...TALLY_SCOPED, voted: 29_989, unexplained: 1, firstUnexplained: [refusal] } });
+		expect(report([failed]).signals.shadowVotes).toMatchObject({
+			verdict: 'fail',
+			confidence: { kind: 'observed', samples: 30_000, divergences: 1 },
+			firstDivergence: { at: failed.at, staple: STAPLE, code: 'LEDGER_INVALID_PERMISSIONS', why: 'no access: 0 reasons explain the refusal' }
+		});
+	});
+
+	test('fails shadow votes on a staple the complete run never applied', function() {
+		const unapplied = shadowRun('2026-10-10T12:00:00.000Z', { unapplied: [{ sequence: '410000', blocksHash: STAPLE, why: 'deferred' }] });
+		expect(report([unapplied]).signals.shadowVotes).toMatchObject({ verdict: 'fail', firstDivergence: { staple: STAPLE, code: 'deferred' } });
+		expect(report([{ ...unapplied, complete: false }]).signals.shadowVotes).toMatchObject({ verdict: 'not-comparable-yet', notComparableReasons: ['run-incomplete'] });
 	});
 
 	test('passes the sweep with the rule of three over the accounts compared when none diverges', function() {
@@ -251,8 +305,10 @@ describe('a parity run', function() {
 			historyHolds: () => Promise.resolve(false),
 			checksumSnapshot: () => Promise.resolve({ stored: 0n, folded: 0n, mainBlocks: 0, mismatched: [] }),
 			quietAccounts: () => Promise.resolve([]),
-			stapleCountBefore: () => Promise.resolve(0),
-			staplesBefore: () => Promise.resolve([]),
+			lastSequence: () => Promise.resolve(0n),
+			stapleAt: () => Promise.resolve(undefined),
+			staplesAfter: () => Promise.resolve([]),
+			staplesOf: () => Promise.resolve([]),
 			heldBlocks: () => Promise.resolve([]),
 			heldBlocksOfStaples: () => Promise.resolve([]),
 			newestStaples: () => Promise.resolve(new Map()),

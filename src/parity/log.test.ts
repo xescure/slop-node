@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import { ParityLog, parityLogPath } from './log.js';
-import type { BlockCountRecord, ChecksumRecord, CrossCheckRecord, ParityRecord, SweepRecord } from './log.js';
+import type { BlockCountRecord, ChecksumRecord, CrossCheckRecord, ParityRecord, ShadowRunRecord, SweepRecord } from './log.js';
 
 const REPRESENTATIVE = 'https://rep1.example/api';
 const ACCOUNT = 'keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai';
@@ -56,6 +56,31 @@ const BLOCK_COUNT: BlockCountRecord = {
 	verdict: { kind: 'not-comparable-yet', reasons: ['stage-not-empty'] }
 };
 
+const SHADOW_RUN: ShadowRunRecord = {
+	kind: 'shadow-run',
+	at: CHECKSUM.at,
+	scope: { release: '0.18.4', from: '2026-07-24T20:33:26.082Z' },
+	informationalEvery: 10,
+	base: { database: null, sequence: '0', blocksHash: null, scopedStaples: 0 },
+	target: { sequence: '90000', fixedAt: CHECKSUM.at, followerCaughtUp: false, heldBefore: null },
+	reached: { sequence: '4500', blocksHash: 'AB'.repeat(32) },
+	scoped: { replayed: 0, shadowVoted: 0, voted: 0, explained: {}, unexplained: 0, firstUnexplained: [], votedFrom: null, votedTo: null },
+	informational: {
+		replayed: 4500,
+		shadowVoted: 450,
+		voted: 440,
+		explained: { 'self-requirement-return': 9, 'trusted-account-genesis': 1 },
+		unexplained: 0,
+		firstUnexplained: [{ blocksHash: 'CD'.repeat(32), code: 'LEDGER_INVALID_PERMISSIONS', message: 'no access', why: '0 reasons explain the refusal' }],
+		votedFrom: '2025-09-23T00:00:00.000Z',
+		votedTo: '2025-10-01T00:00:00.000Z'
+	},
+	refusedForWeight: 2,
+	unapplied: [{ sequence: '4499', blocksHash: 'EF'.repeat(32), why: 'voting-weight' }],
+	complete: false,
+	cost: { seconds: 61.5, staples: 4500, shadowVotes: 450, maxResidentMiB: 812 }
+};
+
 const directories: string[] = [];
 
 async function scratchLog(): Promise<ParityLog> {
@@ -77,7 +102,7 @@ describe('the parity log', function() {
 
 	test('reads back every kind of record it was given, in order', async function() {
 		const log = await scratchLog();
-		const records: readonly ParityRecord[] = [CHECKSUM, ...SWEEPS, FAILED_CHECKSUM, ...CROSS_CHECKS, BLOCK_COUNT];
+		const records: readonly ParityRecord[] = [CHECKSUM, ...SWEEPS, FAILED_CHECKSUM, ...CROSS_CHECKS, BLOCK_COUNT, SHADOW_RUN];
 		await log.append(records.slice(0, 2));
 		await log.append(records.slice(2));
 

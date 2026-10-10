@@ -154,15 +154,6 @@ describe('the follower\'s store, read from its database', function() {
 		expect(await store.progress()).toEqual({ completedPass: undefined, heldBefore: new Date(4000), staged: 0 });
 	});
 
-	test('counts the staples staged and not added yet', async function() {
-		const database = await followerDatabase({ caughtUp: 7000 });
-		const pool = database.pool();
-		const moment = new Date('2026-07-01T00:00:00.000Z');
-		await pool.query('INSERT INTO bootstrap_stage (blocks_hash, first_vote_from, last_vote_from, bytes) VALUES ($1, $2, $2, $3), ($4, $2, $2, $3)', [Buffer.from(STAPLE, 'hex'), moment, Buffer.from([1]), Buffer.from(OTHER_STAPLE, 'hex')]);
-		await database.endPools();
-		expect(await storeOf(database).progress()).toMatchObject({ completedPass: new Date(7000), staged: 2 });
-	});
-
 	test('opens sessions that cannot write to the follower\'s database', async function() {
 		const database = await followerDatabase({});
 		const pool = readOnlyPool(database.connectionString);
@@ -270,7 +261,7 @@ describe('the follower\'s store, read from its database', function() {
 		expect(await store.newestStaples([first, second, third])).toEqual(new Map([[first, quietTime], [second, recentTime]]));
 	});
 
-	test('reads the staples before a moment in history order, rebuilding one stored without its bytes', async function() {
+	test('reads the staples in the order the ledger added them, rebuilding one stored without its bytes', async function() {
 		const database = await followerDatabase({});
 		const pool = database.pool();
 		const signer = lib.Account.fromSeed('5e'.repeat(32), 0);
@@ -300,25 +291,40 @@ describe('the follower\'s store, read from its database', function() {
 		}
 		await database.endPools();
 		const store = storeOf(database);
-		const before = new Date(Date.UTC(2025, 10, 3));
-
-		// The staples the database starts with are later, in December.
-		expect(await store.stapleCountBefore(before)).toBe(2);
-		const read = await store.staplesBefore(before, undefined, 10);
 		const hexOf = function(staple: VoteStaple | undefined): string {
 			return(Buffer.from(staple?.toBytes() ?? new ArrayBuffer(0)).toString('hex'));
 		};
-		expect(read.map(function(entry) {
-			return([entry.staple.blocksHash.toString(), entry.stapleTime.getTime()]);
-		})).toEqual(made.slice(0, 2).map(function(staple) {
-			return([staple.blocksHash.toString(), staple.timestamp().getTime()]);
+		const placed = function(staples: readonly { readonly staple: VoteStaple; readonly stapleTime: Date; readonly sequence: bigint }[]) {
+			return(staples.map(function(entry) {
+				return([entry.staple.blocksHash.toString(), entry.stapleTime.getTime(), entry.sequence]);
+			}));
+		};
+
+		// The two staples the database starts with were added first.
+		expect(await store.lastSequence()).toBe(5n);
+		expect(await store.stapleAt(1n)).toBe(STAPLE);
+		expect(await store.stapleAt(4n)).toBe(made[1]?.blocksHash.toString());
+		expect(await store.stapleAt(6n)).toBeUndefined();
+		const read = await store.staplesAfter(2n, 5n, 2);
+		expect(placed(read)).toEqual(made.slice(0, 2).map(function(staple, index) {
+			return([staple.blocksHash.toString(), staple.timestamp().getTime(), BigInt(index + 3)]);
 		}));
 		expect(hexOf(read[1]?.staple)).toBe(hexOf(made[1]));
-		const [first] = read;
-		expect(first).toBeDefined();
-		const rest = await store.staplesBefore(before, { stapleTime: first?.stapleTime ?? before, blocksHash: first?.staple.blocksHash.toString() ?? '' }, 10);
-		expect(rest.map(function(entry) {
-			return(entry.staple.blocksHash.toString());
+		expect(placed(await store.staplesAfter(3n, 4n, 10)).map(function([hash]) {
+			return(hash);
 		})).toEqual([made[1]?.blocksHash.toString()]);
+		expect(placed(await store.staplesOf([made[2]?.blocksHash.toString() ?? '', made[1]?.blocksHash.toString() ?? '']))).toEqual([4, 5].map(function(sequence) {
+			const staple = made[sequence - 3];
+			return([staple?.blocksHash.toString(), staple?.timestamp().getTime(), BigInt(sequence)]);
+		}));
+	});
+
+	test('counts the staples staged and not added yet', async function() {
+		const database = await followerDatabase({ caughtUp: 7000 });
+		const pool = database.pool();
+		const moment = new Date('2026-07-01T00:00:00.000Z');
+		await pool.query('INSERT INTO bootstrap_stage (blocks_hash, first_vote_from, last_vote_from, bytes) VALUES ($1, $2, $2, $3), ($4, $2, $2, $3)', [Buffer.from(STAPLE, 'hex'), moment, Buffer.from([1]), Buffer.from(OTHER_STAPLE, 'hex')]);
+		await database.endPools();
+		expect(await storeOf(database).progress()).toMatchObject({ completedPass: new Date(7000), staged: 2 });
 	});
 });

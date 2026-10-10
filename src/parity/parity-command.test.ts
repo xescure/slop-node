@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
-import { lockParity, PARITY_LOCK_FILE, parseParityCommand } from './parity-command.js';
+import { lockParity, PARITY_LOCK_FILE, parseParityCommand, SHADOW_LOCK_FILE } from './parity-command.js';
 
 const HOME = '/home/slop';
 const DIRECTORY = '/home/slop/.local/share/slop-node-follower';
@@ -11,9 +11,10 @@ describe('the parity command line', function() {
 	test('names each command with its defaults', function() {
 		expect(parseParityCommand(['checksum'], HOME)).toEqual({ kind: 'checksum', directory: DIRECTORY, gapMilliseconds: 10_000 });
 		expect(parseParityCommand(['sweep'], HOME)).toEqual({ kind: 'sweep', directory: DIRECTORY, accounts: 100 });
-		expect(parseParityCommand(['shadow'], HOME)).toEqual({ kind: 'shadow', directory: DIRECTORY, windowStaples: 1000, storage: 'postgres' });
-		expect(parseParityCommand(['shadow', '--window', '50', '--storage', 'memory'], HOME)).toEqual({ kind: 'shadow', directory: DIRECTORY, windowStaples: 50, storage: 'memory' });
-		expect(parseParityCommand(['shadow', '--storage', 'disk'], HOME)).toBeUndefined();
+		expect(parseParityCommand(['shadow'], HOME)).toEqual({ kind: 'shadow', directory: DIRECTORY, base: undefined, informationalEvery: 10, batchStaples: 500, restart: false });
+		expect(parseParityCommand(['shadow', '--base', 'follower_snapshot_20261010061500', '--informational-every', '1', '--batch', '50', '--restart'], HOME)).toEqual({ kind: 'shadow', directory: DIRECTORY, base: 'follower_snapshot_20261010061500', informationalEvery: 1, batchStaples: 50, restart: true });
+		expect(parseParityCommand(['shadow', '--base', 'follower; DROP DATABASE follower'], HOME)).toBeUndefined();
+		expect(parseParityCommand(['shadow', '--informational-every', '0'], HOME)).toBeUndefined();
 		expect(parseParityCommand(['api-diff'], HOME)).toEqual({ kind: 'api-diff', directory: DIRECTORY, samplesPerStratum: 50, seed: undefined });
 		expect(parseParityCommand(['report'], HOME)).toEqual({ kind: 'report', directory: DIRECTORY, sampleAccounts: 16, apiSamples: 2, gapMilliseconds: 10_000 });
 	});
@@ -57,6 +58,15 @@ describe('the parity lock', function() {
 		await release();
 		const again = await lockParity(directory);
 		await again();
+	});
+
+	test('of a shadow-vote run is apart from the parity tools\'', async function() {
+		const directory = await scratch();
+		const release = await lockParity(directory);
+		const shadow = await lockParity(directory, process.pid, SHADOW_LOCK_FILE);
+		await expect(lockParity(directory, process.pid, SHADOW_LOCK_FILE)).rejects.toThrow('is running');
+		await shadow();
+		await release();
 	});
 
 	test('is taken over from a process that has exited', async function() {
