@@ -574,6 +574,45 @@ export const voteLifecycleCases: readonly SuiteCase[] = [
 			expect(hashOf(await ledger.getBlock(send.hash, 'both'))).toBe(hashOf(send));
 			expect(await orphanedSideRowsOf(storage)).toBe(0);
 		}
+	},
+	{
+		name: 'a pending vote stored again replaces the stored copy',
+		async run(startNetwork: FixtureFactory): Promise<void> {
+			const { network, storage, ledger, startPeer } = await startNetwork();
+			await ledger.add(network.genesis);
+			const peer = await startPeer(1);
+			const send = await sendFromFirstUser(network, headOf(network.genesis, requireAt(network.users, 0)), 5n);
+			const peerVote = await peer.vote([send]);
+
+			await storePendingVote(storage, peerVote, [send]);
+			await storePendingVote(storage, peerVote, [send]);
+
+			expect(await votesOn(storage, send.hash)).toEqual({ main: null, side: [peerVote.$uid], both: [peerVote.$uid] });
+			expect(await stapleOf(ledger, peerVote.blocksHash, 'side')).toEqual({ blocks: [hashOf(send)], votes: [peerVote.$uid] });
+			expect(await orphanedSideRowsOf(storage)).toBe(0);
+		}
+	},
+	{
+		name: 'under both, a confirmed staple and the votes on a successor are read from main, though our temporary vote on its blocks stays on the side',
+		async run(startNetwork: FixtureFactory): Promise<void> {
+			const { network, ledger, startPeer } = await startNetwork();
+			await ledger.add(network.genesis);
+			const peer = await startPeer(1);
+			const ours = requireAt(network.representatives, 0);
+			const genesisHead = headOf(network.genesis, requireAt(network.users, 0));
+			const send = await sendFromFirstUser(network, genesisHead, 5n);
+			const temporary = [await ledger.vote([send]), await peer.vote([send])];
+			const ourTemporary = requireAt(temporary, 0);
+			const ourPermanent = await ledger.vote([send], temporary);
+			const staple = lib.Vote.Staple.fromVotesAndBlocks([ourPermanent, await peer.vote([send], temporary)], [send]);
+
+			await ledger.add(staple);
+
+			expect(await stapleOf(ledger, staple.blocksHash, 'side')).toEqual({ blocks: [hashOf(send)], votes: [ourTemporary.$uid] });
+			expect(await stapleOf(ledger, staple.blocksHash, 'both')).toEqual({ blocks: [hashOf(send)], votes: identitiesOf(staple.votes) });
+			expect(await successorVotes(ledger, [genesisHead], 'side', ours)).toEqual({ [genesisHead.toString()]: [ourTemporary.$uid] });
+			expect(await successorVotes(ledger, [genesisHead], 'both', ours)).toEqual({ [genesisHead.toString()]: [ourPermanent.$uid] });
+		}
 	}
 ];
 

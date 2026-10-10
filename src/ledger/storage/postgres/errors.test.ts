@@ -2,6 +2,7 @@ import { describe, expect, inject, onTestFinished, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import pg from 'pg';
 import { createDatabase } from '../../../testing/postgres.js';
+import { serverError } from '../../../testing/query-faults.js';
 import { PostgresLedgerStorage } from './driver.js';
 import { CONFLICT_MESSAGE, isTransientCheckoutError, mapDatabaseError, POOL_CHECKOUT_TIMEOUT_MESSAGE } from './errors.js';
 import type { FailedStatement } from './errors.js';
@@ -68,7 +69,7 @@ const expectRetryable = function(error: unknown, statement: FailedStatement = BE
 	expect(mapped.error).toMatchObject({ type: 'LEDGER', code: 'LEDGER_TRANSACTION_ABORTED', shouldRetry: true });
 	expect(mapped.error).toHaveProperty('cause', error);
 	// Ledger.run rethrows the last conflict once its retries run out, and the API answers it as a refusal.
-	expect(mapped.error).toHaveProperty('message', CONFLICT_MESSAGE);
+	expect(mapped.error).toHaveProperty('message', 'The transaction was aborted before it committed');
 	if (error instanceof Error) {
 		expect(CONFLICT_MESSAGE).not.toContain(error.message);
 	}
@@ -172,6 +173,10 @@ describe('mapDatabaseError', function() {
 		// Interning skips existing rows, and under SERIALIZABLE a row it cannot see yet fails with 40001 instead.
 		expectUnchanged(failures['accounts_public_key_key']);
 		expectUnchanged(failures['balances_pkey']);
+		// Only a unique violation is a race: another error that names a raced constraint is not.
+		const foreignKey = serverError('23503', 'insert or update violates foreign key constraint');
+		foreignKey.constraint = 'blocks_pkey';
+		expectUnchanged(foreignKey);
 		const unused = new PostgresLedgerStorage({ kind: 'connection-string', connectionString: 'postgresql://unused' });
 		expect(await unused.evaluateError(failures['balances_pkey'])).toMatchObject({ code: 'LEDGER_OTHER', shouldRetry: false });
 	});
@@ -218,6 +223,10 @@ describe('mapDatabaseError', function() {
 	test('other errors are returned unchanged', function() {
 		expectUnchanged(new Error('disk on fire'));
 		expectUnchanged('not even an error');
+		// Anything can be thrown.
+		expectUnchanged(undefined);
+		expectUnchanged(new pg.DatabaseError('an error without a SQLSTATE', 0, 'error'));
+		expectUnchanged(new pg.DatabaseError('an error without a SQLSTATE', 0, 'error'), COMMIT);
 	});
 });
 
@@ -236,10 +245,32 @@ describe('isTransientCheckoutError', function() {
 			new Error('Connection terminated due to connection timeout'),
 			withCode(new Error('connect ECONNREFUSED 127.0.0.1:5432'), 'ECONNREFUSED'),
 			withCode(new Error('read ECONNRESET'), 'ECONNRESET'),
+			withCode(new Error('write EPIPE'), 'EPIPE'),
+			withCode(new Error('connect ETIMEDOUT 10.0.0.1:5432'), 'ETIMEDOUT'),
+			withCode(new Error('connect EHOSTUNREACH 10.0.0.1:5432'), 'EHOSTUNREACH'),
+			withCode(new Error('connect ENETUNREACH 10.0.0.1:5432'), 'ENETUNREACH'),
+			withCode(new Error('getaddrinfo EAI_AGAIN db'), 'EAI_AGAIN'),
 			startingUp
 		]) {
 			expect(isTransientCheckoutError(error), error.message).toBe(true);
 		}
+	});
+
+	test('a checkout that waits out the pool\'s connection timeout may pass', async function() {
+		const database = await createDatabase(inject('postgresCluster'));
+		// Long enough to open the one connection, which the second checkout then waits for in vain.
+		const pool = database.pool({ max: 1, connectionTimeoutMillis: 1000 });
+		const held = await pool.connect();
+		onTestFinished(async function() {
+			held.release();
+			await pool.end();
+			await database.drop();
+		});
+
+		const timedOut = await failureOf(pool.connect());
+
+		expect(timedOut).toHaveProperty('message', POOL_CHECKOUT_TIMEOUT_MESSAGE);
+		expect(isTransientCheckoutError(timedOut)).toBe(true);
 	});
 
 	test('a refusal that stays does not, nor does a store that was destroyed', function() {
@@ -247,7 +278,7 @@ describe('isTransientCheckoutError', function() {
 		password.code = '28P01';
 		const missing = new pg.DatabaseError('database "ledger" does not exist', 0, 'error');
 		missing.code = '3D000';
-		for (const error of [password, missing, withCode(new Error('getaddrinfo ENOTFOUND db'), 'ENOTFOUND'), new Error('key-value store is destroyed'), 'not even an error']) {
+		for (const error of [password, missing, new pg.DatabaseError('an error without a SQLSTATE', 0, 'error'), withCode(new Error('getaddrinfo ENOTFOUND db'), 'ENOTFOUND'), new Error('key-value store is destroyed'), 'not even an error']) {
 			expect(isTransientCheckoutError(error), String(error)).toBe(false);
 		}
 	});

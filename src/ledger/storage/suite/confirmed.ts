@@ -18,6 +18,7 @@ import {
 	manageCertificateBlock,
 	modifyPermissionsBlock,
 	multisigSendBlock,
+	operationsBlock,
 	sendBlock,
 	setInfoBlock,
 	setRepresentativeBlock,
@@ -1025,7 +1026,7 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 
 				const duplicate = hooks.persist(transaction, await changeAtKeptHeight(keptStaple));
 				await expect(duplicate).rejects.toMatchObject({ code: 'LEDGER_BLOCK_ALREADY_EXISTS', shouldRetry: false });
-				await expect(duplicate).rejects.toThrow('Block Already Exists');
+				await expect(duplicate).rejects.toThrow(`Block Already Exists: ${kept.hash.toString()}`);
 				await expect(hooks.persist(transaction, await changeAtKeptHeight(forkStaple))).rejects.toMatchObject({ code: 'LEDGER_PREVIOUS_ALREADY_USED', shouldRetry: false, message: `confirmed block ${fork.hash.toString()} conflicts with confirmed history: previous already has the confirmed successor ${kept.hash.toString()}` });
 
 				// A refused change leaves nothing behind in the transaction.
@@ -1157,7 +1158,9 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 				target: entity.publicKeyString.get(),
 				permissions: permissionsOf(['ACCESS'])
 			};
+			expect((await ledger.listACLsByEntity(entity)).map(summarizeACL)).toEqual([expected]);
 			expect((await ledger.listACLsByEntity(entity, { principalType: 'CERTIFICATE' })).map(summarizeACL)).toEqual([expected]);
+			expect(await ledger.listACLsByEntity(entity)).toMatchObject([{ principalType: 'CERTIFICATE', principal: { usingCertificate: true } }]);
 			expect(await ledger.listACLsByEntity(entity, { principalType: 'ACCOUNT' })).toEqual([]);
 			expect((await ledger.listACLsByPrincipal({ usingCertificate: true, certificate: certificate.hash(), certificateAccount: holder })).map(summarizeACL)).toEqual([expected]);
 		});
@@ -1176,12 +1179,29 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(await ledger.getAllBalances(spender)).toEqual([]);
 			// The receiver holds the base token, and not this one.
 			expect(await ledger.getBalance(receiver, notHeld)).toBe(0n);
+			// Nothing has ever named this account.
+			expect(await ledger.getAccountInfo(lib.Account.fromSeed(NEWCOMER_SEED, 3))).toMatchObject({ name: '', description: '', metadata: '' });
 			expect(await readStorage(storage, async function(transaction) {
 				return({
 					everywhere: await storage.listACLsByPrincipal(transaction, receiver),
 					onToken: await storage.listACLsByPrincipal(transaction, receiver, [notHeld])
 				});
 			})).toEqual({ everywhere: [], onToken: [] });
+		});
+
+		test('a balance an account sets of a token its staple names nowhere else moves between the account and the token', async function() {
+			const { network, ledger } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			await ledger.add(network.genesis);
+			const before = { user: await ledger.getBalance(user, network.baseToken), token: await ledger.getBalance(network.baseToken, network.baseToken) };
+			// The account signs for itself, so upstream requires no permission of anyone, and touches no account but the account's own [Keeta TS] index.js:68240-68251, 68590-68599.
+			const set = await operationsBlock({ account: user, previous: headOf(network.genesis, user), network: network.network, operations: [{ type: lib.Block.OperationType.TOKEN_ADMIN_MODIFY_BALANCE, method: lib.Block.AdjustMethod.SET, token: network.baseToken, amount: 1n }] });
+
+			await ledger.add(await confirmedStaple([set], network.representatives));
+
+			expect(await ledger.getBalance(user, network.baseToken)).toBe(1n);
+			// What the account no longer holds, the token now holds of itself.
+			expect(await ledger.getBalance(network.baseToken, network.baseToken)).toBe(before.token + before.user - 1n);
 		});
 
 		test('catch-up reads the default page size when no options are given', async function() {

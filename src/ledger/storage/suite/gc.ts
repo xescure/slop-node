@@ -6,6 +6,7 @@ import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { Vote, VoteBlockHash, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerInternals } from '../../../upstream/internals.js';
 import { confirmedStaple, feeBlock, manageCertificateBlock, modifyPermissionsBlock, sendBlock } from '../../../testing/blocks.js';
+import { advanceClock } from '../../../testing/network.js';
 import type { TestLedgerOptions, TestNetwork } from '../../../testing/network.js';
 import type { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
 import {
@@ -665,6 +666,23 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			const late = await confirmedStaple([await sendFromGenesis(network, 0, 7n), await sendFrom(network, 1, missing.hash, 2n)], network.representatives);
 			expect(await ledger.add(late)).toEqual([]);
 			expect(await deferredWaitingOn(storage, missing.hash)).toEqual(blocksHashesOf([late]));
+
+			expect(await ledger.gc()).toBe(false);
+
+			expect(await deferredWaitingOn(storage, missing.hash)).toEqual([]);
+			expect(log.errorsMentioning(late)).toHaveLength(1);
+		});
+
+		test('gc reads a deferred staple back as of its votes, though the clock has since gone back past them', async function() {
+			const log = new RecordingLog();
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0, log });
+			await ledger.add(network.genesis);
+			await ledger.add(await confirmedStaple([await sendFromGenesis(network, 0, 5n)], network.representatives));
+			const missing = await sendFromGenesis(network, 1, 1n);
+			const late = await confirmedStaple([await sendFromGenesis(network, 0, 7n), await sendFrom(network, 1, missing.hash, 2n)], network.representatives);
+			expect(await ledger.add(late)).toEqual([]);
+			// Further back than the minute by which upstream takes a vote to be from the future [Keeta TS] index.js:80373-80375, 80653.
+			advanceClock(-10 * 60 * 1000);
 
 			expect(await ledger.gc()).toBe(false);
 

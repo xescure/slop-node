@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, inject, onTestFinished, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type pg from 'pg';
+import { confirmedStaple, sendBlock } from '../../../testing/blocks.js';
 import { createTestNetwork, freezeClock } from '../../../testing/network.js';
 import { createDatabase } from '../../../testing/postgres.js';
-import { DEFAULT_WEIGHTS, GENESIS_MOMENT, requireAt } from '../suite/support.js';
+import { DEFAULT_WEIGHTS, GENESIS_MOMENT, headOf, requireAt } from '../suite/support.js';
 import { PostgresLedgerStorage } from './driver.js';
 
 const lib = KeetaNet.lib;
@@ -110,5 +111,35 @@ describe('the Postgres schema', function() {
 		const stapleBytes = Buffer.from(network.genesis.toBytes());
 		expect(stapleBytes.readUInt8(0) & 0x0f).toBe(ZLIB_DEFLATE_METHOD);
 		expect(stapleBytes.readUInt16BE(0) % 31).toBe(0);
+	});
+
+	test('each account records the first staple that involved it', async function() {
+		const database = await createDatabase(inject('postgresCluster'), inject('postgresLedgerTemplate'));
+		onTestFinished(function() {
+			return(database.drop());
+		});
+		const storage = new PostgresLedgerStorage({ kind: 'connection-string', connectionString: database.connectionString });
+		onTestFinished(function() {
+			return(storage.destroy());
+		});
+		freezeClock(GENESIS_MOMENT);
+		const network = await createTestNetwork({ representativeWeights: DEFAULT_WEIGHTS });
+		const ledger = network.createLedger(storage, requireAt(network.representatives, 0));
+		await ledger.add(network.genesis);
+		const sender = requireAt(network.users, 0);
+		const newcomer = lib.Account.fromSeed('5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d', 0);
+		const sent = await confirmedStaple([await sendBlock({ from: sender, previous: headOf(network.genesis, sender), to: newcomer, amount: 1n, token: network.baseToken, network: network.network })], network.representatives);
+		await ledger.add(sent);
+
+		const rows = await database.pool().query<{ public_key: string; first_staple: Buffer | null }>('SELECT public_key, first_staple FROM accounts WHERE public_key = ANY($1::text[])', [[sender, newcomer].map(function(account) {
+			return(account.publicKeyString.get());
+		})]);
+
+		expect(Object.fromEntries(rows.rows.map(function(row): [string, Buffer | null] {
+			return([row.public_key, row.first_staple]);
+		}))).toEqual({
+			[sender.publicKeyString.get()]: network.genesis.blocksHash.getBuffer(),
+			[newcomer.publicKeyString.get()]: sent.blocksHash.getBuffer()
+		});
 	});
 });

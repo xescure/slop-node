@@ -160,7 +160,6 @@ function ignoreOutcome(): void {
 export class PostgresTransaction extends LedgerDriverTransaction {
 	#state: TransactionState;
 	#tail: Promise<void> = Promise.resolve();
-	#depth = 0;
 	// A conflict seen anywhere dooms the attempt, even one a unit rolled back
 	// and its caller handled: what the attempt read may already be stale.
 	#conflict: KeetaNetLedgerError | undefined;
@@ -199,26 +198,24 @@ export class PostgresTransaction extends LedgerDriverTransaction {
 	}
 
 	/**
-	 * Runs a unit inside a savepoint named by its depth: released when the
-	 * unit succeeds, rolled back to and released when it fails, so the
-	 * transaction carries on as it was before the unit. The base never runs
-	 * two units of one transaction at once, so depth names each uniquely.
+	 * Runs a unit inside a savepoint: released when the unit succeeds, rolled
+	 * back to and released when it fails, so the transaction carries on as it
+	 * was before the unit. Every unit's savepoint has one name: Postgres keeps
+	 * a savepoint of a name already in use and rolls back to or releases the
+	 * newest of that name, which is the innermost unit's, since the base never
+	 * runs two units of one transaction at once.
 	 */
 	async isolate<Result>(unit: () => Promise<Result>): Promise<Result> {
-		const savepoint = `unit_${String(this.#depth)}`;
-		await this.execute(`SAVEPOINT ${savepoint}`);
-		this.#depth++;
+		await this.execute('SAVEPOINT unit');
 		let result: Result;
 		try {
 			result = await unit();
 		} catch (error: unknown) {
-			this.#depth--;
-			await this.execute(`ROLLBACK TO SAVEPOINT ${savepoint}`);
-			await this.execute(`RELEASE SAVEPOINT ${savepoint}`);
+			await this.execute('ROLLBACK TO SAVEPOINT unit');
+			await this.execute('RELEASE SAVEPOINT unit');
 			throw(error);
 		}
-		this.#depth--;
-		await this.execute(`RELEASE SAVEPOINT ${savepoint}`);
+		await this.execute('RELEASE SAVEPOINT unit');
 		return(result);
 	}
 
@@ -496,53 +493,29 @@ function resolveAccount<T extends AccountKeyAlgorithm>(account: Account<T> | str
 	return(lib.Account.fromPublicKeyString(account) as Account<T>);
 }
 
-/** Every account a confirmed change names, with its key type, keyed by public key. */
+/**
+ * Every account a confirmed change writes a row for, with its key type, keyed
+ * by public key. Upstream names as touched every account with an effect of
+ * its own, which takes in each block's account and each holder of a balance
+ * it changes [Keeta TS] index.js:68099-68104, 68166-68171, 68718-68724,
+ * 68776-68780, and as possibly new each account a delegation, a creation or a
+ * permission names [Keeta TS] index.js:68290, 68300, 68314, 68342-68354. Only
+ * the votes, the tokens of balances and the representatives whose weight
+ * moves name others; a token a SET leaves holding itself is one of those
+ * tokens [Keeta TS] index.js:67534-67536.
+ */
 function accountsNamedBy(change: ConfirmedStapleChange): Map<string, AccountKeyAlgorithm> {
 	const named = new Map<string, AccountKeyAlgorithm>();
-	function add(account: GenericAccount | string): void {
-		if (typeof account === 'string') {
-			const { key, keyType } = parseAccountKey(account);
-			named.set(key, keyType);
-		} else {
-			named.set(account.publicKeyString.get(), account.keyType);
-		}
-	}
-	for (const block of change.staple.blocks) {
-		add(block.account);
-	}
 	for (const vote of change.staple.votes) {
-		add(vote.issuer);
+		named.set(vote.issuer.publicKeyString.get(), vote.issuer.keyType);
 	}
-	const { balances, supplies, weights, permissions } = change.ledgerEffect;
-	for (const [holder, tokens] of Object.entries(balances)) {
-		add(holder);
-		for (const token of Object.keys(tokens)) {
-			add(token);
-		}
-	}
-	for (const token of Object.keys(supplies)) {
-		add(token);
-	}
-	for (const representative of Object.keys(weights)) {
-		add(representative);
-	}
-	for (const [holder, representative] of change.delegations) {
-		add(holder);
-		add(representative);
-	}
-	for (const update of permissions) {
-		add(principalAccountOf(update));
-		add(update.entity);
-		add(update.target ?? update.entity);
-	}
-	for (const holder of change.infoUpdates.keys()) {
-		add(holder);
-	}
-	for (const { account } of change.certificateUpdates) {
-		add(account);
-	}
-	for (const account of [...change.historyAccounts, ...change.newAccounts]) {
-		add(account);
+	const { balances, weights } = change.ledgerEffect;
+	const tokens = Object.values(balances).flatMap(function(heldTokens) {
+		return(Object.keys(heldTokens));
+	});
+	for (const account of [...tokens, ...Object.keys(weights), ...change.newAccounts]) {
+		const { key, keyType } = parseAccountKey(account);
+		named.set(key, keyType);
 	}
 	return(named);
 }
@@ -1295,16 +1268,16 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 		});
 	}
 
+	bootstrapStage(): BootstrapStage {
+		return(this.#stage);
+	}
+
 	/*
 	 * One statement over the ledger checksum's rows, which each staple's
 	 * transaction folds its checksum into (schema/migrations/0008_ledger_checksum.sql),
 	 * reads one snapshot of the committed main ledger in as many rows whatever
 	 * its size; the moment is the middle of the span it ran in.
 	 */
-	bootstrapStage(): BootstrapStage {
-		return(this.#stage);
-	}
-
 	async ledgerChecksum(): Promise<LedgerChecksum> {
 		const { pool } = await this.#pool.connection();
 		const sent = Date.now();
@@ -1425,15 +1398,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * serialization failure, which the retry resolves.
 	 */
 	async #intern(transaction: PostgresTransaction, accounts: ReadonlyMap<string, AccountKeyAlgorithm>): Promise<AccountIDs> {
-		const publicKeys = Array.from(accounts.keys()).sort();
-		const keyTypes = publicKeys.map(function(publicKey): number {
-			const keyType = accounts.get(publicKey);
-			if (keyType === undefined) {
-				throw(new Error(`internal error: no key type for ${publicKey}`));
-			}
-			return(keyType);
-		});
-		const rows = await transaction.run(internAccounts, [publicKeys, keyTypes]);
+		const rows = await transaction.run(internAccounts, [Array.from(accounts.keys()), Array.from(accounts.values())]);
 		return(new Map(rows.map(function(row): [string, AccountID] {
 			return([row.public_key, row.id]);
 		})));

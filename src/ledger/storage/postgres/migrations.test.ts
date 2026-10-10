@@ -3,12 +3,36 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { describe, expect, inject, onTestFinished, test } from 'vitest';
+import { describe, expect, inject, onTestFinished, test, vi } from 'vitest';
 import type pg from 'pg';
 import { createDatabase } from '../../../testing/postgres.js';
 import type { TestDatabase } from '../../../testing/postgres.js';
+import { interceptQueries, serverError } from '../../../testing/query-faults.js';
 import { MigrationError, SCHEMA_MIGRATIONS, applyMigrations } from './migrations.js';
-import type { MigrationProblem } from './migrations.js';
+import type { MigrationProblem, SchemaVersion } from './migrations.js';
+
+// A case can have the next listing of a directory come in reverse order.
+const listing = vi.hoisted(function(): { reverseNext: boolean } {
+	return({ reverseNext: false });
+});
+
+vi.mock('node:fs/promises', async function(importOriginal) {
+	const actual = await importOriginal<typeof import('node:fs/promises')>();
+	return({
+		...actual,
+		readdir: new Proxy(actual.readdir, {
+			async apply(target, self, input: unknown[]): Promise<unknown> {
+				const entries: unknown = await Reflect.apply(target, self, input);
+				if (!listing.reverseNext || !Array.isArray(entries)) {
+					return(entries);
+				}
+				listing.reverseNext = false;
+				const listed: unknown[] = entries.slice();
+				return(listed.reverse());
+			}
+		})
+	});
+});
 
 const FIRST_START = new Date('2026-10-07T12:00:00.000Z');
 const SECOND_START = new Date('2026-10-08T12:00:00.000Z');
@@ -283,6 +307,64 @@ describe('applyMigrations', function() {
 		expect(await advisoryLockCount(pool)).toBe(0);
 	});
 
+	test('migrations apply in version order, whatever order the directory lists them in', async function() {
+		const database = await freshDatabase();
+		const pool = database.pool();
+		const directory = await migrationDirectory({ ...TWO_MIGRATIONS, '0003_third.sql': THIRD });
+		listing.reverseNext = true;
+
+		expect(await applyMigrations(pool, directory, clockAt(FIRST_START))).toBe(3);
+
+		expect((await versionRows(pool)).map(function(row) {
+			return([row.version, row.sha256]);
+		})).toEqual([[1, sha256(FIRST)], [2, sha256(SECOND)], [3, sha256(THIRD)]]);
+	});
+
+	test('a directory named without its trailing slash is read as the directory', async function() {
+		const database = await freshDatabase();
+		const pool = database.pool();
+		const directory = await migrationDirectory(TWO_MIGRATIONS);
+
+		expect(await applyMigrations(pool, new URL(directory.href.replace(/\/$/, '')), clockAt(FIRST_START))).toBe(2);
+
+		expect(await tableExists(pool, 'second_probe')).toBe(true);
+	});
+
+	test('migrating returns its connection to the pool, without the lock', async function() {
+		const database = await freshDatabase();
+		const pool = database.pool({ max: 1 });
+
+		await applyMigrations(pool, await migrationDirectory(TWO_MIGRATIONS), clockAt(FIRST_START));
+
+		expect([pool.totalCount, pool.idleCount]).toEqual([1, 1]);
+		expect(await advisoryLockCount(pool)).toBe(0);
+	});
+
+	test('a session that cannot unlock is closed, which releases the lock, rather than returned to the pool', async function() {
+		const database = await freshDatabase();
+		const pool = database.pool({ max: 1 });
+		interceptQueries(pool, function(issued, run) {
+			if (issued.text.startsWith('SELECT pg_advisory_unlock')) {
+				return(Promise.reject(serverError('57P01', 'terminating connection due to administrator command')));
+			}
+			return(run());
+		});
+
+		expect(await applyMigrations(pool, await migrationDirectory(TWO_MIGRATIONS), clockAt(FIRST_START))).toBe(2);
+
+		expect(pool.totalCount).toBe(0);
+	});
+
+	test('the newest version a database records is the one judged unknown', async function() {
+		const database = await freshDatabase();
+		const pool = database.pool();
+		await applyMigrations(pool, await migrationDirectory({ ...TWO_MIGRATIONS, '0003_third.sql': THIRD }), clockAt(FIRST_START));
+
+		const older = await migrationDirectory(TWO_MIGRATIONS);
+
+		expect(await refusalOf(applyMigrations(pool, older, clockAt(SECOND_START)))).toEqual({ kind: 'unknown-version', version: 3, newestKnown: 2 });
+	});
+
 	test('a database at an unknown version is refused', async function() {
 		const database = await freshDatabase();
 		const pool = database.pool();
@@ -346,6 +428,8 @@ describe('applyMigrations', function() {
 
 		await expect(attempt).rejects.toThrow(/version 2/);
 		expect(await refusalOf(attempt)).toEqual({ kind: 'failed', version: 2 });
+		// The database's own error, an undefined column, says why.
+		await expect(attempt).rejects.toMatchObject({ cause: { code: '42703' } });
 		expect((await versionRows(pool)).map(function(row) {
 			return(row.version);
 		})).toEqual([1]);
@@ -365,11 +449,11 @@ describe('applyMigrations', function() {
 	test('a file not named as a migration is refused', async function() {
 		const database = await freshDatabase();
 		const pool = database.pool();
-		const notes = await migrationDirectory({ '0001_first.sql': FIRST, 'notes.txt': 'not a migration\n' });
-		const zero = await migrationDirectory({ '0000_zero.sql': FIRST });
+		for (const fileName of ['notes.txt', '0000_zero.sql', 'v0001_first.sql', '0001_first.sql.orig']) {
+			const directory = await migrationDirectory({ [fileName]: FIRST });
 
-		expect(await refusalOf(applyMigrations(pool, notes, clockAt(FIRST_START)))).toEqual({ kind: 'invalid-file-name', fileName: 'notes.txt' });
-		expect(await refusalOf(applyMigrations(pool, zero, clockAt(FIRST_START)))).toEqual({ kind: 'invalid-file-name', fileName: '0000_zero.sql' });
+			expect(await refusalOf(applyMigrations(pool, directory, clockAt(FIRST_START))), fileName).toEqual({ kind: 'invalid-file-name', fileName });
+		}
 	});
 
 	test('two files with one migration number are refused', async function() {
@@ -380,6 +464,13 @@ describe('applyMigrations', function() {
 		expect(await refusalOf(applyMigrations(pool, directory, clockAt(FIRST_START)))).toEqual({ kind: 'duplicate-file', version: 1 });
 		expect(await tableExists(pool, 'first_probe')).toBe(false);
 		expect(await tableExists(pool, 'third_probe')).toBe(false);
+	});
+
+	test('an empty migration directory is refused', async function() {
+		const database = await freshDatabase();
+		const directory = await migrationDirectory({});
+
+		expect(await refusalOf(applyMigrations(database.pool(), directory, clockAt(FIRST_START)))).toEqual({ kind: 'no-migrations', directory: directory.href });
 	});
 
 	test('a missing migration directory is refused', async function() {
@@ -401,7 +492,36 @@ describe('applyMigrations', function() {
 			'0002_binary.sql': Buffer.from([0x53, 0xff, 0x0a])
 		});
 
-		expect(await refusalOf(applyMigrations(pool, directory, clockAt(FIRST_START)))).toEqual({ kind: 'invalid-file', fileName: '0002_binary.sql' });
+		const attempt = applyMigrations(pool, directory, clockAt(FIRST_START));
+
+		expect(await refusalOf(attempt)).toEqual({ kind: 'invalid-file', fileName: '0002_binary.sql' });
+		await expect(attempt).rejects.toMatchObject({ cause: { code: 'ERR_ENCODING_INVALID_ENCODED_DATA' } });
 		expect(await tableExists(pool, 'first_probe')).toBe(false);
+	});
+});
+
+describe('MigrationError', function() {
+	test('says what is wrong with each refused directory or database', function() {
+		const version = 3 as SchemaVersion;
+		const problems: readonly (readonly [MigrationProblem, string])[] = [
+			[{ kind: 'unreadable-directory', directory: 'file:///absent/' }, 'cannot list the migrations in file:///absent/'],
+			[{ kind: 'no-migrations', directory: 'file:///empty/' }, 'no migrations in file:///empty/'],
+			[{ kind: 'invalid-file-name', fileName: 'notes.txt' }, 'notes.txt is not named NNNN_<name>.sql'],
+			[{ kind: 'invalid-file', fileName: '0002_binary.sql' }, 'the migration 0002_binary.sql is not valid UTF-8'],
+			[{ kind: 'duplicate-file', version }, 'more than one file is migration version 3'],
+			[{ kind: 'missing-file', version }, 'no file is migration version 3, though later versions exist'],
+			[{ kind: 'unknown-version', version, newestKnown: 2 as SchemaVersion }, 'the database is at schema version 3, newer than the newest this build knows, 2'],
+			[{ kind: 'missing-record', version }, 'the database has no record of schema version 3, though it records later versions'],
+			[{ kind: 'edited', version, recordedSHA256: 'aa', fileSHA256: 'bb' }, 'migration version 3 was applied with sha256 aa, but the file now has sha256 bb'],
+			[{ kind: 'failed', version }, 'applying migration version 3 failed']
+		];
+
+		for (const [problem, message] of problems) {
+			const error = new MigrationError(problem);
+
+			expect(error.message).toBe(message);
+			expect(error.name).toBe('MigrationError');
+			expect(error.problem).toBe(problem);
+		}
 	});
 });
