@@ -81,7 +81,12 @@ const POSTGRES_SETTINGS: Readonly<Record<string, string>> = {
 const START_MILLISECONDS = 120_000;
 /** conformance/DEPLOY.md gives a node 20 s to stop; the margin covers a slow database. */
 const NODE_STOP_MILLISECONDS = 30_000;
-const POSTGRES_STOP_MILLISECONDS = 60_000;
+/*
+ * A fast shutdown writes every dirty page of the pool first; with 3 GiB of
+ * buffers mostly dirty after a catch-up, that took 116 s on the follower's
+ * disk, and a kill before it ends leaves the next start to recover.
+ */
+const POSTGRES_STOP_MILLISECONDS = 600_000;
 const POLL_MILLISECONDS = 250;
 const REQUEST_TIMEOUT_MILLISECONDS = 10_000;
 
