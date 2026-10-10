@@ -20,9 +20,9 @@ const putStaged: Statement<[Buffer[], Date[], Date[], Buffer[]], CountColumns> =
 const holdsStaged: Statement<[Buffer], { readonly held: boolean }> = statement('holds_staged', `
 	SELECT EXISTS (SELECT 1 FROM bootstrap_stage WHERE blocks_hash = $1) AS held`);
 
-const stagedFirstBefore: Statement<[Date, number], StagedColumns> = statement('staged_first_before', `
+const stagedFirstBefore: Statement<[Date, number, Buffer[]], StagedColumns> = statement('staged_first_before', `
 	SELECT blocks_hash, first_vote_from, last_vote_from, bytes FROM bootstrap_stage
-	WHERE first_vote_from < $1
+	WHERE first_vote_from < $1 AND blocks_hash <> ALL($3::bytea[])
 	ORDER BY first_vote_from, blocks_hash
 	LIMIT $2`);
 
@@ -101,8 +101,8 @@ export class PostgresBootstrapStage implements BootstrapStage {
 		return(row?.held === true);
 	}
 
-	async firstBefore(moment: Date, count: number): Promise<StagedStaple[]> {
-		return((await this.#run(stagedFirstBefore, [moment, count])).map(stagedOf));
+	async firstBefore(moment: Date, count: number, leftOut: readonly string[] = []): Promise<StagedStaple[]> {
+		return((await this.#run(stagedFirstBefore, [moment, count, leftOut.map(keyBytes)])).map(stagedOf));
 	}
 
 	async lastFrom(moment: Date, count: number): Promise<StagedStaple[]> {

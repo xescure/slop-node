@@ -55,7 +55,7 @@ export function defineStageCases(driver: DriverUnderTest): void {
 			expect(Buffer.from(kept?.bytes ?? new ArrayBuffer(0))).toEqual(Buffer.from(genesis.toBytes()));
 		});
 
-		test('lists the staples whose first vote was made before a moment by their first votes, then their keys, as many as asked for', async function() {
+		test('lists the staples whose first vote was made before a moment by their first votes, then their keys, as many as asked for, but those left out', async function() {
 			const fixture = await startNetwork();
 			const stage = fixture.storage.bootstrapStage();
 			const [genesis, first, second] = await threeStaples(fixture);
@@ -66,6 +66,8 @@ export function defineStageCases(driver: DriverUnderTest): void {
 			expect(keysOf(await stage.firstBefore(new Date(3000), 10))).toEqual(tied);
 			expect(keysOf(await stage.firstBefore(new Date(3001), 1))).toEqual(tied.slice(0, 1));
 			expect(await stage.firstBefore(new Date(1000), 10)).toEqual([]);
+			expect(keysOf(await stage.firstBefore(new Date(3001), 2, tied.slice(0, 1)))).toEqual([...tied.slice(1), genesis.blocksHash.toString()]);
+			expect(keysOf(await stage.firstBefore(new Date(3001), 10, [genesis.blocksHash.toString(), ...tied]))).toEqual([]);
 		});
 
 		test('lists the staples with a vote made at or after a moment by their last votes, for a filter to name', async function() {

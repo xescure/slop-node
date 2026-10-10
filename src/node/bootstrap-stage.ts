@@ -71,6 +71,10 @@ export function applyFrontier(layout: RangeLayout | undefined): number {
 	return(earliest - RANGE_OVERLAP_MILLISECONDS);
 }
 
+function ignoreFailure(): void {
+	// The failure is heard where the promise is awaited.
+}
+
 function plus(left: StagedCounts, right: StagedCounts): StagedCounts {
 	return({ staples: left.staples + right.staples, bytes: left.bytes + right.bytes });
 }
@@ -167,6 +171,19 @@ export type Applied = {
  * refused, queued, and added once the dependency is, as a pass's disorder
  * always was. With no range left to read, every staged staple is added.
  *
+ * Reading and removing beside the adding. The node reads the batch after a
+ * full one while it adds that one, leaving out the batch and every staple
+ * still leaving, and removes a batch that left while it adds the next, one
+ * removal at a time, every later read leaving its staples out until it
+ * finishes; the adding ends only once the last removal has. A staple still
+ * leaves the stage only after the ledger or the queue holds it, so the
+ * argument above is unchanged. The batch read ahead is the one a read after
+ * the removal would return, but for a staple staged in between: one whose
+ * earliest vote is not after the end of the batch read ahead has it read
+ * again, and one after it comes in a later batch, as it would have. A frontier
+ * that moved in between cuts the batch at the frontier. So the node adds the
+ * staples in the order it would without reading ahead.
+ *
  * Liveness. The earliest range is read whatever else is, and never waits on
  * the stage, so the frontier moves on while its peer answers; everything
  * staged before the frontier is added unless the retry queue is full when
@@ -181,6 +198,14 @@ export class Staging<Staple extends PassStaple> {
 	readonly #bound: number;
 	readonly #changes = new Changes();
 	#counts: Promise<StagedCounts> | undefined;
+	/** The batch after the one being added, read while it is added. */
+	#ahead: Promise<StagedStaple[]> | undefined;
+	/** The earliest first vote of a staple staged since the batch ahead was read. */
+	#stagedSinceAhead = Number.POSITIVE_INFINITY;
+	/** The staples added or queued whose removal from the stage has not finished, which a read leaves out. */
+	readonly #leaving = new Set<string>();
+	/** The removal of the last batch added, which runs while the next is added. */
+	#removal: Promise<void> = Promise.resolve();
 
 	constructor(stage: BootstrapStage, retries: RetryQueue<Staple>, ledger: StagedLedger<Staple>, bound: number = STAGE_AHEAD_BYTES) {
 		this.#stage = stage;
@@ -236,10 +261,13 @@ export class Staging<Staple extends PassStaple> {
 		if (use === 'ahead' && counts.bytes >= this.#bound) {
 			throw(new StageFull(staple.blocksHash.toString(), this.#bound));
 		}
-		const kept = await this.#stage.put([stagedOf(staple)]);
+		const staged = stagedOf(staple);
+		const kept = await this.#stage.put([staged]);
 		this.#count(function(counts): StagedCounts {
 			return(plus(counts, kept));
 		});
+		// Noted once the put is done, so that a read issued after this either sees the staple or is told of it.
+		this.#stagedSinceAhead = Math.min(this.#stagedSinceAhead, staged.firstVote.getTime());
 		this.#changes.changed();
 		return('added');
 	}
@@ -285,9 +313,10 @@ export class Staging<Staple extends PassStaple> {
 				await changed;
 			}
 		} catch (error: unknown) {
-			await Promise.allSettled([finished]);
+			await Promise.allSettled([finished, this.#settle()]);
 			throw(error);
 		}
+		await this.#settle();
 		const result = await finished;
 		return({ result, applied: { left, backlog: full || await this.#backlog(frontier()) } });
 	}
@@ -296,9 +325,84 @@ export class Staging<Staple extends PassStaple> {
 		return((await this.#stage.firstBefore(new Date(frontier), 1)).length > 0);
 	}
 
+	/** Drops what was read ahead, and waits for the last removal, whose failure it throws. */
+	async #settle(): Promise<void> {
+		this.#ahead = undefined;
+		await this.#removal;
+	}
+
+	/**
+	 * The batch read ahead while the one before it was added, as far as it
+	 * lies before the frontier: it is what a read now would return, unless a
+	 * staple staged since sorts before its end, when the batch is read again.
+	 */
+	async #nextBatch(frontier: number): Promise<StagedStaple[]> {
+		const ahead = this.#ahead;
+		this.#ahead = undefined;
+		if (ahead !== undefined) {
+			const batch = await ahead;
+			const last = batch.at(-1);
+			if (last !== undefined && this.#stagedSinceAhead > last.firstVote.getTime()) {
+				return(batch.filter(function(staged): boolean {
+					return(staged.firstVote.getTime() < frontier);
+				}));
+			}
+		}
+		return(await this.#stage.firstBefore(new Date(frontier), APPLY_BATCH, [...this.#leaving]));
+	}
+
+	/** Reads the batch after a full one while it is added, leaving it out with every staple still leaving. */
+	#readAhead(frontier: number, batch: readonly StagedStaple[]): Promise<StagedStaple[]> | undefined {
+		if (batch.length < APPLY_BATCH) {
+			return(undefined);
+		}
+		this.#stagedSinceAhead = Number.POSITIVE_INFINITY;
+		const ahead = this.#stage.firstBefore(new Date(frontier), APPLY_BATCH, [...this.#leaving, ...batch.map(function(staged): string {
+			return(staged.key);
+		})]);
+		// Its failure is heard when it is taken, or not at all once it is dropped.
+		ahead.catch(ignoreFailure);
+		return(ahead);
+	}
+
+	/**
+	 * Removes the staples of a batch that left while the next batch is added,
+	 * once the removal before it has finished, whose failure it throws.
+	 */
+	async #leave(settled: readonly string[]): Promise<void> {
+		if (settled.length === 0) {
+			await this.#removal;
+			return;
+		}
+		// Read before the stage changes, so that the counts kept never count a staple twice.
+		await this.counts();
+		for (const key of settled) {
+			this.#leaving.add(key);
+		}
+		const previous = this.#removal;
+		this.#removal = this.#remove(settled);
+		// Its failure is heard by the next batch's removal, or when adding ends.
+		this.#removal.catch(ignoreFailure);
+		await previous;
+	}
+
+	async #remove(keys: readonly string[]): Promise<void> {
+		try {
+			const dropped = await this.#stage.remove(keys);
+			this.#count(function(counts): StagedCounts {
+				return(minus(counts, dropped));
+			});
+		} finally {
+			for (const key of keys) {
+				this.#leaving.delete(key);
+			}
+		}
+	}
+
 	/** One batch of the staples staged before the frontier, in order, each added or queued; answers how many left the stage, and whether the queue had no room for one the ledger refused. */
 	async #addBefore(frontier: number, stopped: () => boolean): Promise<{ readonly left: number; readonly full: boolean }> {
-		const batch = await this.#stage.firstBefore(new Date(frontier), APPLY_BATCH);
+		const batch = await this.#nextBatch(frontier);
+		const ahead = this.#readAhead(frontier, batch);
 		const settled: string[] = [];
 		let added = false;
 		let full = false;
@@ -319,11 +423,11 @@ export class Staging<Staple extends PassStaple> {
 			added ||= outcome === 'added';
 			settled.push(staged.key);
 		}
-		await this.counts();
-		const dropped = await this.#stage.remove(settled);
-		this.#count(function(counts): StagedCounts {
-			return(minus(counts, dropped));
-		});
+		// What was read ahead left out the whole batch, so it follows the batch only once the whole batch left.
+		if (ahead !== undefined && settled.length === batch.length) {
+			this.#ahead = ahead;
+		}
+		await this.#leave(settled);
 		// The queue offers again what an added staple may let in; with no room left, what is due may make some.
 		let retried = 0;
 		if (added || full) {

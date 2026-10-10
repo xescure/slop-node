@@ -28,8 +28,8 @@ export type BootstrapStage = {
 	/** Keeps the staples, but those it holds under the same key already, and answers what it kept. */
 	put(staples: readonly StagedStaple[]): Promise<StagedCounts>;
 	holds(key: string): Promise<boolean>;
-	/** Up to so many staples whose first vote was made before the moment, by their first votes, then their keys. */
-	firstBefore(moment: Date, count: number): Promise<StagedStaple[]>;
+	/** Up to so many staples whose first vote was made before the moment, but those of the keys left out, by their first votes, then their keys. */
+	firstBefore(moment: Date, count: number, leftOut?: readonly string[]): Promise<StagedStaple[]>;
 	/** Up to so many staples with a vote made at or after the moment, by their last votes, then their keys. */
 	lastFrom(moment: Date, count: number): Promise<StagedStaple[]>;
 	/** Drops the staples of these keys it holds, and answers what it dropped. */
@@ -107,14 +107,15 @@ export class MemoryBootstrapStage implements BootstrapStage {
 		return(Promise.resolve(this.#staples.has(key)));
 	}
 
-	firstBefore(moment: Date, count: number): Promise<StagedStaple[]> {
+	firstBefore(moment: Date, count: number, leftOut: readonly string[] = []): Promise<StagedStaple[]> {
+		const skipped = new Set(leftOut);
 		const found: StagedStaple[] = [];
 		for (const { at, key } of this.#byFirst) {
 			if (found.length >= count || at >= moment.getTime()) {
 				break;
 			}
 			const staple = this.#staples.get(key);
-			if (staple !== undefined) {
+			if (staple !== undefined && !skipped.has(key)) {
 				found.push(staple);
 			}
 		}

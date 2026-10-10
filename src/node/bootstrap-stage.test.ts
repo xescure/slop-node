@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { MemoryBootstrapStage } from '../ledger/storage/stage.js';
+import type { BootstrapStage } from '../ledger/storage/stage.js';
 import { freezeClock } from '../testing/network.js';
 import { decodeSimulatedStaple, SIMULATED_STAPLE_BYTES, SimulatedNode, SimulatedPeer, SimulatedRetryStore, simulatedRetries } from '../testing/simulated-peer.js';
 import type { RefusalReport, SimulatedStaple } from '../testing/simulated-peer.js';
@@ -157,6 +158,153 @@ describe('staging what the ranges read', function() {
 		expect(harness.node.size).toBe(200);
 		expect(harness.node.refused).toBe(0);
 		expect(await harness.staging.isEmpty()).toBe(true);
+	});
+
+	test('reads the batch after a full one while it adds that one', async function() {
+		const list = staples(Array.from({ length: 100 }, function(): readonly number[] {
+			return([]);
+		}));
+		const node = new SimulatedNode();
+		const stage = new MemoryBootstrapStage();
+		const events: string[] = [];
+		const recording: BootstrapStage = {
+			put: function(staged) {
+				return(stage.put(staged));
+			},
+			holds: function(key) {
+				return(stage.holds(key));
+			},
+			firstBefore: function(moment, count, leftOut) {
+				events.push(`read leaving out ${String(leftOut?.length ?? 0)}`);
+				return(stage.firstBefore(moment, count, leftOut));
+			},
+			lastFrom: function(moment, count) {
+				return(stage.lastFrom(moment, count));
+			},
+			remove: function(keys) {
+				events.push(`remove ${String(keys.length)}`);
+				return(stage.remove(keys));
+			},
+			counts: function() {
+				return(stage.counts());
+			}
+		};
+		const staging = new Staging(recording, simulatedRetries(node, new SimulatedRetryStore(), []), {
+			holds: function(staple): Promise<boolean> {
+				return(Promise.resolve(node.holds(staple)));
+			},
+			decode: function(bytes): SimulatedStaple {
+				const staple = decodeSimulatedStaple(bytes);
+				events.push(`add ${String(staple.id)}`);
+				return(staple);
+			}
+		});
+		for (const staple of list) {
+			await staging.take(staple, 'live');
+		}
+
+		const { applied } = await staging.alongside(Promise.resolve(), function(): number {
+			return(8.64e15);
+		}, Number.POSITIVE_INFINITY, function(): boolean {
+			return(false);
+		});
+
+		expect(applied).toEqual({ left: 100, backlog: false });
+		expect(events.slice(0, 3)).toEqual(['read leaving out 0', 'read leaving out 64', 'add 0']);
+		expect(events.slice(events.indexOf('add 63'), events.indexOf('add 64') + 1)).toEqual(['add 63', 'remove 64', 'add 64']);
+		expect(events.slice(events.indexOf('add 99'), events.indexOf('add 99') + 2)).toEqual(['add 99', 'remove 36']);
+		expect(events.filter(function(event): boolean {
+			return(event.startsWith('remove'));
+		})).toEqual(['remove 64', 'remove 36']);
+		expect(node.size).toBe(100);
+		expect(await staging.isEmpty()).toBe(true);
+	});
+
+	test('adds a staple staged while a batch is added, ahead of the batch read meanwhile, in its place', async function() {
+		// Each staple needs the one before: added in any other order, one would be refused.
+		const list = staples(Array.from({ length: 200 }, function(_ignored, index): readonly number[] {
+			if (index === 0) {
+				return([]);
+			}
+			return([index - 1]);
+		}));
+		const late = 70;
+		const node = new SimulatedNode();
+		const retries = simulatedRetries(node, new SimulatedRetryStore(), []);
+		const stagedLate: Promise<unknown>[] = [];
+		const staging: Staging<SimulatedStaple> = new Staging(new MemoryBootstrapStage(), retries, {
+			holds: function(staple): Promise<boolean> {
+				return(Promise.resolve(node.holds(staple)));
+			},
+			// Staged while the first batch is added, so after the batch after it was read.
+			decode: function(bytes): SimulatedStaple {
+				const staple = decodeSimulatedStaple(bytes);
+				if (staple.id === 10) {
+					stagedLate.push(staging.take(at(list, late), 'live'));
+				}
+				return(staple);
+			}
+		});
+		for (const [index, staple] of list.entries()) {
+			if (index !== late) {
+				await staging.take(staple, 'live');
+			}
+		}
+
+		const { applied } = await staging.alongside(Promise.resolve(), function(): number {
+			return(8.64e15);
+		}, Number.POSITIVE_INFINITY, function(): boolean {
+			return(false);
+		});
+
+		expect(await Promise.all(stagedLate)).toEqual(['added']);
+		expect(applied).toEqual({ left: 200, backlog: false });
+		expect(node.size).toBe(200);
+		expect(node.refused).toBe(0);
+		expect(await staging.isEmpty()).toBe(true);
+	});
+
+	test('fails when removing what left the stage fails, once it stops adding, and leaves it staged', async function() {
+		const list = staples([[], [0]]);
+		const node = new SimulatedNode();
+		const stage = new MemoryBootstrapStage();
+		const failing: BootstrapStage = {
+			put: function(staged) {
+				return(stage.put(staged));
+			},
+			holds: function(key) {
+				return(stage.holds(key));
+			},
+			firstBefore: function(moment, count, leftOut) {
+				return(stage.firstBefore(moment, count, leftOut));
+			},
+			lastFrom: function(moment, count) {
+				return(stage.lastFrom(moment, count));
+			},
+			remove: function() {
+				return(Promise.reject(new Error('the stage failed')));
+			},
+			counts: function() {
+				return(stage.counts());
+			}
+		};
+		const staging = new Staging(failing, simulatedRetries(node, new SimulatedRetryStore(), []), {
+			holds: function(staple): Promise<boolean> {
+				return(Promise.resolve(node.holds(staple)));
+			},
+			decode: decodeSimulatedStaple
+		});
+		for (const staple of list) {
+			await staging.take(staple, 'live');
+		}
+
+		await expect(staging.alongside(Promise.resolve(), function(): number {
+			return(8.64e15);
+		}, Number.POSITIVE_INFINITY, function(): boolean {
+			return(false);
+		})).rejects.toThrow('the stage failed');
+		expect(node.size).toBe(2);
+		expect((await stage.counts()).staples).toBe(2);
 	});
 
 	test('adds only the staples whose earliest vote was made before the frontier, and the rest once it moves past them', async function() {

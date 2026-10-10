@@ -1078,16 +1078,16 @@ Not part of upstream's interface. A node far behind reads its peers' history in 
 
 - `put(staples)` keeps each staple whose key it does not hold, and returns how many it kept and their bytes. A staple it holds keeps its first bytes.
 - `holds(key)` says whether it holds the key.
-- `firstBefore(moment, count)` returns up to `count` staples whose earliest vote was made before the moment, ascending by that moment, then by key: the order the node adds them in.
+- `firstBefore(moment, count, leftOut?)` returns up to `count` staples whose earliest vote was made before the moment, other than those of the keys in `leftOut`, ascending by that moment, then by key: the order the node adds them in. The node leaves out the staples it has added or queued and is still removing, so it can read the next batch while it adds one and removes the one before.
 - `lastFrom(moment, count)` returns up to `count` staples whose latest vote was made at or after the moment, ascending by that moment, then by key: those a peer keyed by votes lists from the moment (D8), which a bootstrap filter names.
 - `remove(keys)` drops the staples of those keys it holds, and returns how many it dropped and their bytes.
 - `counts()` returns how many staples it holds and their bytes.
 
 Each call's change is durable when it returns, as durable as the ledger: the memory driver keeps the stage in the process, beside its ledger. A staple leaves the stage only once the ledger or the bootstrap's retry queue holds it, so a stop between the two leaves it staged, and it is found held when added again.
 
-Tested by `stage.ts: "keeps each staple once, as the bytes it was given, and counts them and their bytes"`, `stage.ts: "lists the staples whose first vote was made before a moment by their first votes, then their keys, as many as asked for"`, `stage.ts: "lists the staples with a vote made at or after a moment by their last votes, for a filter to name"`, `stage.ts: "drops the staples it is told, and counts what it dropped"` and `stage.ts: "keeps what it staged apart from the ledger, which adds none of it"`.
+Tested by `stage.ts: "keeps each staple once, as the bytes it was given, and counts them and their bytes"`, `stage.ts: "lists the staples whose first vote was made before a moment by their first votes, then their keys, as many as asked for, but those left out"`, `stage.ts: "lists the staples with a vote made at or after a moment by their last votes, for a filter to name"`, `stage.ts: "drops the staples it is told, and counts what it dropped"` and `stage.ts: "keeps what it staged apart from the ledger, which adds none of it"`.
 
-**Postgres.** From schema version 10, `bootstrap_stage` (`blocks_hash`, `first_vote_from`, `last_vote_from`, `bytes`), keyed by `blocks_hash`. Each call is one statement on a pooled connection outside any transaction. `put` inserts with `ON CONFLICT DO NOTHING`; `firstBefore` reads `bootstrap_stage_first_vote` (`first_vote_from`, `blocks_hash`) and `lastFrom` reads `bootstrap_stage_last_vote` (`last_vote_from`, `blocks_hash`), each in index order; byte counts are `octet_length(bytes)`.
+**Postgres.** From schema version 10, `bootstrap_stage` (`blocks_hash`, `first_vote_from`, `last_vote_from`, `bytes`), keyed by `blocks_hash`. Each call is one statement on a pooled connection outside any transaction. `put` inserts with `ON CONFLICT DO NOTHING`; `firstBefore` reads `bootstrap_stage_first_vote` (`first_vote_from`, `blocks_hash`), filtering out the keys left out, and `lastFrom` reads `bootstrap_stage_last_vote` (`last_vote_from`, `blocks_hash`), each in index order; byte counts are `octet_length(bytes)`.
 
 ## 5. Rules
 
