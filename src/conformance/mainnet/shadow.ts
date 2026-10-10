@@ -40,6 +40,22 @@ export const SHADOW_REFUSAL_REASONS = ['self-requirement-return', 'same-staple-g
 
 export type ShadowRefusalReason = typeof SHADOW_REFUSAL_REASONS[number];
 
+/**
+ * The release of @keetanetwork/keetanet-client that changed the rule each
+ * reason names, or null when no release did. 0.18.5 is the first whose
+ * effects skip only the self requirement [Keeta TS 0.18.5] index.js:68512-68513
+ * and scope an earlier grant [Keeta TS 0.18.5] index.js:67903; 0.18.4 has
+ * neither [Keeta TS 0.18.4] index.js:68490-68491. 0.18.0 is the first that
+ * lists a SEND's recipient [Keeta TS 0.18.0] index.js:68263-68279. Every
+ * release refuses the genesis staple's vote.
+ */
+export const SHADOW_REFUSAL_RELEASES: Readonly<Record<ShadowRefusalReason, string | null>> = {
+	'self-requirement-return': '0.18.5',
+	'same-staple-grant-scope': '0.18.5',
+	'trusted-account-genesis': null,
+	'send-recipient-access': '0.18.0'
+};
+
 export type LedgerRefusal = { readonly code: ErrorCode; readonly message: string };
 
 export type ShadowVote =

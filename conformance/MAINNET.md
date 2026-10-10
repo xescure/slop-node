@@ -5,7 +5,7 @@
 ## Conventions
 
 - `[Keeta TS] index.js:N` is line N of `client/index.js` in the published `@keetanetwork/keetanet-client` 0.18.7 package.
-- `[Keeta TS 0.18.4] index.js:N` is line N of the same file in the published 0.18.4 package, and likewise for `[Keeta TS 0.18.0]` and `[Keeta TS 0.16.2]`.
+- `[Keeta TS 0.18.4] index.js:N` is line N of the same file in the published 0.18.4 package, and likewise for `[Keeta TS 0.18.5]`, `[Keeta TS 0.18.0]` and `[Keeta TS 0.16.2]`.
 - A staple is a `VoteStaple`: the votes of a quorum of representatives together with the blocks they confirm.
 
 ## 1. Files
@@ -82,7 +82,7 @@ The rules a staple was voted under are those of the release its representatives 
 | `trusted-account-genesis` | 1 |
 | `send-recipient-access` | 0 |
 
-Two of the reasons are permission fixes between 0.18.4 and 0.18.7. Each fixed form is new in 0.18.7: 0.16.2 has the same early return [Keeta TS 0.16.2] index.js:68179-68181 and the same grant scope [Keeta TS 0.16.2] index.js:67640. Rewriting either fix in the 0.18.7 bundle back to its 0.18.4 form, and replaying again, removes exactly that reason's staples from the refusals; with both rewritten, only the genesis staple is refused. The staples the fixes explain were therefore voted under rules that accept them. A third reason, `send-recipient-access`, is a requirement that 0.18.0 added (section 6.4).
+Two of the reasons are permission fixes between 0.18.4 and 0.18.7. Both fixed forms first appear in 0.18.5 [Keeta TS 0.18.5] index.js:68512-68513, 67903, which the npm registry published on 2026-09-30, a minute before 0.18.6 and 0.18.7; 0.16.2 has the same early return [Keeta TS 0.16.2] index.js:68179-68181 and the same grant scope [Keeta TS 0.16.2] index.js:67640 as 0.18.4. Rewriting either fix in the 0.18.7 bundle back to its 0.18.4 form, and replaying again, removes exactly that reason's staples from the refusals; with both rewritten, only the genesis staple is refused. The staples the fixes explain were therefore voted under rules that accept them. A third reason, `send-recipient-access`, is a requirement that 0.18.0 added (section 6.4).
 
 ### 6.1 `self-requirement-return`
 
