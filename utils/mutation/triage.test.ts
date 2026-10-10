@@ -9,6 +9,8 @@ type Mutant = {
 	readonly status: MutantStatus;
 	/** 'x' when absent. */
 	readonly replacement?: string;
+	/** Absent from the report when absent here. */
+	readonly testsCompleted?: number;
 };
 
 function report(files: Readonly<Record<string, readonly Mutant[]>>): unknown {
@@ -18,8 +20,12 @@ function report(files: Readonly<Record<string, readonly Mutant[]>>): unknown {
 			return([file, {
 				language: 'typescript',
 				source: '',
-				mutants: mutants.map(function({ line, column, mutatorName, status, replacement = 'x' }, index): unknown {
-					return({ id: String(index), mutatorName, replacement, status, location: { start: { line, column }, end: { line, column: column + 1 } } });
+				mutants: mutants.map(function({ line, column, mutatorName, status, replacement = 'x', testsCompleted }, index): unknown {
+					const mutant = { id: String(index), mutatorName, replacement, status, location: { start: { line, column }, end: { line, column: column + 1 } } };
+					if (testsCompleted === undefined) {
+						return(mutant);
+					}
+					return({ ...mutant, testsCompleted });
 				})
 			}]);
 		}))
@@ -66,6 +72,7 @@ describe('mutation triage', function() {
 			timedOut: 1,
 			survived: 2,
 			noCoverage: 1,
+			ranNoTest: 0,
 			equivalent: 2,
 			harmless: 1,
 			scoreBefore: 85,
@@ -118,6 +125,31 @@ describe('mutation triage', function() {
 			return(mutant.place);
 		})).toEqual([placeOf({ file: 'src/a.ts', start: { line: 2, column: 4 }, end: { line: 2, column: 5 }, mutatorName: 'EqualityOperator', replacement: 'x' })]);
 		expect(passes(unaccounted)).toBe(false);
+	});
+
+	test('leaves out of the score a survivor of a run that completed no test, and needs no entry for it', function() {
+		const mutants = parseReport(report({
+			'src/a.ts': [
+				...Array.from({ length: 9 }, function(_, index): Mutant {
+					return(killed(index + 1));
+				}),
+				{ line: 20, column: 1, mutatorName: 'StringLiteral', status: 'Survived', testsCompleted: 0 },
+				{ line: 21, column: 1, mutatorName: 'StringLiteral', status: 'Survived', testsCompleted: 4 }
+			]
+		}));
+		const entries = parseTriage(entryFor('src/a.ts', { line: 21, column: 1, mutatorName: 'StringLiteral' }, 'equivalent: the message is never read'));
+
+		const assessment = assess(mutants, entries);
+
+		expect(assessment.modules[0]).toMatchObject({ killed: 9, survived: 1, ranNoTest: 1, equivalent: 1, scoreBefore: 90, scoreAfter: 100 });
+		expect(assessment.ranNoTest.map(function(mutant): string {
+			return(mutant.place);
+		})).toEqual([placeOf({ file: 'src/a.ts', start: { line: 20, column: 1 }, end: { line: 20, column: 2 }, mutatorName: 'StringLiteral', replacement: 'x' })]);
+		expect(assessment.unaccounted).toEqual([]);
+		expect(passes(assessment)).toBe(true);
+		expect(function() {
+			return(parseReport({ files: { 'src/a.ts': { mutants: [{ mutatorName: 'StringLiteral', replacement: 'x', status: 'Survived', testsCompleted: -1, location: { start: { line: 1, column: 1 }, end: { line: 1, column: 2 } } }] } } }));
+		}).toThrow(/testsCompleted is not a whole number/);
 	});
 
 	test('refuses an entry it cannot read, and one that names a mutant twice', function() {

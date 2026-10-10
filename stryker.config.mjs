@@ -56,6 +56,8 @@ export default {
 	},
 	coverageAnalysis: 'perTest',
 	mutate: [...module.mutate],
+	plugins: ['@stryker-mutator/*', './mutation/ignorers.js'],
+	ignorers: [...module.ignorers],
 	/*
 	 * Two runners, each a single vitest worker with its own Postgres cluster,
 	 * stay within a 12 GiB memory cap beside a running node.

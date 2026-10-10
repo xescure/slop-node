@@ -8,9 +8,26 @@ Stryker reports them:
 `- <file>:<line>:<column>-<line>:<column> <mutator> <replacement> <equivalent|harmless>: <reason>`
 
 An equivalent mutant behaves as the original does for every input the code can
-receive, so no test can kill it. A harmless mutant changes behavior that no
-caller can observe through the storage contract. Equivalent mutants leave the
-module's score after triage; harmless ones count against it.
+receive, so no test can kill it. A mutant that only skips or adds a statement
+which changes and answers nothing, such as one an early return for an empty
+list saves, is equivalent: no answer and no stored row differs. A harmless
+mutant changes behavior that no caller can observe through the storage
+contract. Equivalent mutants leave the module's score after triage; harmless
+ones count against it.
+
+Two kinds of mutant need no entry:
+
+* Stryker makes no mutant of the Postgres driver's SQL (`mutation/ignorers.js`):
+  the text of each statement, and the name it is prepared under. The driver
+  suite and the conformance corpus run every statement against Postgres, and a
+  renamed statement is still the only one of its name. Leaving the
+  StringLiteral mutator out of the module instead would also spare the error
+  codes, constraint names and messages its TypeScript must get right.
+* A mutant reported as surviving a run in which no test completed is left out
+  of the score, as Stryker leaves out a run that failed. Under a mutant of code
+  that runs as its module loads, every test file can fail to load, and
+  Stryker 10.0.0's vitest runner reports that as a survivor. `make mutation`
+  lists each one.
 
 ## storage
 

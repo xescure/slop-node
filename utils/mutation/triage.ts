@@ -31,6 +31,13 @@ export type ReportedMutant = {
 	readonly place: MutantPlace;
 	readonly file: string;
 	readonly status: MutantStatus;
+	/**
+	 * A survivor of a run that completed no test. Under a mutant of code that
+	 * runs as its module loads, every test file can fail to load, and
+	 * Stryker 10.0.0's vitest runner then reports the mutant as surviving
+	 * the empty run, though no test ran to let it survive.
+	 */
+	readonly ranNoTest: boolean;
 };
 
 export type TriageClass = 'equivalent' | 'harmless';
@@ -49,6 +56,7 @@ export type ModuleAssessment = {
 	readonly timedOut: number;
 	readonly survived: number;
 	readonly noCoverage: number;
+	readonly ranNoTest: number;
 	readonly equivalent: number;
 	readonly harmless: number;
 	readonly scoreBefore: number;
@@ -59,6 +67,8 @@ export type Assessment = {
 	readonly modules: readonly ModuleAssessment[];
 	/** Surviving mutants that no triage entry accounts for. */
 	readonly unaccounted: readonly ReportedMutant[];
+	/** Mutants reported as surviving a run that completed no test, which the scores leave out as Stryker leaves out a run that failed. */
+	readonly ranNoTest: readonly ReportedMutant[];
 	/** Entries for a reported module that name no surviving mutant: the code moved, or a test now kills it. */
 	readonly stale: readonly TriageEntry[];
 };
@@ -121,6 +131,17 @@ function textAt(object: JSONObject, name: string, where: string): string {
 	return(value);
 }
 
+function testsCompletedAt(object: JSONObject, where: string): number | undefined {
+	if (!('testsCompleted' in object)) {
+		return(undefined);
+	}
+	const value = object['testsCompleted'];
+	if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+		throw(new Error(`${where}.testsCompleted is not a whole number`));
+	}
+	return(value);
+}
+
 function positionAt(object: JSONObject, name: string, where: string): SourcePosition {
 	const position = objectAt(object, name, where);
 	const positionWhere = `${where}.${name}`;
@@ -159,6 +180,7 @@ export function parseReport(report: unknown): ReportedMutant[] {
 				throw(new Error(`${mutantWhere}.status is the unknown status ${status}`));
 			}
 			mutants.push({
+				ranNoTest: status === 'Survived' && testsCompletedAt(mutant, mutantWhere) === 0,
 				place: placeOf({
 					file,
 					start: positionAt(location, 'start', `${mutantWhere}.location`),
@@ -253,7 +275,7 @@ function countOf(mutants: readonly ReportedMutant[], status: MutantStatus): numb
 }
 
 function isSurvivor(mutant: ReportedMutant): boolean {
-	return(mutant.status === 'Survived' || mutant.status === 'NoCoverage');
+	return((mutant.status === 'Survived' && !mutant.ranNoTest) || mutant.status === 'NoCoverage');
 }
 
 /*
@@ -265,7 +287,10 @@ function isSurvivor(mutant: ReportedMutant): boolean {
 function assessModule(file: string, mutants: readonly ReportedMutant[], entries: ReadonlyMap<MutantPlace, TriageEntry>): ModuleAssessment {
 	const killed = countOf(mutants, 'Killed');
 	const timedOut = countOf(mutants, 'Timeout');
-	const survived = countOf(mutants, 'Survived');
+	const ranNoTest = mutants.filter(function(mutant): boolean {
+		return(mutant.ranNoTest);
+	}).length;
+	const survived = countOf(mutants, 'Survived') - ranNoTest;
 	const noCoverage = countOf(mutants, 'NoCoverage');
 	let equivalent = 0;
 	let harmless = 0;
@@ -285,6 +310,7 @@ function assessModule(file: string, mutants: readonly ReportedMutant[], entries:
 		timedOut,
 		survived,
 		noCoverage,
+		ranNoTest,
 		equivalent,
 		harmless,
 		scoreBefore: percent(detected, valid),
@@ -310,6 +336,9 @@ export function assess(mutants: readonly ReportedMutant[], entries: readonly Tri
 		}),
 		unaccounted: mutants.filter(function(mutant): boolean {
 			return(isSurvivor(mutant) && !byPlace.has(mutant.place));
+		}),
+		ranNoTest: mutants.filter(function(mutant): boolean {
+			return(mutant.ranNoTest);
 		}),
 		stale: entries.filter(function(entry): boolean {
 			return(files.includes(entry.file) && !surviving.has(entry.place));

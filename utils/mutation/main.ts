@@ -36,6 +36,7 @@ function describeModule(module: ModuleAssessment): string {
 		`${String(module.timedOut)} timed out`,
 		`${String(module.survived)} survived`,
 		`${String(module.noCoverage)} not covered`,
+		`${String(module.ranNoTest)} ran no test`,
 		`${String(module.equivalent)} equivalent`,
 		`${String(module.harmless)} harmless`
 	];
@@ -44,6 +45,9 @@ function describeModule(module: ModuleAssessment): string {
 
 function describe(assessment: Assessment): string[] {
 	const lines = assessment.modules.map(describeModule);
+	for (const mutant of assessment.ranNoTest) {
+		lines.push(`ran no test, so left out of the score: ${mutant.place}`);
+	}
 	for (const mutant of assessment.unaccounted) {
 		lines.push(`unaccounted: ${mutant.place} (${mutant.status})`);
 	}
