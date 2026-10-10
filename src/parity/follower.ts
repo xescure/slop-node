@@ -36,10 +36,13 @@ const PRIVATE_DIRECTORY = 0o700;
  * touches, hundreds on the main network, so its index writes land on pages
  * spread over gigabytes. With a small buffer pool each such page is read,
  * evicted dirty and written again many times, and with frequent checkpoints
- * nearly every change logs the whole page. A pool of 1 GiB keeps the pages
- * being written in memory, checkpoints come at most every 30 minutes, and
- * the whole pages they log are compressed; the cluster's memory stays about
- * 1.3 GiB, beside a node of about 1 GiB. Commits do not wait for the disk: a
+ * nearly every change logs the whole page. A pool of 3 GiB keeps the pages
+ * being written in memory, and the whole ledger for the first months of the
+ * main network's history, where a pool of 1 GiB read about ten pages back
+ * from the disk for each staple touching hundreds of accounts; checkpoints
+ * come at most every 30 minutes, and the whole pages they log are
+ * compressed. The cluster's memory stays about 3.3 GiB, beside a node of
+ * about 1 GiB. Commits do not wait for the disk: a
  * crash loses only the last of them, the write-ahead log restores the
  * database as of an earlier commit, and the catch-up cursors live in the same
  * database, so none survives the staples it moved past, which are fetched
@@ -50,11 +53,11 @@ const POSTGRES_SETTINGS: Readonly<Record<string, string>> = {
 	listen_addresses: '\'\'',
 	port: String(POSTGRES_PORT),
 	max_connections: '40',
-	shared_buffers: '\'1GB\'',
+	shared_buffers: '\'3GB\'',
 	work_mem: '\'8MB\'',
 	maintenance_work_mem: '\'128MB\'',
 	autovacuum_work_mem: '\'64MB\'',
-	effective_cache_size: '\'3GB\'',
+	effective_cache_size: '\'4GB\'',
 	huge_pages: 'off',
 	synchronous_commit: 'off',
 	wal_level: 'minimal',
