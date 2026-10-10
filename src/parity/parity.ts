@@ -210,8 +210,16 @@ async function shadow(command: Extract<ParityCommand, { kind: 'shadow' }>, direc
 		});
 		await state.clear();
 	}
-	const start = await shadowStart(command, directory, tools.store, await state.load());
-	await state.save(start);
+	const loaded = await state.load();
+	const start = await shadowStart(command, directory, tools.store, loaded);
+	/*
+	 * A run that stands somewhere already is saved only by its batches: a
+	 * save now would count the votes of a batch a stop cut short as covered,
+	 * and the run would then find their staples in the ledger unrecorded.
+	 */
+	if (loaded === undefined) {
+		await state.save(start);
+	}
 	const storage = new PostgresLedgerStorage({
 		kind: 'connection-string',
 		connectionString: followerDatabaseURLOf(directory, SHADOW_DATABASE),
