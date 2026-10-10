@@ -87,8 +87,14 @@ type ArgumentsAfterTransaction<Member extends StorageMember> = Parameters<NonNul
 
 type MemberResult<Member extends StorageMember> = ReturnType<NonNullable<LedgerStorageAPI[Member]>>;
 
+/*
+ * A staple may be deferred when it arrives, but never on a replay: a waiter
+ * that still lacks another previous stays where it is.
+ * [Keeta TS] index.js:67722-67725
+ */
+type Application = 'arrival' | 'replay';
+
 type ReplayState = {
-	readonly mayDefer: boolean;
 	readonly completed: Set<StapleKey>;
 	readonly deadline: number;
 };
@@ -195,8 +201,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	async adjust(transaction: Transaction, input: VoteStaple, changes: ComputedEffectOfBlocks): Promise<VoteStaple[]> {
 		const windowMilliseconds = this.initialized.config.heapProcessWindowMs ?? DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS;
 		const applied = await this.#exclusively(transaction, () => {
-			return(this.#applyConfirmedStaple(transaction, input, changes, {
-				mayDefer: true,
+			return(this.#applyConfirmedStaple(transaction, input, changes, 'arrival', {
 				completed: new Set(),
 				deadline: Date.now() + windowMilliseconds
 			}));
@@ -486,10 +491,10 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * defers, the driver refuses forks, and only a fully computed change is
 	 * written.
 	 */
-	async #applyConfirmedStaple(transaction: Transaction, staple: VoteStaple, effects: ComputedEffectOfBlocks, replay: ReplayState): Promise<AppliedStaple[]> {
+	async #applyConfirmedStaple(transaction: Transaction, staple: VoteStaple, effects: ComputedEffectOfBlocks, application: Application, replay: ReplayState): Promise<AppliedStaple[]> {
 		this.#assertChainOrder(staple);
 		this.#assertDistinctPrevious(staple);
-		const heights = await this.preAdjust(staple, replay.mayDefer, transaction);
+		const heights = await this.preAdjust(staple, mayDefer(application), transaction);
 		// An empty result means preAdjust deferred the staple, or found it already deferred.
 		if (Object.keys(heights).length === 0) {
 			return([]);
@@ -532,7 +537,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 		const completed = new Set(replay.completed);
 		const applied = await this.runIsolated(transaction, async () => {
 			const effects = LedgerInternals.computeEffectOfBlocks(staple.blocks, ledger);
-			return(await this.#applyConfirmedStaple(transaction, staple, effects, { ...replay, mayDefer: false, completed }));
+			return(await this.#applyConfirmedStaple(transaction, staple, effects, 'replay', { ...replay, completed }));
 		});
 		for (const stapleKey of completed) {
 			replay.completed.add(stapleKey);
@@ -638,7 +643,6 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 		const retried = this.#retriedByGc.get(transaction) ?? new Set<StapleKey>();
 		this.#retriedByGc.set(transaction, retried);
 		const replay: ReplayState = {
-			mayDefer: false,
 			completed: new Set(),
 			deadline: Date.now() + (config.heapProcessWindowMs ?? DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS)
 		};
@@ -742,6 +746,17 @@ function recordSettlement(transaction: LedgerDriverTransaction, applied: readonl
 		for (const increase of settlement) {
 			transaction.statsPending.incr(...increase);
 		}
+	}
+}
+
+function mayDefer(application: Application): boolean {
+	switch (application) {
+		case 'arrival':
+			return(true);
+		case 'replay':
+			return(false);
+		default:
+			return(assertNever(application));
 	}
 }
 

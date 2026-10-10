@@ -21,10 +21,9 @@ export type ConfirmedBlockRow = {
 	readonly staple: StapleKey;
 };
 
-/** A confirmed staple: its blocks in order, its votes, its bytes, its staple time, and where its votes sit in the catch-up order. */
+/** A confirmed staple: its votes, its bytes, its staple time, and where its votes sit in the catch-up order. */
 export type StapleRow = {
 	readonly blocksHash: VoteBlockHash;
-	readonly blocks: readonly BlockHashKey[];
 	readonly votes: ReadonlyMap<VoteKey, Vote>;
 	/** `VoteStaple.toBytes()` as the staple was received, which no rebuild from its votes and blocks reproduces. */
 	readonly bytes: ArrayBuffer;

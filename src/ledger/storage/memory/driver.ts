@@ -247,6 +247,10 @@ function addMember<TableKey extends string, Member>(table: TableOverlay<TableKey
 	table.set(key, members);
 }
 
+function hasMembers<Member>(members: ReadonlySet<Member> | undefined): boolean {
+	return((members?.size ?? 0) > 0);
+}
+
 /** Removes the row once its last member is gone. */
 function removeMember<TableKey extends string, Member>(table: TableOverlay<TableKey, ReadonlySet<Member>>, key: TableKey, member: Member): void {
 	const members = new Set(table.get(key));
@@ -839,7 +843,8 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		const overlay = await transaction.view();
 		const uncovered = new Set<BlockHashKey>();
 		for (const [blockKey] of overlay.sideBlocks.entries()) {
-			if (overlay.blocks.get(blockKey) !== undefined || overlay.sideVotesByBlock.get(blockKey) === undefined) {
+			// An index entry left empty covers nothing, as one never written does.
+			if (overlay.blocks.get(blockKey) !== undefined || !hasMembers(overlay.sideVotesByBlock.get(blockKey))) {
 				uncovered.add(blockKey);
 			}
 		}
@@ -1116,9 +1121,6 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 		}
 		overlay.staples.set(stapleKey, {
 			blocksHash: staple.blocksHash,
-			blocks: staple.blocks.map(function(block): BlockHashKey {
-				return(toBlockHashKey(block.hash));
-			}),
 			votes,
 			bytes: staple.toBytes(),
 			stapleTime: staple.timestamp(),

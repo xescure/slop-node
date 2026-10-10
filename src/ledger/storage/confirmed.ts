@@ -136,28 +136,18 @@ function toAccountKeys(...accountSets: readonly Iterable<GenericAccount>[]): Set
 }
 
 /**
- * The accounts whose history lists a staple: every signer of its blocks,
- * nested multisig signers included, and every account it has an effect on,
- * the principal of a permission requirement among them. An account that
- * only a requirement names as its entity or target, such as the token of a
- * send or the network address of an identifier's creation, is touched
- * [Keeta TS] index.js:68662-68665 but not listed, as the main network's
- * representatives list history (D18).
- * [Keeta TS] index.js:68700-68709, 68776-68781
+ * The accounts whose history lists a staple: every account it has an effect
+ * on, the principal of a permission requirement among them, which takes in
+ * every signer of its blocks: a block's account has an effect
+ * [Keeta TS] index.js:68717-68723, and a signer other than the account,
+ * nested multisig signers included, is a requirement's principal
+ * [Keeta TS] index.js:68742-68767. An account that only a requirement names
+ * as its entity or target, such as the token of a send or the network address
+ * of an identifier's creation, is touched [Keeta TS] index.js:68662-68665 but
+ * not listed, as the main network's representatives list history (D18).
  */
-export function historyAccountsOf(blocks: readonly Block[], effects: Pick<ComputedEffectOfBlocks, 'accounts'>): Set<AccountKey> {
+export function historyAccountsOf(effects: Pick<ComputedEffectOfBlocks, 'accounts'>): Set<AccountKey> {
 	const listed = new Set<AccountKey>();
-	for (const block of blocks) {
-		const signers: Block['signer'][] = [block.signer];
-		for (let signer = signers.shift(); signer !== undefined; signer = signers.shift()) {
-			if (Array.isArray(signer)) {
-				listed.add(toAccountKey(signer[0]));
-				signers.push(...signer[1]);
-			} else {
-				listed.add(toAccountKey(signer));
-			}
-		}
-	}
 	for (const effect of Object.values(effects.accounts)) {
 		if (effect.type === 'ACCOUNT') {
 			listed.add(toAccountKey(effect.account));
@@ -198,7 +188,7 @@ export async function computeConfirmedStapleChange(input: {
 		ledgerEffect,
 		...collectAccountFields(effects),
 		idempotentKeys: collectIdempotentKeys(staple),
-		historyAccounts: historyAccountsOf(staple.blocks, effects),
+		historyAccounts: historyAccountsOf(effects),
 		newAccounts: toAccountKeys(effects.touched, effects.possibleNewAccounts),
 		checksum: stapleChecksumOf(staple)
 	});

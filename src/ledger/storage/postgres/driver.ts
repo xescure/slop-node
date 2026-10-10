@@ -376,7 +376,7 @@ function historyChangesOf(rows: readonly ReindexedStaple[], context: EffectConte
 	for (const row of rows) {
 		const blocks = row.blocks.map(decodeBlock);
 		const effects = LedgerInternals.computeEffectOfBlocks(blocks, context);
-		const keys = historyAccountsOf(blocks, effects);
+		const keys = historyAccountsOf(effects);
 		const listedAccounts: string[] = [];
 		const unlistedKeys: string[] = [];
 		for (const account of effects.touched) {
