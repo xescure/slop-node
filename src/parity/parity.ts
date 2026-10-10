@@ -114,7 +114,7 @@ async function databaseExists(client: pg.Client, name: string): Promise<boolean>
 	return(((await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [name])).rowCount ?? 0) > 0);
 }
 
-const BASE_LAST_STAPLE = 'SELECT sequence::text AS sequence, blocks_hash FROM staples ORDER BY sequence DESC LIMIT 1';
+const BASE_LAST_STAPLE = 'SELECT sequence::text AS place, blocks_hash FROM staples ORDER BY sequence DESC LIMIT 1';
 
 /** Staples whose every vote is from the moment on: those of the scoped window. */
 const BASE_SCOPED_STAPLES = `
@@ -150,9 +150,9 @@ async function prepareShadowLedger(directory: string, base: string | undefined, 
 	const copy = new pg.Client({ connectionString: followerDatabaseURLOf(directory, SHADOW_DATABASE) });
 	await copy.connect();
 	try {
-		const last = (await copy.query<{ sequence: string; blocks_hash: Buffer }>(BASE_LAST_STAPLE)).rows[0];
+		const last = (await copy.query<{ place: string; blocks_hash: Buffer }>(BASE_LAST_STAPLE)).rows[0];
 		const scoped = await copy.query<{ count: string }>(BASE_SCOPED_STAPLES, [SHADOW_SCOPE.from]);
-		const sequence = last?.sequence ?? '0';
+		const sequence = last?.place ?? '0';
 		const blocksHash = last?.blocks_hash.toString('hex').toUpperCase() ?? null;
 		if (blocksHash !== null && await store.stapleAt(BigInt(sequence)) !== blocksHash) {
 			throw(new Error(`the follower's ledger holds no staple ${blocksHash} at ${sequence}, where ${base} holds it; ${base} is no snapshot of this ledger`));

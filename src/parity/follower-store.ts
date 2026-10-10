@@ -292,26 +292,27 @@ const NEWEST_STAPLES = `
 
 const STAGED = 'SELECT count(*) AS count FROM bootstrap_stage';
 
-const LAST_SEQUENCE = 'SELECT max(sequence)::text AS sequence FROM staples';
+const LAST_SEQUENCE = 'SELECT max(sequence)::text AS place FROM staples';
 
 const STAPLE_AT = 'SELECT blocks_hash FROM staples WHERE sequence = $1';
 
+/* The place is read as text, under a name of its own, so that the order is still the number's. */
 const STAPLES_AFTER = `
-	SELECT blocks_hash, staple_time, bytes, sequence::text AS sequence FROM staples
+	SELECT blocks_hash, staple_time, bytes, sequence::text AS place FROM staples
 	WHERE sequence > $1 AND sequence <= $2
 	ORDER BY sequence LIMIT $3`;
 
 const STAPLES_OF = `
-	SELECT blocks_hash, staple_time, bytes, sequence::text AS sequence FROM staples
+	SELECT blocks_hash, staple_time, bytes, sequence::text AS place FROM staples
 	WHERE blocks_hash = ANY($1::bytea[])
 	ORDER BY sequence`;
 
-type SequencedStapleRow = { blocks_hash: Buffer; staple_time: Date; bytes: Buffer | null; sequence: string };
+type SequencedStapleRow = { blocks_hash: Buffer; staple_time: Date; bytes: Buffer | null; place: string };
 
 async function sequencedStaplesOf(pool: pg.Pool, rows: readonly SequencedStapleRow[]): Promise<SequencedStaple[]> {
 	const held = await heldStaplesOf(pool, rows);
 	return(held.map(function(staple, index): SequencedStaple {
-		return({ ...staple, sequence: BigInt(rows[index]?.sequence ?? '0') });
+		return({ ...staple, sequence: BigInt(rows[index]?.place ?? '0') });
 	}));
 }
 
@@ -493,8 +494,8 @@ export function openFollowerStore(connectionString: string): FollowerStore {
 			return((await pool.query<HeldBlockRow>(HELD_BLOCKS_OF_STAPLES, [keys, before])).rows.map(heldBlockOf));
 		},
 		async lastSequence(): Promise<bigint> {
-			const result = await pool.query<{ sequence: string | null }>(LAST_SEQUENCE);
-			return(BigInt(result.rows[0]?.sequence ?? '0'));
+			const result = await pool.query<{ place: string | null }>(LAST_SEQUENCE);
+			return(BigInt(result.rows[0]?.place ?? '0'));
 		},
 		async stapleAt(sequence: bigint): Promise<string | undefined> {
 			const result = await pool.query<{ blocks_hash: Buffer }>(STAPLE_AT, [sequence.toString()]);

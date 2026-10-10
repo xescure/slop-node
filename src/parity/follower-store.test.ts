@@ -22,6 +22,9 @@ const ACCOUNTS = [
 ];
 
 const STAPLE = 'AB'.repeat(32);
+
+/** Where the staples a test adds after the database's own two are placed. */
+const PLACES: readonly bigint[] = [9n, 10n, 100n];
 const OTHER_STAPLE = 'CD'.repeat(32);
 
 /** The checksum the node keeps folded, folded afresh from the staples' own, as a node writing them would have kept it. */
@@ -279,7 +282,8 @@ describe('the follower\'s store, read from its database', function() {
 				bytes = null;
 			}
 			const key = Buffer.from(staple.blocksHash.toString(), 'hex');
-			await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, bytes, checksum) VALUES ($1, $2, $2, $3, repeat(\'0\', 256)::bit(256))', [key, staple.timestamp(), bytes]);
+			// Places whose order as text is not their order as numbers.
+			await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, bytes, checksum, sequence) OVERRIDING SYSTEM VALUE VALUES ($1, $2, $2, $3, repeat(\'0\', 256)::bit(256), $4)', [key, staple.timestamp(), bytes, PLACES[index]]);
 			for (const [position, block] of staple.blocks.entries()) {
 				await pool.query(`INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position)
 					SELECT $1, 'main', id, $2, 1, $3, $4, $5 FROM accounts WHERE public_key = $6`, [Buffer.from(block.hash.toString(), 'hex'), Buffer.from(block.previous.toString(), 'hex'), Buffer.from(block.toBytes()), key, position, issuer]);
@@ -301,21 +305,21 @@ describe('the follower\'s store, read from its database', function() {
 		};
 
 		// The two staples the database starts with were added first.
-		expect(await store.lastSequence()).toBe(5n);
+		expect(await store.lastSequence()).toBe(100n);
 		expect(await store.stapleAt(1n)).toBe(STAPLE);
-		expect(await store.stapleAt(4n)).toBe(made[1]?.blocksHash.toString());
-		expect(await store.stapleAt(6n)).toBeUndefined();
-		const read = await store.staplesAfter(2n, 5n, 2);
+		expect(await store.stapleAt(10n)).toBe(made[1]?.blocksHash.toString());
+		expect(await store.stapleAt(11n)).toBeUndefined();
+		const read = await store.staplesAfter(2n, 100n, 2);
 		expect(placed(read)).toEqual(made.slice(0, 2).map(function(staple, index) {
-			return([staple.blocksHash.toString(), staple.timestamp().getTime(), BigInt(index + 3)]);
+			return([staple.blocksHash.toString(), staple.timestamp().getTime(), PLACES[index]]);
 		}));
 		expect(hexOf(read[1]?.staple)).toBe(hexOf(made[1]));
-		expect(placed(await store.staplesAfter(3n, 4n, 10)).map(function([hash]) {
+		expect(placed(await store.staplesAfter(9n, 99n, 10)).map(function([hash]) {
 			return(hash);
 		})).toEqual([made[1]?.blocksHash.toString()]);
-		expect(placed(await store.staplesOf([made[2]?.blocksHash.toString() ?? '', made[1]?.blocksHash.toString() ?? '']))).toEqual([4, 5].map(function(sequence) {
-			const staple = made[sequence - 3];
-			return([staple?.blocksHash.toString(), staple?.timestamp().getTime(), BigInt(sequence)]);
+		expect(placed(await store.staplesOf([made[2]?.blocksHash.toString() ?? '', made[1]?.blocksHash.toString() ?? '']))).toEqual([1, 2].map(function(index) {
+			const staple = made[index];
+			return([staple?.blocksHash.toString(), staple?.timestamp().getTime(), PLACES[index]]);
 		}));
 	});
 
