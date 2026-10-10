@@ -64,13 +64,10 @@ const HELD_READ_MILLISECONDS = 2000;
 
 /**
  * How long one slice of the ledger's garbage collection runs at most, in one
- * transaction of its own [Keeta TS] index.js:67852-67861, 70517-70521, and how
- * many slices follow each update at most: it holds the ledger to itself while
- * it runs, so it is cut short rather than hold up the next update's adds.
+ * transaction of its own [Keeta TS] index.js:67852-67861, 70517-70521, so
+ * that a stop waits on one slice at most.
  */
 const GC_SLICE_MILLISECONDS = 2000;
-
-const GC_SLICES = 5;
 
 type UpdateResult = { complete: boolean };
 
@@ -458,16 +455,22 @@ export class BootstrapClient {
 	}
 
 	/**
-	 * Runs the ledger's garbage collection, which, besides what it collects,
-	 * applies each deferred staple whose awaited blocks are all held
-	 * (schema/CONTRACT.md, section 2.6). The ledger applies a deferred staple
-	 * when the block it awaits arrives, but only for as long as the replay
-	 * window allows, so of a long chain of staples a peer sent ahead of the
-	 * block they extend, as a pass over a range read ahead of the earliest
-	 * sends, only the collection applies the rest. Nothing else in the node runs it.
+	 * Runs the ledger's garbage collection, slice after slice, until it
+	 * reports nothing left, which, besides what it collects, applies each
+	 * deferred staple whose awaited blocks are all held (schema/CONTRACT.md,
+	 * section 2.6). The ledger applies a deferred staple when the block it
+	 * awaits arrives, but only for as long as the replay window allows, so of
+	 * a long chain of staples deferred behind one block, only the collection
+	 * applies the rest, about a window's worth a slice. Each staple of the
+	 * chain the next update adds before the chain is applied is deferred
+	 * behind it too, so a collection cut short after a few slices fell behind
+	 * an account that sends a staple every few seconds of its history: on the
+	 * main network such a chain grew past a hundred thousand staples. Every
+	 * staple it applies precedes, by its votes, whatever the next update adds.
+	 * Nothing else in the node runs it.
 	 */
 	async #collect(): Promise<void> {
-		for (let slice = 0; slice < GC_SLICES && !this.#stopped(); slice++) {
+		while (!this.#stopped()) {
 			let more: boolean;
 			try {
 				more = await this.#node.ledger.gc(GC_SLICE_MILLISECONDS);

@@ -447,7 +447,7 @@ describe('a bootstrap client', function() {
 		expect(new Set(servedCounts(recording.pages))).toEqual(new Set([0]));
 	});
 
-	test('runs the ledger\'s garbage collection after each update, which applies staples deferred past the replay window, in a few short slices, and none once stopped', async function() {
+	test('runs the ledger\'s garbage collection after each update, which applies staples deferred past the replay window, in short slices until it reports nothing left, and none once stopped', async function() {
 		const peer = await representative();
 		await addAll(peer.node, await sendsFrom(peer.network, 0, 2));
 		const late = await joiner({ bootstrapFrom: [peer.apiURL] });
@@ -458,13 +458,32 @@ describe('a bootstrap client', function() {
 		await client.update();
 		expect(collect.mock.calls).toEqual([[2000]]);
 
+		// A chain of deferred staples longer than a few slices apply is applied whole before the next update adds more.
 		collect.mockClear();
-		collect.mockResolvedValue(true);
+		let slices = 0;
+		collect.mockImplementation(function() {
+			slices++;
+			return(Promise.resolve(slices < 12));
+		});
 		await client.update();
-		expect(collect.mock.calls.length).toBe(5);
+		expect(collect.mock.calls.length).toBe(12);
+
+		// A stop asked for while it runs ends it after the slice.
+		collect.mockClear();
+		slices = 0;
+		let stopping: Promise<void> = Promise.resolve();
+		collect.mockImplementation(function() {
+			slices++;
+			if (slices === 3) {
+				stopping = client.stop();
+			}
+			return(Promise.resolve(true));
+		});
+		await client.update();
+		await stopping;
+		expect(collect.mock.calls.length).toBe(3);
 
 		collect.mockClear();
-		await client.stop();
 		await client.update();
 		expect(collect).not.toHaveBeenCalled();
 	});
