@@ -495,14 +495,17 @@ function resolveAccount<T extends AccountKeyAlgorithm>(account: Account<T> | str
 
 /**
  * Every account a confirmed change writes a row for, with its key type, keyed
- * by public key. Upstream names as touched every account with an effect of
- * its own, which takes in each block's account and each holder of a balance
- * it changes [Keeta TS] index.js:68099-68104, 68166-68171, 68718-68724,
- * 68776-68780, and as possibly new each account a delegation, a creation or a
- * permission names [Keeta TS] index.js:68290, 68300, 68314, 68342-68354. Only
- * the votes, the tokens of balances and the representatives whose weight
- * moves name others; a token a SET leaves holding itself is one of those
- * tokens [Keeta TS] index.js:67534-67536.
+ * by public key. A change's effects are always upstream's for the staple's own
+ * blocks over the ledger: upstream computes them so just before it adjusts
+ * [Keeta TS] index.js:69404-69407, and so does the base's replay of a deferred
+ * staple (base.ts, #applyIsolated). Upstream names as touched every account
+ * with an effect of its own, which takes in each block's account and each
+ * holder of a balance it changes [Keeta TS] index.js:68099-68104, 68166-68171,
+ * 68718-68724, 68776-68780, and as possibly new each account a delegation, a
+ * creation or a permission names [Keeta TS] index.js:68290, 68300, 68314,
+ * 68342-68354. Only the votes, the tokens of balances and the representatives
+ * whose weight moves name others; a token a SET leaves holding itself is one
+ * of those tokens [Keeta TS] index.js:67534-67536.
  */
 function accountsNamedBy(change: ConfirmedStapleChange): Map<string, AccountKeyAlgorithm> {
 	const named = new Map<string, AccountKeyAlgorithm>();

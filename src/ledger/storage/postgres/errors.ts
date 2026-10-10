@@ -22,6 +22,13 @@ const UNIQUE_VIOLATION = '23505';
 // The server ending the session while a statement runs: an administrator's or a shutdown's termination, or the idle-in-transaction timeout.
 const SESSION_TERMINATED = ['57P01', '57P02', '25P03'] as const;
 const CONNECTION_EXCEPTION_CLASS = '08';
+/*
+ * The server refusing a message it could not read. As an ERROR it refuses
+ * only that message, such as a bind with the wrong number of parameters, and
+ * the session goes on, so a new attempt would send the same message; only as
+ * a FATAL does it end the session.
+ */
+const PROTOCOL_VIOLATION = '08P01';
 
 /*
  * The unique constraints two processes of one node can race to: the same
@@ -46,6 +53,9 @@ const isSessionLoss = function(error: unknown): boolean {
 		return(false);
 	}
 	const { code } = error;
+	if (code === PROTOCOL_VIOLATION) {
+		return(error.severity === 'FATAL');
+	}
 	return(code.startsWith(CONNECTION_EXCEPTION_CLASS) || SESSION_TERMINATED.some(function(terminated): boolean {
 		return(terminated === code);
 	}));

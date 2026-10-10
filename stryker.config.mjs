@@ -59,10 +59,11 @@ export default {
 	plugins: ['@stryker-mutator/*', './mutation/ignorers.js'],
 	ignorers: [...module.ignorers],
 	/*
-	 * Two runners, each a single vitest worker with its own Postgres cluster,
-	 * stay within a 12 GiB memory cap beside a running node.
+	 * One runner, a single vitest worker with its own Postgres cluster: beside
+	 * a running node's page cache, a second runner took the workspace past
+	 * 10 GiB of its 12 GiB memory cap.
 	 */
-	concurrency: 2,
+	concurrency: 1,
 	/*
 	 * The incremental file is a cache of the last run, kept out of the tree
 	 * with the reports: every run rewrites it, and it holds nothing a run

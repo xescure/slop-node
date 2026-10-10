@@ -32,10 +32,12 @@ export type ReportedMutant = {
 	readonly file: string;
 	readonly status: MutantStatus;
 	/**
-	 * A survivor of a run that completed no test. Under a mutant of code that
-	 * runs as its module loads, every test file can fail to load, and
-	 * Stryker 10.0.0's vitest runner then reports the mutant as surviving
-	 * the empty run, though no test ran to let it survive.
+	 * A survivor of a run that completed no test, of code that runs as its
+	 * module loads. Under such a mutant every test file can fail to load, and
+	 * Stryker 10.0.0's vitest runner then reports the mutant as surviving the
+	 * empty run, though no test ran to let it survive. Any other survivor of
+	 * an empty run is one whose covering tests the runner failed to select,
+	 * so it stays unjudged and needs an entry.
 	 */
 	readonly ranNoTest: boolean;
 };
@@ -142,6 +144,17 @@ function testsCompletedAt(object: JSONObject, where: string): number | undefined
 	return(value);
 }
 
+function staticAt(object: JSONObject, where: string): boolean {
+	if (!('static' in object)) {
+		return(false);
+	}
+	const value = object['static'];
+	if (typeof value !== 'boolean') {
+		throw(new Error(`${where}.static is not a boolean`));
+	}
+	return(value);
+}
+
 function positionAt(object: JSONObject, name: string, where: string): SourcePosition {
 	const position = objectAt(object, name, where);
 	const positionWhere = `${where}.${name}`;
@@ -180,7 +193,7 @@ export function parseReport(report: unknown): ReportedMutant[] {
 				throw(new Error(`${mutantWhere}.status is the unknown status ${status}`));
 			}
 			mutants.push({
-				ranNoTest: status === 'Survived' && testsCompletedAt(mutant, mutantWhere) === 0,
+				ranNoTest: status === 'Survived' && testsCompletedAt(mutant, mutantWhere) === 0 && staticAt(mutant, mutantWhere),
 				place: placeOf({
 					file,
 					start: positionAt(location, 'start', `${mutantWhere}.location`),

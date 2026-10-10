@@ -11,6 +11,8 @@ type Mutant = {
 	readonly replacement?: string;
 	/** Absent from the report when absent here. */
 	readonly testsCompleted?: number;
+	/** Absent from the report when absent here. */
+	readonly static?: boolean;
 };
 
 function report(files: Readonly<Record<string, readonly Mutant[]>>): unknown {
@@ -20,12 +22,15 @@ function report(files: Readonly<Record<string, readonly Mutant[]>>): unknown {
 			return([file, {
 				language: 'typescript',
 				source: '',
-				mutants: mutants.map(function({ line, column, mutatorName, status, replacement = 'x', testsCompleted }, index): unknown {
-					const mutant = { id: String(index), mutatorName, replacement, status, location: { start: { line, column }, end: { line, column: column + 1 } } };
-					if (testsCompleted === undefined) {
-						return(mutant);
+				mutants: mutants.map(function({ line, column, mutatorName, status, replacement = 'x', testsCompleted, static: isStatic }, index): unknown {
+					const mutant: Record<string, unknown> = { id: String(index), mutatorName, replacement, status, location: { start: { line, column }, end: { line, column: column + 1 } } };
+					if (testsCompleted !== undefined) {
+						mutant['testsCompleted'] = testsCompleted;
 					}
-					return({ ...mutant, testsCompleted });
+					if (isStatic !== undefined) {
+						mutant['static'] = isStatic;
+					}
+					return(mutant);
 				})
 			}]);
 		}))
@@ -127,13 +132,13 @@ describe('mutation triage', function() {
 		expect(passes(unaccounted)).toBe(false);
 	});
 
-	test('leaves out of the score a survivor of a run that completed no test, and needs no entry for it', function() {
+	test('leaves out of the score a static survivor of a run that completed no test, and needs no entry for it', function() {
 		const mutants = parseReport(report({
 			'src/a.ts': [
 				...Array.from({ length: 9 }, function(_, index): Mutant {
 					return(killed(index + 1));
 				}),
-				{ line: 20, column: 1, mutatorName: 'StringLiteral', status: 'Survived', testsCompleted: 0 },
+				{ line: 20, column: 1, mutatorName: 'StringLiteral', status: 'Survived', testsCompleted: 0, static: true },
 				{ line: 21, column: 1, mutatorName: 'StringLiteral', status: 'Survived', testsCompleted: 4 }
 			]
 		}));
@@ -150,6 +155,26 @@ describe('mutation triage', function() {
 		expect(function() {
 			return(parseReport({ files: { 'src/a.ts': { mutants: [{ mutatorName: 'StringLiteral', replacement: 'x', status: 'Survived', testsCompleted: -1, location: { start: { line: 1, column: 1 }, end: { line: 1, column: 2 } } }] } } }));
 		}).toThrow(/testsCompleted is not a whole number/);
+		expect(function() {
+			return(parseReport({ files: { 'src/a.ts': { mutants: [{ mutatorName: 'StringLiteral', replacement: 'x', status: 'Survived', testsCompleted: 0, static: 'yes', location: { start: { line: 1, column: 1 }, end: { line: 1, column: 2 } } }] } } }));
+		}).toThrow(/static is not a boolean/);
+	});
+
+	test('fails a survivor of a run that completed no test unless its code runs as its module loads', function() {
+		const nonStatic: Mutant = { line: 20, column: 1, mutatorName: 'StringLiteral', status: 'Survived', testsCompleted: 0, static: false };
+		const unstated: Mutant = { line: 21, column: 1, mutatorName: 'StringLiteral', status: 'Survived', testsCompleted: 0 };
+		const mutants = parseReport(report({ 'src/a.ts': [killed(1), nonStatic, unstated] }));
+
+		const assessment = assess(mutants, []);
+
+		expect(assessment.ranNoTest).toEqual([]);
+		expect(assessment.unaccounted.map(function(mutant): string {
+			return(mutant.place);
+		})).toEqual([20, 21].map(function(line): string {
+			return(placeOf({ file: 'src/a.ts', start: { line, column: 1 }, end: { line, column: 2 }, mutatorName: 'StringLiteral', replacement: 'x' }));
+		}));
+		expect(assessment.modules[0]).toMatchObject({ survived: 2, ranNoTest: 0 });
+		expect(passes(assessment)).toBe(false);
 	});
 
 	test('refuses an entry it cannot read, and one that names a mutant twice', function() {

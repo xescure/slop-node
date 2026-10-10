@@ -341,6 +341,23 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(await ledger.listACLsByPrincipal(principal, [])).toEqual([]);
 		});
 
+		test('a grant on a target nothing has named before stores the target with the grant', async function() {
+			const { network, ledger } = await startNetwork();
+			const entity = requireAt(network.users, 0);
+			const principal = requireAt(network.users, 1);
+			const target = lib.Account.fromSeed(NEWCOMER_SEED, 4);
+			const cursor = new ChainCursor(network.genesis);
+			await ledger.add(network.genesis);
+
+			// The target is named only as possibly new [Keeta TS] index.js:68353.
+			await applyPermissionChanges(network, ledger, cursor, entity, [
+				{ principal, target, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['ACCESS']) }
+			]);
+
+			expect(await aclsOf(ledger, principal, entity)).toEqual([rowFor(principal, entity, target, ['ACCESS'])]);
+			expect((await ledger.listACLsByEntity(entity)).map(summarizeACL)).toEqual([rowFor(principal, entity, target, ['ACCESS'])]);
+		});
+
 		test('subtract to empty stores an empty row (entity-wide row does not re-apply)', async function() {
 			const { network, ledger } = await startNetwork();
 			const entity = requireAt(network.users, 0);

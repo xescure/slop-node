@@ -212,6 +212,23 @@ describe('mapDatabaseError', function() {
 		expectUnchanged(failure, COMMIT);
 	});
 
+	test('a message the server refuses as malformed is passed through, unless the refusal ends the session', async function() {
+		const pool = await ledgerPool();
+
+		// pg binds the parameters it is given, and the server refuses a bind short of the statement's.
+		const refused = await failureOf(pool.query({ name: 'short_bind', text: 'SELECT $1::integer AS value', values: [] }));
+
+		expect(refused).toMatchObject({ code: '08P01', severity: 'ERROR' });
+		expectUnchanged(refused);
+		// The session went on: the refusal ended neither it nor the pool's use of it.
+		expect((await pool.query<{ value: number }>('SELECT 1 AS value')).rows).toEqual([{ value: 1 }]);
+		const fatal = new pg.DatabaseError('invalid frontend message type', 0, 'error');
+		fatal.code = '08P01';
+		fatal.severity = 'FATAL';
+		expectRetryable(fatal);
+		expectUnchanged(fatal, COMMIT);
+	});
+
 	test('a session ended for idling in its transaction is a retryable conflict only before COMMIT', function() {
 		const failure = new pg.DatabaseError('terminating connection due to idle-in-transaction timeout', 0, 'error');
 		failure.code = '25P03';
