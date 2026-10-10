@@ -954,7 +954,7 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(caughtUp.map(bytesOf)).toEqual([network.genesis, received, later].map(bytesOf));
 		});
 
-		test('fork in confirmed history is rejected with LEDGER_PREVIOUS_ALREADY_USED, and raises an alarm', async function() {
+		test('fork in confirmed history is rejected with LEDGER_PREVIOUS_ALREADY_USED', async function() {
 			const log = new RecordingLog();
 			const { network, ledger } = await startNetwork(DEFAULT_WEIGHTS, { log });
 			const user = requireAt(network.users, 0);
