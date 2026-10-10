@@ -185,6 +185,11 @@ export class PostgresTransaction extends LedgerDriverTransaction {
 		return(result.rows);
 	}
 
+	/** Throws as a statement would once the transaction is ending or finished, for an answer that needs no statement. */
+	assertOpen(): void {
+		this.#open();
+	}
+
 	/** Runs SQL whose rows the caller reads by column name. */
 	async execute(text: string, values: readonly SQLValue[] = []): Promise<UntypedRow[]> {
 		const result = await this.#perform(function(client) {
@@ -922,9 +927,18 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 		return(lib.Account.fromPublicKeyString(row.representative).assertAccount());
 	}
 
+	/*
+	 * computeLedgerEffect asks once for each principal a staple has an effect
+	 * on, with the entities whose permissions it adjusts, often none
+	 * [Keeta TS] index.js:67264-67308; no row matches an empty list (D10).
+	 */
 	async listACLsByPrincipal(transaction: PostgresTransaction, principal: ACLRow['principal'], entityList?: GenericAccount[]): Promise<ACLRow[]> {
 		let entities: string[] | null = null;
 		if (entityList !== undefined) {
+			if (entityList.length === 0) {
+				transaction.assertOpen();
+				return([]);
+			}
 			entities = entityList.map(publicKeyOf);
 		}
 		let holder: GenericAccount;

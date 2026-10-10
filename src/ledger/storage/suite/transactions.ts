@@ -89,6 +89,8 @@ export function defineTransactionCases(driver: DriverUnderTest): void {
 			await storage.commitTransaction(transaction);
 
 			await expect(storage.getBalance(transaction, requireAt(network.users, 0), network.baseToken)).rejects.toThrow();
+			// An answer the driver knows without reading still needs an open transaction.
+			await expect(storage.listACLsByPrincipal(transaction, requireAt(network.users, 0), [])).rejects.toThrow();
 			await expect(storage.abortTransaction(transaction)).rejects.toThrow();
 			await expect(storage.commitTransaction(transaction)).rejects.toThrow();
 

@@ -359,6 +359,33 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			].sort(byTarget));
 		});
 
+		test('a staple reads the permissions and representative an earlier staple of its transaction wrote', async function() {
+			const { network, ledger } = await startNetwork();
+			const entity = requireAt(network.users, 0);
+			const principal = requireAt(network.users, 1);
+			const second = requireAt(network.representatives, 1);
+			const third = requireAt(network.representatives, 2);
+			const cursor = new ChainCursor(network.genesis);
+			await ledger.add(network.genesis);
+			const delegation = cursor.append(await setRepresentativeBlock({ account: entity, representative: second, previous: cursor.previous(entity), network: network.network }));
+			const grant = cursor.append(await modifyPermissionsBlock({ account: entity, previous: cursor.previous(entity), network: network.network, principal, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['ACCESS']) }));
+			const regrant = cursor.append(await modifyPermissionsBlock({ account: entity, previous: cursor.previous(entity), network: network.network, principal, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['SEND_ON_BEHALF']) }));
+			const spend = cursor.append(await sendBlock({ from: entity, previous: cursor.previous(entity), to: requireAt(network.users, 2), amount: 10n, token: network.baseToken, network: network.network }));
+			const first = await confirmedStaple([delegation, grant], network.representatives);
+			const later = await confirmedStaple([regrant, spend], network.representatives);
+
+			const applied = await ledger.run('suite-reads-earlier-staple', async function(transaction) {
+				expect(await transaction.listACLsByPrincipal(principal, [entity])).toEqual([]);
+				return([...await transaction.add(first), ...await transaction.add(later)]);
+			});
+
+			expect(blocksHashesOf(applied)).toEqual(blocksHashesOf([first, later]));
+
+			expect(await aclsOf(ledger, principal, entity)).toEqual([rowFor(principal, entity, entity, ['ACCESS', 'SEND_ON_BEHALF'])]);
+			expect(await ledger.votingPower(second)).toBe(690n);
+			expect(await ledger.votingPower(third)).toBe(310n);
+		});
+
 		/*
 		 * Upstream's encoder rebuilds a permission set from its true offsets,
 		 * so a negative external set leaves a block as a positive one, and its
