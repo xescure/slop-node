@@ -159,7 +159,7 @@ export function defineStatsCases(driver: DriverUnderTest): void {
 			await node.stats.sync();
 
 			expect((await storage.ledgerChecksum()).checksum).toBe(checksumOf([network.genesis, staple]));
-			// The statistic upstream's ledger folds every applied block into [Keeta TS] index.js:69437.
+			// The statistic upstream's ledger folds every applied block into [Keeta TS] index.js:69415.
 			expect((await node.stats.getXor('ledgerChecksum')).toBigInt()).toBe(0n);
 		});
 

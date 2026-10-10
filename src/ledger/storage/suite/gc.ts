@@ -10,6 +10,7 @@ import type { TestLedgerOptions, TestNetwork } from '../../../testing/network.js
 import type { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
 import {
 	ChainCursor,
+	DEFAULT_REPLAY_WINDOW_MILLISECONDS,
 	DEFAULT_WEIGHTS,
 	RecordingLog,
 	TESTING_KEY,
@@ -92,9 +93,6 @@ async function voteOursPermanent(network: TestNetwork, ours: Ledger, peers: read
 	const ourPermanent = await ours.vote([send, fee], temporary);
 	return({ send, fee, ourTemporary, ourPermanent });
 }
-
-// Upstream's documented default for LedgerConfig.heapProcessWindowMs.
-const DEFAULT_REPLAY_WINDOW_MILLISECONDS = 5000;
 
 type CertificateChain = {
 	readonly entity: Account;

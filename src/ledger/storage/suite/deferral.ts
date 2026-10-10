@@ -6,6 +6,7 @@ import { advanceClock } from '../../../testing/network.js';
 import type { TestNetwork } from '../../../testing/network.js';
 import type { LedgerStorageDriverBase } from '../base.js';
 import {
+	DEFAULT_REPLAY_WINDOW_MILLISECONDS,
 	DEFAULT_WEIGHTS,
 	RecordingLog,
 	TESTING_KEY,
@@ -27,9 +28,6 @@ import type { DriverUnderTest } from './types.js';
 const lib = KeetaNet.lib;
 
 const NEWCOMER_SEED = '5c2e8a7d4b1f9036e2d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7f6';
-
-// Upstream's documented default for LedgerConfig.heapProcessWindowMs.
-const DEFAULT_REPLAY_WINDOW_MILLISECONDS = 5000;
 
 function sendOf(network: TestNetwork, user: number, previous: BlockHash, amount: bigint): Promise<Block> {
 	const from = requireAt(network.users, user);

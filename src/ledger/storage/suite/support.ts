@@ -20,6 +20,8 @@ export const GENESIS_MOMENT: Date = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
 // The key the driver base's test hooks answer to.
 export const TESTING_KEY = 'ba48dff1-fc9c-4834-abc0-68434c8dc29b';
 export const DEFAULT_WEIGHTS: readonly bigint[] = [400n, 300n, 300n];
+// Upstream's documented default for LedgerConfig.heapProcessWindowMs, which a ledger without one replays for.
+export const DEFAULT_REPLAY_WINDOW_MILLISECONDS = 5000;
 
 export type NetworkFixture = {
 	readonly network: TestNetwork;
