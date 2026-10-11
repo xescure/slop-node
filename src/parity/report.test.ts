@@ -255,13 +255,13 @@ describe('the parity report', function() {
 		expect(unresolved).toMatchObject({ verdict: 'fail', counts: { diverged: 1, unresolved: 1 }, firstDivergence: { path, field: 'body.info' } });
 	});
 
-	test('states a census of a stratum whose every planned request was compared, which a later plan drawing a sample of it does not end, and covers a stratum by 300 requests or its census', function() {
+	test('states a census of a stratum whose every planned request was compared, and covers a stratum by 300 requests or its census', function() {
 		const census = [`/node/ledger/account/${ACCOUNT}`, `/node/ledger/account/${ACCOUNT}/head`];
 		const plan: APIDiffPlanRecord = { kind: 'api-diff-plan', at: '2026-10-11T14:00:00.000Z', quietBefore: '2026-10-11T13:00:00.000Z', samplesPerStratum: 300, strata: [{ stratum: 'multisig', population: { kind: 'census', requests: census } }, { stratum: 'storage', population: { kind: 'census', requests: [`/node/ledger/account/${OTHER_ACCOUNT}`] } }] };
 		const tokens = Array.from({ length: 300 }, function(_, index) {
 			return(apiDiff('2026-10-11T14:01:00.000Z', 'token', `/node/ledger/account/${ACCOUNT}/history/start/${index.toString(16).padStart(64, '0')}`, MATCHED));
 		});
-		const sampled: APIDiffPlanRecord = { ...plan, at: '2026-10-11T16:00:00.000Z', strata: [{ stratum: 'multisig', population: { kind: 'sample', drawn: 2, whole: false } }, { stratum: 'operation:TOKEN_ADMIN_MODIFY_BALANCE', population: { kind: 'census', requests: [] } }] };
+		const sampled: APIDiffPlanRecord = { ...plan, at: '2026-10-11T16:00:00.000Z', strata: [{ stratum: 'token', population: { kind: 'sample', drawn: 300, whole: false } }, { stratum: 'operation:TOKEN_ADMIN_MODIFY_BALANCE', population: { kind: 'census', requests: [] } }] };
 		const signal = report([plan, ...census.map(function(path) {
 			return(apiDiff('2026-10-11T14:02:00.000Z', 'multisig', path, MATCHED));
 		}), ...tokens, sampled]).signals.apiDiff;
@@ -276,6 +276,16 @@ describe('the parity report', function() {
 		expect(of('permissions')).toMatchObject({ census: null, covered: false });
 		expect(of('operation:TOKEN_ADMIN_MODIFY_BALANCE')).toMatchObject({ census: { requests: 0, compared: 0 }, covered: true, confidence: { kind: 'empty-population' } });
 		expect(signal).toMatchObject({ samplesTarget: 300, everyStratumCovered: false });
+	});
+
+	test('ends a census by a later plan drawing a sample of its stratum, whose population grew past it, so that only the done criterion covers the stratum', function() {
+		const census = [`/node/ledger/account/${ACCOUNT}`];
+		const plan: APIDiffPlanRecord = { kind: 'api-diff-plan', at: '2026-10-11T14:00:00.000Z', quietBefore: '2026-10-11T13:00:00.000Z', samplesPerStratum: 300, strata: [{ stratum: 'multisig', population: { kind: 'census', requests: census } }] };
+		const sampled: APIDiffPlanRecord = { ...plan, at: '2026-10-12T14:00:00.000Z', strata: [{ stratum: 'multisig', population: { kind: 'sample', drawn: 300, whole: false } }] };
+		const multisig = report([plan, apiDiff('2026-10-11T14:02:00.000Z', 'multisig', census[0] ?? '', MATCHED), sampled]).signals.apiDiff.strata.find(function(entry) {
+			return(entry.stratum === 'multisig');
+		});
+		expect(multisig).toMatchObject({ requestsCompared: 1, census: null, covered: false, confidence: { kind: 'rule-of-three', samples: 1 } });
 	});
 
 	test('passes shadow votes only once the latest run voted on the whole scoped window, up to a target fixed with the follower caught up', function() {

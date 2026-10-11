@@ -607,7 +607,7 @@ describe('a triage of an API divergence', function() {
 });
 
 describe('a census', function() {
-	test('stands on the latest plan that made one, whose grown population an older complete census does not cover', function() {
+	test('stands on the latest plan that made one, whose grown population an older complete census does not cover, until a later plan draws a sample of the stratum', function() {
 		const plan = function(at: string, requests: readonly string[]): APIDiffPlanRecord {
 			return({ kind: 'api-diff-plan', at, quietBefore: at, samplesPerStratum: 300, strata: [{ stratum: 'multisig', population: { kind: 'census', requests } }] });
 		};
@@ -615,7 +615,8 @@ describe('a census', function() {
 		const grown = plan('2026-10-12T14:00:00.000Z', ['/a', '/b']);
 		const sampled: APIDiffPlanRecord = { ...grown, at: '2026-10-13T14:00:00.000Z', strata: [{ stratum: 'multisig', population: { kind: 'sample', drawn: 2, whole: false } }] };
 
-		expect(standingCensuses([older, grown, sampled]).get('multisig')).toEqual({ plan: grown, requests: ['/a', '/b'] });
+		expect(standingCensuses([older, grown]).get('multisig')).toEqual({ plan: grown, requests: ['/a', '/b'] });
+		expect(standingCensuses([older, grown, sampled]).get('multisig')).toBeUndefined();
 	});
 
 	test('is completed on recheck, each request of the latest plan\'s census not compared yet sent to the representative last tried, or the first', async function() {

@@ -1152,14 +1152,23 @@ export function requestStandings(records: readonly APIDiffRecord[], explanations
 /**
  * The census each stratum stands on: the latest plan that made one of it,
  * whose population, which may have grown since an older census, is the
- * one to cover; a plan that drew a sample of it does not end it.
+ * one to cover. A later plan that drew a sample of the stratum ends it: a
+ * plan is recorded only for a run of the done criterion, so its population
+ * has grown past that, which no older census covers.
  */
 export function standingCensuses(plans: readonly APIDiffPlanRecord[]): ReadonlyMap<Stratum, { readonly plan: APIDiffPlanRecord; readonly requests: readonly string[] }> {
 	const censuses = new Map<Stratum, { readonly plan: APIDiffPlanRecord; readonly requests: readonly string[] }>();
 	for (const plan of plans) {
 		for (const { stratum, population } of plan.strata) {
-			if (population.kind === 'census') {
-				censuses.set(stratum, { plan, requests: population.requests });
+			switch (population.kind) {
+				case 'census':
+					censuses.set(stratum, { plan, requests: population.requests });
+					break;
+				case 'sample':
+					censuses.delete(stratum);
+					break;
+				default:
+					assertNever(population);
 			}
 		}
 	}
