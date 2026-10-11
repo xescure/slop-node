@@ -676,10 +676,13 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * out, or the replay failed. It is retried the way a replay would run it.
 	 * One that fails again stays deferred and is logged, and is not retried
 	 * again by the same gc pass, so it never keeps the pass going. Once the
-	 * replay window is spent the batch stops, after one staple at least, and
-	 * the staples it listed and left are listed again by the next: a batch
-	 * runs in the gc's one transaction, which a hundred staples of hundreds
-	 * of operations each would hold open for minutes.
+	 * replay window is spent the batch stops, after it applied or dropped one
+	 * staple at least, and the staples it listed and left are listed again by
+	 * the next: a batch runs in the gc's one transaction, which a hundred
+	 * staples of hundreds of operations each would hold open for minutes. A
+	 * failed retry counts for nothing there: the next gc, in a transaction of
+	 * its own, lists it first again, so a batch that stopped after it would
+	 * never reach the staples listed after it, and the gc never end.
 	 */
 	async #retryReleasedDeferredStaples(transaction: Transaction, limit: number): Promise<boolean> {
 		const { config } = this.initialized;
@@ -689,22 +692,23 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			completed: new Set(),
 			deadline: Date.now() + (config.heapProcessWindowMs ?? DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS)
 		};
-		let tried = 0;
+		let settled = 0;
 		for (const staple of await this.listReleasedDeferredStaples(transaction, limit, retried)) {
-			if (tried > 0 && Date.now() >= replay.deadline) {
+			if (settled > 0 && Date.now() >= replay.deadline) {
 				break;
 			}
-			tried++;
 			const stapleKey = toStapleKey(staple.blocksHash);
 			retried.add(stapleKey);
 			if (await this.#isDead(transaction, staple)) {
 				await this.removeDeferredStaple(transaction, stapleKey);
 				this.#reportDeadDeferredStaple(staple);
+				settled++;
 				continue;
 			}
 			try {
 				const applied = await this.#applyIsolated(transaction, staple, replay);
 				recordSettlement(transaction, applied);
+				settled++;
 			} catch (error: unknown) {
 				config.log?.error(LOG_SOURCE, `retrying deferred staple ${stapleKey} failed; it stays deferred`, error);
 			}

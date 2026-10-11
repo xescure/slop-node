@@ -53,12 +53,6 @@ export type ShadowRun = {
 	readonly progress?: (state: ShadowRunState) => void;
 	/** Ends the run after the batch it is in. */
 	readonly stopped?: AbortSignal;
-	/**
-	 * The staples the follower held deferred at the base, by the hash of
-	 * their blocks, which the run applies at their places as the follower's
-	 * replay of them did; none for a run from an empty ledger.
-	 */
-	readonly deferredAtBase?: ReadonlySet<string>;
 };
 
 /** Enough staples to keep the reads and saves few, and few enough that a batch's bytes are a few megabytes. */
@@ -127,26 +121,40 @@ export function sampledForInformation(blocksHash: string, every: number): boolea
 export const SHADOW_GC_SLICE_MILLISECONDS = 2000;
 
 /**
+ * A stop came while staples a batch released were still to be applied: the
+ * batch is cut short there, unsaved, as a kill would cut it, and the run
+ * resumed applies them before anything else (runShadowVotes).
+ */
+class StoppedInBatch extends Error {
+	constructor() {
+		super('the shadow votes were stopped while a batch applied the staples it released');
+		this.name = 'StoppedInBatch';
+	}
+}
+
+/**
  * Applies every deferred staple that what the ledger holds releases, in
  * garbage collections of a slice each, until one reports nothing left: as
  * many transactions as it takes, each on a clock running on from the
- * moment, as the time limits that end it read the clock.
+ * moment, as the time limits that end it read the clock. A stop ends it
+ * between two slices.
  */
-async function drainDeferral(ledger: Ledger, moment: Date): Promise<void> {
-	while (await fromMoment(moment, function() {
-		return(ledger.gc(SHADOW_GC_SLICE_MILLISECONDS));
-	})) {
-		// Each slice retries the staples that the slices before released.
+async function drainDeferral(ledger: Ledger, moment: Date, stopped: AbortSignal | undefined): Promise<void> {
+	for (;;) {
+		if (stopped?.aborted === true) {
+			throw(new StoppedInBatch());
+		}
+		const more = await fromMoment(moment, function() {
+			return(ledger.gc(SHADOW_GC_SLICE_MILLISECONDS));
+		});
+		if (!more) {
+			return;
+		}
 	}
 }
 
 function keyOf(staple: VoteStaple): string {
 	return(staple.blocksHash.toString());
-}
-
-/** The ledger's refusal of a staple whose votes are short of a quorum by the weights it holds so far. */
-function isWeightRefusal(error: unknown): boolean {
-	return(lib.Error.isInstance(error) && error.code === 'LEDGER_INSUFFICIENT_VOTING_WEIGHT');
 }
 
 /** The ledger's refusal of a staple whose blocks it holds already [Keeta TS] index.js:67683-67687. */
@@ -155,82 +163,54 @@ function isAlreadyHeld(error: unknown): boolean {
 }
 
 /**
- * Adds staples as the follower's bootstrap does: one refused for want of
- * voting weight waits, and is tried again once more staples were added
- * (src/node/bootstrap-pass.ts), and one refused because the ledger holds
- * its blocks is held, as the follower's retry queue counts it
- * (src/node/bootstrap-retry.ts). The ledger holds a staple before its place
- * when a replay applied a deferred copy of it, which a snapshot keeps: the
- * follower applied it the same way, at the place of the staple before it on
- * its chain, so the ledger stands as the follower's did either way.
+ * Applies the follower's staples to the offline ledger as its ledger
+ * accepted them: through the storage's adjust, as the ledger's add does
+ * once the votes are weighed, without weighing them again
+ * [Keeta TS] index.js:69397-69411, 67717-67729. The follower's list holds
+ * only staples its ledger accepted, each at the place it applied it, and a
+ * staple it applied by a replay of the staples deferred behind another,
+ * which weighs nothing, was weighed as it arrived, under the weights of an
+ * earlier place; weighed again at its place it could only be refused where
+ * the follower applied it, and the replay would leave the follower's
+ * ledger. What the shadow votes judge is the votes on each staple's blocks,
+ * not the follower's adds. A staple deferred is applied once a staple
+ * applied after it releases it, and one whose blocks the ledger holds
+ * already, as a stop that cut its batch short leaves it, is held.
  */
-class WeightedAdds {
+class Adds {
 	readonly #ledger: Ledger;
 	readonly #storage: LedgerStorageAPI;
 	readonly #node: KeetaNode;
-	readonly #waiting = new Map<string, SequencedStaple>();
+	readonly #stopped: AbortSignal | undefined;
 	/** The staples the ledger deferred and has not applied yet, which a staple it applies may release. */
 	readonly #deferred = new Map<string, SequencedStaple>();
-	refused = 0;
 
-	constructor(node: KeetaNode, storage: LedgerStorageAPI, waiting: readonly SequencedStaple[], deferred: readonly SequencedStaple[]) {
+	constructor(node: KeetaNode, storage: LedgerStorageAPI, deferred: readonly SequencedStaple[], stopped: AbortSignal | undefined) {
 		this.#ledger = node.ledger;
 		this.#storage = storage;
 		this.#node = node;
-		for (const held of waiting) {
-			this.#waiting.set(keyOf(held.staple), held);
-		}
+		this.#stopped = stopped;
 		for (const held of deferred) {
 			this.#deferred.set(keyOf(held.staple), held);
 		}
 	}
 
 	/**
-	 * Adds the staple at its moment, and then, when it applied and staples
-	 * wait deferred, applies all those it releases before anything else is
-	 * asked of the ledger. The ledger replays nothing as it adds (its replay
-	 * window is zero), so that what a vote after sees depends on what was
-	 * added, not on how fast: every release goes through the collections,
-	 * whose transactions are each short.
+	 * Applies the staple at its moment, and then, when it applied and
+	 * staples wait deferred, applies all those it releases before anything
+	 * else is asked of the ledger. The ledger replays nothing as it applies
+	 * (its replay window is zero), so that what a vote after sees depends on
+	 * what was applied, not on how fast: every release goes through the
+	 * collections, whose transactions are each short.
 	 */
 	async add(held: SequencedStaple): Promise<void> {
-		await this.#settled(held, await fromMoment(held.staple.timestamp(), () => {
-			return(this.#offer(held));
-		}));
-	}
-
-	/**
-	 * Applies a staple the follower held deferred at the base as its replay
-	 * did: through the storage's adjust, as the ledger's add does once the
-	 * votes are weighed, without weighing them again
-	 * [Keeta TS] index.js:69397-69411, 67717-67729. Its votes were weighed as
-	 * it arrived, under the weights of an earlier place.
-	 */
-	async replay(held: SequencedStaple): Promise<void> {
-		const applied = await fromMoment(held.staple.timestamp(), async () => {
-			const transaction = await this.#storage.beginTransaction({ node: this.#node, moment: new Date(), identifier: 'shadow-replay', readOnly: false });
-			let added: VoteStaple[];
-			try {
-				added = await this.#storage.adjust(transaction, held.staple, LedgerInternals.computeEffectOfBlocks(held.staple.blocks, this.#ledger));
-			} catch (error: unknown) {
-				await this.#storage.abortTransaction(transaction);
-				throw(error);
-			}
-			await this.#storage.commitTransaction(transaction);
-			if (added.length === 0) {
-				this.#deferred.set(keyOf(held.staple), held);
-				return(false);
-			}
-			return(true);
+		const applied = await fromMoment(held.staple.timestamp(), () => {
+			return(this.#apply(held));
 		});
-		await this.#settled(held, applied);
-	}
-
-	async #settled(held: SequencedStaple, applied: boolean): Promise<void> {
 		if (!applied || this.#deferred.size === 0) {
 			return;
 		}
-		await drainDeferral(this.#ledger, held.staple.timestamp());
+		await drainDeferral(this.#ledger, held.staple.timestamp(), this.#stopped);
 		const still = await appliedOf(this.#ledger, [...this.#deferred.values()].map(function(entry): VoteStaple {
 			return(entry.staple);
 		}));
@@ -242,46 +222,24 @@ class WeightedAdds {
 	}
 
 	/** Whether the ledger applied the staple now. */
-	async #offer(held: SequencedStaple): Promise<boolean> {
+	async #apply(held: SequencedStaple): Promise<boolean> {
+		const transaction = await this.#storage.beginTransaction({ node: this.#node, moment: new Date(), identifier: 'shadow-apply', readOnly: false });
+		let added: VoteStaple[];
 		try {
-			const added = await this.#ledger.add(held.staple);
-			this.#waiting.delete(keyOf(held.staple));
-			if (added.length === 0) {
-				this.#deferred.set(keyOf(held.staple), held);
-				return(false);
-			}
-			return(true);
+			added = await this.#storage.adjust(transaction, held.staple, LedgerInternals.computeEffectOfBlocks(held.staple.blocks, this.#ledger));
 		} catch (error: unknown) {
+			await this.#storage.abortTransaction(transaction);
 			if (isAlreadyHeld(error) && (await appliedOf(this.#ledger, [held.staple])).has(keyOf(held.staple))) {
-				this.#waiting.delete(keyOf(held.staple));
 				return(false);
 			}
-			if (!isWeightRefusal(error)) {
-				throw(error);
-			}
-			if (!this.#waiting.has(keyOf(held.staple))) {
-				this.refused++;
-			}
-			this.#waiting.set(keyOf(held.staple), held);
+			throw(error);
+		}
+		await this.#storage.commitTransaction(transaction);
+		if (added.length === 0) {
+			this.#deferred.set(keyOf(held.staple), held);
 			return(false);
 		}
-	}
-
-	/** Tries every waiting staple again, each at its own moment, until a round adds none. */
-	async retry(): Promise<void> {
-		for (;;) {
-			const before = this.#waiting.size;
-			for (const held of [...this.#waiting.values()]) {
-				await this.add(held);
-			}
-			if (this.#waiting.size === 0 || this.#waiting.size === before) {
-				return;
-			}
-		}
-	}
-
-	waiting(): readonly SequencedStaple[] {
-		return([...this.#waiting.values()]);
+		return(true);
 	}
 }
 
@@ -404,10 +362,14 @@ export async function runShadowVotes(run: ShadowRun): Promise<ShadowRunState> {
 	let deferred = reloaded.filter(function(held): boolean {
 		return(unappliedBefore.get(keyOf(held.staple)) === 'deferred');
 	});
-	const deferredAtBase = run.deferredAtBase ?? new Set<string>();
-	const adds = new WeightedAdds(node, run.storage, reloaded.filter(function(held): boolean {
+	const adds = new Adds(node, run.storage, deferred, run.stopped);
+	/*
+	 * Staples an earlier build left refused for want of voting weight are
+	 * applied as the follower's ledger accepted them, before anything else.
+	 */
+	const refusedBefore = reloaded.filter(function(held): boolean {
 		return(unappliedBefore.get(keyOf(held.staple)) === 'voting-weight');
-	}), deferred);
+	});
 	let state = run.start;
 	/*
 	 * A stop may have cut a batch short after some of its staples were voted
@@ -417,6 +379,9 @@ export async function runShadowVotes(run: ShadowRun): Promise<ShadowRunState> {
 	const recorded = await run.state.recordedSinceSaved();
 	let resuming = true;
 	try {
+		for (const held of refusedBefore) {
+			await adds.add(held);
+		}
 		while (run.stopped?.aborted !== true) {
 			const batch = await run.source.staplesAfter(BigInt(state.reached.sequence), BigInt(state.target.sequence), run.batchStaples ?? DEFAULT_BATCH_STAPLES);
 			const last = batch.at(-1);
@@ -425,6 +390,14 @@ export async function runShadowVotes(run: ShadowRun): Promise<ShadowRunState> {
 			}
 			let held = new Set<string>();
 			if (resuming) {
+				/*
+				 * A stop or a kill may have cut the batch short after an
+				 * applied staple released staples deferred before it in the
+				 * batch, and before the collections applied them. Applied
+				 * now, as the run cut short would have, they are held, their
+				 * recorded votes counted.
+				 */
+				await drainDeferral(ledger, last.staple.timestamp(), run.stopped);
 				held = await appliedOf(ledger, batch.map(function(entry): VoteStaple {
 					return(entry.staple);
 				}));
@@ -464,35 +437,23 @@ export async function runShadowVotes(run: ShadowRun): Promise<ShadowRunState> {
 						return(votedIn(tally, counted));
 					});
 				}
-				if (held.has(blocksHash)) {
-					// Added before a stop cut its batch short.
-				} else if (deferredAtBase.has(blocksHash)) {
-					await adds.replay(entry);
-				} else {
+				// One held was applied before a stop cut its batch short.
+				if (!held.has(blocksHash)) {
 					await adds.add(entry);
 				}
 			}
 			// The follower runs gc as it adds, which applies the staples deferred until the blocks they build on came.
-			await drainDeferral(ledger, last.staple.timestamp());
-			await adds.retry();
-			const waiting = adds.waiting();
-			const waitingHashes = new Set(waiting.map(function(held): string {
-				return(keyOf(held.staple));
-			}));
-			const candidates = [...deferred, ...batch].filter(function(held): boolean {
-				return(!waitingHashes.has(keyOf(held.staple)));
-			});
+			await drainDeferral(ledger, last.staple.timestamp(), run.stopped);
+			const candidates = [...deferred, ...batch];
 			const applied = await appliedOf(ledger, candidates.map(function(held): VoteStaple {
 				return(held.staple);
 			}));
 			deferred = candidates.filter(function(held): boolean {
 				return(!applied.has(keyOf(held.staple)));
 			});
-			const unapplied: UnappliedStaple[] = [...waiting.map(function(held): UnappliedStaple {
-				return(unappliedOf(held, 'voting-weight'));
-			}), ...deferred.map(function(held): UnappliedStaple {
+			const unapplied: UnappliedStaple[] = deferred.map(function(held): UnappliedStaple {
 				return(unappliedOf(held, 'deferred'));
-			})].sort(function(left, right): number {
+			}).sort(function(left, right): number {
 				return(Number(BigInt(left.sequence) - BigInt(right.sequence)));
 			});
 			if (unapplied.length > MAX_UNAPPLIED) {
@@ -509,14 +470,17 @@ export async function runShadowVotes(run: ShadowRun): Promise<ShadowRunState> {
 				...state,
 				...tallies,
 				reached: { sequence: last.sequence.toString(), blocksHash: keyOf(last.staple) },
-				refusedForWeight: state.refusedForWeight + adds.refused,
 				unapplied
 			};
-			adds.refused = 0;
 			await run.state.save(state);
 			run.progress?.(state);
 		}
 		return(state);
+	} catch (error: unknown) {
+		if (error instanceof StoppedInBatch) {
+			return(state);
+		}
+		throw(error);
 	} finally {
 		/*
 		 * Stopping flushes the node's statistics and closes its switch,

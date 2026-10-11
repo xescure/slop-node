@@ -444,6 +444,40 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			expect(hashOf(await node.ledger.getHeadBlock(user, 'main'))).toBe(hashOf(second));
 		});
 
+		test('a released staple whose retry fails keeps no gc going, however short its time: the next is applied, and gc reports nothing left', async function() {
+			const { network, startNode } = await startNetwork();
+			// A zero window is spent before any batch begins, and a limit below zero spends each gc after one batch.
+			const { node, storage } = await startNode(0, { heapProcessWindowMs: 0 });
+			const firsts = [await sendFromGenesis(network, 0, 5n), await sendFromGenesis(network, 1, 5n)];
+			const seconds = await Promise.all(firsts.map(async function(first, user) {
+				return(await confirmedStaple([await sendFrom(network, user, first.hash, 7n)], network.representatives));
+			}));
+			// The one listed first fails: first by hash, and deferred first.
+			const [failing, applying] = [...seconds].sort(function(left, right): number {
+				return(Number(left.blocksHash.toString() > right.blocksHash.toString()) - Number(left.blocksHash.toString() < right.blocksHash.toString()));
+			});
+			if (failing === undefined || applying === undefined) {
+				throw(new Error('two staples expected'));
+			}
+			for (const staple of [failing, applying]) {
+				expect(await node.ledger.add(staple)).toEqual([]);
+			}
+			for (const first of firsts) {
+				await node.ledger.add(await confirmedStaple([first], network.representatives));
+			}
+			failAfterPersisting(storage, failing);
+
+			const reported: boolean[] = [];
+			for (let call = 0; call < 5 && reported.at(-1) !== false; call++) {
+				reported.push(await node.ledger.gc(-1));
+			}
+
+			expect(reported.at(-1)).toBe(false);
+			expect(reported.length).toBeLessThanOrEqual(3);
+			expect(hashOf(await node.ledger.getBlock(requireAt(applying.blocks, 0).hash, 'main'))).toBe(hashOf(requireAt(applying.blocks, 0)));
+			expect(await node.ledger.getBlock(requireAt(failing.blocks, 0).hash, 'main')).toBeNull();
+		});
+
 		test('a gc retry that fails after its write leaves nothing behind and stays deferred', async function() {
 			const { network, startNode } = await startNetwork();
 			const user = requireAt(network.users, 0);

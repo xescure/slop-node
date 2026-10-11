@@ -8,6 +8,7 @@ import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { P2PPeer } from '@keetanetwork/keetanet-client/lib/p2p.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerStorageDriverBase } from '../ledger/storage/base.js';
+import type { StrandedDeferredStaple } from '../ledger/storage/base.js';
 import { GENESIS_MOMENT, ChainCursor, requireAt } from '../ledger/storage/suite/support.js';
 import { confirmedStaple, sendBlock } from '../testing/blocks.js';
 import { VOTES_PER_READ, listedByVotes, pageFrom, startAnsweringPeer, startFailingPeer, startReadingPeer, startRecordingPeer, startServingPeer, startSilentAPIPeer, unreachableEndpoint } from '../testing/bootstrap-peers.js';
@@ -355,6 +356,43 @@ describe('a bootstrap client', function() {
 		expect(read.mock.calls.map(function([, limit, after_]): [number, string | undefined] {
 			return([limit, after_?.staple.blocksHash.toString()]);
 		})).toEqual([[STRANDED_READ, undefined]]);
+	});
+
+	test('reads the next page of stranded staples from after the last one read, carrying the blocks of a round\'s pages, and a new round after a short page', async function() {
+		const peer = await representative();
+		const reading = await startReadingPeer(ONE_VOTE_A_READ);
+		reading.apply([peer.network.genesis]);
+		const late = await joiner({ bootstrapFrom: [reading.apiURL] });
+		const [carrier, waiting] = await sendsFrom(peer.network, 0, 2);
+		const carried = carrier?.blocks[0]?.hash;
+		if (carrier === undefined || waiting === undefined || carried === undefined) {
+			throw(new Error('no staples were made'));
+		}
+		const latestVote = new Date();
+		const full = Array.from({ length: STRANDED_READ }, function(): StrandedDeferredStaple {
+			return({ staple: carrier, lacks: [], latestVote });
+		});
+		const lacking: StrandedDeferredStaple = { staple: waiting, lacks: [carried], latestVote };
+		const pages = [full, [lacking], [lacking]];
+		const storage = late.node.config.ledger.storageDriver;
+		if (!(storage instanceof LedgerStorageDriverBase)) {
+			throw(new Error('the node\'s storage is no driver of this node'));
+		}
+		const read = vi.spyOn(storage, 'listStrandedDeferredStaples').mockImplementation(function(): Promise<readonly StrandedDeferredStaple[]> {
+			return(Promise.resolve(pages.shift() ?? []));
+		});
+		const client = clientOf(late.node);
+
+		await client.update();
+		await client.update();
+		// The second page lacks only a block the first page's staples carry.
+		expect(reading.askedFor).toEqual([]);
+		await client.update();
+
+		expect(read.mock.calls.map(function([, , after]): StrandedDeferredStaple | undefined {
+			return(after);
+		})).toEqual([undefined, full.at(-1), undefined]);
+		expect(reading.askedFor).toEqual([carried.toString()]);
 	});
 
 	test('asks only for the blocks deferred staples await that none of them carries, nor a page before, each once, none waiting out its backoff, and at most so many', async function() {

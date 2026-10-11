@@ -121,6 +121,42 @@ function scopeFrom(staples: readonly VoteStaple[], index: number): ShadowScope {
 	return({ release: 'test', from: votedFrom(staple) });
 }
 
+/**
+ * The head, but for a chain of three staples, each building on the one
+ * before, after a staple past the first two hundred: listed just before
+ * the staple they build on, at whose place they are released.
+ */
+async function chainListedBeforeItsRoot(): Promise<{ readonly listed: readonly VoteStaple[]; readonly rootPlace: number }> {
+	const head = replayOrder(await loadMainnetFixture('head')).slice(0, 400);
+	const chainOf = function(root: number): number[] {
+		const chain: number[] = [];
+		let tip = root;
+		for (let index = root + 1; index < head.length && chain.length < 3; index++) {
+			const staple = head[index];
+			if (staple !== undefined && buildsOn(staple, head[tip])) {
+				chain.push(index);
+				tip = index;
+			}
+		}
+		return(chain);
+	};
+	const root = head.findIndex(function(_staple, index): boolean {
+		return(index >= 200 && chainOf(index).length === 3);
+	});
+	const chain = chainOf(root);
+	if (root < 0) {
+		throw(new Error('no chain of three staples in the head'));
+	}
+	const listed = [...head.slice(0, root).filter(function(_staple, index): boolean {
+		return(!chain.includes(index));
+	}), ...chain.flatMap(function(index): VoteStaple[] {
+		return(head.slice(index, index + 1));
+	}), ...head.slice(root).filter(function(_staple, index): boolean {
+		return(!chain.includes(index + root));
+	})];
+	return({ listed, rootPlace: root + chain.length });
+}
+
 async function committedExceptions(): Promise<ReadonlyMap<string, string>> {
 	const parsed: unknown = JSON.parse(await readFile(new URL('../../conformance/mainnet/shadow-vote-exceptions.json', import.meta.url), 'utf8'));
 	const exceptions = new Map<string, string>();
@@ -347,37 +383,22 @@ describe('shadow votes on the follower\'s history', function() {
 		expect(reached.unapplied).toContainEqual(expect.objectContaining({ blocksHash: dependent?.blocksHash.toString(), why: 'deferred' }));
 	}, REPLAY_TIMEOUT_MILLISECONDS);
 
-	test('retry a staple refused for want of voting weight once the staples that give it come', async function() {
-		const head = replayOrder(await loadMainnetFixture('head')).slice(0, 200);
-		// The genesis staple gives the first representatives their weight; added late, the staples before it wait for it.
-		const rest = head.slice(1);
-		const late = [...rest.slice(0, 5), ...head.slice(0, 1), ...rest.slice(5)];
-		const state = memoryState();
-		const reached = await runShadowVotes({ source: sourceOf(late), state, storage: new MemoryLedgerStorage(), start: freshShadowRun(scopeFrom(head, 150), 10, GENESIS_BASE, targetOf(late)), batchStaples: 3 });
-
-		expect(reached.refusedForWeight).toBeGreaterThan(0);
-		expect(reached).toMatchObject({ reached: { sequence: '200' }, unapplied: [] });
-		expect(reached.scoped.replayed + reached.informational.replayed).toBe(200);
-	}, REPLAY_TIMEOUT_MILLISECONDS);
-
 	/*
-	 * A staple the follower held deferred at the base was weighed as it
-	 * arrived, and applied later by a replay, which weighs nothing
-	 * [Keeta TS] index.js:69397-69411: its place in the follower's list is
-	 * where the replay applied it, under weights that may no longer pass it.
+	 * The follower's list holds only staples its ledger accepted. One it
+	 * applied by a replay of the staples deferred behind another was weighed
+	 * as it arrived, under the weights of an earlier place, and a replay
+	 * weighs nothing [Keeta TS] index.js:69397-69411: weighed again at its
+	 * place, it could be refused where the follower applied it.
 	 */
-	test('apply a staple the follower held deferred at the base as its replay did, without weighing its votes again', async function() {
+	test('apply every staple as the follower\'s ledger accepted it, without weighing its votes again', async function() {
 		const head = replayOrder(await loadMainnetFixture('head')).slice(0, 200);
 		// Listed before the genesis staple, which gives their voters weight, the first staples would be refused for it.
 		const rest = head.slice(1);
 		const late = [...rest.slice(0, 5), ...head.slice(0, 1), ...rest.slice(5)];
-		const run = function(deferredAtBase: ReadonlySet<string>): Promise<ShadowRunState> {
-			return(runShadowVotes({ source: sourceOf(late), state: memoryState(), storage: new MemoryLedgerStorage(), start: freshShadowRun(scopeFrom(head, 150), 1000, GENESIS_BASE, targetOf(late)), batchStaples: 3, deferredAtBase }));
-		};
+		const reached = await runShadowVotes({ source: sourceOf(late), state: memoryState(), storage: new MemoryLedgerStorage(), start: freshShadowRun(scopeFrom(head, 150), 10, GENESIS_BASE, targetOf(late)), batchStaples: 3 });
 
-		expect((await run(new Set())).refusedForWeight).toBeGreaterThan(0);
-		const replayed = await run(new Set(rest.slice(0, 5).map(keyOf)));
-		expect(replayed).toMatchObject({ refusedForWeight: 0, reached: { sequence: '200' }, unapplied: [] });
+		expect(reached).toMatchObject({ refusedForWeight: 0, reached: { sequence: '200' }, unapplied: [] });
+		expect(reached.scoped.replayed + reached.informational.replayed).toBe(200);
 	}, REPLAY_TIMEOUT_MILLISECONDS);
 
 	/*
@@ -404,12 +425,13 @@ describe('shadow votes on the follower\'s history', function() {
 		});
 		await runShadowVotes({ source: sourceOf(head), state: memoryState(), storage, start: freshShadowRun(scopeFrom(head, 39), 1000, GENESIS_BASE, targetOf(head)), batchStaples: 20 });
 
+		// One collection as the run begins, which applies what a batch cut short released, and one at the end of each batch.
 		expect(collected.map(function({ limit }): number | undefined {
 			return(limit);
-		})).toEqual([SHADOW_GC_SLICE_MILLISECONDS, SHADOW_GC_SLICE_MILLISECONDS]);
-		expect(collected.map(function({ at }, batch): boolean {
-			return(at > (head[batch * 20 + 19]?.timestamp().getTime() ?? Number.POSITIVE_INFINITY));
-		})).toEqual([true, true]);
+		})).toEqual([SHADOW_GC_SLICE_MILLISECONDS, SHADOW_GC_SLICE_MILLISECONDS, SHADOW_GC_SLICE_MILLISECONDS]);
+		expect(collected.map(function({ at }, call): boolean {
+			return(at > (head[Math.max(0, call - 1) * 20 + 19]?.timestamp().getTime() ?? Number.POSITIVE_INFINITY));
+		})).toEqual([true, true, true]);
 	});
 
 	/*
@@ -420,35 +442,7 @@ describe('shadow votes on the follower\'s history', function() {
 	 * clock, or a replay as the add runs, would apply the chain in one.
 	 */
 	test('apply a deferred chain the next staple releases before the next vote, one staple to a transaction, at any pace', async function() {
-		const head = replayOrder(await loadMainnetFixture('head')).slice(0, 400);
-		const chainOf = function(root: number): number[] {
-			const chain: number[] = [];
-			let tip = root;
-			for (let index = root + 1; index < head.length && chain.length < 3; index++) {
-				const staple = head[index];
-				if (staple !== undefined && buildsOn(staple, head[tip])) {
-					chain.push(index);
-					tip = index;
-				}
-			}
-			return(chain);
-		};
-		const root = head.findIndex(function(_staple, index): boolean {
-			return(index >= 200 && chainOf(index).length === 3);
-		});
-		const chain = chainOf(root);
-		if (root < 0) {
-			throw(new Error('no chain of three staples in the head'));
-		}
-		// The chain listed just before the staple it builds on.
-		const listed = [...head.slice(0, root).filter(function(_staple, index): boolean {
-			return(!chain.includes(index));
-		}), ...chain.flatMap(function(index): VoteStaple[] {
-			return(head.slice(index, index + 1));
-		}), ...head.slice(root).filter(function(_staple, index): boolean {
-			return(!chain.includes(index + root));
-		})];
-		const rootPlace = root + chain.length;
+		const { listed, rootPlace } = await chainListedBeforeItsRoot();
 		const places = new Map(listed.map(function(staple, index): [string, number] {
 			return([keyOf(staple), index]);
 		}));
@@ -501,6 +495,54 @@ describe('shadow votes on the follower\'s history', function() {
 		expect(slow.reached).toEqual(fast.reached);
 		// Genesis may land in one transaction with what its own staple holds; past it, no transaction holds two staples of the chain.
 		expect(slow.mostInOne).toBeLessThanOrEqual(Math.max(largest, listed[0]?.blocks.length ?? 0));
+	}, REPLAY_TIMEOUT_MILLISECONDS);
+
+	/*
+	 * A stop, as a kill, can land after a staple applied and before the
+	 * collections applied the staples it released, which were listed, and
+	 * voted on, before it in the batch.
+	 */
+	test('resume a batch cut short between a staple applying and the staples it released, applying those first, to the outcome of a run never cut', async function() {
+		const { listed, rootPlace } = await chainListedBeforeItsRoot();
+		const root = listed[rootPlace];
+		if (root === undefined) {
+			throw(new Error('no root'));
+		}
+		const start = freshShadowRun(scopeFrom(listed, listed.length - 1), 1, GENESIS_BASE, targetOf(listed));
+		const whole = await runShadowVotes({ source: sourceOf(listed), state: memoryState(), storage: new MemoryLedgerStorage(), start, batchStaples: 500 });
+
+		const inLedger = await offlineLedger();
+		const state = memoryState();
+		const stopping = new AbortController();
+		const cut = await inLedger(function(storage) {
+			const adjust = storage.adjust.bind(storage);
+			vi.spyOn(storage, 'adjust').mockImplementation(async function(...args: Parameters<typeof storage.adjust>): ReturnType<typeof storage.adjust> {
+				const applied = await adjust(...args);
+				if (args[1].blocksHash.toString() === keyOf(root)) {
+					stopping.abort();
+				}
+				return(applied);
+			});
+			return(runShadowVotes({ source: sourceOf(listed), state, storage, start, batchStaples: 500, stopped: stopping.signal }));
+		});
+		expect(cut).toEqual(start);
+		vi.restoreAllMocks();
+		const chain = new Set(listed.slice(rootPlace - 3, rootPlace).map(keyOf));
+		const appliedAgain: string[] = [];
+		const resumed = await inLedger(function(storage) {
+			const adjust = storage.adjust.bind(storage);
+			vi.spyOn(storage, 'adjust').mockImplementation(function(...args: Parameters<typeof storage.adjust>): ReturnType<typeof storage.adjust> {
+				if (chain.has(args[1].blocksHash.toString())) {
+					appliedAgain.push(args[1].blocksHash.toString());
+				}
+				return(adjust(...args));
+			});
+			return(runShadowVotes({ source: sourceOf(listed), state, storage, start, batchStaples: 500 }));
+		});
+
+		expect(resumed).toEqual(whole);
+		// The collections applied the chain as the run began, so it is held, not added at its places again.
+		expect(appliedAgain).toEqual([]);
 	}, REPLAY_TIMEOUT_MILLISECONDS);
 
 	test('replay nothing past a target they have reached', async function() {

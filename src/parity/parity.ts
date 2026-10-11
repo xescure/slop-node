@@ -116,12 +116,10 @@ async function databaseExists(client: pg.Client, name: string): Promise<boolean>
 
 const BASE_LAST_STAPLE = 'SELECT sequence::text AS place, blocks_hash FROM staples ORDER BY sequence DESC LIMIT 1';
 
-/** Staples whose every vote is from the moment on: those of the scoped window. */
-const DEFERRED_STAPLES = 'SELECT blocks_hash FROM deferred_staples';
-
 /** Forgets every deferred staple; the rows of what each waits on go with it (schema/migrations/0001_ledger.sql, 0006_deferred_checks.sql). */
 const FORGET_DEFERRED_STAPLES = 'DELETE FROM deferred_staples';
 
+/** Staples whose every vote is from the moment on: those of the scoped window. */
 const BASE_SCOPED_STAPLES = `
 	SELECT count(*) AS count FROM (
 		SELECT blocks_hash FROM votes
@@ -158,11 +156,11 @@ async function prepareShadowLedger(directory: string, base: string | undefined, 
 		/*
 		 * The follower lists every staple it applied at the place it applied
 		 * it, those a replay of a deferred one applied included, so the run
-		 * applies each itself, those deferred at the snapshot as the replay
-		 * did (deferredAtBaseOf), and needs no deferred copy. A copy would be
-		 * applied by the collection after the staple before it on its chain,
-		 * ahead of its own place, where its vote would see a ledger that
-		 * holds it (src/parity/shadow-live.ts).
+		 * applies each itself, as the follower's ledger accepted it, and
+		 * needs no deferred copy. A copy would be applied by the collection
+		 * after the staple before it on its chain, ahead of its own place,
+		 * where its vote would see a ledger that holds it
+		 * (src/parity/shadow-live.ts).
 		 */
 		await copy.query(FORGET_DEFERRED_STAPLES);
 		const last = (await copy.query<{ place: string; blocks_hash: Buffer }>(BASE_LAST_STAPLE)).rows[0];
@@ -175,27 +173,6 @@ async function prepareShadowLedger(directory: string, base: string | undefined, 
 		return({ database: base, sequence, blocksHash, scopedStaples: Number(scoped.rows[0]?.count ?? 0) });
 	} finally {
 		await copy.end();
-	}
-}
-
-/**
- * The staples the follower held deferred in the snapshot the run started
- * from, by the hash of their blocks, read from the snapshot each time the
- * run starts or resumes, as its copy holds them no more.
- */
-async function deferredAtBaseOf(directory: string, base: string | null): Promise<ReadonlySet<string>> {
-	if (base === null) {
-		return(new Set());
-	}
-	const snapshot = new pg.Client({ connectionString: followerDatabaseURLOf(directory, base) });
-	await snapshot.connect();
-	try {
-		const rows = (await snapshot.query<{ blocks_hash: Buffer }>(DEFERRED_STAPLES)).rows;
-		return(new Set(rows.map(function(row): string {
-			return(row.blocks_hash.toString('hex').toUpperCase());
-		})));
-	} finally {
-		await snapshot.end();
 	}
 }
 
@@ -280,7 +257,6 @@ async function shadow(command: Extract<ParityCommand, { kind: 'shadow' }>, direc
 			start,
 			batchStaples: command.batchStaples,
 			stopped: tools.stopped,
-			deferredAtBase: await deferredAtBaseOf(directory, start.base.database),
 			progress(standing) {
 				const now = performance.now();
 				const rate = (replayedOf(standing) - lastReplayed) * 1000 / Math.max(1, now - lastReport);
