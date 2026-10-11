@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import { onTestFinished } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { BloomFilter } from '@keetanetwork/keetanet-client/lib/utils/bloom.js';
+import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { MAX_PAGE_BYTES } from '../node/bootstrap-page.js';
 import { assertNever } from '../util/assert-never.js';
 
@@ -317,6 +318,131 @@ export async function startServingPeer(): Promise<ServingPeer> {
 			for (const staple of staples) {
 				const bytes = bytesOf(staple);
 				applied.push({ bytes, lastVote: lastVoteOf(bytes) });
+			}
+		},
+		served: function(): number {
+			return(served);
+		}
+	});
+}
+
+export type ReadingPeer = ServingPeer & {
+	/** The blocks it was asked for the votes on, by hash, in the order asked. */
+	readonly askedFor: readonly string[];
+	/** Answers no votes on the blocks named from now on, as a representative that holds no staple of theirs. */
+	readonly holdsNot: (block: string) => void;
+};
+
+/**
+ * How a main network representative reads its votes for a page: so many at
+ * a time, from the first keyed at or after the start, each read after the
+ * first beginning past the key of the read before's last vote by
+ * resumesPast, so that a vote keyed that close after it is in no read.
+ */
+export type ReadingRule = { readonly votesPerRead: number; readonly resumesPast: number };
+
+/**
+ * A representative keyed by votes that reads them as the rule says, lists
+ * each read's staples but those the filter names, up to the limit, and
+ * answers for a block the votes on it and each block they cover, as the
+ * client asks for a block's staple [Keeta TS] index.js:58802-58842,
+ * 59887-59933, 58778-58796.
+ */
+export async function startReadingPeer(rule: ReadingRule): Promise<ReadingPeer> {
+	const applied: VoteStaple[] = [];
+	const pages: RecordedPage[] = [];
+	const askedFor: string[] = [];
+	const heldNot = new Set<string>();
+	let served = 0;
+	const holding = function(block: string): VoteStaple | undefined {
+		if (heldNot.has(block)) {
+			return(undefined);
+		}
+		return(applied.find(function(staple): boolean {
+			return(staple.blocks.some(function(held): boolean {
+				return(held.hash.toString() === block);
+			}));
+		}));
+	};
+	const answer = function(response: http.ServerResponse, body: unknown): void {
+		response.writeHead(200, { 'content-type': 'application/json' });
+		response.end(JSON.stringify(body));
+	};
+	const server = http.createServer(function(request, response): void {
+		const received = performance.now();
+		const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+		const [, route, ...rest] = url.pathname.split('/api/');
+		const path = [route, ...rest].join('/api/');
+		if (path.startsWith('vote/')) {
+			const block = path.slice('vote/'.length).toUpperCase();
+			askedFor.push(block);
+			const staple = holding(block);
+			answer(response, { blockhash: block, votes: staple?.votes.map(function(vote): { readonly $binary: string } {
+				return({ $binary: Buffer.from(vote.toBytes()).toString('base64') });
+			}) ?? null });
+			return;
+		}
+		if (path.startsWith('node/ledger/block/')) {
+			const block = path.slice('node/ledger/block/'.length).toUpperCase();
+			const found = holding(block)?.blocks.find(function(held): boolean {
+				return(held.hash.toString() === block);
+			});
+			let written: { readonly $binary: string } | null = null;
+			if (found !== undefined) {
+				written = { $binary: Buffer.from(found.toBytes()).toString('base64') };
+			}
+			answer(response, { blockhash: block, block: written });
+			return;
+		}
+		const query = url.searchParams;
+		const start = Date.parse(query.get('start') ?? '');
+		const limit = Number(query.get('limit') ?? '1000');
+		const filter = bloomFilterOf(query);
+		const votes = applied.flatMap(function(staple): { readonly staple: VoteStaple; readonly made: number }[] {
+			return(staple.votes.map(function(vote): { readonly staple: VoteStaple; readonly made: number } {
+				return({ staple, made: vote.validityFrom.getTime() });
+			}));
+		}).sort(function(left, right): number {
+			return(left.made - right.made);
+		});
+		const page: string[] = [];
+		let at = votes.findIndex(function(vote): boolean {
+			return(vote.made >= start);
+		});
+		while (at >= 0 && at < votes.length && page.length < limit) {
+			const read = votes.slice(at, at + rule.votesPerRead);
+			at += read.length;
+			const lastKey = read.at(-1)?.made ?? Number.POSITIVE_INFINITY;
+			while ((votes[at]?.made ?? Number.POSITIVE_INFINITY) <= lastKey + rule.resumesPast) {
+				at++;
+			}
+			for (const staple of new Set(read.map(function(vote): VoteStaple {
+				return(vote.staple);
+			}))) {
+				if (page.length >= limit) {
+					break;
+				}
+				if (filter?.has(staple.toBytes()) !== true) {
+					page.push(Buffer.from(staple.toBytes()).toString('base64'));
+				}
+			}
+		}
+		served += page.length;
+		answer(response, { voteStaples: page.map(function(binary): { readonly $binary: string } {
+			return({ $binary: binary });
+		}) });
+		pages.push({ start: query.get('start'), limit: query.get('limit'), bloomFilter: filter, status: 200, served: page, received, answered: performance.now() });
+	});
+	return({
+		apiURL: await listenUntilTestEnds(server),
+		pages,
+		askedFor,
+		holdsNot: function(block: string): void {
+			heldNot.add(block);
+		},
+		apply: function(staples: readonly ServedStaple[]): void {
+			for (const staple of staples) {
+				applied.push(new KeetaNet.lib.Vote.Staple(bytesOf(staple).toString('base64')));
 			}
 		},
 		served: function(): number {

@@ -503,5 +503,43 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			expect(await stranded(later, 10)).toEqual([]);
 			expect(hashOf(await ledger.getBlock(third.hash, 'main'))).toBe(hashOf(third));
 		});
+
+		test('lists stranded staples of one latest vote by their blocks hashes, each with the blocks it lacks by their hashes, and from after a staple given', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			await ledger.add(network.genesis);
+			// Made at one moment, so each staple's votes are made at one moment too.
+			const missing = await Promise.all([0, 1, 2].map(function(user) {
+				return(sendFromGenesisOf(network, user, 1n));
+			}));
+			const [first, second, third] = missing;
+			if (first === undefined || second === undefined || third === undefined) {
+				throw(new Error('three blocks expected'));
+			}
+			const lackingTwo = await confirmedStaple([await sendOf(network, 0, first.hash, 2n), await sendOf(network, 1, second.hash, 2n)], network.representatives);
+			const lackingOne = await confirmedStaple([await sendOf(network, 2, third.hash, 2n)], network.representatives);
+			expect(await ledger.add(lackingTwo)).toEqual([]);
+			expect(await ledger.add(lackingOne)).toEqual([]);
+			const later = new Date(Date.now() + 60_000);
+			const byKey = [lackingTwo, lackingOne].sort(function(left, right): number {
+				return(Number(left.blocksHash.toString() > right.blocksHash.toString()) - Number(left.blocksHash.toString() < right.blocksHash.toString()));
+			});
+			const lacked = new Map([[lackingTwo.blocksHash.toString(), [first, second]], [lackingOne.blocksHash.toString(), [third]]]);
+			const listed = await storage.listStrandedDeferredStaples(later, 10);
+
+			expect(listed.map(function({ staple, lacks, latestVote }): [string, (string | null)[], number] {
+				return([staple.blocksHash.toString(), lacks.map(hashOf), latestVote.getTime()]);
+			})).toEqual(byKey.map(function(staple): [string, (string | null)[], number] {
+				return([staple.blocksHash.toString(), (lacked.get(staple.blocksHash.toString()) ?? []).map(hashOf).sort(), Math.max(...staple.votes.map(function(vote): number {
+					return(vote.validityFrom.getTime());
+				}))]);
+			}));
+			const [earliest] = listed;
+			if (earliest === undefined) {
+				throw(new Error('two stranded staples expected'));
+			}
+			expect((await storage.listStrandedDeferredStaples(later, 10, earliest)).map(function({ staple }): string {
+				return(staple.blocksHash.toString());
+			})).toEqual([byKey[1]?.blocksHash.toString()]);
+		});
 	});
 }

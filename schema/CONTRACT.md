@@ -1059,12 +1059,12 @@ Returns the ledger checksum, the XOR of the hash of every block on the main ledg
 #### `listStrandedDeferredStaples`
 
 ```ts
-abstract listStrandedDeferredStaples(before: Date, limit: number): Promise<readonly StrandedDeferredStaple[]>;
+abstract listStrandedDeferredStaples(before: Date, limit: number, after?: StrandedDeferredStaple): Promise<readonly StrandedDeferredStaple[]>;
 ```
 
-Not part of upstream's interface. Returns up to `limit` deferred staples whose latest vote was made before `before` and that await a block the main ledger lacks, each with those blocks in `lacks`, ascending by the latest vote, then by `blocksHash`, from one view of the committed ledger outside any transaction. A deferred staple whose awaited blocks are all on the main ledger is released, and `gc` applies it (section 2.6), so it is not listed. The node's bootstrap asks its peers for the staples holding the blocks these staples lack, once an update has completed without them: a peer may leave a staple out of every page it serves (`src/node/bootstrap.ts`). Tested by `deferral.ts: "lists the deferred staples that await a block the main ledger lacks, by their latest votes, with the blocks they lack, as of before a moment"`.
+Not part of upstream's interface. Returns up to `limit` deferred staples whose latest vote was made before `before` and that await a block the main ledger lacks, each with those blocks in `lacks`, ascending by their hashes, and its latest vote in `latestVote`. The staples come ascending by the latest vote, then by `blocksHash`, from after `after` in that order when it is given, from one view of the committed ledger outside any transaction. A staple is decoded with its latest vote as the moment its votes are judged permanent against, as every deferred staple is read back. A deferred staple whose awaited blocks are all on the main ledger is released, and `gc` applies it (section 2.6), so it is not listed. The node's bootstrap reads these a page at a time, from after the last page read, and asks its peers for the staples holding the blocks they lack that none of them carries, once a pass has completed with nothing staged: a peer may leave a staple out of every page it serves (`src/node/bootstrap.ts`). Tested by `deferral.ts: "lists the deferred staples that await a block the main ledger lacks, by their latest votes, with the blocks they lack, as of before a moment"` and `deferral.ts: "lists stranded staples of one latest vote by their blocks hashes, each with the blocks it lacks by their hashes, and from after a staple given"`.
 
-**Postgres.** One statement on a pooled connection: `deferred_staples` joined to the `deferred_waits` rows whose `block_hash` is no main `blocks` row, grouped by staple, ordered by `latest_vote_from`, then `blocks_hash`.
+**Postgres.** One statement on a pooled connection. From schema version 11, it chooses the page from `deferred_staples_latest_vote` (`latest_vote_from`, `blocks_hash`) in index order, testing each staple for a `deferred_waits` row whose `block_hash` is no main `blocks` row, until the page is full, and only then reads the chosen staples' bytes and lacked blocks, so a page costs the same however many staples wait. Tested by `plans.test.ts: "a page of the stranded staples reads the page, however many staples wait, from the first or after one"`.
 
 #### `confirmedHistoryConflict`
 
@@ -1436,6 +1436,7 @@ The Postgres driver keeps the ledger, and the Postgres key-value store the node'
 - **Deferral.** `deferred_staples` holds a deferred staple's bytes; `deferred_waits` the blocks it waits on; `deferred_blocks` the previous of each of its blocks, for the check that it can never apply, found by `previous` through `deferred_blocks_previous` from schema version 6; and, from schema version 6, `deferred_checks` the deferred staples that may be released or dead, which gc reads instead of every deferred staple.
 - **Serials.** The sequence `vote_serials` (section 3.6).
 - **Bootstrap stage.** From schema version 10, `bootstrap_stage` holds the staples a bootstrap read and has not added yet (section 4.3), which no ledger member reads.
+- **Stranded deferred staples.** From schema version 11, `deferred_staples_latest_vote` (`latest_vote_from`, `blocks_hash`) orders the deferred staples by their latest votes, for `listStrandedDeferredStaples`.
 
 ### 6.2 Moments and the database clock
 

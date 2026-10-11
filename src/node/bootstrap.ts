@@ -22,10 +22,11 @@ import { bootstrapPacingOf, bootstrapSources } from './bootstrap-peers.js';
 import type { BootstrapNode } from './bootstrap-peers.js';
 import { rangeResultOf, updateRanges } from './bootstrap-ranges.js';
 import type { RangeEvent, RangeIO, RangeLayout, RangeResult, RangeTask } from './bootstrap-ranges.js';
-import { RetryQueue, RetryQueueFull, backoffAfter } from './bootstrap-retry.js';
+import { RetryQueue, RetryQueueFull } from './bootstrap-retry.js';
 import { StageFull, Staging, applyFrontier } from './bootstrap-stage.js';
 import type { Applied } from './bootstrap-stage.js';
-import { awaitedOf, lackedBlocksOf, landedOn, weightSufficesOn } from './retry-signals.js';
+import { MOST_LACKED_PER_UPDATE, STRANDED_READ, awaitedOf, dueLackedBlocks, landedOn, weightSufficesOn } from './retry-signals.js';
+import type { Unanswered } from './retry-signals.js';
 import { BOOTSTRAP_MARGIN_MILLISECONDS, MAX_NAMED } from './bootstrap-window.js';
 import type { NamedStaple } from './bootstrap-window.js';
 import type { Added, Offered, QueuedStaple, QueueUse } from './bootstrap-retry.js';
@@ -136,24 +137,11 @@ function keptFor<Value>(kept: Map<string, Value>, endpoint: string, make: () => 
 	return(value);
 }
 
-/**
- * How many deferred staples awaiting blocks the main ledger lacks an update
- * reads to find those blocks: a chain of such staples awaits, but for its
- * first, blocks its own staples carry, which no peer need be asked for.
- */
-const STRANDED_READ = 64;
-
-/** How many lacked blocks one update asks the peers for at most. */
-const MOST_LACKED_PER_UPDATE = 8;
-
-/** A block asked for that no peer held, how often, and when last. */
-type Unanswered = { readonly asked: number; readonly at: number };
-
-/** What became of a staple the node fetched, as its log says it. */
-function describeTaken(added: Added): string {
+/** What became of a staple the node fetched that its ledger did not apply, as its log says it. */
+function describeNotApplied(added: Added): string {
 	switch (added) {
 		case 'added':
-			return('added');
+			return('deferred');
 		case 'held':
 			return('held already');
 		case 'queued':
@@ -279,8 +267,11 @@ export class BootstrapClient {
 	readonly #crowdedAt = new Map<string, number>();
 	readonly #answers = new Map<string, LongestAnswer>();
 	readonly #priming = new Map<string, PrimingWindow>();
-	/** The lacked blocks no peer held, by hash, asked for again only after a wait that doubles each time. */
+	/** The lacked blocks asked for that did not land, by hash, asked for again only after a wait that doubles each time. */
 	readonly #unanswered = new Map<string, Unanswered>();
+	/** The last stranded staple read, after which the next update reads, and the blocks the pages of this round carry; none once a page was the last. */
+	#strandedAfter: StrandedDeferredStaple | undefined;
+	readonly #carriedThisRound = new Set<string>();
 
 	/**
 	 * With a period, an update runs at once and then that many milliseconds
@@ -459,10 +450,15 @@ export class BootstrapClient {
 				this.#lastResults = [...this.#lastResults, 'bounded'];
 			}
 			await this.#collect();
+			const stageEmpty = await staging.isEmpty();
 			const complete = sources.every(function(endpoint): boolean {
 				return(results.get(endpoint) === 'completed');
-			}) && !this.#stopped() && await staging.isEmpty();
-			if (complete) {
+			}) && !this.#stopped() && stageEmpty;
+			// One peer that read the node up to the margin shows the deferred staples before it wait on what no pass brings; a peer failing meanwhile changes nothing of that.
+			const anyCompleted = sources.some(function(endpoint): boolean {
+				return(results.get(endpoint) === 'completed');
+			});
+			if (anyCompleted && stageEmpty && !this.#stopped()) {
 				await this.#fetchLacked(sources, fetcher, began);
 			}
 			this.#record(complete);
@@ -522,19 +518,21 @@ export class BootstrapClient {
 
 	/**
 	 * Asks the peers for the staples holding blocks that deferred staples
-	 * await, once an update has completed without them. A complete update
-	 * shows the node holds every staple its peers keyed before the margin
-	 * before it began, as their pages listed them; but a main network
-	 * representative leaves out of a page a vote made a millisecond or less
-	 * after the last vote of one of its reads, as its reads resume past that
-	 * vote, so a pass moves past a staple whose votes are all left out so. One
-	 * staple of a chain lost so leaves every later one deferred for good.
-	 * Only deferred staples voted before the margin are read, those whose
-	 * dependencies the passes have read past; a block they await that none of
-	 * them carries is asked for from each peer in turn, as the client asks
-	 * for a block's staple, and the staple added, which applies the deferred
-	 * staples after it. A block no peer holds is asked for again after a wait
-	 * that doubles each time.
+	 * await, once a pass over some peer has completed with nothing staged.
+	 * A completed pass shows the node holds every staple that peer keyed
+	 * before the margin before the update began, as its pages listed them;
+	 * but a main network representative leaves out of a page a vote made a
+	 * millisecond or less after the last vote of one of its reads, as its
+	 * reads resume past that vote, so a pass moves past a staple whose votes
+	 * are all left out so. One staple of a chain lost so leaves every later
+	 * one deferred for good. Only deferred staples voted before the margin
+	 * are read, those whose dependencies the passes have read past, a page at
+	 * a time from after the last page read, round after round. A block they
+	 * await that none of them carries is asked for from each peer in turn, as
+	 * the client asks for a block's staple, and the staple added, which
+	 * applies the deferred staples after it. A block not applied so, whether
+	 * no peer held it, or the ledger queued, deferred or refused its staple,
+	 * is asked for again only after a wait that doubles each time.
 	 */
 	async #fetchLacked(sources: readonly string[], fetcher: PageFetcher, began: number): Promise<void> {
 		const storage = this.#node.config.ledger.storageDriver;
@@ -543,26 +541,41 @@ export class BootstrapClient {
 		}
 		let stranded: readonly StrandedDeferredStaple[];
 		try {
-			stranded = await storage.listStrandedDeferredStaples(new Date(began - BOOTSTRAP_MARGIN_MILLISECONDS), STRANDED_READ);
+			stranded = await storage.listStrandedDeferredStaples(new Date(began - BOOTSTRAP_MARGIN_MILLISECONDS), STRANDED_READ, this.#strandedAfter);
 		} catch (error: unknown) {
 			this.#node.log.warn(LOG_SOURCE, 'Reading the deferred staples that await blocks the ledger lacks failed; it is read again after the next update:', error);
 			return;
 		}
-		const now = Date.now();
-		const due = lackedBlocksOf(stranded).filter((block): boolean => {
-			const unanswered = this.#unanswered.get(block.toString());
-			return(unanswered === undefined || now >= unanswered.at + backoffAfter(unanswered.asked));
-		}).slice(0, MOST_LACKED_PER_UPDATE);
+		const due = dueLackedBlocks(stranded, this.#carriedThisRound, this.#unanswered, Date.now(), MOST_LACKED_PER_UPDATE);
+		this.#strandedAfter = stranded.at(-1);
+		for (const { staple } of stranded) {
+			for (const block of staple.blocks) {
+				this.#carriedThisRound.add(block.hash.toString());
+			}
+		}
+		if (stranded.length < STRANDED_READ) {
+			this.#strandedAfter = undefined;
+			this.#carriedThisRound.clear();
+		}
 		for (const block of due) {
 			if (this.#stopped()) {
 				return;
 			}
-			await this.#fetchHolding(block, sources, fetcher);
+			if (!await this.#fetchHolding(block, sources, fetcher)) {
+				const unanswered = this.#unanswered.get(block.toString());
+				this.#unanswered.set(block.toString(), { asked: (unanswered?.asked ?? 0) + 1, at: Date.now() });
+			}
 		}
 	}
 
-	/** Asks each peer in turn for the staple holding the block, and adds the first one found. */
-	async #fetchHolding(block: BlockHash, sources: readonly string[], fetcher: PageFetcher): Promise<void> {
+	/**
+	 * Asks each peer in turn for the staple holding the block, and adds the
+	 * first one found; answers whether the ledger then holds it. The staple
+	 * is built from its votes and blocks as the client builds it, so its
+	 * bytes need not be those a page carries, which a filter names: a later
+	 * page may send it again, and it is found held.
+	 */
+	async #fetchHolding(block: BlockHash, sources: readonly string[], fetcher: PageFetcher): Promise<boolean> {
 		const key = block.toString();
 		for (const endpoint of sources) {
 			let staple: VoteStaple | undefined;
@@ -572,7 +585,7 @@ export class BootstrapClient {
 				});
 			} catch (error: unknown) {
 				if (this.#stopped()) {
-					return;
+					return(false);
 				}
 				this.#node.log.warn(LOG_SOURCE, `Asking ${endpoint} for the staple holding block ${key}, which deferred staples await, failed:`, error);
 				continue;
@@ -580,22 +593,25 @@ export class BootstrapClient {
 			if (staple === undefined) {
 				continue;
 			}
-			this.#unanswered.delete(key);
 			let added: Added;
 			try {
 				added = await this.#retries.add(staple, 'deep');
 			} catch (error: unknown) {
 				if (!this.#stopped()) {
-					this.#node.log.warn(LOG_SOURCE, `Adding staple ${staple.blocksHash.toString()}, which holds block ${key} that deferred staples await, failed:`, error);
+					this.#node.log.warn(LOG_SOURCE, `Adding staple ${staple.blocksHash.toString()}, which holds block ${key} that deferred staples await, failed; it is asked for again later:`, error);
 				}
-				return;
+				return(false);
 			}
-			this.#node.log.info(LOG_SOURCE, `Bootstrap: the node lacked block ${key}, which deferred staples await; staple ${staple.blocksHash.toString()} holding it, from ${endpoint}, was ${describeTaken(added)}`);
-			return;
+			if (await this.#holds(staple)) {
+				this.#unanswered.delete(key);
+				this.#node.log.info(LOG_SOURCE, `Bootstrap: the node lacked block ${key}, which deferred staples await; staple ${staple.blocksHash.toString()} holding it, from ${endpoint}, was added`);
+				return(true);
+			}
+			this.#node.log.warn(LOG_SOURCE, `Bootstrap: the node lacks block ${key}, which deferred staples await; staple ${staple.blocksHash.toString()} holding it, from ${endpoint}, was ${describeNotApplied(added)}; it is asked for again later`);
+			return(false);
 		}
-		const unanswered = this.#unanswered.get(key);
-		this.#unanswered.set(key, { asked: (unanswered?.asked ?? 0) + 1, at: Date.now() });
 		this.#node.log.warn(LOG_SOURCE, `Bootstrap: the node lacks block ${key}, which deferred staples await, and none of its peers holds a staple holding it; it asks again later`);
+		return(false);
 	}
 
 	#record(complete: boolean): void {

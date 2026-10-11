@@ -131,10 +131,11 @@ export type CollectedDeferredStaples = {
 	readonly more: boolean;
 };
 
-/** A deferred staple that awaits blocks the main ledger lacks: those blocks, which a staple not yet added carries. */
+/** A deferred staple that awaits blocks the main ledger lacks: those blocks, which a staple not yet added carries, and when its latest vote was made. */
 export type StrandedDeferredStaple = {
 	readonly staple: VoteStaple;
 	readonly lacks: readonly BlockHash[];
+	readonly latestVote: Date;
 };
 
 /** Documented default of LedgerConfig.heapProcessWindowMs. */
@@ -486,13 +487,14 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	/**
 	 * Up to limit deferred staples whose every vote was made before the
 	 * moment and that await a block the main ledger lacks, each with those
-	 * blocks, by their latest votes, then their blocks hashes, read from the
-	 * committed ledger outside every transaction. A staple released by blocks
-	 * on main is not listed: gc applies it. The rest wait for a staple that
-	 * nothing the node holds or reads may bring, which the bootstrap asks its
-	 * peers for (src/node/bootstrap.ts).
+	 * blocks, by their latest votes, then their blocks hashes, from after the
+	 * staple given in that order, read from the committed ledger outside every
+	 * transaction. A staple released by blocks on main is not listed: gc
+	 * applies it. The rest wait for a staple that nothing the node holds or
+	 * reads may bring, which the bootstrap asks its peers for
+	 * (src/node/bootstrap.ts).
 	 */
-	abstract listStrandedDeferredStaples(before: Date, limit: number): Promise<readonly StrandedDeferredStaple[]>;
+	abstract listStrandedDeferredStaples(before: Date, limit: number, after?: StrandedDeferredStaple): Promise<readonly StrandedDeferredStaple[]>;
 
 	/** Makes the transaction's writes permanent and ends it. */
 	protected abstract commitStorage(transaction: Transaction): Promise<void>;

@@ -744,7 +744,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	}
 
 	/* Read from the committed state, as the counts are. */
-	listStrandedDeferredStaples(before: Date, limit: number): Promise<readonly StrandedDeferredStaple[]> {
+	listStrandedDeferredStaples(before: Date, limit: number, after?: StrandedDeferredStaple): Promise<readonly StrandedDeferredStaple[]> {
 		const committed = this.#committed;
 		const stranded: { readonly latestVote: number; readonly key: StapleKey; readonly found: StrandedDeferredStaple }[] = [];
 		for (const [key, row] of committed.deferredStaples.entries()) {
@@ -765,14 +765,21 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 					lacks.set(previousKey, block.previous);
 				}
 			}
-			stranded.push({ latestVote, key, found: { staple: row.staple, lacks: [...lacks.entries()].sort(compareKeyed).map(function([, hash]): BlockHash {
+			stranded.push({ latestVote, key, found: { staple: row.staple, latestVote: new Date(latestVote), lacks: [...lacks.entries()].sort(compareKeyed).map(function([, hash]): BlockHash {
 				return(hash);
 			}) } });
 		}
-		stranded.sort(function(left, right): number {
+		const order = function(left: { readonly latestVote: number; readonly key: string }, right: { readonly latestVote: number; readonly key: string }): number {
 			return(left.latestVote - right.latestVote || compareText(left.key, right.key));
-		});
-		return(Promise.resolve(stranded.slice(0, limit).map(function({ found }): StrandedDeferredStaple {
+		};
+		stranded.sort(order);
+		let from = { latestVote: Number.NEGATIVE_INFINITY, key: '' };
+		if (after !== undefined) {
+			from = { latestVote: after.latestVote.getTime(), key: toStapleKey(after.staple.blocksHash) };
+		}
+		return(Promise.resolve(stranded.filter(function(entry): boolean {
+			return(order(entry, from) > 0);
+		}).slice(0, limit).map(function({ found }): StrandedDeferredStaple {
 			return(found);
 		})));
 	}

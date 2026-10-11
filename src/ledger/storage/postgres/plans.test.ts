@@ -2,7 +2,7 @@ import { describe, expect, inject, onTestFinished, test } from 'vitest';
 import type pg from 'pg';
 import { createDatabase } from '../../../testing/postgres.js';
 import { accountHistory, accountHistoryAfter } from './confirmed-statements.js';
-import { deadDeferredStaples, releasedDeferredStaples } from './side-statements.js';
+import { deadDeferredStaples, releasedDeferredStaples, strandedDeferredStaples } from './side-statements.js';
 
 /** A catch-up far behind its peers defers tens of thousands of staples, beside a main ledger of many more blocks. */
 const WAITING_STAPLES = 10_000;
@@ -10,6 +10,9 @@ const CONFIRMED_BLOCKS = 10_000;
 
 /** gc's reads must not grow with the staples that still wait, nor with the main ledger: far fewer pages than one per hundred of either. */
 const MOST_PAGES = Math.min(WAITING_STAPLES, CONFIRMED_BLOCKS) / 100;
+
+/** A page of 64 stranded staples reads each staple's index entries, waits, awaited blocks and bytes, a few pages apiece, and no more for a larger backlog. */
+const MOST_PAGES_A_STRANDED_PAGE = 64 * 16;
 
 const MOMENT = new Date('2026-10-07T12:00:00.000Z');
 
@@ -139,6 +142,26 @@ describe('the Postgres driver\'s plans', function() {
 		expect(await pagesRead(pool, deadDeferredStaples.text, [101])).toBeLessThan(MOST_PAGES);
 		expect(await pagesRead(pool, releasedDeferredStaples.text, [100, []])).toBeLessThan(MOST_PAGES);
 		expect(await pagesRead(pool, releasedDeferredStaples.text, [1, [await labelHash(pool, 'released')]])).toBeLessThan(MOST_PAGES);
+	});
+
+	test('a page of the stranded staples reads the page, however many staples wait, from the first or after one', async function() {
+		const pool = await ledgerPool();
+		await seedMainLedger(pool);
+		await seedConfirmedBlocks(pool, CONFIRMED_BLOCKS);
+		await seedWaitingStaples(pool, WAITING_STAPLES);
+		await pool.query('ANALYZE');
+		const later = new Date(MOMENT.getTime() + 1);
+		const first = [later, 64, new Date(0), Buffer.alloc(32)];
+
+		const page = await pool.query<{ readonly latest_vote_from: Date; readonly lacks: readonly Buffer[] }>(strandedDeferredStaples.text, first);
+		const after = [later, 64, MOMENT, await labelHash(pool, 'waiting 5000')];
+
+		expect(page.rows).toHaveLength(64);
+		expect(page.rows.every(function(row): boolean {
+			return(row.lacks.length === 1);
+		})).toBe(true);
+		expect(await pagesRead(pool, strandedDeferredStaples.text, first)).toBeLessThan(MOST_PAGES_A_STRANDED_PAGE);
+		expect(await pagesRead(pool, strandedDeferredStaples.text, after)).toBeLessThan(MOST_PAGES_A_STRANDED_PAGE);
 	});
 
 	test.each([

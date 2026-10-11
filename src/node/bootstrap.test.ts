@@ -10,8 +10,8 @@ import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerStorageDriverBase } from '../ledger/storage/base.js';
 import { GENESIS_MOMENT, ChainCursor, requireAt } from '../ledger/storage/suite/support.js';
 import { confirmedStaple, sendBlock } from '../testing/blocks.js';
-import { VOTES_PER_READ, listedByVotes, pageFrom, startAnsweringPeer, startFailingPeer, startRecordingPeer, startServingPeer, startSilentAPIPeer, unreachableEndpoint } from '../testing/bootstrap-peers.js';
-import type { RecordedPage } from '../testing/bootstrap-peers.js';
+import { VOTES_PER_READ, listedByVotes, pageFrom, startAnsweringPeer, startFailingPeer, startReadingPeer, startRecordingPeer, startServingPeer, startSilentAPIPeer, unreachableEndpoint } from '../testing/bootstrap-peers.js';
+import type { ReadingRule, RecordedPage } from '../testing/bootstrap-peers.js';
 import { request, useLocalNodes } from '../testing/local-node.js';
 import type { CreatedLocalNode, LocalNodeOptions, RunningLocalNode } from '../testing/local-node.js';
 import { advanceClock, freezeClock } from '../testing/network.js';
@@ -26,9 +26,9 @@ import { BootstrapClient } from './bootstrap.js';
 import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RETRY_ARENA, BootstrapCursors } from './bootstrap-cursors.js';
 import { bootstrapEndpointsOf, bootstrapFrom, bootstrapSources } from './bootstrap-peers.js';
 import { DEEP_SCAN_PERIOD_MILLISECONDS, MAX_PASS_MILLISECONDS } from './bootstrap-pass.js';
-import { REPORT_REFUSED_AFTER_MILLISECONDS } from './bootstrap-retry.js';
+import { FIRST_BACKOFF_MILLISECONDS, REPORT_REFUSED_AFTER_MILLISECONDS } from './bootstrap-retry.js';
 import { stagedOf } from './bootstrap-stage.js';
-import { awaitedOf, lackedBlocksOf } from './retry-signals.js';
+import { MOST_LACKED_PER_UPDATE, STRANDED_READ, awaitedOf, dueLackedBlocks } from './retry-signals.js';
 import { BOOTSTRAP_MARGIN_MILLISECONDS } from './bootstrap-window.js';
 import type { LocalNode } from './local.js';
 
@@ -239,16 +239,146 @@ describe('a bootstrap client', function() {
 		expect(lines()).toContainEqual(expect.stringContaining(`lacked block ${lostBlock?.hash.toString() ?? ''}, which deferred staples await; staple ${lost.blocksHash.toString()} holding it, from ${recording.apiURL}, was added`));
 	});
 
-	test('asks only for the blocks deferred staples await that none of them carries, each once', async function() {
+	/**
+	 * A staple of one user voted a millisecond after another user's, which a
+	 * representative reading one vote at a time leaves out of every page
+	 * whose read ends on the earlier vote, and the user's next staple, which
+	 * then waits on it.
+	 */
+	async function nearTiedHistory(network: TestNetwork, lostVoters: readonly Account[] = network.representatives): Promise<{ readonly before: VoteStaple; readonly lost: VoteStaple; readonly after: VoteStaple; readonly lostBlock: string }> {
+		const cursor = new ChainCursor(network.genesis);
+		const [first, second] = network.users;
+		if (first === undefined || second === undefined) {
+			throw(new Error('two users expected'));
+		}
+		const send = async function(from: Account, voters: readonly Account[]): Promise<VoteStaple> {
+			const block = cursor.append(await sendBlock({ from, to: RECIPIENT, amount: 1n, token: network.baseToken, previous: cursor.previous(from), network: network.network }));
+			return(await confirmedStaple([block], voters));
+		};
+		advanceClock(1000);
+		const before = await send(first, network.representatives);
+		advanceClock(1);
+		const lost = await send(second, lostVoters);
+		advanceClock(2000);
+		const after = await send(second, network.representatives);
+		return({ before, lost, after, lostBlock: lost.blocks[0]?.hash.toString() ?? '' });
+	}
+
+	const ONE_VOTE_A_READ: ReadingRule = { votesPerRead: 1, resumesPast: 1 };
+
+	test('ends holding a staple a representative left out of its pages, as its reads resume a millisecond past the last vote of a read', async function() {
+		const peer = await representative();
+		const reading = await startReadingPeer(ONE_VOTE_A_READ);
+		const late = await joiner({ bootstrapFrom: [reading.apiURL] });
+		const { before, lost, after, lostBlock } = await nearTiedHistory(peer.network);
+		reading.apply([peer.network.genesis, before, lost, after]);
+		advanceClock(BOOTSTRAP_MARGIN_MILLISECONDS + 1000);
+
+		expect(await clientOf(late.node).update()).toEqual({ complete: true });
+
+		expect(reading.pages.flatMap(function(page): readonly string[] {
+			return(page.served);
+		})).not.toContain(Buffer.from(lost.toBytes()).toString('base64'));
+		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([peer.network.genesis, before, lost, after]));
+		expect(reading.askedFor).toEqual([lostBlock]);
+	});
+
+	test('asks the next peer for a lacked block when one holds no staple of it, or fails, after a pass over some peer completed', async function() {
+		const peer = await representative();
+		const holdsNot = await startReadingPeer(ONE_VOTE_A_READ);
+		const holds = await startReadingPeer(ONE_VOTE_A_READ);
+		const failing = await startFailingPeer();
+		const late = await joiner({ bootstrapFrom: [failing.apiURL, holdsNot.apiURL, holds.apiURL] });
+		const { before, lost, after, lostBlock } = await nearTiedHistory(peer.network);
+		for (const reading of [holdsNot, holds]) {
+			reading.apply([peer.network.genesis, before, lost, after]);
+		}
+		holdsNot.holdsNot(lostBlock);
+		advanceClock(BOOTSTRAP_MARGIN_MILLISECONDS + 1000);
+		const warnings = warningsOf(late.node);
+
+		// The failing peer leaves the update incomplete, which holds back nothing of the fetch.
+		expect(await clientOf(late.node).update()).toEqual({ complete: false });
+
+		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([peer.network.genesis, before, lost, after]));
+		expect([holdsNot.askedFor, holds.askedFor]).toEqual([[lostBlock], [lostBlock]]);
+		expect(warnings()).toContainEqual(expect.stringContaining(`Asking ${failing.apiURL} for the staple holding block ${lostBlock}, which deferred staples await, failed`));
+	});
+
+	test('asks for a lacked block that does not land, because no peer holds it or the ledger refuses its staple, again only once its wait has passed', async function() {
+		const peer = await representative();
+		const [firstVoter] = peer.network.representatives;
+		if (firstVoter === undefined) {
+			throw(new Error('no representative'));
+		}
+		const reading = await startReadingPeer(ONE_VOTE_A_READ);
+		const late = await joiner({ bootstrapFrom: [reading.apiURL] });
+		// One representative's vote alone carries too little weight.
+		const refused = await nearTiedHistory(peer.network, [firstVoter]);
+		reading.apply([peer.network.genesis, refused.before, refused.lost, refused.after]);
+		advanceClock(BOOTSTRAP_MARGIN_MILLISECONDS + 1000);
+		const warnings = warningsOf(late.node);
+		const client = clientOf(late.node);
+
+		expect(await client.update()).toEqual({ complete: true });
+		expect(reading.askedFor).toEqual([refused.lostBlock]);
+		expect(warnings()).toContainEqual(expect.stringContaining(`was queued for retry; it is asked for again later`));
+		expect(await client.update()).toEqual({ complete: true });
+		expect(reading.askedFor).toEqual([refused.lostBlock]);
+		advanceClock(FIRST_BACKOFF_MILLISECONDS);
+		await client.update();
+		expect(reading.askedFor).toEqual([refused.lostBlock, refused.lostBlock]);
+
+		reading.holdsNot(refused.lostBlock);
+		advanceClock(2 * FIRST_BACKOFF_MILLISECONDS);
+		await client.update();
+		expect(warnings()).toContainEqual(expect.stringContaining(`lacks block ${refused.lostBlock}, which deferred staples await, and none of its peers holds a staple holding it`));
+		await client.update();
+		expect(reading.askedFor).toHaveLength(3);
+	});
+
+	test('reads the stranded staples a page at a time, from after the last page read', async function() {
+		const peer = await representative();
+		const reading = await startReadingPeer(ONE_VOTE_A_READ);
+		const late = await joiner({ bootstrapFrom: [reading.apiURL] });
+		const { before, lost, after } = await nearTiedHistory(peer.network);
+		reading.apply([peer.network.genesis, before, lost, after]);
+		const storage = late.node.config.ledger.storageDriver;
+		if (!(storage instanceof LedgerStorageDriverBase)) {
+			throw(new Error('the node\'s storage is no driver of this node'));
+		}
+		const read = vi.spyOn(storage, 'listStrandedDeferredStaples');
+		advanceClock(BOOTSTRAP_MARGIN_MILLISECONDS + 1000);
+
+		await clientOf(late.node).update();
+
+		expect(read.mock.calls.map(function([, limit, after_]): [number, string | undefined] {
+			return([limit, after_?.staple.blocksHash.toString()]);
+		})).toEqual([[STRANDED_READ, undefined]]);
+	});
+
+	test('asks only for the blocks deferred staples await that none of them carries, nor a page before, each once, none waiting out its backoff, and at most so many', async function() {
 		const peer = await representative();
 		const [first, second, third] = await sendsFrom(peer.network, 0, 3);
 		const [firstBlock] = first?.blocks ?? [];
 		const [secondBlock] = second?.blocks ?? [];
-		if (second === undefined || third === undefined || firstBlock === undefined || secondBlock === undefined) {
+		if (first === undefined || second === undefined || third === undefined || firstBlock === undefined || secondBlock === undefined) {
 			throw(new Error('no staples were made'));
 		}
+		const latestVote = new Date();
+		const stranded = [{ staple: second, lacks: [firstBlock.hash], latestVote }, { staple: third, lacks: [secondBlock.hash, firstBlock.hash], latestVote }];
+		const due = function(carried: ReadonlySet<string>, unanswered: ReadonlyMap<string, { readonly asked: number; readonly at: number }>, now: number, most: number): string[] {
+			return(dueLackedBlocks(stranded, carried, unanswered, now, most).map(String));
+		};
+		const noBackoff = new Map<string, { readonly asked: number; readonly at: number }>();
 
-		expect(lackedBlocksOf([{ staple: second, lacks: [firstBlock.hash] }, { staple: third, lacks: [secondBlock.hash, firstBlock.hash] }]).map(String)).toEqual([firstBlock.hash.toString()]);
+		expect(due(new Set(), noBackoff, 0, MOST_LACKED_PER_UPDATE)).toEqual([firstBlock.hash.toString()]);
+		expect(due(new Set([firstBlock.hash.toString()]), noBackoff, 0, MOST_LACKED_PER_UPDATE)).toEqual([]);
+		expect(due(new Set(), noBackoff, 0, 0)).toEqual([]);
+		const askedOnce = new Map([[firstBlock.hash.toString(), { asked: 1, at: 1000 }]]);
+		expect(due(new Set(), askedOnce, 1000 + FIRST_BACKOFF_MILLISECONDS - 1, MOST_LACKED_PER_UPDATE)).toEqual([]);
+		expect(due(new Set(), askedOnce, 1000 + FIRST_BACKOFF_MILLISECONDS, MOST_LACKED_PER_UPDATE)).toEqual([firstBlock.hash.toString()]);
+		expect([MOST_LACKED_PER_UPDATE, STRANDED_READ]).toEqual([8, 64]);
 	});
 
 	test('names the staples the node holds in its filter, so that a peer sends none of them', async function() {

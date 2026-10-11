@@ -718,6 +718,9 @@ function decodeDeferredStaple(row: DeferredStapleColumns): VoteStaple {
 	return(new lib.Vote.Staple(row.bytes, { now: row.latest_vote_from }));
 }
 
+/** How many bytes a blocks hash has (schema/migrations/0001_ledger.sql, hash32). */
+const STRANDED_HASH_BYTES = 32;
+
 /**
  * The ledger in Postgres. Transactions are SERIALIZABLE, so several processes
  * can serve one representative from one database: a conflict between them
@@ -1277,11 +1280,17 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	}
 
 	/* One statement on a pooled connection, so one snapshot of the committed deferrals and main blocks. */
-	async listStrandedDeferredStaples(before: Date, limit: number): Promise<readonly StrandedDeferredStaple[]> {
+	async listStrandedDeferredStaples(before: Date, limit: number, after?: StrandedDeferredStaple): Promise<readonly StrandedDeferredStaple[]> {
 		const { pool } = await this.#pool.connection();
-		const result = await pool.query<{ readonly bytes: Buffer; readonly lacks: readonly Buffer[] }>({ name: strandedDeferredStaples.name, text: strandedDeferredStaples.text, values: [before, limit] });
+		// Before every staple: no vote is made before the epoch, and no blocks hash sorts before 32 zero bytes.
+		let from: [Date, Buffer] = [new Date(0), Buffer.alloc(STRANDED_HASH_BYTES)];
+		if (after !== undefined) {
+			from = [after.latestVote, hashBytes(after.staple.blocksHash)];
+		}
+		const result = await pool.query<{ readonly bytes: Buffer; readonly latest_vote_from: Date; readonly lacks: readonly Buffer[] }>({ name: strandedDeferredStaples.name, text: strandedDeferredStaples.text, values: [before, limit, ...from] });
 		return(result.rows.map(function(row): StrandedDeferredStaple {
-			return({ staple: new lib.Vote.Staple(row.bytes), lacks: row.lacks.map(toBlockHash) });
+			// Votes are judged permanent as of their own moment, as every deferred staple is read back (decodeDeferredStaple).
+			return({ staple: new lib.Vote.Staple(row.bytes, { now: row.latest_vote_from }), lacks: row.lacks.map(toBlockHash), latestVote: row.latest_vote_from });
 		}));
 	}
 

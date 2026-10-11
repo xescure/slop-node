@@ -238,3 +238,93 @@ describe('a page of a peer\'s staples', function() {
 		expect(error.message).toBe('ftp://127.0.0.1/api is no http:// or https:// URL');
 	});
 });
+
+describe('the staple holding a block, as a peer holds it', function() {
+	/** A peer answering for the fixture's staple: its votes on any of its blocks, and each of its blocks, as the routes the client asks. */
+	async function holder(options: { readonly votes?: 'none'; readonly missingBlock?: boolean; readonly status?: number } = {}): Promise<{ readonly endpoint: string; readonly received: Received[]; readonly staple: InstanceType<typeof lib.Vote.Staple> }> {
+		const staple = new lib.Vote.Staple(await servedStaple());
+		const peer = await peerAnswering(function(response): void {
+			const url = peer.received.at(-1)?.url ?? '';
+			if (options.status !== undefined) {
+				answerWith(options.status, JSON.stringify({ error: true, message: 'An internal error occurred' }))(response);
+				return;
+			}
+			if (url.includes('/vote/')) {
+				let votes: { readonly $binary: string }[] | null = staple.votes.map(function(vote): { readonly $binary: string } {
+					return({ $binary: Buffer.from(vote.toBytes()).toString('base64') });
+				});
+				if (options.votes === 'none') {
+					votes = null;
+				}
+				answerWith(200, JSON.stringify({ blockhash: 'x', votes }))(response);
+				return;
+			}
+			const block = staple.blocks.find(function(held): boolean {
+				return(url.includes(held.hash.toString()));
+			});
+			let written: { readonly $binary: string } | null = null;
+			if (block !== undefined && options.missingBlock !== true) {
+				written = { $binary: Buffer.from(block.toBytes()).toString('base64') };
+			}
+			answerWith(200, JSON.stringify({ blockhash: 'x', block: written }))(response);
+		});
+		return({ ...peer, staple });
+	}
+
+	function counting(): { readonly pace: <Result>(request: () => Promise<Result>) => Promise<Result>; readonly paced: () => number } {
+		let paced = 0;
+		return({ pace: function<Result>(request: () => Promise<Result>): Promise<Result> {
+			paced++;
+			return(request());
+		}, paced: function(): number {
+			return(paced);
+		} });
+	}
+
+	test('is built from the votes on the block and each block they cover, each request paced, as the client builds it', async function() {
+		const { endpoint, received, staple } = await holder();
+		const [block] = staple.blocks;
+		if (block === undefined) {
+			throw(new Error('the fixture staple holds no block'));
+		}
+		const { pace, paced } = counting();
+
+		const found = await fetcher().stapleHolding(endpoint, block.hash, 1000, NOT_STOPPED, pace);
+
+		expect(found?.blocksHash.toString()).toBe(staple.blocksHash.toString());
+		expect(received.map(function({ url }): string {
+			return(url);
+		})).toEqual([`/api/vote/${block.hash.toString()}?side=main`, ...staple.blocks.map(function(held): string {
+			return(`/api/node/ledger/block/${held.hash.toString()}?side=main`);
+		})]);
+		expect(paced()).toBe(received.length);
+	});
+
+	test('is none when the peer holds no votes on the block, or lacks a block they cover', async function() {
+		const none = await holder({ votes: 'none' });
+		const missing = await holder({ missingBlock: true });
+		const [block] = none.staple.blocks;
+		if (block === undefined) {
+			throw(new Error('the fixture staple holds no block'));
+		}
+
+		expect(await fetcher().stapleHolding(none.endpoint, block.hash, 1000, NOT_STOPPED, counting().pace)).toBeUndefined();
+		expect(none.received).toHaveLength(1);
+		expect(await fetcher().stapleHolding(missing.endpoint, block.hash, 1000, NOT_STOPPED, counting().pace)).toBeUndefined();
+	});
+
+	test('fails on an answer of another status, on a staple that lacks the block, and once the timeout passes', async function() {
+		const failing = await holder({ status: 500 });
+		const other = await holder();
+		const [block] = failing.staple.blocks;
+		if (block === undefined) {
+			throw(new Error('the fixture staple holds no block'));
+		}
+		const outside = new lib.Block.Hash(Buffer.alloc(32, 7));
+
+		expect((await problemOf(fetcher().stapleHolding(failing.endpoint, block.hash, 1000, NOT_STOPPED, counting().pace))).problem).toEqual({ kind: 'status', status: 500, message: 'An internal error occurred' });
+		expect((await problemOf(fetcher().stapleHolding(other.endpoint, outside, 1000, NOT_STOPPED, counting().pace))).problem).toEqual({ kind: 'malformed', detail: `the staple it holds for block ${outside.toString()} lacks it` });
+		const endpoint = `http://127.0.0.1:${String((await mutePeer()).port)}/api`;
+		expect((await problemOf(fetcher().stapleHolding(endpoint, block.hash, 50, NOT_STOPPED, counting().pace))).problem).toEqual({ kind: 'timeout', milliseconds: 50 });
+	});
+});

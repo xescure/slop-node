@@ -4,6 +4,7 @@ import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/i
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import type { StrandedDeferredStaple } from '../ledger/storage/base.js';
+import { backoffAfter } from './bootstrap-retry.js';
 import type { Awaited } from './bootstrap-retry.js';
 
 const lib = KeetaNet.lib;
@@ -115,12 +116,29 @@ export async function weightSufficesOn(ledger: Pick<Ledger, 'runReadOnly'>, vote
 }
 
 /**
- * The blocks the staples await that none of them carries, each once, in the
- * order the staples are listed: what the earliest staple of each chain of
- * them lacks.
+ * How many deferred staples awaiting blocks the main ledger lacks an update
+ * reads to find those blocks, a page after the one the update before read:
+ * a chain of such staples awaits, but for its first, blocks its own staples
+ * carry, which no peer need be asked for, and one chain longer than a page
+ * would otherwise hide every chain after it.
  */
-export function lackedBlocksOf(stranded: readonly StrandedDeferredStaple[]): BlockHash[] {
-	const carried = new Set<string>();
+export const STRANDED_READ = 64;
+
+/** How many lacked blocks one update asks the peers for at most, so that it waits on at most so many rounds of requests. */
+export const MOST_LACKED_PER_UPDATE = 8;
+
+/** A lacked block asked for that did not land: how often, and when last. */
+export type Unanswered = { readonly asked: number; readonly at: number };
+
+/**
+ * The blocks the staples lack that none of them carries, nor any staple of
+ * a page read before in the same round, each once, in the order the staples
+ * are listed: what the earliest staple of each chain of them lacks. Those
+ * asked for whose wait since (backoffAfter) has not passed are left out, and
+ * at most so many are given.
+ */
+export function dueLackedBlocks(stranded: readonly StrandedDeferredStaple[], carriedBefore: ReadonlySet<string>, unanswered: ReadonlyMap<string, Unanswered>, now: number, most: number): BlockHash[] {
+	const carried = new Set<string>(carriedBefore);
 	for (const { staple } of stranded) {
 		for (const block of staple.blocks) {
 			carried.add(block.hash.toString());
@@ -130,10 +148,11 @@ export function lackedBlocksOf(stranded: readonly StrandedDeferredStaple[]): Blo
 	for (const { lacks } of stranded) {
 		for (const block of lacks) {
 			const key = block.toString();
-			if (!carried.has(key)) {
+			const asked = unanswered.get(key);
+			if (!carried.has(key) && (asked === undefined || now >= asked.at + backoffAfter(asked.asked))) {
 				lacked.set(key, block);
 			}
 		}
 	}
-	return([...lacked.values()]);
+	return([...lacked.values()].slice(0, most));
 }
