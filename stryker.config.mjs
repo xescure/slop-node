@@ -26,25 +26,36 @@ const UNTRACKED_INPUTS = [
 ];
 
 /**
- * Whether the last run had a static mutant, one in code that runs as its
- * module loads: Stryker ties its result to no test, so its incremental mode
- * reuses that result whichever tests changed.
+ * @typedef {object} LastRun What the incremental file keeps of the last run.
+ * @property {Record<string, { mutants: { static?: boolean }[] }>} files
+ * @property {Record<string, { source?: string }>} testFiles The tests' sources as the run read them, when it began.
+ */
+
+/**
+ * Whether a test of the module differs from the source the last run read,
+ * while that run had a static mutant, one in code that runs as its module
+ * loads: Stryker ties its result to no test, so its incremental mode reuses
+ * that result whichever tests changed. The sources are compared rather than
+ * times, as a test edited during a run is older than the file the run writes
+ * at its end.
+ * @param {LastRun} lastRun
  * @returns {boolean}
  */
-function lastRunHadStaticMutants() {
-	/** @type {{ files: Record<string, { mutants: { static?: boolean }[] }> }} */
-	const lastRun = JSON.parse(readFileSync(incrementalFile, 'utf8'));
-	return(Object.values(lastRun.files).some(function(file) {
+function staticResultsStale(lastRun) {
+	const hadStatic = Object.values(lastRun.files).some(function(file) {
 		return(file.mutants.some(function(mutant) {
 			return(mutant.static === true);
 		}));
+	});
+	return(hadStatic && globSync([...module.tests]).some(function(path) {
+		return(lastRun.testFiles[path]?.source !== readFileSync(path, 'utf8'));
 	}));
 }
 
 /**
- * Whether an input Stryker does not track is newer than the last run, or a
- * test of the module is and the last run had a static mutant, after which
- * every mutant runs again.
+ * Whether an input Stryker does not track is newer than the last run, or the
+ * results of its static mutants are stale, after which every mutant runs
+ * again.
  * @returns {boolean}
  */
 function inputsChangedSinceLastRun() {
@@ -57,14 +68,11 @@ function inputsChangedSinceLastRun() {
 		}
 		throw(error);
 	}
-	const newer = function(/** @type {string} */ path) {
-		return(statSync(path).mtimeMs > lastRun);
-	};
 	const tracked = new Set(globSync([...module.mutate]));
 	const untracked = globSync(UNTRACKED_INPUTS).some(function(path) {
-		return(!path.endsWith('.test.ts') && !tracked.has(path) && newer(path));
+		return(!path.endsWith('.test.ts') && !tracked.has(path) && statSync(path).mtimeMs > lastRun);
 	});
-	return(untracked || (globSync([...module.tests]).some(newer) && lastRunHadStaticMutants()));
+	return(untracked || staticResultsStale(JSON.parse(readFileSync(incrementalFile, 'utf8'))));
 }
 
 /** @type {import('@stryker-mutator/api/core').PartialStrykerOptions} */
