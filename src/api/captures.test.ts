@@ -64,6 +64,9 @@ const MULTISIG = 'keeta_a733fw4ggvpzh6o4lut6sst6orrs5wmhqwawamideu6aa6ela5gsnztw
 
 const NETWORK_ADDRESS = 'keeta_alwerxoezkupzhifvpo5yvoazlsdqaweov66mokhq7xl4h5ow36v5xu6ek3js';
 
+/** The ED25519 account whose public key is all zeros, whose blocks are of the edge-case staples, after the head. */
+const ZERO_ED25519 = 'keeta_aeaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaazpi2nodu';
+
 /** The storage account the head names, whose chain moved on after the head. */
 const STORAGE = 'keeta_aqltdal4rshtky5iehd765y3mdjkcmku5d4ulo5fgonzqrxulwepnogq33mle';
 
@@ -102,6 +105,7 @@ const VERDICTS: Readonly<Record<string, Verdict>> = {
 	'ledger-account-chain.json': USER_LATER,
 	'ledger-account-head-unknown.json': replayed(),
 	'ledger-account-head.json': USER_LATER,
+	'ledger-account-ed25519.json': excluded({ kind: 'later-activity', account: ZERO_ED25519, evidence: 'ledger-account-ed25519.json' }),
 	'ledger-account-history-from-start.json': USER_LATER,
 	'ledger-account-history-limit-below-one.json': replayed(),
 	'ledger-account-history-limit-empty.json': replayed(),

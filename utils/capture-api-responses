@@ -52,6 +52,10 @@ UNKNOWN_HASH = hashlib.sha256(b"").hexdigest().upper()
 UNKNOWN_IDEMPOTENT_KEY = base64.b64encode(b"slop-node/unknown").decode("ascii")
 MALFORMED_HASH = "not-a-hash"
 MALFORMED_ACCOUNT = "keeta_not-an-account"
+# The ED25519 account whose public key is all zeros, which signs blocks of the
+# edge-case staples (conformance/MAINNET.md, section 7); the head state holds
+# no ED25519 account.
+ZERO_ED25519_ACCOUNT = "keeta_aeaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaazpi2nodu"
 
 
 def fail(message):
@@ -374,6 +378,7 @@ def capture(parameters, directory, selected):
 	c.get("ledger-account-network", [*account, p.network])
 	c.get("ledger-account-multisig", [*account, p.multisig])
 	c.get("ledger-account-storage", [*account, p.storage])
+	c.get("ledger-account-ed25519", [*account, ZERO_ED25519_ACCOUNT])
 	c.get("ledger-account-unknown", [*account, UNKNOWN_ACCOUNT])
 	c.get("ledger-account-malformed", [*account, MALFORMED_ACCOUNT])
 	c.get("ledger-account-head", [*account, p.user, "head"])
