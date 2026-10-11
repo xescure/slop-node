@@ -9,7 +9,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
 import { PeerPacer } from '../node/bootstrap-pacing.js';
 import { assertNever } from '../util/assert-never.js';
-import { capturedBehaviors, sampleAPI } from './api-diff.js';
+import { capturedBehaviors, recheckAPIDivergences, sampleAPI } from './api-diff.js';
 import { httpSource, pacedSource } from './api-source.js';
 import type { APISource } from './api-source.js';
 import { compareChecksums, crossCheckChecksum } from './checksum.js';
@@ -55,9 +55,12 @@ const USAGE = [
 	'            with most and with at least two, and unresolved otherwise',
 	'  recheck   compare again each account whose latest comparison diverged or was unresolved, or that both',
 	'            sides answered with the same error, with the',
-	'            representative it was compared with, and read it again from every other representative',
+	'            representative it was compared with, and read it again from every other representative;',
+	'            and send again each API diff request whose latest comparison diverged or was unresolved',
 	'  api-diff  send the same GET requests, drawn from what the follower holds within its reach, to the',
-	'            follower and to a representative, and compare the answers, stratum by stratum',
+	'            follower and to a representative, and compare the answers, stratum by stratum; a stratum',
+	'            with fewer requests than --samples in all is a census, each of its requests sent; answers',
+	'            that differ are sent again to every other representative and judged as the sweep judges',
 	'            --samples <n>      how many requests of each stratum to compare (50)',
 	'            --seed <text>      fixes which requests are drawn (the time of the run)',
 	'  shadow    replay the follower\'s main staples, in the order its ledger added them, into an offline',
@@ -343,7 +346,7 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 			return(0);
 		}
 		case 'recheck': {
-			const summary = await recheckDivergences(tools);
+			const summary = { sweep: await recheckDivergences(tools), apiDiff: await recheckAPIDivergences(tools) };
 			process.stdout.write(`${JSON.stringify(summary, null, '\t')}\n`);
 			return(0);
 		}

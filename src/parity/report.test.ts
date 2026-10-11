@@ -6,7 +6,7 @@ import { startFakeAPI } from '../testing/fake-api.js';
 import { httpSource } from './api-source.js';
 import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-store.js';
 import { ParityLog } from './log.js';
-import type { APIDiffOutcome, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, ShadowRunRecord, ShadowWindowTally, SweepBatchRecord, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
+import type { APIDiffOutcome, APIDiffPlanRecord, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, ShadowRunRecord, ShadowWindowTally, SweepBatchRecord, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
 import { parityReportOf, runParity, neverComparedCandidatesOf } from './report.js';
 import type { SweepPosition } from './report.js';
 import { sweepCursorPaths } from './sweep.js';
@@ -184,7 +184,7 @@ describe('the parity report', function() {
 		});
 		expect(signal.strata.find(function(stratum) {
 			return(stratum.stratum === 'token');
-		})).toEqual({ stratum: 'token', requestsCompared: 2, diverged: 0, confidence: { kind: 'rule-of-three', samples: 2, level: 0.95, divergenceRateBelow: 1.5 } });
+		})).toEqual({ stratum: 'token', requestsCompared: 2, diverged: 0, representativeLocal: 0, census: null, covered: false, confidence: { kind: 'rule-of-three', samples: 2, level: 0.95, divergenceRateBelow: 1.5 } });
 		expect(signal.strata.find(function(stratum) {
 			return(stratum.stratum === 'storage');
 		})).toMatchObject({ requestsCompared: 0, confidence: { kind: 'none' } });
@@ -197,6 +197,44 @@ describe('the parity report', function() {
 			apiDiff('2026-10-09T01:00:01.000Z', 'token', path, DIVERGED_INFO)
 		]).signals.apiDiff;
 		expect(signal).toMatchObject({ verdict: 'fail', firstDivergence: { at: '2026-10-09T01:00:01.000Z', representative: REPRESENTATIVE, stratum: 'token', path, field: 'body.info' } });
+	});
+
+	test('supersedes a divergence by a later comparison of the identical request, listing both rather than dropping it', function() {
+		const path = `/node/ledger/account/${ACCOUNT}/history?limit=1`;
+		const divergence = apiDiff('2026-10-09T08:40:25.000Z', 'token', path, { kind: 'diverged', field: 'body.history[0].$id', follower: {}, representative: {}, readings: [] });
+		const later = apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'match' });
+		const signal = report([divergence, apiDiff('2026-10-10T00:00:00.000Z', 'token', path, { kind: 'skipped', reason: 'moving', side: 'representative', detail: 'recent' }), later]).signals.apiDiff;
+		expect(signal).toMatchObject({ verdict: 'pass', counts: { diverged: 0, superseded: 1, divergenceRecords: 1 }, superseded: [{ divergence, by: later }], firstDivergence: null });
+	});
+
+	test('fails the API diff on an unresolved request, but counts one representative\'s own difference apart without failing', function() {
+		const path = `/node/ledger/account/${ACCOUNT}`;
+		const disputed = { field: 'body.info', follower: {}, representative: {}, readings: [] };
+		const local = report([apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'representative-local', ...disputed })]).signals.apiDiff;
+		expect(local).toMatchObject({ verdict: 'pass', counts: { requestsCompared: 1, matched: 0, diverged: 0, representativeLocal: 1 }, representativeLocal: { [REPRESENTATIVE]: 1 } });
+		const unresolved = report([apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'unresolved', ...disputed })]).signals.apiDiff;
+		expect(unresolved).toMatchObject({ verdict: 'fail', counts: { diverged: 1, unresolved: 1 }, firstDivergence: { path, field: 'body.info' } });
+	});
+
+	test('states a census of a stratum whose every planned request was compared, and covers a stratum by 300 requests or its census', function() {
+		const census = [`/node/ledger/account/${ACCOUNT}`, `/node/ledger/account/${ACCOUNT}/head`];
+		const plan: APIDiffPlanRecord = { kind: 'api-diff-plan', at: '2026-10-11T14:00:00.000Z', quietBefore: '2026-10-11T13:00:00.000Z', samplesPerStratum: 300, strata: [{ stratum: 'multisig', population: { kind: 'census', requests: census } }, { stratum: 'storage', population: { kind: 'census', requests: [`/node/ledger/account/${OTHER_ACCOUNT}`] } }] };
+		const tokens = Array.from({ length: 300 }, function(_, index) {
+			return(apiDiff('2026-10-11T14:01:00.000Z', 'token', `/node/ledger/account/${ACCOUNT}/history/start/${index.toString(16).padStart(64, '0')}`, { kind: 'match' }));
+		});
+		const signal = report([plan, ...census.map(function(path) {
+			return(apiDiff('2026-10-11T14:02:00.000Z', 'multisig', path, { kind: 'match' }));
+		}), ...tokens]).signals.apiDiff;
+		const of = function(stratum: Stratum) {
+			return(signal.strata.find(function(entry) {
+				return(entry.stratum === stratum);
+			}));
+		};
+		expect(of('multisig')).toMatchObject({ requestsCompared: 2, census: { requests: 2, compared: 2, plannedAt: plan.at }, covered: true, confidence: { kind: 'census', requests: 2 } });
+		expect(of('storage')).toMatchObject({ requestsCompared: 0, census: { requests: 1, compared: 0 }, covered: false });
+		expect(of('token')).toMatchObject({ requestsCompared: 300, census: null, covered: true, confidence: { kind: 'rule-of-three', samples: 300, divergenceRateBelow: 0.01 } });
+		expect(of('permissions')).toMatchObject({ census: null, covered: false });
+		expect(signal).toMatchObject({ samplesTarget: 300, everyStratumCovered: false });
 	});
 
 	test('passes shadow votes only once the latest run voted on the whole scoped window, up to a target fixed with the follower caught up', function() {
