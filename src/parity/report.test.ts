@@ -8,7 +8,7 @@ import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-s
 import { ParityLog } from './log.js';
 import type { APIDiffExplainedRecord, APIDiffOutcome, APIDiffPlanRecord, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, ShadowRunRecord, ShadowWindowTally, SweepBatchRecord, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
 import { answerDigest } from './api-diff.js';
-import { parityReportOf, runParity, neverComparedCandidatesOf } from './report.js';
+import { neverComparedAccountsOf, parityReportOf, runParity, neverComparedCandidatesOf } from './report.js';
 import type { SweepPosition } from './report.js';
 import { sweepCursorPaths } from './sweep.js';
 import type { Stratum } from './strata.js';
@@ -571,6 +571,13 @@ describe('the parity report', function() {
 		};
 		const sweep = report([swept('2026-10-09T01:00:00.000Z', ACCOUNT, local)]).signals.sweep;
 		expect(sweep.representativeLocal).toMatchObject({ records: 1, accounts: 1, byRepresentative: { [REPRESENTATIVE]: 1, [THIRD_REPRESENTATIVE]: 1 } });
+	});
+
+	test('names the accounts a lap never compared, by walk, which a later comparison of each by itself covers', function() {
+		const position: SweepPosition = { knownAccounts: 3, chainAccounts: [chainAccount(ACCOUNT)], cursors: { chain: { lap: 1, afterRowID: '0' }, passive: { lap: 1, afterRowID: '0' } }, rowIDs: new Map([[OTHER_ACCOUNT, '5']]) };
+		const missed = [batch('2026-10-09T01:00:00.000Z', 0, ['0', '20'], 4, [OTHER_ACCOUNT])];
+		expect(neverComparedAccountsOf(missed, position)).toEqual({ chain: [chainAccount(ACCOUNT)], passive: [OTHER_ACCOUNT] });
+		expect(neverComparedAccountsOf([...missed, swept('2026-10-09T02:00:00.000Z', ACCOUNT, MATCH, 0, 'chain'), swept('2026-10-09T02:00:01.000Z', OTHER_ACCOUNT, MATCH, 0, 'passive')], position)).toEqual({ chain: [], passive: [] });
 	});
 
 	test('fails the sweep on an account the representatives split on', function() {

@@ -10,7 +10,7 @@ import type { FollowerProgress, KnownAccount } from './follower-store.js';
 import { ParityLog } from './log.js';
 import type { SweepBatchRecord, SweepRecord, SweepWalk } from './log.js';
 import { recordsOf } from './report.js';
-import { compareAccount, firstDifference, QUIET_MARGIN_MILLISECONDS, readSweepCursor, recheckDivergences, sweepAccounts, sweepCursorPaths } from './sweep.js';
+import { compareAccount, compareNeverCompared, firstDifference, QUIET_MARGIN_MILLISECONDS, readSweepCursor, recheckDivergences, sweepAccounts, sweepCursorPaths } from './sweep.js';
 import type { SweepCursorPaths, SweepStore, SweepSummary, WalkSummary } from './sweep.js';
 import { retryingStore } from './transient-store.js';
 
@@ -961,5 +961,31 @@ describe('an account both sides answer with the same error', function() {
 			stopped: new AbortController().signal
 		});
 		expect(summary).toEqual({ match: 1 });
+	});
+});
+
+describe('the accounts a lap never compared', function() {
+	test('are compared one at a time, each representative in turn, and recorded in the walk and lap they were missed in', async function() {
+		const running = await setup(2);
+		const [chain, passive] = ACCOUNTS;
+		serveSplit(running, chain, '0x10', ['0x10', '0x10']);
+		serveSplit(running, passive, '0x10', ['0x10', '0x10']);
+		const store = memoryStore({ [chain]: [STAPLE], [passive]: [STAPLE] }, undefined, {}, [passive]);
+		const known = (await store.chainAccounts())[0];
+		if (known === undefined) {
+			throw(new Error('no chain account'));
+		}
+
+		const summary = await compareNeverCompared({ follower: httpSource(running.follower.endpoint), representatives: running.representatives.map(function(api) {
+			return(httpSource(api.endpoint));
+		}), store, log: running.log, stopped: new AbortController().signal }, { chain: [known], passive: [passive] }, { chain: 0, passive: 2 });
+
+		expect(summary).toEqual({ match: 2 });
+		expect(recordsOf((await running.log.read()).records, 'sweep').map(function(record) {
+			return([record.account, record.walk, record.lap, record.representative, record.outcome.kind]);
+		})).toEqual([
+			[chain, 'chain', 0, running.representatives[0]?.endpoint, 'match'],
+			[passive, 'passive', 2, running.representatives[1]?.endpoint, 'match']
+		]);
 	});
 });

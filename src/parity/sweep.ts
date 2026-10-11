@@ -600,7 +600,7 @@ function holdsRecent(known: KnownAccount, quietBefore: Date): boolean {
  * holds a staple of from within the margin is moving whatever is read again,
  * so its chain is compared at once.
  */
-async function compareChainKnown(setup: SweepSetup, representative: APISource, known: KnownAccount, quietBefore: Date): Promise<SweepOutcome> {
+async function compareChainKnown(setup: Comparing & Pick<SweepSetup, 'stopped'>, representative: APISource, known: KnownAccount, quietBefore: Date): Promise<SweepOutcome> {
 	let outcome = await compareKnown(setup, representative, known, quietBefore);
 	for (let retry = 0; retry < MOVING_RETRIES && isMoving(outcome) && !holdsRecent(known, quietBefore) && !isStopped(setup.stopped); retry++) {
 		outcome = await compareAdjudicated(setup, representative, known.account, quietBefore);
@@ -616,7 +616,7 @@ async function compareChainKnown(setup: SweepSetup, representative: APISource, k
  * from within the margin of its reach: then it is moving whatever a
  * representative holds, and none is asked about it.
  */
-function compareKnown(setup: SweepSetup, representative: APISource, known: KnownAccount, quietBefore: Date): Promise<SweepOutcome> {
+function compareKnown(setup: Comparing, representative: APISource, known: KnownAccount, quietBefore: Date): Promise<SweepOutcome> {
 	if (holdsRecent(known, quietBefore)) {
 		return(Promise.resolve({ kind: 'skipped', reason: 'moving', side: 'follower', detail: FOLLOWER_HOLDS_RECENT }));
 	}
@@ -967,5 +967,55 @@ export async function recheckDivergences(setup: RecheckSetup): Promise<RecheckSu
 		await setup.log.append([recordOf(representative, record.account, record.lap, record.walk, outcome)]);
 		summary[outcome.kind] = (summary[outcome.kind] ?? 0) + 1;
 	}
+	return(summary);
+}
+
+/** The accounts no lap compared, by the walk that missed them: those with a chain as the follower knows them. */
+export type NeverCompared = { readonly chain: readonly KnownAccount[]; readonly passive: readonly string[] };
+
+/**
+ * Compares by itself each account a complete lap never compared, one at a
+ * time for each representative in turn, as its walk would, and records it
+ * in that walk and lap, so that the lap's coverage completes without a
+ * whole new lap.
+ */
+export async function compareNeverCompared(setup: RecheckSetup, accounts: NeverCompared, laps: Readonly<Record<SweepWalk, number>>): Promise<RecheckSummary> {
+	const quietBefore = await quietBeforeOf(setup.store);
+	if (quietBefore === undefined) {
+		throw(new Error('the follower has read from no representative yet'));
+	}
+	const pending: readonly { readonly walk: SweepWalk; readonly known: KnownAccount }[] = [
+		...accounts.chain.map(function(known) {
+			return({ walk: 'chain', known } as const);
+		}),
+		...accounts.passive.map(function(account) {
+			return({ walk: 'passive', known: { rowID: '0', account, newestStaple: undefined } } as const);
+		})
+	];
+	const summary: Partial<Record<SweepOutcome['kind'], number>> = {};
+	await Promise.all(setup.representatives.map(async function(representative, worker) {
+		for (let index = worker; index < pending.length && !isStopped(setup.stopped); index += setup.representatives.length) {
+			const entry = pending[index];
+			if (entry === undefined) {
+				continue;
+			}
+			let outcome: SweepOutcome;
+			switch (entry.walk) {
+				case 'chain':
+					outcome = await compareChainKnown(setup, representative, entry.known, quietBefore);
+					break;
+				case 'passive':
+					outcome = await compareAdjudicated(setup, representative, entry.known.account, quietBefore);
+					break;
+				default:
+					outcome = assertNever(entry.walk);
+			}
+			if (isStopped(setup.stopped)) {
+				return;
+			}
+			await setup.log.append([recordOf(representative, entry.known.account, laps[entry.walk], entry.walk, outcome)]);
+			summary[outcome.kind] = (summary[outcome.kind] ?? 0) + 1;
+		}
+	}));
 	return(summary);
 }

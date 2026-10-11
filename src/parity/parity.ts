@@ -19,13 +19,13 @@ import { ParityLog, parityLogPath } from './log.js';
 import type { ShadowBase, ShadowRunRecord, ShadowRunState, ShadowTarget } from './log.js';
 import { lockParity, PARITY_LOCK_FILE, parseParityCommand, SHADOW_LOCK_FILE } from './parity-command.js';
 import type { ParityCommand } from './parity-command.js';
-import { reportOnLog, runParity, sweepPointerOf } from './report.js';
+import { neverComparedAccountsOf, reportOnLog, runParity, sweepPointerOf, sweepPositionOf } from './report.js';
 import { DEFAULT_REPRESENTATIVE_PACING, RepresentativePacer } from './representative-pacer.js';
 import type { PacerClock, RepresentativePacing } from './representative-pacer.js';
 import type { ParityReport } from './report.js';
 import { freshShadowRun, runShadowVotes, SHADOW_SCOPE, shadowRunComplete } from './shadow-live.js';
 import { fileShadowState, shadowDirectory } from './shadow-state.js';
-import { recheckDivergences, sweepAccounts, sweepCursorPaths } from './sweep.js';
+import { compareNeverCompared, recheckDivergences, sweepAccounts, sweepCursorPaths } from './sweep.js';
 import { retryingStore } from './transient-store.js';
 import type { TransientFailure } from './transient-store.js';
 import type { SweepCursorPaths } from './sweep.js';
@@ -70,6 +70,7 @@ const USAGE = [
 	'  recheck   compare again each account whose latest comparison diverged or was unresolved, or that both',
 	'            sides answered with the same error, with the',
 	'            representative it was compared with, and read it again from every other representative;',
+	'            then compare by itself each account the latest complete lap never compared, recorded in that lap;',
 	'            and send again each API diff request whose latest comparison diverged or was unresolved,',
 	'            and each request of the latest API diff census not compared yet',
 	'  api-diff  send the same GET requests, drawn from what the follower holds within its reach, to the',
@@ -373,7 +374,15 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 			return(0);
 		}
 		case 'recheck': {
-			const summary = { sweep: await recheckDivergences(tools), apiDiff: await recheckAPIDivergences(tools) };
+			const sweep = await recheckDivergences(tools);
+			const apiDiff = await recheckAPIDivergences(tools);
+			const { records } = await tools.log.read();
+			const position = await sweepPositionOf(tools, records);
+			const neverCompared = await compareNeverCompared(tools, neverComparedAccountsOf(records, position), {
+				chain: Math.max(0, position.cursors.chain.lap - 1),
+				passive: Math.max(0, position.cursors.passive.lap - 1)
+			});
+			const summary = { sweep, apiDiff, neverCompared };
 			process.stdout.write(`${JSON.stringify(summary, null, '\t')}\n`);
 			return(0);
 		}

@@ -11,7 +11,7 @@ import type { APIDiffExplainedRecord, APIDiffPlanRecord, APIDiffRecord, BlockCou
 import { STRATA } from './strata.js';
 import type { Stratum } from './strata.js';
 import { readSweepCursor, sweepAccounts } from './sweep.js';
-import type { SweepCursorPaths } from './sweep.js';
+import type { NeverCompared, SweepCursorPaths } from './sweep.js';
 
 /** A signal's verdict. */
 export type Verdict = 'pass' | 'fail' | 'not-comparable-yet';
@@ -1140,14 +1140,13 @@ export type ReportSources = {
 /** The accounts the store looks up at once, well within what a query takes as one parameter. */
 const ROWS_LOOKED_UP_AT_ONCE = 10_000;
 
-/** The report on the whole log as it stands, comparing nothing afresh. */
-export async function reportOnLog(sources: ReportSources): Promise<ParityReport> {
-	const log = await sources.log.read();
+/** Where the sweep stands, read from the follower's store and the cursors, for the accounts the log names. */
+export async function sweepPositionOf(sources: Pick<ReportSources, 'store' | 'cursorPaths'>, records: readonly ParityRecord[]): Promise<SweepPosition> {
 	const chainAccounts = await sources.store.chainAccounts();
 	const chainSet = new Set(chainAccounts.map(function(known): string {
 		return(known.account);
 	}));
-	const candidates = neverComparedCandidatesOf(log.records).filter(function(account): boolean {
+	const candidates = neverComparedCandidatesOf(records).filter(function(account): boolean {
 		return(!chainSet.has(account));
 	});
 	const rowIDs = new Map<string, string>();
@@ -1156,12 +1155,31 @@ export async function reportOnLog(sources: ReportSources): Promise<ParityReport>
 			rowIDs.set(account, rowID);
 		}
 	}
-	const sweep: SweepPosition = {
+	return({
 		knownAccounts: await sources.store.accountCount(),
 		chainAccounts,
 		cursors: { chain: await readSweepCursor(sources.cursorPaths.chain), passive: await readSweepCursor(sources.cursorPaths.passive) },
 		rowIDs
-	};
+	});
+}
+
+/** The accounts no lap compared, as the report counts them, the accounts with a chain as the follower knows them. */
+export function neverComparedAccountsOf(allRecords: readonly ParityRecord[], position: SweepPosition): NeverCompared {
+	const records = recordsOf(allRecords, 'sweep');
+	const { chain, passive } = neverComparedOf(records, latestBatches(recordsOf(allRecords, 'sweep-batch')), position, chainLapRecordsOf(records), neverComparedCandidatesOf(allRecords));
+	const missed = new Set(chain);
+	return({
+		chain: position.chainAccounts.filter(function(known): boolean {
+			return(missed.has(known.account));
+		}),
+		passive
+	});
+}
+
+/** The report on the whole log as it stands, comparing nothing afresh. */
+export async function reportOnLog(sources: ReportSources): Promise<ParityReport> {
+	const log = await sources.log.read();
+	const sweep = await sweepPositionOf(sources, log.records);
 	return(parityReportOf({ generatedAt: new Date(), progress: await sources.store.progress(), sweep, log, knownBehaviors: sources.knownBehaviors }));
 }
 
