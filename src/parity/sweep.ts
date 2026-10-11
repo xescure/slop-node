@@ -971,17 +971,30 @@ export async function recheckDivergences(setup: RecheckSetup): Promise<RecheckSu
 }
 
 /**
+ * Reads of the follower's state of a passive account after the
+ * representative's, for the follower to reach the state the representative
+ * served: some seconds of local reads, as long as the follower takes to add
+ * a staple the representative added.
+ */
+const FOLLOWER_CATCH_UP_READS = 200;
+
+/**
  * Compares a passive account by itself as its walk compares one in a batch:
  * states alike match, as no lag of either side makes unequal states equal,
- * and states apart are compared by themselves.
+ * the follower read again until it reaches the state the representative
+ * served, which an account a staple touches every few seconds needs; states
+ * apart are compared by themselves.
  */
-async function comparePassiveAlone(setup: Comparing, representative: APISource, account: string, quietBefore: Date): Promise<SweepOutcome> {
+async function comparePassiveAlone(setup: Comparing & Pick<SweepSetup, 'stopped'>, representative: APISource, account: string, quietBefore: Date): Promise<SweepOutcome> {
 	const path = `/node/ledger/account/${account}`;
 	try {
-		const followerState = await getOK(setup.follower, path);
 		const representativeState = await getOK(representative, path);
-		if (stateErrorOf(representativeState) === undefined && firstDifference(followerState, representativeState) === undefined) {
-			return({ kind: 'match', head: headOf(representativeState), staple: null });
+		if (stateErrorOf(representativeState) === undefined) {
+			for (let read = 0; read < FOLLOWER_CATCH_UP_READS && !isStopped(setup.stopped); read++) {
+				if (firstDifference(await getOK(setup.follower, path), representativeState) === undefined) {
+					return({ kind: 'match', head: headOf(representativeState), staple: null });
+				}
+			}
 		}
 	} catch {
 		// Compared by itself, which records why it was not answered.
