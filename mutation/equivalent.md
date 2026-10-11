@@ -298,7 +298,6 @@ keeps, or the text of a line it logs.
 
 - src/node/bootstrap-cursors.ts:40:9-40:34 ConditionalExpression "true" equivalent: Number.isSafeInteger is false for every value that is no number, so the conjunction answers the same without the typeof test.
 - src/node/bootstrap-cursors.ts:288:3-289:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of Awaited is unreachable.
-- src/node/bootstrap-pacing.ts:25:43-25:57 ObjectLiteral "{}" equivalent: the listener is removed once the wait ends, and a signal is aborted at most once, so it runs at most once either way.
 - src/node/bootstrap-pacing.ts:25:51-25:55 BooleanLiteral "false" equivalent: the listener is removed once the wait ends, and a signal is aborted at most once, so it runs at most once either way.
 - src/node/bootstrap-pacing.ts:66:8-66:16 EqualityOperator "wait >= 0" harmless: a wait of exactly 0 ms takes one timer tick before the same request is sent; a stop in that tick is reported as a stop while waiting, as the error the signal's reason wraps, rather than as the reason itself.
 - src/node/bootstrap-pacing.ts:77:8-77:42 ConditionalExpression "false" equivalent: a peer's last turn left in place is settled, so the next request to the peer waits on a settled promise, as on none; the map keeps one turn per peer the node bootstraps from.
@@ -310,7 +309,6 @@ keeps, or the text of a line it logs.
 - src/node/bootstrap-page.ts:124:7-124:64 LogicalOperator "isRecord(parsed) || typeof parsed['message'] === 'string'" equivalent: a value with no string message throws as its message is sliced, inside the try whose catch answers undefined, as the guard does.
 - src/node/bootstrap-page.ts:124:27-124:64 ConditionalExpression "true" equivalent: a record with no string message throws as its message is sliced, inside the try whose catch answers undefined, as the guard does.
 - src/node/bootstrap-page.ts:226:41-226:60 ObjectLiteral "{}" harmless: an https peer's pages then each open a connection of their own instead of reusing one; the pages read are the same.
-- src/node/bootstrap-page.ts:226:54-226:58 BooleanLiteral "false" harmless: an https peer's pages then each open a connection of their own instead of reusing one; the pages read are the same.
 - src/node/bootstrap-page.ts:338:17-338:24 StringLiteral "\"\"" equivalent: the error a response is destroyed with, too large or ended early, also fails its request, whose 'error' listener rejects the page with that error (Node's http client; bootstrap-page.test.ts runs both).
 - src/node/bootstrap-page.ts:339:5-343:8 CallExpression ";" equivalent: Node's http client destroys a response that closes before it is complete with an 'aborted' error first, which rejects the page, so this rejection never decides it (bootstrap-page.test.ts, an answer that ends before its length).
 - src/node/bootstrap-page.ts:339:17-339:24 StringLiteral "\"\"" equivalent: Node's http client destroys a response that closes before it is complete with an 'aborted' error first, which rejects the page, so this rejection never decides it.

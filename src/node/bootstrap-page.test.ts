@@ -380,18 +380,18 @@ describe('the staple holding a block, as a peer holds it', function() {
 		return({ endpoint: peer.endpoint, hash: first.hash });
 	}
 
-	test.each<[string, unknown, unknown, PageProblem]>([
-		['votes that are no record', [], {}, { kind: 'malformed', detail: 'it holds no votes' }],
-		['no votes', { blockhash: 'x' }, {}, { kind: 'malformed', detail: 'it holds no votes' }],
-		['votes that are no list', { votes: 5 }, {}, { kind: 'malformed', detail: 'its votes are no list' }],
-		['a vote with no bytes', { votes: [{}] }, {}, { kind: 'malformed', detail: 'a vote carries no bytes' }],
-		['a vote that cannot be read', { votes: [{ $binary: 'AAAA' }] }, {}, { kind: 'malformed', detail: 'a vote cannot be read' }],
-		['a block answer that is no record', 'votes', [], { kind: 'malformed', detail: 'it holds no block' }],
-		['no block', 'votes', { blockhash: 'x' }, { kind: 'malformed', detail: 'it holds no block' }],
-		['a block with no bytes', 'votes', { block: {} }, { kind: 'malformed', detail: 'a block carries no bytes' }],
-		['a block that cannot be read', 'votes', { block: { $binary: 'AAAA' } }, { kind: 'malformed', detail: 'a block cannot be read' }],
-		['a block the votes do not cover', 'votes', 'other block', { kind: 'malformed', detail: 'its votes and blocks make no staple' }]
-	])('fails on an answer with %s', async function(_ignored: string, votes: unknown, block: unknown, problem: PageProblem) {
+	test.each<[string, unknown, unknown, PageProblem, boolean]>([
+		['votes that are no record', [], {}, { kind: 'malformed', detail: 'it holds no votes' }, false],
+		['no votes', { blockhash: 'x' }, {}, { kind: 'malformed', detail: 'it holds no votes' }, false],
+		['votes that are no list', { votes: 5 }, {}, { kind: 'malformed', detail: 'its votes are no list' }, false],
+		['a vote with no bytes', { votes: [{}] }, {}, { kind: 'malformed', detail: 'a vote carries no bytes' }, false],
+		['a vote that cannot be read', { votes: [{ $binary: 'AAAA' }] }, {}, { kind: 'malformed', detail: 'a vote cannot be read' }, true],
+		['a block answer that is no record', 'votes', [], { kind: 'malformed', detail: 'it holds no block' }, false],
+		['no block', 'votes', { blockhash: 'x' }, { kind: 'malformed', detail: 'it holds no block' }, false],
+		['a block with no bytes', 'votes', { block: {} }, { kind: 'malformed', detail: 'a block carries no bytes' }, false],
+		['a block that cannot be read', 'votes', { block: { $binary: 'AAAA' } }, { kind: 'malformed', detail: 'a block cannot be read' }, true],
+		['a block the votes do not cover', 'votes', 'other block', { kind: 'malformed', detail: 'its votes and blocks make no staple' }, true]
+	])('fails on an answer with %s, keeping what could not be read as the cause', async function(_ignored: string, votes: unknown, block: unknown, problem: PageProblem, caused: boolean) {
 		const page: unknown = JSON.parse(await readFile(new URL('../testing/fixtures/mainnet-rep1-epoch-page.json', import.meta.url), 'utf8'));
 		const written = (page as { readonly voteStaples: readonly string[] }).voteStaples;
 		const [own, other] = written.map(function(encoded): InstanceType<typeof lib.Vote.Staple> {
@@ -418,5 +418,6 @@ describe('the staple holding a block, as a peer holds it', function() {
 		const failed = await problemOf(fetcher().stapleHolding(endpoint, hash, 30_000, NOT_STOPPED, counting().pace));
 
 		expect(failed.problem).toEqual(problem);
+		expect(failed.cause instanceof Error).toBe(caused);
 	});
 });
