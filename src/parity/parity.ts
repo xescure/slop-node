@@ -24,7 +24,7 @@ import { reportOnLog, runParity, sweepPointerOf } from './report.js';
 import type { ParityReport } from './report.js';
 import { freshShadowRun, runShadowVotes, SHADOW_SCOPE, shadowRunComplete } from './shadow-live.js';
 import { fileShadowState, shadowDirectory } from './shadow-state.js';
-import { sweepAccounts, sweepCursorPaths } from './sweep.js';
+import { recheckDivergences, sweepAccounts, sweepCursorPaths } from './sweep.js';
 import type { SweepCursorPaths } from './sweep.js';
 
 /**
@@ -50,6 +50,11 @@ const USAGE = [
 	'            and the rest a hundred at a time, each answered apart compared again by itself',
 	'            --accounts <n>     how many accounts each walk goes past (100)',
 	'            --lap              go on to the end of the lap each walk is on (as many as there are)',
+	'            an account that diverges from its representative is read again from every other one: the',
+	'            follower\'s divergence when it disagrees with most, that representative\'s own when it agrees',
+	'            with most and with at least two, and unresolved otherwise',
+	'  recheck   compare again each account whose latest comparison diverged or was unresolved, with the',
+	'            representative it was compared with, and read it again from every other representative',
 	'  api-diff  send the same GET requests, drawn from what the follower holds within its reach, to the',
 	'            follower and to a representative, and compare the answers, stratum by stratum',
 	'            --samples <n>      how many requests of each stratum to compare (50)',
@@ -333,6 +338,11 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 		}
 		case 'sweep': {
 			const summary = await sweepAccounts({ ...tools, accounts: { chain: command.accounts, passive: command.accounts }, toLapEnd: command.toLapEnd });
+			process.stdout.write(`${JSON.stringify(summary, null, '\t')}\n`);
+			return(0);
+		}
+		case 'recheck': {
+			const summary = await recheckDivergences(tools);
 			process.stdout.write(`${JSON.stringify(summary, null, '\t')}\n`);
 			return(0);
 		}

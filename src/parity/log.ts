@@ -82,9 +82,34 @@ export type Divergence = {
 /** Which side showed the account moving. */
 export type MovingSide = 'representative' | 'follower';
 
+/** Another representative's state of an account the follower and one representative answered apart, read again to tell whose the difference is. */
+export type RepresentativeReading =
+	/** Whether its state, and its newest staple of the account, which the follower must hold, are the follower's. */
+	| { readonly representative: string; readonly kind: 'agrees' | 'disagrees'; readonly state: unknown; readonly staple: string | null }
+	/** No reading that counts: it did not answer, or its newest staple of the account is from within the margin of the follower's reach. */
+	| { readonly representative: string; readonly kind: 'unanswered' | 'moving'; readonly detail: string };
+
+/** What the follower and the representative compared with answered apart, and what the other representatives answered when read again. */
+export type Disputed = {
+	readonly divergence: Divergence;
+	readonly follower: unknown;
+	readonly representative: unknown;
+	/** None in a record written before divergences were read again. */
+	readonly readings: readonly RepresentativeReading[];
+};
+
+/** What a divergence from one representative turns out to be, once the others are read. */
+export type DisputedKind =
+	/** The follower disagrees with most of the representatives that answered: the follower's own. */
+	| 'diverged'
+	/** The follower agrees with most of them, at least two besides the one compared with: that representative's own. */
+	| 'representative-local'
+	/** Neither side has most of them. */
+	| 'unresolved';
+
 export type SweepOutcome =
 	| { readonly kind: 'match'; readonly head: string | null; readonly staple: string | null }
-	| { readonly kind: 'diverged'; readonly divergence: Divergence; readonly follower: unknown; readonly representative: unknown }
+	| ({ readonly kind: DisputedKind } & Disputed)
 	/** Not compared: the two may hold the account at different points, so it is retried on a later lap. */
 	| { readonly kind: 'skipped'; readonly reason: 'moving'; readonly side: MovingSide; readonly detail: string }
 	| { readonly kind: 'skipped'; readonly reason: 'unanswered'; readonly detail: string };
@@ -636,6 +661,29 @@ function movingSideOf(value: unknown): MovingSide | undefined {
 	return(undefined);
 }
 
+function representativeReadingOf(value: unknown): RepresentativeReading | undefined {
+	if (!isFields(value) || !isString(value['representative'])) {
+		return(undefined);
+	}
+	const { representative, kind, state, staple, detail } = value;
+	switch (kind) {
+		case 'agrees':
+		case 'disagrees':
+			if (!isStringOrNull(staple)) {
+				return(undefined);
+			}
+			return({ representative, kind, state, staple });
+		case 'unanswered':
+		case 'moving':
+			if (!isString(detail)) {
+				return(undefined);
+			}
+			return({ representative, kind, detail });
+		default:
+			return(undefined);
+	}
+}
+
 function sweepOutcomeOf(value: unknown): SweepOutcome | undefined {
 	if (!isFields(value)) {
 		return(undefined);
@@ -646,12 +694,18 @@ function sweepOutcomeOf(value: unknown): SweepOutcome | undefined {
 				return(undefined);
 			}
 			return({ kind: 'match', head: value['head'], staple: value['staple'] });
-		case 'diverged': {
+		case 'diverged':
+		case 'representative-local':
+		case 'unresolved': {
 			const divergence = divergenceOf(value['divergence']);
-			if (divergence === undefined) {
+			let readings: readonly RepresentativeReading[] | undefined = [];
+			if (value['readings'] !== undefined) {
+				readings = listOf(value['readings'], representativeReadingOf);
+			}
+			if (divergence === undefined || readings === undefined) {
 				return(undefined);
 			}
-			return({ kind: 'diverged', divergence, follower: value['follower'], representative: value['representative'] });
+			return({ kind: value['kind'], divergence, follower: value['follower'], representative: value['representative'], readings });
 		}
 		case 'skipped': {
 			const detail = value['detail'];

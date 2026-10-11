@@ -6,7 +6,7 @@ import { checksumsEqual, compareChecksums, crossCheckChecksum } from './checksum
 import type { FollowerProgress, FollowerStore } from './follower-store.js';
 import { SHADOW_REFUSAL_REASONS, SHADOW_REFUSAL_RELEASES } from '../conformance/mainnet/shadow.js';
 import type { ShadowRefusalReason } from '../conformance/mainnet/shadow.js';
-import type { APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, ShadowBase, ShadowRunCost, ShadowRunRecord, ShadowTarget, ShadowWindowTally, SweepBatchRecord, SweepCursor, SweepPointer, SweepRecord, SweepWalk } from './log.js';
+import type { APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, ShadowBase, ShadowRunCost, ShadowRunRecord, ShadowTarget, ShadowWindowTally, SweepBatchRecord, SweepCursor, SweepOutcome, SweepPointer, SweepRecord, SweepWalk } from './log.js';
 import { STRATA } from './strata.js';
 import type { Stratum } from './strata.js';
 import { readSweepCursor, sweepAccounts } from './sweep.js';
@@ -104,13 +104,28 @@ export type SweepCoverage = {
 	readonly everyAccountCompared: boolean;
 };
 
+/**
+ * Accounts one representative alone answered apart, the follower agreeing
+ * with most of the others: an artifact of that representative's own node.
+ */
+export type RepresentativeLocal = {
+	readonly records: number;
+	/** Accounts whose latest comparison is one. */
+	readonly accounts: number;
+	readonly byRepresentative: Readonly<Record<string, number>>;
+	readonly first: FirstDivergence | null;
+};
+
 export type SweepSignal = {
 	readonly verdict: Verdict;
 	readonly counts: {
 		/** Accounts compared by themselves at least once, each counted by its latest comparison. */
 		readonly accountsCompared: number;
 		readonly matched: number;
+		/** Accounts the follower disagrees with most representatives about, or that they split on, which fail the sweep. */
 		readonly diverged: number;
+		/** Of those, the ones the representatives split on. */
+		readonly unresolved: number;
 		/** Accounts never compared, whose latest attempt found them moving. */
 		readonly skippedMoving: number;
 		/** Accounts never compared, whose latest attempt went unanswered. */
@@ -121,6 +136,8 @@ export type SweepSignal = {
 		readonly divergenceRecords: number;
 	};
 	readonly coverage: SweepCoverage;
+	/** Differences of one representative's own, which decide nothing about the follower. */
+	readonly representativeLocal: RepresentativeLocal;
 	/** Over the accounts compared by themselves and those the passive walk's batches matched, each batch of rows counted once. */
 	readonly confidence: ConfidenceBound;
 	readonly firstDivergence: FirstDivergence | null;
@@ -331,6 +348,11 @@ function checksumSignalOf(records: readonly ParityRecord[]): ChecksumSignal {
 	});
 }
 
+/** Whether the outcome counts against the follower: it disagrees with most representatives, or they split. */
+export function followerDiverged(outcome: SweepOutcome): boolean {
+	return(outcome.kind === 'diverged' || outcome.kind === 'unresolved');
+}
+
 /** Each account's latest comparison, and its latest record of any kind, in the order the accounts were first seen. */
 function latestByAccount(records: readonly SweepRecord[]): { readonly compared: Map<string, SweepRecord>; readonly attempted: Map<string, SweepRecord>; readonly everDiverged: Set<string> } {
 	const compared = new Map<string, SweepRecord>();
@@ -340,10 +362,12 @@ function latestByAccount(records: readonly SweepRecord[]): { readonly compared: 
 		attempted.set(record.account, record);
 		switch (record.outcome.kind) {
 			case 'diverged':
+			case 'unresolved':
 				everDiverged.add(record.account);
 				compared.set(record.account, record);
 				break;
 			case 'match':
+			case 'representative-local':
 				compared.set(record.account, record);
 				break;
 			case 'skipped':
@@ -465,8 +489,8 @@ function chainLapsOf(records: readonly SweepRecord[], cursor: SweepCursor): read
 				return(record.outcome.kind === kind);
 			}).length);
 		};
-		const diverged = outcomesOf('diverged');
-		return({ lap, complete: lap < cursor.lap, walked: latest.length, compared: outcomesOf('match') + diverged, diverged, skipped: outcomesOf('skipped') });
+		const diverged = outcomesOf('diverged') + outcomesOf('unresolved');
+		return({ lap, complete: lap < cursor.lap, walked: latest.length, compared: latest.length - outcomesOf('skipped'), diverged, skipped: outcomesOf('skipped') });
 	}));
 }
 
@@ -492,7 +516,7 @@ function passiveLapsOf(records: readonly SweepRecord[], batches: readonly SweepB
 		return(left - right);
 	}).map(function([lap, tally]): WalkLap {
 		const diverged = [...tally.latest.values()].filter(function(record): boolean {
-			return(record.outcome.kind === 'diverged');
+			return(followerDiverged(record.outcome));
 		}).length;
 		return({ lap, complete: lap < cursor.lap, walked: tally.walked, compared: tally.walked - tally.skipped, diverged, skipped: tally.skipped });
 	}));
@@ -518,13 +542,38 @@ function sweepCoverageOf(records: readonly SweepRecord[], batches: readonly Swee
 /** How many accounts never compared the report names. */
 const FIRST_NEVER_COMPARED_LISTED = 10;
 
+/** The accounts whose latest comparison found one representative alone apart, by that representative, with the first such record. */
+function representativeLocalOf(records: readonly SweepRecord[], localNow: readonly SweepRecord[]): RepresentativeLocal {
+	const byRepresentative: Record<string, number> = {};
+	for (const record of localNow) {
+		byRepresentative[record.representative] = (byRepresentative[record.representative] ?? 0) + 1;
+	}
+	const accounts = new Set(localNow.map(function(record): string {
+		return(record.account);
+	}));
+	const first = records.find(function(record): boolean {
+		return(record.outcome.kind === 'representative-local' && accounts.has(record.account));
+	});
+	let firstExample: FirstDivergence | null = null;
+	if (first !== undefined && first.outcome.kind === 'representative-local') {
+		firstExample = { ...first.outcome.divergence, at: first.at, representative: first.representative };
+	}
+	const recorded = records.filter(function(record): boolean {
+		return(record.outcome.kind === 'representative-local');
+	}).length;
+	return({ records: recorded, accounts: localNow.length, byRepresentative, first: firstExample });
+}
+
 function sweepSignalOf(allRecords: readonly ParityRecord[], position: SweepPosition): SweepSignal {
 	const records = recordsOf(allRecords, 'sweep');
 	const batches = latestBatches(recordsOf(allRecords, 'sweep-batch'));
 	const { compared, attempted, everDiverged } = latestByAccount(records);
 	const latest = [...compared.values()];
 	const divergedNow = latest.filter(function(record): boolean {
-		return(record.outcome.kind === 'diverged');
+		return(followerDiverged(record.outcome));
+	});
+	const localNow = latest.filter(function(record): boolean {
+		return(record.outcome.kind === 'representative-local');
 	});
 	let skippedMoving = 0;
 	let unanswered = 0;
@@ -544,12 +593,15 @@ function sweepSignalOf(allRecords: readonly ParityRecord[], position: SweepPosit
 		}
 	}
 	const divergenceRecords = records.filter(function(record): boolean {
-		return(record.outcome.kind === 'diverged');
+		return(followerDiverged(record.outcome));
 	}).length;
 	const counts = {
 		accountsCompared: latest.length,
-		matched: latest.length - divergedNow.length,
+		matched: latest.length - divergedNow.length - localNow.length,
 		diverged: divergedNow.length,
+		unresolved: divergedNow.filter(function(record): boolean {
+			return(record.outcome.kind === 'unresolved');
+		}).length,
 		skippedMoving,
 		unanswered,
 		resolvedDivergences: everDiverged.size - divergedNow.length,
@@ -565,19 +617,20 @@ function sweepSignalOf(allRecords: readonly ParityRecord[], position: SweepPosit
 		samples += matched;
 	}
 	const confidence = confidenceOf(samples, divergedNow.length, 'account');
+	const representativeLocal = representativeLocalOf(records, localNow);
 	if (samples === 0) {
-		return({ verdict: 'not-comparable-yet', counts, coverage, confidence, firstDivergence: null });
+		return({ verdict: 'not-comparable-yet', counts, coverage, representativeLocal, confidence, firstDivergence: null });
 	}
 	const stillDiverging = new Set(divergedNow.map(function(record): string {
 		return(record.account);
 	}));
 	const first = records.find(function(record): boolean {
-		return(record.outcome.kind === 'diverged' && stillDiverging.has(record.account));
+		return(followerDiverged(record.outcome) && stillDiverging.has(record.account));
 	});
-	if (first?.outcome.kind !== 'diverged') {
-		return({ verdict: 'pass', counts, coverage, confidence, firstDivergence: null });
+	if (first === undefined || first.outcome.kind === 'match' || first.outcome.kind === 'skipped') {
+		return({ verdict: 'pass', counts, coverage, representativeLocal, confidence, firstDivergence: null });
 	}
-	return({ verdict: 'fail', counts, coverage, confidence, firstDivergence: { ...first.outcome.divergence, at: first.at, representative: first.representative } });
+	return({ verdict: 'fail', counts, coverage, representativeLocal, confidence, firstDivergence: { ...first.outcome.divergence, at: first.at, representative: first.representative } });
 }
 
 /** The records of one kind. */
@@ -780,10 +833,10 @@ export function parityReportOf(input: ReportInput): ParityReport {
 /** Where the sweep stands: the chain walk's cursor, and the first divergence it recorded. */
 export async function sweepPointerOf(log: ParityLog, cursorPaths: SweepCursorPaths): Promise<SweepPointer> {
 	const first = recordsOf((await log.read()).records, 'sweep').find(function(record): boolean {
-		return(record.outcome.kind === 'diverged');
+		return(followerDiverged(record.outcome));
 	});
 	let firstDivergence: Divergence | null = null;
-	if (first?.outcome.kind === 'diverged') {
+	if (first !== undefined && first.outcome.kind !== 'match' && first.outcome.kind !== 'skipped') {
 		firstDivergence = first.outcome.divergence;
 	}
 	return({ cursor: await readSweepCursor(cursorPaths.chain), firstDivergence });

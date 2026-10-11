@@ -7,6 +7,7 @@ import { defaultFollowerDirectory, optionsOf, setting } from './follower-config.
 export type ParityCommand =
 	| { readonly kind: 'checksum'; readonly directory: string; readonly gapMilliseconds: number }
 	| { readonly kind: 'sweep'; readonly directory: string; readonly accounts: number; readonly toLapEnd: boolean }
+	| { readonly kind: 'recheck'; readonly directory: string }
 	| { readonly kind: 'api-diff'; readonly directory: string; readonly samplesPerStratum: number; readonly seed: string | undefined }
 	| { readonly kind: 'shadow'; readonly directory: string; readonly base: string | undefined; readonly informationalEvery: number; readonly batchStaples: number; readonly restart: boolean }
 	| {
@@ -67,6 +68,9 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 			valued = ['--directory', '--accounts'];
 			flags = ['--lap'];
 			break;
+		case 'recheck':
+			valued = ['--directory'];
+			break;
 		case 'api-diff':
 			valued = ['--directory', '--samples', '--seed'];
 			break;
@@ -105,6 +109,8 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 			}
 			return({ kind: name, directory, accounts, toLapEnd });
 		}
+		case 'recheck':
+			return({ kind: name, directory });
 		case 'api-diff': {
 			const samplesPerStratum = setting(options, '--samples', Number.MAX_SAFE_INTEGER, DEFAULT_API_SAMPLES);
 			if (samplesPerStratum === undefined) {

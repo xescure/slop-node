@@ -11,6 +11,7 @@ describe('the parity command line', function() {
 	test('names each command with its defaults', function() {
 		expect(parseParityCommand(['checksum'], HOME)).toEqual({ kind: 'checksum', directory: DIRECTORY, gapMilliseconds: 10_000 });
 		expect(parseParityCommand(['sweep'], HOME)).toEqual({ kind: 'sweep', directory: DIRECTORY, accounts: 100, toLapEnd: false });
+		expect(parseParityCommand(['recheck'], HOME)).toEqual({ kind: 'recheck', directory: DIRECTORY });
 		expect(parseParityCommand(['sweep', '--lap'], HOME)).toEqual({ kind: 'sweep', directory: DIRECTORY, accounts: Number.MAX_SAFE_INTEGER, toLapEnd: true });
 		expect(parseParityCommand(['shadow'], HOME)).toEqual({ kind: 'shadow', directory: DIRECTORY, base: undefined, informationalEvery: 10, batchStaples: 500, restart: false });
 		expect(parseParityCommand(['shadow', '--base', 'follower_snapshot_20261010061500', '--informational-every', '1', '--batch', '50', '--restart'], HOME)).toEqual({ kind: 'shadow', directory: DIRECTORY, base: 'follower_snapshot_20261010061500', informationalEvery: 1, batchStaples: 50, restart: true });

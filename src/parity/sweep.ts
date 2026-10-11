@@ -6,7 +6,7 @@ import { getOK } from './api-source.js';
 import type { APIAnswer, APISource } from './api-source.js';
 import type { FollowerStore, KnownAccount } from './follower-store.js';
 import { sweepCursorOf } from './log.js';
-import type { ParityLog, SweepBatchRecord, SweepCursor, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
+import type { Disputed, DisputedKind, ParityLog, RecordedWalk, RepresentativeReading, SweepBatchRecord, SweepCursor, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
 
 /** Where each walk of the sweep resumes, in the follower's directory. */
 export const SWEEP_CURSOR_FILES: Readonly<Record<SweepWalk, string>> = { chain: 'parity-sweep-chain.json', passive: 'parity-sweep-passive.json' };
@@ -200,10 +200,10 @@ export async function compareAccount(comparison: AccountComparison): Promise<Swe
 	}
 	const staple = newest?.staple ?? null;
 	if (followerAfter.status !== 200) {
-		return({ kind: 'diverged', divergence: { account, field: 'status', staple }, follower: followerAfter, representative: representativeState });
+		return({ kind: 'diverged', divergence: { account, field: 'status', staple }, follower: followerAfter, representative: representativeState, readings: [] });
 	}
 	if (newest !== undefined && !await store.historyHolds(account, newest.staple)) {
-		return({ kind: 'diverged', divergence: { account, field: 'history', staple }, follower: followerAfter.body, representative: representativeState });
+		return({ kind: 'diverged', divergence: { account, field: 'history', staple }, follower: followerAfter.body, representative: representativeState, readings: [] });
 	}
 	/*
 	 * The account's state has no node-local field: a node holding the same
@@ -213,7 +213,7 @@ export async function compareAccount(comparison: AccountComparison): Promise<Swe
 	 */
 	const field = firstDifference(followerAfter.body, representativeState);
 	if (field !== undefined) {
-		return({ kind: 'diverged', divergence: { account, field, staple }, follower: followerAfter.body, representative: representativeState });
+		return({ kind: 'diverged', divergence: { account, field, staple }, follower: followerAfter.body, representative: representativeState, readings: [] });
 	}
 	return({ kind: 'match', head: headOf(representativeState), staple });
 }
@@ -241,7 +241,10 @@ export type WalkSummary = {
 	readonly walked: number;
 	readonly compared: number;
 	readonly matched: number;
+	/** Accounts the follower disagrees with most representatives about, or that they split on. */
 	readonly diverged: number;
+	/** Accounts one representative alone disagreed about, the follower agreeing with most of the others. */
+	readonly representativeLocal: number;
 	/** Accounts not compared: found moving, or unanswered; each is compared again on the next lap. */
 	readonly skipped: number;
 	readonly cursor: SweepCursor;
@@ -249,10 +252,10 @@ export type WalkSummary = {
 
 export type SweepSummary = Readonly<Record<SweepWalk, WalkSummary>>;
 
-type Tally = { walked: number; compared: number; matched: number; diverged: number; skipped: number };
+type Tally = { walked: number; compared: number; matched: number; diverged: number; representativeLocal: number; skipped: number };
 
 function emptyTally(): Tally {
-	return({ walked: 0, compared: 0, matched: 0, diverged: 0, skipped: 0 });
+	return({ walked: 0, compared: 0, matched: 0, diverged: 0, representativeLocal: 0, skipped: 0 });
 }
 
 function count(tally: Tally, outcome: SweepOutcome): void {
@@ -262,8 +265,13 @@ function count(tally: Tally, outcome: SweepOutcome): void {
 			tally.matched++;
 			break;
 		case 'diverged':
+		case 'unresolved':
 			tally.compared++;
 			tally.diverged++;
+			break;
+		case 'representative-local':
+			tally.compared++;
+			tally.representativeLocal++;
 			break;
 		case 'skipped':
 			tally.skipped++;
@@ -281,6 +289,76 @@ function isStopped(signal: AbortSignal): boolean {
 const FOLLOWER_HOLDS_RECENT = 'the follower holds a staple of it from within the margin of its reach';
 
 /**
+ * What another representative holds of the account, read as the one
+ * compared with was: its state, then its newest staple, which must be
+ * before the margin and held by the follower for the state to agree.
+ */
+async function readingOf(store: Pick<SweepStore, 'historyHolds'>, representative: APISource, account: string, follower: Disputed, quietBefore: Date): Promise<RepresentativeReading> {
+	const path = `/node/ledger/account/${account}`;
+	let state: unknown;
+	let newest: NewestStaple | undefined;
+	try {
+		state = await getOK(representative, path);
+		newest = newestStapleOf(await getOK(representative, `${path}/history?limit=1`));
+	} catch (error: unknown) {
+		return({ representative: representative.endpoint, kind: 'unanswered', detail: messageOf(error) });
+	}
+	if (newest !== undefined && newest.latestVote.getTime() >= quietBefore.getTime()) {
+		return({ representative: representative.endpoint, kind: 'moving', detail: `its newest staple ${newest.staple} has a vote from ${newest.latestVote.toISOString()}` });
+	}
+	const staple = newest?.staple ?? null;
+	const agrees = follower.divergence.field !== 'status' && isDeepStrictEqual(follower.follower, state) && (newest === undefined || await store.historyHolds(account, newest.staple));
+	if (agrees) {
+		return({ representative: representative.endpoint, kind: 'agrees', state, staple });
+	}
+	return({ representative: representative.endpoint, kind: 'disagrees', state, staple });
+}
+
+/**
+ * Whose a divergence is, by the representatives that gave a reading, the one
+ * compared with among them: the follower's when most disagree with it, that
+ * representative's own when most agree with it and at least two do, so that
+ * one other representative alone never outweighs the one compared with.
+ */
+export function disputedKindOf(readings: readonly RepresentativeReading[]): DisputedKind {
+	const agreeing = readings.filter(function(reading): boolean {
+		return(reading.kind === 'agrees');
+	}).length;
+	const disagreeing = 1 + readings.filter(function(reading): boolean {
+		return(reading.kind === 'disagrees');
+	}).length;
+	const read = agreeing + disagreeing;
+	if (agreeing >= 2 && agreeing * 2 > read) {
+		return('representative-local');
+	}
+	if (disagreeing * 2 > read) {
+		return('diverged');
+	}
+	return('unresolved');
+}
+
+type Comparing = Pick<SweepSetup, 'follower' | 'representatives' | 'store'>;
+
+/**
+ * Compares an account by itself, and reads one that diverges again from
+ * every other representative, to tell the follower's divergence from one
+ * representative's own.
+ */
+async function compareAdjudicated(setup: Comparing, representative: APISource, account: string, quietBefore: Date): Promise<SweepOutcome> {
+	const outcome = await compareAccount({ follower: setup.follower, representative, store: setup.store, quietBefore, account });
+	if (outcome.kind !== 'diverged') {
+		return(outcome);
+	}
+	const others = setup.representatives.filter(function(other): boolean {
+		return(other.endpoint !== representative.endpoint);
+	});
+	const readings = await Promise.all(others.map(function(other) {
+		return(readingOf(setup.store, other, account, outcome, quietBefore));
+	}));
+	return({ ...outcome, kind: disputedKindOf(readings), readings });
+}
+
+/**
  * Compares an account by itself, unless the follower holds a staple of it
  * from within the margin of its reach: then it is moving whatever a
  * representative holds, and none is asked about it.
@@ -289,10 +367,10 @@ function compareKnown(setup: SweepSetup, representative: APISource, known: Known
 	if (known.newestStaple !== undefined && known.newestStaple.getTime() >= quietBefore.getTime()) {
 		return(Promise.resolve({ kind: 'skipped', reason: 'moving', side: 'follower', detail: FOLLOWER_HOLDS_RECENT }));
 	}
-	return(compareAccount({ follower: setup.follower, representative, store: setup.store, quietBefore, account: known.account }));
+	return(compareAdjudicated(setup, representative, known.account, quietBefore));
 }
 
-function sweepRecord(representative: APISource, account: string, lap: number, walk: SweepWalk, outcome: SweepOutcome): SweepRecord {
+function recordOf(representative: APISource, account: string, lap: number, walk: RecordedWalk, outcome: SweepOutcome): SweepRecord {
 	return({ kind: 'sweep', at: new Date().toISOString(), representative: representative.endpoint, account, lap, walk, outcome });
 }
 
@@ -309,7 +387,7 @@ async function compareChainAccounts(setup: SweepSetup, batch: readonly KnownAcco
 			if (isStopped(setup.stopped)) {
 				return;
 			}
-			await setup.log.append([sweepRecord(representative, known.account, lap, 'chain', outcome)]);
+			await setup.log.append([recordOf(representative, known.account, lap, 'chain', outcome)]);
 			count(tally, outcome);
 		}
 	});
@@ -371,7 +449,7 @@ async function comparePassiveBatch(setup: SweepSetup, representative: APISource,
 			continue;
 		}
 		const outcome = await compareKnown(setup, representative, known, quietBefore);
-		records.push(sweepRecord(representative, known.account, lap, 'passive', outcome));
+		records.push(recordOf(representative, known.account, lap, 'passive', outcome));
 		if (outcome.kind === 'skipped') {
 			skipped.push(known.account);
 		}
@@ -469,6 +547,7 @@ async function walk(setup: SweepSetup, walking: Walk): Promise<WalkSummary> {
 		tally.compared += compared.compared;
 		tally.matched += compared.matched;
 		tally.diverged += compared.diverged;
+		tally.representativeLocal += compared.representativeLocal;
 		tally.skipped += compared.skipped;
 		cursor = { lap: cursor.lap, afterRowID: last.rowID };
 		await writeSweepCursor(path, cursor);
@@ -509,4 +588,55 @@ export async function sweepAccounts(setup: SweepSetup): Promise<SweepSummary> {
 		})
 	]);
 	return({ chain, passive });
+}
+
+export type RecheckSetup = Pick<SweepSetup, 'follower' | 'representatives' | 'store' | 'log' | 'stopped'>;
+
+/** How many accounts were compared again, by the outcome each had. */
+export type RecheckSummary = Readonly<Partial<Record<SweepOutcome['kind'], number>>>;
+
+/** The latest comparison of each account, in the order the accounts were first compared. */
+function latestComparisons(records: readonly SweepRecord[]): readonly SweepRecord[] {
+	const latest = new Map<string, SweepRecord>();
+	for (const record of records) {
+		if (record.outcome.kind !== 'skipped') {
+			latest.set(record.account, record);
+		}
+	}
+	return([...latest.values()]);
+}
+
+/**
+ * Compares again each account whose latest comparison diverged or was
+ * unresolved, with the representative it was compared with and read again
+ * from every other, and records the outcome in that comparison's walk and
+ * lap, where it stands as the account's latest. A representative the run
+ * does not reach leaves its accounts as they stand.
+ */
+export async function recheckDivergences(setup: RecheckSetup): Promise<RecheckSummary> {
+	const quietBefore = await quietBeforeOf(setup.store);
+	if (quietBefore === undefined) {
+		throw(new Error('the follower has read from no representative yet'));
+	}
+	const disputed = latestComparisons((await setup.log.read()).records.filter(function(record): record is SweepRecord {
+		return(record.kind === 'sweep');
+	})).filter(function(record): boolean {
+		return(record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved');
+	});
+	const summary: Partial<Record<SweepOutcome['kind'], number>> = {};
+	for (const record of disputed) {
+		const representative = setup.representatives.find(function(source): boolean {
+			return(source.endpoint === record.representative);
+		});
+		if (representative === undefined) {
+			continue;
+		}
+		const outcome = await compareAdjudicated(setup, representative, record.account, quietBefore);
+		if (isStopped(setup.stopped)) {
+			break;
+		}
+		await setup.log.append([recordOf(representative, record.account, record.lap, record.walk, outcome)]);
+		summary[outcome.kind] = (summary[outcome.kind] ?? 0) + 1;
+	}
+	return(summary);
 }

@@ -54,8 +54,8 @@ const MATCH: SweepOutcome = { kind: 'match', head: null, staple: STAPLE };
 const MOVING: SweepOutcome = { kind: 'skipped', reason: 'moving', side: 'representative', detail: 'recent' };
 const UNANSWERED: SweepOutcome = { kind: 'skipped', reason: 'unanswered', detail: '500' };
 
-function diverged(account: string, field: string): SweepOutcome {
-	return({ kind: 'diverged', divergence: { account, field, staple: STAPLE }, follower: {}, representative: {} });
+function diverged(account: string, field: string, kind: 'diverged' | 'representative-local' | 'unresolved' = 'diverged'): SweepOutcome {
+	return({ kind, divergence: { account, field, staple: STAPLE }, follower: {}, representative: {}, readings: [] });
 }
 
 const KNOWN_BEHAVIOR = '/api/node/ledger/account/{account} 200 error=-';
@@ -330,6 +330,28 @@ describe('the parity report', function() {
 			swept('2026-10-09T01:00:02.000Z', OTHER_ACCOUNT, UNANSWERED),
 			batch('2026-10-09T01:00:03.000Z', 0, ['0', '20'], 4, [THIRD_ACCOUNT])
 		])).toEqual([OTHER_ACCOUNT, THIRD_ACCOUNT]);
+	});
+
+	test('shows the differences of one representative\'s own apart, and passes the sweep on them', function() {
+		const sweep = report([
+			swept('2026-10-09T01:00:00.000Z', ACCOUNT, MATCH),
+			{ ...swept('2026-10-09T01:00:01.000Z', OTHER_ACCOUNT, diverged(OTHER_ACCOUNT, 'balances[0].balance')), representative: OTHER_REPRESENTATIVE },
+			{ ...swept('2026-10-09T01:00:02.000Z', OTHER_ACCOUNT, diverged(OTHER_ACCOUNT, 'balances[0].balance', 'representative-local')), representative: OTHER_REPRESENTATIVE },
+			{ ...swept('2026-10-09T01:00:03.000Z', THIRD_ACCOUNT, diverged(THIRD_ACCOUNT, 'balances[1].balance', 'representative-local')), representative: OTHER_REPRESENTATIVE }
+		]).signals.sweep;
+		expect(sweep).toMatchObject({
+			verdict: 'pass',
+			counts: { accountsCompared: 3, matched: 1, diverged: 0, resolvedDivergences: 1 },
+			representativeLocal: { records: 2, accounts: 2, byRepresentative: { [OTHER_REPRESENTATIVE]: 2 }, first: { account: OTHER_ACCOUNT, field: 'balances[0].balance', representative: OTHER_REPRESENTATIVE, at: '2026-10-09T01:00:02.000Z' } },
+			confidence: { kind: 'rule-of-three', samples: 3 }
+		});
+	});
+
+	test('fails the sweep on an account the representatives split on', function() {
+		const sweep = report([
+			swept('2026-10-09T01:00:00.000Z', ACCOUNT, diverged(ACCOUNT, 'balances[0].balance', 'unresolved'))
+		]).signals.sweep;
+		expect(sweep).toMatchObject({ verdict: 'fail', counts: { diverged: 1, unresolved: 1 }, representativeLocal: { records: 0, first: null }, firstDivergence: { account: ACCOUNT } });
 	});
 
 	test('has nothing comparable in the sweep while every account was skipped', function() {
