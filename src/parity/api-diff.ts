@@ -267,66 +267,58 @@ export function shuffled<Item>(items: readonly Item[], keyOf: (item: Item) => st
 }
 
 /** What the API diff reads of the follower's storage. */
-export type APIDiffStore = Pick<FollowerStore, 'progress' | 'quietAccounts' | 'heldBlocks' | 'heldBlocksOfStaples' | 'newestStaples'>;
+export type APIDiffStore = Pick<FollowerStore, 'progress' | 'quietAccounts' | 'heldBlocks' | 'blockPages' | 'heldBlocksInPages' | 'heldBlocksOfStaples' | 'newestStaples'>;
 
 /**
- * Held blocks are read in pages from a point the seed fixes, round to it
- * again, until every type of operation has enough of them. The rarest types
- * are held by a few blocks in hundreds of thousands, so a run reads every
- * held block once, and then has drawn every block of those types.
+ * Pages of the blocks' table read at a time: some two thousand blocks, in
+ * the order they are stored, so that their bytes are read as stored rather
+ * than in the order of an index.
  */
-const BLOCKS_PER_PAGE = 1000;
+const TABLE_PAGES_PER_READ = 200;
 
-const LAST_HASH = 'F'.repeat(64);
+type DrawnBlock = { readonly key: string; readonly block: HeldBlock };
 
-const FIRST_HASH = '0'.repeat(64);
-
-type DrawnBlocks = {
-	readonly byOperation: ReadonlyMap<OperationName, readonly HeldBlock[]>;
-	/** Whether every held block was read, so that a type with fewer blocks than wanted has none besides them. */
-	readonly everyBlockRead: boolean;
-};
-
-function hashAfter(hash: string): string {
-	return((BigInt(`0x${hash}`) + 1n).toString(16).padStart(64, '0').toUpperCase());
+function drawKey(seed: string, block: HeldBlock): string {
+	return(createHash('sha256').update(`${seed}\0${block.hash}`).digest('hex'));
 }
 
-async function blocksByOperation(store: APIDiffStore, before: Date, wanted: number, seed: string): Promise<DrawnBlocks> {
-	const byOperation = new Map<OperationName, HeldBlock[]>(OPERATION_NAMES.map(function(name) {
+/** The blocks the seed puts first, at most so many. */
+function keptFirst(drawn: readonly DrawnBlock[], wanted: number): DrawnBlock[] {
+	return([...drawn].sort(function(left, right): number {
+		return(left.key.localeCompare(right.key));
+	}).slice(0, wanted));
+}
+
+/**
+ * The blocks of each type of operation the seed puts first, at most so many
+ * of each, from a read of every held block: the rarest types are held by a
+ * few blocks in hundreds of thousands, so a type with fewer blocks than
+ * wanted has drawn every block it has.
+ */
+async function blocksByOperation(store: APIDiffStore, before: Date, wanted: number, seed: string): Promise<ReadonlyMap<OperationName, readonly HeldBlock[]>> {
+	const byOperation = new Map<OperationName, DrawnBlock[]>(OPERATION_NAMES.map(function(name) {
 		return([name, []]);
 	}));
-	const start = createHash('sha256').update(seed).digest('hex').toUpperCase();
-	let from = start;
-	let wrapped = false;
-	const short = function(): boolean {
-		return([...byOperation.values()].some(function(blocks): boolean {
-			return(blocks.length < wanted);
-		}));
-	};
-	while (short()) {
-		const page = (await store.heldBlocks(from, before, BLOCKS_PER_PAGE)).filter(function(block): boolean {
-			return(!wrapped || block.hash < start);
-		});
-		for (const block of page) {
+	const pages = await store.blockPages();
+	for (let fromPage = 0; fromPage < pages; fromPage += TABLE_PAGES_PER_READ) {
+		for (const block of await store.heldBlocksInPages(fromPage, fromPage + TABLE_PAGES_PER_READ, before)) {
 			for (const name of operationsOf(block)) {
-				const blocks = byOperation.get(name);
-				if (blocks !== undefined && blocks.length < wanted) {
-					blocks.push(block);
+				const drawn = byOperation.get(name) ?? [];
+				drawn.push({ key: drawKey(seed, block), block });
+				// Kept to at most twice as many as wanted, so that a common type holds no more than that.
+				if (drawn.length >= 2 * wanted) {
+					byOperation.set(name, keptFirst(drawn, wanted));
+				} else {
+					byOperation.set(name, drawn);
 				}
 			}
 		}
-		const last = page.at(-1);
-		if (last === undefined || page.length < BLOCKS_PER_PAGE || last.hash === LAST_HASH) {
-			if (wrapped) {
-				return({ byOperation, everyBlockRead: true });
-			}
-			wrapped = true;
-			from = FIRST_HASH;
-			continue;
-		}
-		from = hashAfter(last.hash);
 	}
-	return({ byOperation, everyBlockRead: false });
+	return(new Map([...byOperation].map(function([name, drawn]) {
+		return([name, keptFirst(drawn, wanted).map(function({ block }): HeldBlock {
+			return(block);
+		})]);
+	})));
 }
 
 /** A stratum's requests, and whether they are every request the follower's data forms for it. */
@@ -363,12 +355,11 @@ export async function samplingPlan(store: APIDiffStore, quietBefore: Date, perSt
 			return(accountRequests(kind, candidate, candidates[index + 1]?.account));
 		}), candidates.length < perStratum, seed));
 	}
-	const { byOperation, everyBlockRead } = await blocksByOperation(store, quietBefore, perStratum, seed);
-	for (const [name, blocks] of byOperation) {
+	for (const [name, blocks] of await blocksByOperation(store, quietBefore, perStratum, seed)) {
 		const stratum = operationStratum(name);
 		plan.set(stratum, planned(blocks.flatMap(function(block): SampledRequest[] {
 			return(blockRequests(stratum, block));
-		}), everyBlockRead && blocks.length < perStratum, seed));
+		}), blocks.length < perStratum, seed));
 	}
 	const edgeBlocks = await store.heldBlocksOfStaples(edgeCaseStaples, quietBefore);
 	plan.set('edge-cases', planned(edgeBlocks.flatMap(function(block): SampledRequest[] {

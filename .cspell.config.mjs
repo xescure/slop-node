@@ -23,6 +23,7 @@ export default {
 		'bytea',
 		'timestamptz',
 		'regclass',
+		'ctid',
 		'locktype',
 		'localtime',
 		'localtimestamp',

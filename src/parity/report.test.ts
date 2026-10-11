@@ -517,6 +517,8 @@ describe('a parity run', function() {
 			staplesAfter: () => Promise.resolve([]),
 			staplesOf: () => Promise.resolve([]),
 			heldBlocks: () => Promise.resolve([]),
+			blockPages: () => Promise.resolve(0),
+			heldBlocksInPages: () => Promise.resolve([]),
 			heldBlocksOfStaples: () => Promise.resolve([]),
 			newestStaples: () => Promise.resolve(new Map()),
 			close: () => Promise.resolve()

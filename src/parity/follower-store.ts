@@ -124,6 +124,10 @@ export type FollowerStore = {
 	quietAccounts(kind: AccountKind, quietBefore: Date, count: number, seed: string): Promise<readonly AccountCandidate[]>;
 	/** Main blocks from the hash on, in hash order, of staples before the moment. */
 	heldBlocks(fromHash: string, before: Date, count: number): Promise<readonly HeldBlock[]>;
+	/** How many pages the blocks' table spans, as the database stores it. */
+	blockPages(): Promise<number>;
+	/** Main blocks of staples before the moment stored in the pages from the first up to the last, in no order. */
+	heldBlocksInPages(fromPage: number, toPage: number, before: Date): Promise<readonly HeldBlock[]>;
 	/** The main blocks of those staples, by the hash of their blocks, that are before the moment. */
 	heldBlocksOfStaples(blocksHashes: readonly string[], before: Date): Promise<readonly HeldBlock[]>;
 	/** Where the newest main staple stands in the order the ledger added them, 0 when it holds none. */
@@ -294,6 +298,19 @@ const HELD_BLOCKS = `
 	JOIN accounts a ON a.id = b.account_id
 	WHERE b.ledger = 'main' AND b.hash >= $1 AND s.staple_time < $2
 	ORDER BY b.hash LIMIT $3`;
+
+const BLOCK_PAGES = 'SELECT (pg_relation_size(\'blocks\') / current_setting(\'block_size\')::bigint)::text AS pages';
+
+/* A range of tuple IDs is read in the order the pages are stored, as a TID range scan. */
+const HELD_BLOCKS_IN_PAGES = `
+	SELECT b.hash, b.bytes, a.public_key FROM blocks b
+	JOIN staples s ON s.blocks_hash = b.staple
+	JOIN accounts a ON a.id = b.account_id
+	WHERE b.ctid >= $1::tid AND b.ctid < $2::tid AND b.ledger = 'main' AND s.staple_time < $3`;
+
+function firstTupleOf(page: number): string {
+	return(`(${String(page)},0)`);
+}
 
 const HELD_BLOCKS_OF_STAPLES = `
 	SELECT b.hash, b.bytes, a.public_key FROM blocks b
@@ -517,6 +534,12 @@ export function openFollowerStore(connectionString: string): FollowerStore {
 		},
 		async heldBlocks(fromHash: string, before: Date, count: number): Promise<readonly HeldBlock[]> {
 			return((await pool.query<HeldBlockRow>(HELD_BLOCKS, [Buffer.from(fromHash, 'hex'), before, count])).rows.map(heldBlockOf));
+		},
+		async blockPages(): Promise<number> {
+			return(Number((await pool.query<{ pages: string }>(BLOCK_PAGES)).rows[0]?.pages ?? '0'));
+		},
+		async heldBlocksInPages(fromPage: number, toPage: number, before: Date): Promise<readonly HeldBlock[]> {
+			return((await pool.query<HeldBlockRow>(HELD_BLOCKS_IN_PAGES, [firstTupleOf(fromPage), firstTupleOf(toPage), before])).rows.map(heldBlockOf));
 		},
 		async heldBlocksOfStaples(blocksHashes: readonly string[], before: Date): Promise<readonly HeldBlock[]> {
 			const keys = blocksHashes.map(function(hash): Buffer {

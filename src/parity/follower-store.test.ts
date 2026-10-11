@@ -265,6 +265,11 @@ describe('the follower\'s store, read from its database', function() {
 		expect(await store.heldBlocks('00'.repeat(32), quietBefore, 10)).toEqual([{ hash: BLOCK, account: first, bytes: Buffer.from([1, 2]) }]);
 		expect(await store.heldBlocks('13'.repeat(32), quietBefore, 10)).toEqual([]);
 		expect(await store.heldBlocks('00'.repeat(32), quietTime, 10)).toEqual([]);
+		const pages = await store.blockPages();
+		expect(pages).toBeGreaterThan(0);
+		expect(await store.heldBlocksInPages(0, pages, quietBefore)).toEqual([{ hash: BLOCK, account: first, bytes: Buffer.from([1, 2]) }]);
+		expect(await store.heldBlocksInPages(pages, pages + 1, quietBefore)).toEqual([]);
+		expect(await store.heldBlocksInPages(0, pages, quietTime)).toEqual([]);
 		expect(await store.heldBlocksOfStaples([STAPLE, OTHER_STAPLE], quietBefore)).toHaveLength(1);
 		expect(await store.heldBlocksOfStaples([OTHER_STAPLE], quietBefore)).toEqual([]);
 

@@ -169,6 +169,9 @@ function memoryStore(contents: StoreContents): APIDiffStore {
 		heldBlocks: (fromHash) => Promise.resolve((contents.blocks ?? []).filter(function(block) {
 			return(block.hash >= fromHash);
 		})),
+		// Each block on a page of its own, in the order given.
+		blockPages: () => Promise.resolve(contents.blocks?.length ?? 0),
+		heldBlocksInPages: (fromPage, toPage) => Promise.resolve((contents.blocks ?? []).slice(fromPage, toPage)),
 		heldBlocksOfStaples: () => Promise.resolve([]),
 		newestStaples: () => Promise.resolve(contents.newest ?? new Map())
 	});
@@ -466,6 +469,29 @@ describe('the plan of a run', function() {
 		expect(census?.kind === 'census' && [...census.requests].sort()).toEqual([...requested].sort());
 		expect(populationOf(plan, 'storage')).toEqual({ kind: 'census', requests: [] });
 		expect(plan).toMatchObject({ samplesPerStratum: 100, quietBefore: '2025-12-30T23:00:00.000Z' });
+	});
+
+	test('draws the blocks of an operation the seed puts first, wherever they are stored', async function() {
+		const blocks = await Promise.all([1, 2, 3].map(async function(amount): Promise<HeldBlock> {
+			const block = await sendBlock({ from: owner, to: other, amount: BigInt(amount), token, previous: null, network: NETWORK, date: new Date('2025-11-01T00:00:00.000Z') });
+			return({ hash: block.hash.toString(), account: OWNER, bytes: Buffer.from(block.toBytes()) });
+		}));
+		const drawn = async function(stored: readonly HeldBlock[]) {
+			const { plan } = await planned(memoryStore({ blocks: stored }), 2);
+			return(populationOf(plan, 'operation:SEND'));
+		};
+
+		const forwards = await drawn(blocks);
+		expect(forwards).toEqual({ kind: 'sample', drawn: 8, whole: false });
+		const requested = async function(stored: readonly HeldBlock[]) {
+			const { records } = await planned(memoryStore({ blocks: stored }), 2);
+			return(new Set(records.filter(function(record) {
+				return(record.stratum === 'operation:SEND' && record.route === '/api/node/ledger/block/{blockhash}');
+			}).map(function(record) {
+				return(record.path);
+			})));
+		};
+		expect(await requested([...blocks].reverse())).toEqual(await requested(blocks));
 	});
 
 	test('is a sample of a stratum with as many accounts as it asked for, which more may follow', async function() {
