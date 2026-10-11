@@ -141,7 +141,7 @@ describe('the follower\'s store, read from its database', function() {
 		expect(rest).toEqual([{ rowID: rest[0]?.rowID, account: third, newestStaple: undefined }]);
 		expect(await store.passiveAccountsAfter(rest[0]?.rowID ?? '', 2)).toEqual([]);
 		expect(await store.accountCount()).toBe(3);
-		expect(await store.chainAccountCount()).toBe(1);
+		expect(await store.chainAccounts()).toEqual(chains);
 		expect(await store.rowIDsOf([third, first, 'keeta_unknown'])).toEqual(new Map([[first, passive[0]?.rowID], [third, rest[0]?.rowID]]));
 	});
 

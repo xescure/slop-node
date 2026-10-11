@@ -363,6 +363,9 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 			if (command.logOnly) {
 				const report = await reportOnLog({ ...tools, knownBehaviors: await capturedBehaviors(fileURLToPath(CAPTURE_DIRECTORY)) });
 				process.stdout.write(`${JSON.stringify(report, null, '\t')}\n`);
+				if (anyFails(report)) {
+					return(1);
+				}
 				return(0);
 			}
 			const apiDiff = {

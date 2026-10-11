@@ -110,7 +110,8 @@ export type FollowerStore = {
 	/** The accounts without a chain on the main ledger after the row, in row order, at most the count of them. */
 	passiveAccountsAfter(rowID: string, count: number): Promise<readonly KnownAccount[]>;
 	accountCount(): Promise<number>;
-	chainAccountCount(): Promise<number>;
+	/** Every account with a chain on the main ledger, in row order. */
+	chainAccounts(): Promise<readonly KnownAccount[]>;
 	/** The row of each of the accounts the follower knows. */
 	rowIDsOf(accounts: readonly string[]): Promise<ReadonlyMap<string, string>>;
 	/** Whether the staple, by the hash of its blocks, is in the account's history on the follower's main ledger. */
@@ -189,6 +190,10 @@ const KV_VALUES = 'SELECT value FROM kv_entries WHERE arena = $1 AND (expires_at
 const CHAIN_ACCOUNTS_AFTER = `
 	SELECT a.id, a.public_key, (SELECT max(h.staple_time) FROM history h WHERE h.account_id = a.id) AS newest_staple
 	FROM heads c JOIN accounts a ON a.id = c.account_id WHERE c.account_id > $1::bigint ORDER BY c.account_id LIMIT $2`;
+
+const CHAIN_ACCOUNTS = `
+	SELECT a.id, a.public_key, (SELECT max(h.staple_time) FROM history h WHERE h.account_id = a.id) AS newest_staple
+	FROM heads c JOIN accounts a ON a.id = c.account_id ORDER BY c.account_id`;
 
 const PASSIVE_ACCOUNTS_AFTER = `
 	SELECT a.id, a.public_key, (SELECT max(h.staple_time) FROM history h WHERE h.account_id = a.id) AS newest_staple
@@ -417,11 +422,13 @@ async function accountCandidateOf(pool: pg.Pool, id: string, account: string): P
 	});
 }
 
+function knownAccountOf(row: { id: string; public_key: string; newest_staple: Date | null }): KnownAccount {
+	return({ rowID: row.id, account: row.public_key, newestStaple: row.newest_staple ?? undefined });
+}
+
 async function knownAccounts(pool: pg.Pool, query: string, rowID: string, count: number): Promise<readonly KnownAccount[]> {
 	const result = await pool.query<{ id: string; public_key: string; newest_staple: Date | null }>(query, [rowID, count]);
-	return(result.rows.map(function(row): KnownAccount {
-		return({ rowID: row.id, account: row.public_key, newestStaple: row.newest_staple ?? undefined });
-	}));
+	return(result.rows.map(knownAccountOf));
 }
 
 /** Reads every query in one view of the database, so that no commit lands between them. */
@@ -474,9 +481,9 @@ export function openFollowerStore(connectionString: string): FollowerStore {
 			const result = await pool.query<{ count: string }>('SELECT count(*) AS count FROM accounts');
 			return(Number(result.rows[0]?.count ?? 0));
 		},
-		async chainAccountCount(): Promise<number> {
-			const result = await pool.query<{ count: string }>('SELECT count(*) AS count FROM heads');
-			return(Number(result.rows[0]?.count ?? 0));
+		async chainAccounts(): Promise<readonly KnownAccount[]> {
+			const result = await pool.query<{ id: string; public_key: string; newest_staple: Date | null }>(CHAIN_ACCOUNTS);
+			return(result.rows.map(knownAccountOf));
 		},
 		async rowIDsOf(accounts: readonly string[]): Promise<ReadonlyMap<string, string>> {
 			const result = await pool.query<{ id: string; public_key: string }>('SELECT id, public_key FROM accounts WHERE public_key = ANY($1::text[])', [accounts]);

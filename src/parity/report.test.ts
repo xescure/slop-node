@@ -48,6 +48,11 @@ function batch(at: string, lap: number, rows: readonly [string, string], account
 	return({ kind: 'sweep-batch', at, representative: REPRESENTATIVE, lap, afterRowID: rows[0], throughRowID: rows[1], accounts, matched, skipped, unanswered });
 }
 
+/** An account with a chain, quiet on the follower since long before the records. */
+function chainAccount(account: string, newestStaple: Date = new Date('2025-06-01T00:00:00.000Z')): KnownAccount {
+	return({ rowID: '1', account, newestStaple });
+}
+
 const CURSORS = { chain: { lap: 1, afterRowID: '7' }, passive: { lap: 0, afterRowID: '40' } } as const;
 
 const MATCH: SweepOutcome = { kind: 'match', head: null, staple: STAPLE };
@@ -89,7 +94,7 @@ function shadowRun(at: string, changes: Partial<ShadowRunRecord>): ShadowRunReco
 }
 
 function report(records: readonly ParityRecord[], position: Partial<SweepPosition> = {}) {
-	const sweep: SweepPosition = { knownAccounts: 10, chainAccounts: 3, cursors: CURSORS, rowIDs: new Map(), ...position };
+	const sweep: SweepPosition = { knownAccounts: 10, chainAccounts: [], cursors: CURSORS, rowIDs: new Map(), ...position };
 	return(parityReportOf({ generatedAt: new Date('2026-10-09T08:00:00.000Z'), progress: PROGRESS, sweep, log: { records, unreadableLines: 0 }, knownBehaviors: new Set([KNOWN_BEHAVIOR]) }));
 }
 
@@ -294,15 +299,16 @@ describe('the parity report', function() {
 			swept('2026-10-09T01:00:03.000Z', THIRD_ACCOUNT, diverged(THIRD_ACCOUNT, 'balances'), 0, 'passive'),
 			batch('2026-10-09T01:00:04.000Z', 0, ['0', '20'], 4, [FOURTH_ACCOUNT]),
 			batch('2026-10-09T01:00:05.000Z', 0, ['20', '40'], 3, [], null)
-		]).signals.sweep;
+		], { chainAccounts: [chainAccount(ACCOUNT), chainAccount(OTHER_ACCOUNT)] }).signals.sweep;
 		expect(sweep.coverage).toEqual({
 			knownAccounts: 10,
-			chainAccounts: 3,
+			chainAccounts: 2,
 			walks: {
-				chain: { cursor: CURSORS.chain, laps: [{ lap: 0, complete: true, walked: 2, compared: 1, diverged: 0, skipped: 1 }, { lap: 1, complete: false, walked: 1, compared: 1, diverged: 0, skipped: 0 }] },
-				passive: { cursor: CURSORS.passive, laps: [{ lap: 0, complete: false, walked: 7, compared: 6, diverged: 1, skipped: 1 }] }
+				chain: { cursor: CURSORS.chain, laps: [{ lap: 0, complete: true, walked: 2, compared: 1, diverged: 0, skipped: 1, notCompared: 1 }, { lap: 1, complete: false, walked: 1, compared: 1, diverged: 0, skipped: 0, notCompared: 1 }] },
+				passive: { cursor: CURSORS.passive, laps: [{ lap: 0, complete: false, walked: 7, compared: 6, diverged: 1, skipped: 1, notCompared: 1 }] }
 			},
 			neverCompared: 1,
+			neverComparedChain: 0,
 			firstNeverCompared: [FOURTH_ACCOUNT],
 			everyAccountCompared: false
 		});
@@ -318,9 +324,54 @@ describe('the parity report', function() {
 		];
 		const cursors = { chain: { lap: 2, afterRowID: '0' }, passive: { lap: 2, afterRowID: '0' } };
 		const rowIDs = new Map([[OTHER_ACCOUNT, '12'], [THIRD_ACCOUNT, '18']]);
-		expect(report(records, { cursors, rowIDs }).signals.sweep.coverage).toMatchObject({ neverCompared: 0, firstNeverCompared: [], everyAccountCompared: true });
-		expect(report(records, { cursors, rowIDs: new Map([[OTHER_ACCOUNT, '12'], [THIRD_ACCOUNT, '14']]) }).signals.sweep.coverage).toMatchObject({ neverCompared: 1, firstNeverCompared: [THIRD_ACCOUNT], everyAccountCompared: false });
+		const chainAccounts = [chainAccount(ACCOUNT)];
+		expect(report(records, { cursors, rowIDs, chainAccounts }).signals.sweep.coverage).toMatchObject({ neverCompared: 0, firstNeverCompared: [], everyAccountCompared: true });
+		expect(report(records, { cursors, chainAccounts, rowIDs: new Map([[OTHER_ACCOUNT, '12'], [THIRD_ACCOUNT, '14']]) }).signals.sweep.coverage).toMatchObject({ neverCompared: 1, firstNeverCompared: [THIRD_ACCOUNT], everyAccountCompared: false });
 		expect(report(records, { cursors: { ...cursors, passive: { lap: 0, afterRowID: '20' } }, rowIDs }).signals.sweep.coverage).toMatchObject({ neverCompared: 0, everyAccountCompared: false });
+	});
+
+	test('clears a chain account skipped on every attempt only by a comparison by itself, not by a passive batch over its row', function() {
+		const records = [
+			swept('2026-10-09T01:00:00.000Z', ACCOUNT, MOVING, 0),
+			batch('2026-10-09T01:00:01.000Z', 0, ['0', '20'], 4)
+		];
+		const cursors = { chain: { lap: 1, afterRowID: '0' }, passive: { lap: 1, afterRowID: '0' } };
+		expect(report(records, { cursors, chainAccounts: [chainAccount(ACCOUNT)], rowIDs: new Map([[ACCOUNT, '5']]) }).signals.sweep.coverage).toMatchObject({ neverCompared: 1, neverComparedChain: 1, firstNeverCompared: [ACCOUNT], everyAccountCompared: false });
+	});
+
+	test('counts a chain account the chain walk never compared, though a passive batch matched it before it gained its chain', function() {
+		const records = [
+			swept('2026-10-09T01:00:00.000Z', OTHER_ACCOUNT, MATCH, 0),
+			batch('2026-10-09T01:00:01.000Z', 0, ['0', '20'], 4)
+		];
+		const cursors = { chain: { lap: 1, afterRowID: '0' }, passive: { lap: 1, afterRowID: '0' } };
+		const position = { cursors, rowIDs: new Map([[ACCOUNT, '5']]) };
+		expect(report(records, { ...position, chainAccounts: [chainAccount(OTHER_ACCOUNT), chainAccount(ACCOUNT)] }).signals.sweep.coverage).toMatchObject({ neverCompared: 1, neverComparedChain: 1, everyAccountCompared: false });
+		// One whose newest staple is from after the lap's last comparison may have gained its chain since, and waits for the next lap.
+		expect(report(records, { ...position, chainAccounts: [chainAccount(OTHER_ACCOUNT), chainAccount(ACCOUNT, new Date('2026-10-09T02:00:00.000Z'))] }).signals.sweep.coverage).toMatchObject({ neverCompared: 0, everyAccountCompared: true });
+	});
+
+	test('counts a chain account compared by its chain as compared, and how many were', function() {
+		const sweep = report([swept('2026-10-09T01:00:00.000Z', ACCOUNT, { kind: 'compared-chain', head: STAPLE, representativeHead: STAPLE, lacking: 2 })], { chainAccounts: [chainAccount(ACCOUNT)] }).signals.sweep;
+		expect(sweep).toMatchObject({ verdict: 'pass', counts: { accountsCompared: 1, matched: 1, comparedByChain: 1 }, coverage: { neverCompared: 0 } });
+	});
+
+	test('counts the passive walk\'s batch matches of one lap only among the samples, however the spans fall in each', function() {
+		const sweep = report([
+			batch('2026-10-09T01:00:00.000Z', 0, ['0', '20'], 10),
+			batch('2026-10-09T01:00:01.000Z', 1, ['0', '25'], 12)
+		]).signals.sweep;
+		expect(sweep.confidence).toMatchObject({ kind: 'rule-of-three', samples: 12 });
+	});
+
+	test('counts accounts both answered with an error, and those an unanswered batch named, as not compared', function() {
+		const sweep = report([
+			swept('2026-10-09T01:00:00.000Z', ACCOUNT, { kind: 'error-both', error: 'Error: x' }, 0, 'passive'),
+			batch('2026-10-09T01:00:01.000Z', 0, ['0', '20'], 2, [ACCOUNT]),
+			batch('2026-10-09T01:00:02.000Z', 0, ['20', '40'], 1, [OTHER_ACCOUNT], 'answered 504')
+		], { rowIDs: new Map([[ACCOUNT, '5'], [OTHER_ACCOUNT, '25']]) }).signals.sweep;
+		expect(sweep.counts).toMatchObject({ accountsCompared: 0, errorBoth: 1, unanswered: 1 });
+		expect(sweep.coverage).toMatchObject({ neverCompared: 2 });
 	});
 
 	test('lists the accounts the log names as not compared, whose rows the report reads', function() {
@@ -401,7 +452,7 @@ describe('a parity run', function() {
 			chainAccountsAfter: (rowID) => after(known, rowID),
 			passiveAccountsAfter: (rowID) => after(passive, rowID),
 			accountCount: () => Promise.resolve(2),
-			chainAccountCount: () => Promise.resolve(1),
+			chainAccounts: () => Promise.resolve(known),
 			rowIDsOf: () => Promise.resolve(new Map()),
 			historyHolds: () => Promise.resolve(false),
 			checksumSnapshot: () => Promise.resolve({ stored: 0n, folded: 0n, mainBlocks: 0, mismatched: [] }),

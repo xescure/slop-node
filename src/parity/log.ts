@@ -109,7 +109,16 @@ export type DisputedKind =
 
 export type SweepOutcome =
 	| { readonly kind: 'match'; readonly head: string | null; readonly staple: string | null }
+	/**
+	 * A chain account moving on every attempt, compared by its chain: the
+	 * follower's head is a block of the representative's chain, so every
+	 * block below it is the representative's too, and each block the
+	 * representative holds past it is too recent for the follower to hold.
+	 */
+	| { readonly kind: 'compared-chain'; readonly head: string; readonly representativeHead: string; readonly lacking: number }
 	| ({ readonly kind: DisputedKind } & Disputed)
+	/** Not compared: both sides answered the account in a batch with the same error. */
+	| { readonly kind: 'error-both'; readonly error: string }
 	/** Not compared: the two may hold the account at different points, so it is retried on a later lap. */
 	| { readonly kind: 'skipped'; readonly reason: 'moving'; readonly side: MovingSide; readonly detail: string }
 	| { readonly kind: 'skipped'; readonly reason: 'unanswered'; readonly detail: string };
@@ -694,6 +703,18 @@ function sweepOutcomeOf(value: unknown): SweepOutcome | undefined {
 				return(undefined);
 			}
 			return({ kind: 'match', head: value['head'], staple: value['staple'] });
+		case 'compared-chain': {
+			const { head, representativeHead, lacking } = value;
+			if (!isString(head) || !isString(representativeHead) || !isCount(lacking)) {
+				return(undefined);
+			}
+			return({ kind: 'compared-chain', head, representativeHead, lacking });
+		}
+		case 'error-both':
+			if (!isString(value['error'])) {
+				return(undefined);
+			}
+			return({ kind: 'error-both', error: value['error'] });
 		case 'diverged':
 		case 'representative-local':
 		case 'unresolved': {

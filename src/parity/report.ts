@@ -3,7 +3,7 @@ import { sampleAPI } from './api-diff.js';
 import type { APIDiffSetup } from './api-diff.js';
 import type { APISource } from './api-source.js';
 import { checksumsEqual, compareChecksums, crossCheckChecksum } from './checksum.js';
-import type { FollowerProgress, FollowerStore } from './follower-store.js';
+import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-store.js';
 import { SHADOW_REFUSAL_REASONS, SHADOW_REFUSAL_RELEASES } from '../conformance/mainnet/shadow.js';
 import type { ShadowRefusalReason } from '../conformance/mainnet/shadow.js';
 import type { APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, ShadowBase, ShadowRunCost, ShadowRunRecord, ShadowTarget, ShadowWindowTally, SweepBatchRecord, SweepCursor, SweepOutcome, SweepPointer, SweepRecord, SweepWalk } from './log.js';
@@ -81,8 +81,15 @@ export type WalkLap = {
 	readonly walked: number;
 	readonly compared: number;
 	readonly diverged: number;
-	/** Accounts not compared in the lap: found moving, or unanswered. */
+	/** Accounts not compared in the lap: found moving, unanswered, or answered with the same error by both. */
 	readonly skipped: number;
+	/**
+	 * Accounts of the walk the lap did not compare. For the chain walk, every
+	 * account with a chain now that has no comparison in the lap, but for
+	 * one whose newest staple is from after the lap's last comparison, which
+	 * may have gained its chain since; for the passive walk, those skipped.
+	 */
+	readonly notCompared: number;
 };
 
 export type WalkCoverage = {
@@ -96,8 +103,15 @@ export type SweepCoverage = {
 	/** Accounts with a chain on the follower's main ledger, which the chain walk goes over; the passive walk goes over the rest. */
 	readonly chainAccounts: number;
 	readonly walks: Readonly<Record<SweepWalk, WalkCoverage>>;
-	/** Accounts a walk went past and never compared, every attempt at each skipped. */
+	/**
+	 * Accounts never compared: an account with a chain now without a
+	 * comparison by itself in the chain walk, but for one that may have
+	 * gained its chain since the last complete lap; a passive account every
+	 * attempt at skipped, which no batch over its row compared since.
+	 */
 	readonly neverCompared: number;
+	/** Of those, the accounts with a chain. */
+	readonly neverComparedChain: number;
 	/** The first of them, to start from. */
 	readonly firstNeverCompared: readonly string[];
 	/** Both walks have gone past every account at least once, and every account they went past was compared at least once. */
@@ -119,17 +133,21 @@ export type RepresentativeLocal = {
 export type SweepSignal = {
 	readonly verdict: Verdict;
 	readonly counts: {
-		/** Accounts compared by themselves at least once, each counted by its latest comparison. */
+		/** Accounts compared by themselves at least once, each counted by its latest comparison; the passive walk's batch matches are in the coverage. */
 		readonly accountsCompared: number;
 		readonly matched: number;
 		/** Accounts the follower disagrees with most representatives about, or that they split on, which fail the sweep. */
 		readonly diverged: number;
 		/** Of those, the ones the representatives split on. */
 		readonly unresolved: number;
+		/** Of those compared, the chain accounts moving on every attempt, compared by their chains. */
+		readonly comparedByChain: number;
 		/** Accounts never compared, whose latest attempt found them moving. */
 		readonly skippedMoving: number;
-		/** Accounts never compared, whose latest attempt went unanswered. */
+		/** Accounts never compared, whose latest attempt went unanswered, by themselves or in a batch. */
 		readonly unanswered: number;
+		/** Accounts never compared, whose latest attempt found both answering the same error in a batch. */
+		readonly errorBoth: number;
 		/** Accounts that diverged once and matched later. */
 		readonly resolvedDivergences: number;
 		/** Every divergence recorded, each to be explained. */
@@ -353,6 +371,11 @@ export function followerDiverged(outcome: SweepOutcome): boolean {
 	return(outcome.kind === 'diverged' || outcome.kind === 'unresolved');
 }
 
+/** Whether the account was compared: an outcome other than a skip or an error both sides answered. */
+export function wasCompared(outcome: SweepOutcome): boolean {
+	return(outcome.kind !== 'skipped' && outcome.kind !== 'error-both');
+}
+
 /** Each account's latest comparison, and its latest record of any kind, in the order the accounts were first seen. */
 function latestByAccount(records: readonly SweepRecord[]): { readonly compared: Map<string, SweepRecord>; readonly attempted: Map<string, SweepRecord>; readonly everDiverged: Set<string> } {
 	const compared = new Map<string, SweepRecord>();
@@ -360,27 +383,17 @@ function latestByAccount(records: readonly SweepRecord[]): { readonly compared: 
 	const everDiverged = new Set<string>();
 	for (const record of records) {
 		attempted.set(record.account, record);
-		switch (record.outcome.kind) {
-			case 'diverged':
-			case 'unresolved':
-				everDiverged.add(record.account);
-				compared.set(record.account, record);
-				break;
-			case 'match':
-			case 'representative-local':
-				compared.set(record.account, record);
-				break;
-			case 'skipped':
-				break;
-			default:
-				assertNever(record.outcome);
+		if (followerDiverged(record.outcome)) {
+			everDiverged.add(record.account);
+		}
+		if (wasCompared(record.outcome)) {
+			compared.set(record.account, record);
 		}
 	}
 	return({ compared, attempted, everDiverged });
 }
 
-
-/** The latest batch over each span of rows, which a crash in a batch makes the sweep walk again. */
+/** The latest batch over each span of rows in each lap, which a crash in a batch makes the sweep walk again. */
 function latestBatches(batches: readonly SweepBatchRecord[]): readonly SweepBatchRecord[] {
 	const latest = new Map<string, SweepBatchRecord>();
 	for (const batch of batches) {
@@ -396,10 +409,10 @@ export function neverComparedCandidatesOf(records: readonly ParityRecord[]): rea
 	for (const record of records) {
 		switch (record.kind) {
 			case 'sweep':
-				if (record.outcome.kind === 'skipped') {
-					candidates.add(record.account);
-				} else {
+				if (wasCompared(record.outcome)) {
 					compared.add(record.account);
+				} else {
+					candidates.add(record.account);
 				}
 				break;
 			case 'sweep-batch':
@@ -440,11 +453,13 @@ function spanHolding(spans: readonly BatchSpan[], row: bigint): BatchSpan | unde
 }
 
 /**
- * The candidates no batch compared: one compared an account when it went
- * over its row and did not name it as skipped. An account the follower names
- * no row for is never compared.
+ * The passive candidates no batch compared: one compared an account when it
+ * went over its row and did not name it as skipped. An account passive now
+ * was passive whenever a batch went over its row, since an account never
+ * loses its chain. An account the follower names no row for is never
+ * compared.
  */
-function neverComparedOf(candidates: readonly string[], batches: readonly SweepBatchRecord[], rowIDs: ReadonlyMap<string, string>): readonly string[] {
+function passiveNeverComparedOf(candidates: readonly string[], batches: readonly SweepBatchRecord[], rowIDs: ReadonlyMap<string, string>): readonly string[] {
 	const laps = new Map<number, BatchSpan[]>();
 	for (const batch of batches) {
 		const spans = laps.get(batch.lap) ?? [];
@@ -469,28 +484,53 @@ function neverComparedOf(candidates: readonly string[], batches: readonly SweepB
 	}));
 }
 
-/** Each lap of the chain walk, every account counted by its latest record in the lap. */
-function chainLapsOf(records: readonly SweepRecord[], cursor: SweepCursor): readonly WalkLap[] {
-	const laps = new Map<number, Map<string, SweepRecord>>();
+/** Each lap of the chain walk, by the records written in it. */
+type ChainLapRecords = { readonly lap: number; readonly latest: ReadonlyMap<string, SweepRecord>; readonly lastAt: string };
+
+function chainLapRecordsOf(records: readonly SweepRecord[]): readonly ChainLapRecords[] {
+	const laps = new Map<number, { latest: Map<string, SweepRecord>; lastAt: string }>();
 	for (const record of records) {
 		if (record.walk !== 'chain') {
 			continue;
 		}
-		const lap = laps.get(record.lap) ?? new Map<string, SweepRecord>();
-		lap.set(record.account, record);
+		const lap = laps.get(record.lap) ?? { latest: new Map<string, SweepRecord>(), lastAt: record.at };
+		lap.latest.set(record.account, record);
+		if (record.at > lap.lastAt) {
+			lap.lastAt = record.at;
+		}
 		laps.set(record.lap, lap);
 	}
 	return([...laps].sort(function([left], [right]): number {
 		return(left - right);
-	}).map(function([lap, accounts]): WalkLap {
-		const latest = [...accounts.values()];
-		const outcomesOf = function(kind: SweepRecord['outcome']['kind']): number {
-			return(latest.filter(function(record): boolean {
-				return(record.outcome.kind === kind);
-			}).length);
-		};
-		const diverged = outcomesOf('diverged') + outcomesOf('unresolved');
-		return({ lap, complete: lap < cursor.lap, walked: latest.length, compared: latest.length - outcomesOf('skipped'), diverged, skipped: outcomesOf('skipped') });
+	}).map(function([lap, { latest, lastAt }]): ChainLapRecords {
+		return({ lap, latest, lastAt });
+	}));
+}
+
+/** Whether the follower holds a staple of the account from after the moment: it may have gained its chain since. */
+function changedSince(known: KnownAccount, moment: string): boolean {
+	return(known.newestStaple !== undefined && known.newestStaple.getTime() > Date.parse(moment));
+}
+
+/** The chain accounts known now that the lap did not compare, but for those that may have gained their chain since it. */
+function chainNotComparedIn(lap: ChainLapRecords, chainAccounts: readonly KnownAccount[]): number {
+	return(chainAccounts.filter(function(known): boolean {
+		const record = lap.latest.get(known.account);
+		return((record === undefined || !wasCompared(record.outcome)) && !changedSince(known, lap.lastAt));
+	}).length);
+}
+
+/** Each lap of the chain walk, every account counted by its latest record in the lap. */
+function chainLapsOf(laps: readonly ChainLapRecords[], cursor: SweepCursor, chainAccounts: readonly KnownAccount[]): readonly WalkLap[] {
+	return(laps.map(function(lap): WalkLap {
+		const latest = [...lap.latest.values()];
+		const diverged = latest.filter(function(record): boolean {
+			return(followerDiverged(record.outcome));
+		}).length;
+		const compared = latest.filter(function(record): boolean {
+			return(wasCompared(record.outcome));
+		}).length;
+		return({ lap: lap.lap, complete: lap.lap < cursor.lap, walked: latest.length, compared, diverged, skipped: latest.length - compared, notCompared: chainNotComparedIn(lap, chainAccounts) });
 	}));
 }
 
@@ -518,29 +558,63 @@ function passiveLapsOf(records: readonly SweepRecord[], batches: readonly SweepB
 		const diverged = [...tally.latest.values()].filter(function(record): boolean {
 			return(followerDiverged(record.outcome));
 		}).length;
-		return({ lap, complete: lap < cursor.lap, walked: tally.walked, compared: tally.walked - tally.skipped, diverged, skipped: tally.skipped });
+		return({ lap, complete: lap < cursor.lap, walked: tally.walked, compared: tally.walked - tally.skipped, diverged, skipped: tally.skipped, notCompared: tally.skipped });
 	}));
 }
 
-function sweepCoverageOf(records: readonly SweepRecord[], batches: readonly SweepBatchRecord[], position: SweepPosition, candidates: readonly string[]): SweepCoverage {
-	const neverCompared = neverComparedOf(candidates, batches, position.rowIDs);
+/**
+ * Who is never compared. A chain account counts by its comparisons by
+ * itself in the chain walk (or the walk over every account before it) only,
+ * since the passive walk's batches went over its row while it may have had
+ * a chain; one whose newest staple is from after the last complete lap of
+ * the chain walk ended may have gained its chain since, and waits for the
+ * next lap. A passive account counts by any comparison by itself, or by a
+ * batch over its row.
+ */
+function neverComparedOf(records: readonly SweepRecord[], batches: readonly SweepBatchRecord[], position: SweepPosition, chainLaps: readonly ChainLapRecords[], candidates: readonly string[]): { readonly chain: readonly string[]; readonly passive: readonly string[] } {
+	const comparedInChainWalk = new Set<string>();
+	for (const record of records) {
+		if (record.walk !== 'passive' && wasCompared(record.outcome)) {
+			comparedInChainWalk.add(record.account);
+		}
+	}
+	const lastComplete = chainLaps.filter(function(lap): boolean {
+		return(lap.lap < position.cursors.chain.lap);
+	}).at(-1);
+	const chain = position.chainAccounts.filter(function(known): boolean {
+		return(!comparedInChainWalk.has(known.account) && (lastComplete === undefined || !changedSince(known, lastComplete.lastAt)));
+	}).map(function(known): string {
+		return(known.account);
+	});
+	const chainSet = new Set(position.chainAccounts.map(function(known): string {
+		return(known.account);
+	}));
+	const passive = passiveNeverComparedOf(candidates.filter(function(account): boolean {
+		return(!chainSet.has(account));
+	}), batches, position.rowIDs);
+	return({ chain, passive });
+}
+
+/** How many accounts never compared the report names. */
+const FIRST_NEVER_COMPARED_LISTED = 10;
+
+function sweepCoverageOf(records: readonly SweepRecord[], batches: readonly SweepBatchRecord[], position: SweepPosition, neverCompared: { readonly chain: readonly string[]; readonly passive: readonly string[] }, chainLaps: readonly ChainLapRecords[]): SweepCoverage {
+	const all = [...neverCompared.chain, ...neverCompared.passive];
 	const walks = {
-		chain: { cursor: position.cursors.chain, laps: chainLapsOf(records, position.cursors.chain) },
+		chain: { cursor: position.cursors.chain, laps: chainLapsOf(chainLaps, position.cursors.chain, position.chainAccounts) },
 		passive: { cursor: position.cursors.passive, laps: passiveLapsOf(records, batches, position.cursors.passive) }
 	};
 	const lapped = position.cursors.chain.lap > 0 && position.cursors.passive.lap > 0;
 	return({
 		knownAccounts: position.knownAccounts,
-		chainAccounts: position.chainAccounts,
+		chainAccounts: position.chainAccounts.length,
 		walks,
-		neverCompared: neverCompared.length,
-		firstNeverCompared: neverCompared.slice(0, FIRST_NEVER_COMPARED_LISTED),
-		everyAccountCompared: lapped && neverCompared.length === 0
+		neverCompared: all.length,
+		neverComparedChain: neverCompared.chain.length,
+		firstNeverCompared: all.slice(0, FIRST_NEVER_COMPARED_LISTED),
+		everyAccountCompared: lapped && all.length === 0
 	});
 }
-
-/** How many accounts never compared the report names. */
-const FIRST_NEVER_COMPARED_LISTED = 10;
 
 /** The accounts whose latest comparison found one representative alone apart, by that representative, with the first such record. */
 function representativeLocalOf(records: readonly SweepRecord[], localNow: readonly SweepRecord[]): RepresentativeLocal {
@@ -564,6 +638,19 @@ function representativeLocalOf(records: readonly SweepRecord[], localNow: readon
 	return({ records: recorded, accounts: localNow.length, byRepresentative, first: firstExample });
 }
 
+/**
+ * The passive walk's batch matches among the samples: each lap's, every span
+ * once, and of the laps the one that matched most, since every lap goes
+ * over the same accounts.
+ */
+function matchedInBatchesOf(batches: readonly SweepBatchRecord[]): number {
+	const laps = new Map<number, number>();
+	for (const batch of batches) {
+		laps.set(batch.lap, (laps.get(batch.lap) ?? 0) + batch.matched);
+	}
+	return(Math.max(0, ...laps.values()));
+}
+
 function sweepSignalOf(allRecords: readonly ParityRecord[], position: SweepPosition): SweepSignal {
 	const records = recordsOf(allRecords, 'sweep');
 	const batches = latestBatches(recordsOf(allRecords, 'sweep-batch'));
@@ -575,23 +662,34 @@ function sweepSignalOf(allRecords: readonly ParityRecord[], position: SweepPosit
 	const localNow = latest.filter(function(record): boolean {
 		return(record.outcome.kind === 'representative-local');
 	});
+	const chainLaps = chainLapRecordsOf(records);
+	const neverCompared = neverComparedOf(records, batches, position, chainLaps, neverComparedCandidatesOf(allRecords));
 	let skippedMoving = 0;
 	let unanswered = 0;
+	let errorBoth = 0;
 	for (const [account, record] of attempted) {
-		if (compared.has(account) || record.outcome.kind !== 'skipped') {
+		if (compared.has(account)) {
 			continue;
 		}
-		switch (record.outcome.reason) {
-			case 'moving':
-				skippedMoving++;
+		switch (record.outcome.kind) {
+			case 'skipped':
+				if (record.outcome.reason === 'moving') {
+					skippedMoving++;
+				} else {
+					unanswered++;
+				}
 				break;
-			case 'unanswered':
-				unanswered++;
+			case 'error-both':
+				errorBoth++;
 				break;
 			default:
-				assertNever(record.outcome);
+				break;
 		}
 	}
+	// An account an unanswered batch named, with no record of its own.
+	unanswered += neverCompared.passive.filter(function(account): boolean {
+		return(!attempted.has(account));
+	}).length;
 	const divergenceRecords = records.filter(function(record): boolean {
 		return(followerDiverged(record.outcome));
 	}).length;
@@ -602,20 +700,17 @@ function sweepSignalOf(allRecords: readonly ParityRecord[], position: SweepPosit
 		unresolved: divergedNow.filter(function(record): boolean {
 			return(record.outcome.kind === 'unresolved');
 		}).length,
+		comparedByChain: latest.filter(function(record): boolean {
+			return(record.outcome.kind === 'compared-chain');
+		}).length,
 		skippedMoving,
 		unanswered,
+		errorBoth,
 		resolvedDivergences: everDiverged.size - divergedNow.length,
 		divergenceRecords
 	};
-	const coverage = sweepCoverageOf(records, batches, position, neverComparedCandidatesOf(allRecords));
-	const matchedInBatches = new Map<string, number>();
-	for (const batch of batches) {
-		matchedInBatches.set(`${batch.afterRowID} ${batch.throughRowID}`, batch.matched);
-	}
-	let samples = latest.length;
-	for (const matched of matchedInBatches.values()) {
-		samples += matched;
-	}
+	const coverage = sweepCoverageOf(records, batches, position, neverCompared, chainLaps);
+	const samples = latest.length + matchedInBatchesOf(batches);
 	const confidence = confidenceOf(samples, divergedNow.length, 'account');
 	const representativeLocal = representativeLocalOf(records, localNow);
 	if (samples === 0) {
@@ -627,7 +722,7 @@ function sweepSignalOf(allRecords: readonly ParityRecord[], position: SweepPosit
 	const first = records.find(function(record): boolean {
 		return(followerDiverged(record.outcome) && stillDiverging.has(record.account));
 	});
-	if (first === undefined || first.outcome.kind === 'match' || first.outcome.kind === 'skipped') {
+	if (first === undefined || (first.outcome.kind !== 'diverged' && first.outcome.kind !== 'unresolved')) {
 		return({ verdict: 'pass', counts, coverage, representativeLocal, confidence, firstDivergence: null });
 	}
 	return({ verdict: 'fail', counts, coverage, representativeLocal, confidence, firstDivergence: { ...first.outcome.divergence, at: first.at, representative: first.representative } });
@@ -800,7 +895,8 @@ function shadowVotesSignalOf(records: readonly ShadowRunRecord[]): ShadowVotesSi
 /** Where the sweep stands among the accounts the follower knows. */
 export type SweepPosition = {
 	readonly knownAccounts: number;
-	readonly chainAccounts: number;
+	/** The accounts with a chain now, which the chain walk must have compared by themselves. */
+	readonly chainAccounts: readonly KnownAccount[];
 	readonly cursors: Readonly<Record<SweepWalk, SweepCursor>>;
 	/** The row of each account the log names as not compared, by which a later batch of the passive walk may have compared it. */
 	readonly rowIDs: ReadonlyMap<string, string>;
@@ -836,7 +932,7 @@ export async function sweepPointerOf(log: ParityLog, cursorPaths: SweepCursorPat
 		return(followerDiverged(record.outcome));
 	});
 	let firstDivergence: Divergence | null = null;
-	if (first !== undefined && first.outcome.kind !== 'match' && first.outcome.kind !== 'skipped') {
+	if (first !== undefined && (first.outcome.kind === 'diverged' || first.outcome.kind === 'unresolved')) {
 		firstDivergence = first.outcome.divergence;
 	}
 	return({ cursor: await readSweepCursor(cursorPaths.chain), firstDivergence });
@@ -857,7 +953,13 @@ const ROWS_LOOKED_UP_AT_ONCE = 10_000;
 /** The report on the whole log as it stands, comparing nothing afresh. */
 export async function reportOnLog(sources: ReportSources): Promise<ParityReport> {
 	const log = await sources.log.read();
-	const candidates = neverComparedCandidatesOf(log.records);
+	const chainAccounts = await sources.store.chainAccounts();
+	const chainSet = new Set(chainAccounts.map(function(known): string {
+		return(known.account);
+	}));
+	const candidates = neverComparedCandidatesOf(log.records).filter(function(account): boolean {
+		return(!chainSet.has(account));
+	});
 	const rowIDs = new Map<string, string>();
 	for (let start = 0; start < candidates.length; start += ROWS_LOOKED_UP_AT_ONCE) {
 		for (const [account, rowID] of await sources.store.rowIDsOf(candidates.slice(start, start + ROWS_LOOKED_UP_AT_ONCE))) {
@@ -866,7 +968,7 @@ export async function reportOnLog(sources: ReportSources): Promise<ParityReport>
 	}
 	const sweep: SweepPosition = {
 		knownAccounts: await sources.store.accountCount(),
-		chainAccounts: await sources.store.chainAccountCount(),
+		chainAccounts,
 		cursors: { chain: await readSweepCursor(sources.cursorPaths.chain), passive: await readSweepCursor(sources.cursorPaths.passive) },
 		rowIDs
 	};

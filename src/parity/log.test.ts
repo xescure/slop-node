@@ -36,6 +36,8 @@ const MATCHED: SweepRecord = { kind: 'sweep', at: CHECKSUM.at, representative: R
 
 const SWEEPS: readonly SweepRecord[] = [
 	MATCHED,
+	{ ...MATCHED, outcome: { kind: 'compared-chain', head: 'CD'.repeat(32), representativeHead: 'EF'.repeat(32), lacking: 3 } },
+	{ ...MATCHED, walk: 'passive', outcome: { kind: 'error-both', error: 'Error: Unable to parse account information' } },
 	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 0, walk: 'passive', outcome: { kind: 'diverged', divergence: { account: ACCOUNT, field: 'representative', staple: null }, follower: { representative: null }, representative: { representative: ACCOUNT }, readings: [] } },
 	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 0, walk: 'chain', outcome: { kind: 'representative-local', divergence: { account: ACCOUNT, field: 'balances[0].balance', staple: 'AB'.repeat(32) }, follower: { balances: [] }, representative: { balances: [1] }, readings: [{ representative: 'https://rep2.example/api', kind: 'agrees', state: { balances: [] }, staple: 'AB'.repeat(32) }, { representative: 'https://rep3.example/api', kind: 'unanswered', detail: 'answered 504' }] } },
 	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 0, walk: 'chain', outcome: { kind: 'unresolved', divergence: { account: ACCOUNT, field: 'balances[0].balance', staple: null }, follower: { balances: [] }, representative: { balances: [1] }, readings: [{ representative: 'https://rep2.example/api', kind: 'disagrees', state: { balances: [2] }, staple: null }] } },
