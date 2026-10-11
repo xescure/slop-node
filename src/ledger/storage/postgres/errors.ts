@@ -26,7 +26,10 @@ const CONNECTION_EXCEPTION_CLASS = '08';
  * The server refusing a message it could not read. As an ERROR it refuses
  * only that message, such as a bind with the wrong number of parameters, and
  * the session goes on, so a new attempt would send the same message; only as
- * a FATAL does it end the session.
+ * a FATAL does it end the session. pg reads only the severity as the server
+ * words it in its lc_messages, field S, and never V, which the server leaves
+ * in English (pg-protocol 1.16.1 parser.js:307), so under another language a
+ * FATAL one is passed through, as an ERROR one is, rather than retried.
  */
 const PROTOCOL_VIOLATION = '08P01';
 
