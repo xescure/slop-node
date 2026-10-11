@@ -5,6 +5,7 @@ import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/i
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { Vote, VoteBlockHash, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerInternals } from '../../../upstream/internals.js';
+import { createLedgerError } from '../errors.js';
 import { confirmedStaple, feeBlock, manageCertificateBlock, modifyPermissionsBlock, sendBlock } from '../../../testing/blocks.js';
 import { advanceClock } from '../../../testing/network.js';
 import type { TestLedgerOptions, TestNetwork } from '../../../testing/network.js';
@@ -545,6 +546,25 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			expect(hashOf(await node.ledger.getBlock(second.hash, 'main'))).toBe(hashOf(second));
 		});
 
+		test('a released staple whose retry fails with an error that asks for the transaction to run again is retried by the next gc, not left until a staple is applied', async function() {
+			const { network, startNode } = await startNetwork();
+			const { node, storage } = await startNode(0, { heapProcessWindowMs: 0 });
+			const first = await sendFromGenesis(network, 0, 5n);
+			const second = await sendFrom(network, 0, first.hash, 7n);
+			const secondStaple = await confirmedStaple([second], network.representatives);
+			expect(await node.ledger.add(secondStaple)).toEqual([]);
+			await node.ledger.add(await confirmedStaple([first], network.representatives));
+			const restore = afterPersisting(storage, [secondStaple], function(blocksHash): void {
+				throw(createLedgerError('LEDGER_TRANSACTION_ABORTED', `injected conflict after persisting ${blocksHash}`, { retry: true }));
+			});
+			expect(await node.ledger.gc()).toBe(false);
+			expect(await node.ledger.getBlock(second.hash, 'main')).toBeNull();
+			restore();
+
+			expect(await node.ledger.gc()).toBe(false);
+			expect(hashOf(await node.ledger.getBlock(second.hash, 'main'))).toBe(hashOf(second));
+		});
+
 		/*
 		 * Each failing retry spends the window and moves the clock on past
 		 * any time a gc could wait out, so only the order gc lists released
@@ -582,8 +602,8 @@ export function defineGcCases(driver: DriverUnderTest): void {
 				}
 			}
 
-			expect(appliedIn).toBeDefined();
-			expect(appliedIn ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(failing + 1);
+			// The applicable staple is listed after the failing ones, so it is reached only once each has failed once.
+			expect(appliedIn).toBe(failing + 1);
 			expect(reported.at(-1)).toBe(false);
 		});
 

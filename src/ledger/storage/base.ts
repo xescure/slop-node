@@ -177,8 +177,8 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	// Each released deferred staple whose last gc retry failed; it outlives the transaction, as the failure does not roll back.
 	readonly #failedRetries = new Map<StapleKey, FailedRetry>();
 	#failedRetriesSoFar = 0;
-	// Staples this driver has applied to the main ledger, by an add or a gc retry with what each released, the one change that can make a failed retry succeed; a unit undone counts none.
-	#stapleWrites = 0;
+	// Staples this driver has applied to the main ledger in a transaction, committed or not, by an add or a gc retry with what each released: the one change that can make a failed retry succeed. A unit undone counts none.
+	#staplesApplied = 0;
 	// The tail of the work queued on each transaction that may open isolated units; it never rejects.
 	readonly #exclusiveWork = new WeakMap<Transaction, Promise<void>>();
 
@@ -225,7 +225,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			}));
 		});
 		recordSettlement(transaction, applied);
-		this.#stapleWrites += applied.length;
+		this.#staplesApplied += applied.length;
 		return(applied.map(function({ staple }): VoteStaple {
 			return(staple);
 		}));
@@ -690,9 +690,11 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * whose retry fails stays deferred and is logged, and from then on is
 	 * listed after every staple whose retry never failed, so failures however
 	 * slow or many never hold back a staple that applies; and it is retried
-	 * again only once this driver has written a staple since, as its retry
+	 * again only once this driver has applied a staple since, as its retry
 	 * on the same ledger would fail the same way, so that it keeps no gc
-	 * reporting more left. Neither depends on the clock.
+	 * reporting more left. Neither depends on the clock. A failure the
+	 * transaction is to run again for is not the staple's, and the next gc
+	 * retries it as one that never failed.
 	 */
 	async #retryReleasedDeferredStaples(transaction: Transaction, limit: number): Promise<boolean> {
 		const { config } = this.initialized;
@@ -719,10 +721,14 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			try {
 				const applied = await this.#applyIsolated(transaction, staple, replay);
 				recordSettlement(transaction, applied);
-				this.#stapleWrites += applied.length;
+				this.#staplesApplied += applied.length;
 				this.#failedRetries.delete(stapleKey);
 			} catch (error: unknown) {
-				this.#failedRetries.set(stapleKey, { order: this.#failedRetriesSoFar++, appliedBefore: this.#stapleWrites });
+				if (await this.#asksToRunAgain(error)) {
+					config.log?.warn(LOG_SOURCE, `retrying deferred staple ${stapleKey} met a failure the transaction is to run again for; it stays deferred, and the next gc retries it`, error);
+					continue;
+				}
+				this.#failedRetries.set(stapleKey, { order: this.#failedRetriesSoFar++, appliedBefore: this.#staplesApplied });
 				config.log?.error(LOG_SOURCE, `retrying deferred staple ${stapleKey} failed; it stays deferred, and gc retries it again once a staple has been applied since`, error);
 			}
 		}
@@ -730,10 +736,24 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 		return((await this.listReleasedDeferredStaples(transaction, 1, passedOver)).length > 0);
 	}
 
+	/*
+	 * A conflict with another transaction or a lost session is the
+	 * transaction's failure, which Ledger.run reruns, not the staple's: a
+	 * retry then may succeed on the same ledger.
+	 * [Keeta TS] index.js:70360-70370
+	 */
+	async #asksToRunAgain(error: unknown): Promise<boolean> {
+		const evaluated = await this.evaluateError(error);
+		if (!isKeetaNetError(evaluated) || typeof evaluated !== 'object' || evaluated === null) {
+			return(false);
+		}
+		return(Reflect.get(evaluated, 'shouldRetry') === true);
+	}
+
 	/** The staples whose last retry failed, and of them those due again, a staple written since, or those not, oldest failure first. */
 	#failedRetryKeys(due: boolean): StapleKey[] {
 		return([...this.#failedRetries].filter(([, failure]): boolean => {
-			return((failure.appliedBefore < this.#stapleWrites) === due);
+			return((failure.appliedBefore < this.#staplesApplied) === due);
 		}).sort(function([, left], [, right]): number {
 			return(left.order - right.order);
 		}).map(function([stapleKey]): StapleKey {

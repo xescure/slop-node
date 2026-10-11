@@ -489,8 +489,9 @@ export class BootstrapClient {
 	/**
 	 * Runs the ledger's garbage collection, slice after slice, until it
 	 * reports nothing left, which, besides what it collects, applies each
-	 * deferred staple whose awaited blocks are all held (schema/CONTRACT.md,
-	 * section 2.6). The ledger applies a deferred staple when the block it
+	 * deferred staple whose awaited blocks are all held, but for one whose
+	 * last retry failed, which waits until a staple is applied since
+	 * (schema/CONTRACT.md, section 2.6). The ledger applies a deferred staple when the block it
 	 * awaits arrives, but only for as long as the replay window allows, so of
 	 * a long chain of staples deferred behind one block, only the collection
 	 * applies the rest, about a window's worth a slice. Each staple of the
