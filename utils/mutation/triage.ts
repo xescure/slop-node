@@ -37,7 +37,7 @@ export type ReportedMutant = {
 	 * Stryker 10.0.0's vitest runner then reports the mutant as surviving the
 	 * empty run, though no test ran to let it survive. Any other survivor of
 	 * an empty run is one whose covering tests the runner failed to select,
-	 * so it stays unjudged and needs an entry.
+	 * which no test has judged, so it needs an entry.
 	 */
 	readonly ranNoTest: boolean;
 };

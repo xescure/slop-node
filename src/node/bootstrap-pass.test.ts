@@ -20,25 +20,25 @@ const EPOCH = new Date(0);
 
 /** The traces of the passes over a range "how much a pass over a range asks of a peer" pins. */
 const RANGE_TRACES: Readonly<Record<'votes' | 'unknown' | 'applied', Trace>> = {
-	votes: { requests: 4, probes: 0, starts: 2, served: 2000, resent: 1, heldReads: [1200], digest: '0JjvPQIpgwhxsCMc' },
-	unknown: { requests: 4, probes: 0, starts: 2, served: 2000, resent: 1, heldReads: [1200], digest: '0JjvPQIpgwhxsCMc' },
-	applied: { requests: 4, probes: 0, starts: 2, served: 2000, resent: 1, heldReads: [1200], digest: 'cBOFFVXzS+wx0x1b' }
+	votes: { requests: 4, probes: 0, starts: 2, served: 2000, resent: 1, heldReads: [1200], digest: 229355267359273 },
+	unknown: { requests: 4, probes: 0, starts: 2, served: 2000, resent: 1, heldReads: [1200], digest: 229355267359273 },
+	applied: { requests: 4, probes: 0, starts: 2, served: 2000, resent: 1, heldReads: [1200], digest: 123229139457523 }
 };
 
 /** The traces of the passes "how much a pass asks of a peer" pins. */
 const TRACES: Readonly<Record<'applied' | 'held' | 'votes' | 'late' | 'short' | 'votesHeld' | 'crowd' | 'crowdApplied' | 'crowdVotes' | 'lateVotes' | 'readsOut' | 'lateHeld', Trace>> = {
-	applied: { requests: 18, probes: 0, starts: 4, served: 5003, resent: 3, heldReads: [1200], digest: '4XcUWARS7u+1E7BO' },
-	held: { requests: 4, probes: 0, starts: 3, served: 2008, resent: 2008, heldReads: [1200, 951, 951], digest: 'jk66XsibaCfo6dSg' },
-	votes: { requests: 12, probes: 0, starts: 3, served: 3002, resent: 2, heldReads: [1200], digest: 'VSZJ9fOkn5CKfis0' },
-	late: { requests: 68, probes: 63, starts: 65, served: 4054, resent: 0, heldReads: [1200], digest: 'szri4TDseTUu6INa' },
-	short: { requests: 135, probes: 7, starts: 6, served: 4743, resent: 4, heldReads: [1200], digest: 'uBwqym+OS5Te/YNT' },
-	votesHeld: { requests: 3, probes: 1, starts: 2, served: 10, resent: 10, heldReads: [1200], digest: '2csxzHMNYwZMKlb6' },
-	crowd: { requests: 8, probes: 1, starts: 3, served: 4394, resent: 1001, heldReads: [1200, 709], digest: 'lYzWPdTvc7RZ8zgJ' },
-	crowdApplied: { requests: 63, probes: 54, starts: 56, served: 6234, resent: 3000, heldReads: [1200, 201, 200, 909], digest: '/ILt3bl0gS6obzel' },
-	crowdVotes: { requests: 7, probes: 0, starts: 3, served: 4393, resent: 1001, heldReads: [1200, 709], digest: '3m+A6J0cesk4q0QV' },
-	lateVotes: { requests: 8, probes: 0, starts: 5, served: 3004, resent: 4, heldReads: [1200], digest: 'ij2fmzfH3T/nZ3x7' },
-	readsOut: { requests: 24, probes: 4, starts: 19, served: 5021, resent: 17, heldReads: [1200], digest: 'fz52tisEJZH7jVdI' },
-	lateHeld: { requests: 71, probes: 67, starts: 69, served: 2857, resent: 300, heldReads: [1200, 951, 1040], digest: '9s37wuVc/yNqMydi' }
+	applied: { requests: 18, probes: 0, starts: 4, served: 5003, resent: 3, heldReads: [1200], digest: 247901558670418 },
+	held: { requests: 4, probes: 0, starts: 3, served: 2008, resent: 2008, heldReads: [1200, 951, 951], digest: 156468785367195 },
+	votes: { requests: 12, probes: 0, starts: 3, served: 3002, resent: 2, heldReads: [1200], digest: 93622937973668 },
+	late: { requests: 68, probes: 63, starts: 65, served: 4054, resent: 0, heldReads: [1200], digest: 197065495884012 },
+	short: { requests: 135, probes: 7, starts: 6, served: 4743, resent: 4, heldReads: [1200], digest: 202431116504974 },
+	votesHeld: { requests: 3, probes: 1, starts: 2, served: 10, resent: 10, heldReads: [1200], digest: 239466737070861 },
+	crowd: { requests: 8, probes: 1, starts: 3, served: 4394, resent: 1001, heldReads: [1200, 709], digest: 164432122336495 },
+	crowdApplied: { requests: 63, probes: 54, starts: 56, served: 6234, resent: 3000, heldReads: [1200, 201, 200, 909], digest: 277639266679156 },
+	crowdVotes: { requests: 7, probes: 0, starts: 3, served: 4393, resent: 1001, heldReads: [1200, 709], digest: 244570485464348 },
+	lateVotes: { requests: 8, probes: 0, starts: 5, served: 3004, resent: 4, heldReads: [1200], digest: 151997275387847 },
+	readsOut: { requests: 24, probes: 4, starts: 19, served: 5021, resent: 17, heldReads: [1200], digest: 139906256349956 },
+	lateHeld: { requests: 71, probes: 67, starts: 69, served: 2857, resent: 300, heldReads: [1200, 951, 1040], digest: 271364552582492 }
 };
 
 /** Passes whose filters take seeds from a fixed sequence, so that each run names the same staples by mistake. */
@@ -865,7 +865,7 @@ type Trace = {
 	readonly served: number;
 	readonly resent: number;
 	readonly heldReads: readonly number[];
-	readonly digest: string;
+	readonly digest: number;
 };
 
 function traceOf(harness: Harness): Trace {
@@ -880,7 +880,7 @@ function traceOf(harness: Harness): Trace {
 		heldReads: harness.heldCounts,
 		digest: createHash('sha256').update(JSON.stringify(harness.requests.map(function(request): [number, number, string, number] {
 			return([request.start.getTime(), request.limit, request.bloomFilter ?? '', request.served]);
-		}))).digest('base64').slice(0, 16)
+		}))).digest().readUIntBE(0, 6)
 	});
 }
 

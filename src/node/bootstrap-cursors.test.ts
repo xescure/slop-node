@@ -167,6 +167,9 @@ const STORED_LAYOUT = {
 	nextID: 4
 };
 
+/** The bytes 1, 2 and 3, in base64, as a queued staple is kept. */
+const THREE_BYTES = Buffer.from([1, 2, 3]).toString('base64');
+
 describe('values the node did not write', function() {
 	test('are kept under the arenas and keys of earlier builds', async function() {
 		const kv = new KVInternals.KVStorageProviderMemory();
@@ -284,7 +287,7 @@ describe('values the node did not write', function() {
 		['accounts', { kind: 'accounts', accounts: ['keeta_a'] }, { kind: 'accounts', accounts: ['keeta_a'] }]
 	])('read what a queued staple awaits as nothing the queue watches for unless it names it whole: %s', async function(_ignored: string, awaited: JSONSerializable, read: unknown) {
 		const kv = new KVInternals.KVStorageProviderMemory();
-		await kv.set(BOOTSTRAP_RETRY_ARENA, 'AB', { staple: 'AQID', queuedAt: 1, code: 'X', reported: false, awaited });
+		await kv.set(BOOTSTRAP_RETRY_ARENA, 'AB', { staple: THREE_BYTES, queuedAt: 1, code: 'X', reported: false, awaited });
 
 		expect((await new KVRetryStore(kv).load())[0]?.awaited).toEqual(read);
 	});
@@ -293,12 +296,12 @@ describe('values the node did not write', function() {
 		const kv = new KVInternals.KVStorageProviderMemory();
 		await new KVRetryStore(kv).put({ key: 'AB', bytes: Uint8Array.from([1, 2, 3]).buffer, queuedAt: 1, code: 'X', reported: false, awaited: { kind: 'unknown' } });
 
-		expect(await kv.get(BOOTSTRAP_RETRY_ARENA, 'AB')).toEqual({ staple: 'AQID', queuedAt: 1, code: 'X', reported: false, awaited: { kind: 'unknown' } });
+		expect(await kv.get(BOOTSTRAP_RETRY_ARENA, 'AB')).toEqual({ staple: THREE_BYTES, queuedAt: 1, code: 'X', reported: false, awaited: { kind: 'unknown' } });
 	});
 
 	test('leave out of the queue loaded each queued staple the node did not write, and keep the others', async function() {
 		const kv = new KVInternals.KVStorageProviderMemory();
-		const stored = { staple: 'AQID', queuedAt: 1, code: 'X', reported: false };
+		const stored = { staple: THREE_BYTES, queuedAt: 1, code: 'X', reported: false };
 		const unwritten: Readonly<Record<string, JSONSerializable>> = {
 			record: 5,
 			staple: { ...stored, staple: 5 },
