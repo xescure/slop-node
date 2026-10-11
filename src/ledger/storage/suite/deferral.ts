@@ -504,6 +504,26 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			expect(hashOf(await ledger.getBlock(third.hash, 'main'))).toBe(hashOf(third));
 		});
 
+		test('lists a stranded staple as of its votes, though the clock has since gone back past them', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			await ledger.add(network.genesis);
+			const [missing, waiting] = await sendsAfter(network, headOf(network.genesis, requireAt(network.users, 0)), [5n, 7n]);
+			if (missing === undefined || waiting === undefined) {
+				throw(new Error('two blocks expected'));
+			}
+			const staple = await confirmedStaple([waiting], network.representatives);
+			expect(await ledger.add(staple)).toEqual([]);
+			const later = new Date(Date.now() + 1);
+			// Further back than the minute by which upstream takes a vote to be from the future [Keeta TS] index.js:80373-80375, 80653.
+			advanceClock(-10 * 60 * 1000);
+
+			const listed = await storage.listStrandedDeferredStaples(later, 10);
+
+			expect(listed.map(function({ staple: stranded, lacks }): [string, (string | null)[]] {
+				return([stranded.blocksHash.toString(), lacks.map(hashOf)]);
+			})).toEqual([[staple.blocksHash.toString(), [missing.hash.toString()]]]);
+		});
+
 		test('lists stranded staples of one latest vote by their blocks hashes, each with the blocks it lacks by their hashes, and from after a staple given', async function() {
 			const { network, storage, ledger } = await startNetwork();
 			await ledger.add(network.genesis);
