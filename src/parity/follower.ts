@@ -53,11 +53,17 @@ const PRIVATE_DIRECTORY = 0o700;
  * ledger of shadow votes (utils/parity shadow), in a database of the same
  * cluster, ran it out within a minute beside the node, failing transactions
  * of both, while a few megabytes more hold a thousand per transaction.
+ * The cluster serves the node's pool, the offline ledger's pool of the
+ * shadow votes and the parity tools' sessions at once, 10 each at most, and
+ * a pool that cannot connect waits out its timeout: with 40 connections the
+ * tools beside both ledgers ran out of them, and 100 leave room for a few
+ * tools and a console beside, for some megabytes more of shared memory.
+ * The settings are written on every start, so a change applies at the next.
  */
 const POSTGRES_SETTINGS: Readonly<Record<string, string>> = {
 	listen_addresses: '\'\'',
 	port: String(POSTGRES_PORT),
-	max_connections: '40',
+	max_connections: '100',
 	shared_buffers: '\'3GB\'',
 	work_mem: '\'8MB\'',
 	maintenance_work_mem: '\'128MB\'',

@@ -26,6 +26,7 @@ import type { ParityReport } from './report.js';
 import { freshShadowRun, runShadowVotes, SHADOW_SCOPE, shadowRunComplete } from './shadow-live.js';
 import { fileShadowState, shadowDirectory } from './shadow-state.js';
 import { recheckDivergences, sweepAccounts, sweepCursorPaths } from './sweep.js';
+import { retryingStore } from './transient-store.js';
 import type { SweepCursorPaths } from './sweep.js';
 
 /** The pacer reads the wall clock, which a Retry-After date is in. */
@@ -458,7 +459,13 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
 		};
 		process.once('SIGINT', stop);
 		process.once('SIGTERM', stop);
-		const store = openFollowerStore(followerDatabaseURL(directory));
+		const store = retryingStore(openFollowerStore(followerDatabaseURL(directory)), {
+			clock: WALL_CLOCK,
+			stopped: stopping.signal,
+			retrying(error: unknown, waitMilliseconds: number): void {
+				process.stderr.write(`${new Date().toISOString()} the follower's database is under load (${messageOf(error)}); reading again in ${String(waitMilliseconds)} ms\n`);
+			}
+		});
 		try {
 			const pacer = new RepresentativePacer(pacingOf(command), WALL_CLOCK, function(endpoint, standing, waitMilliseconds, why) {
 				process.stderr.write(`${new Date().toISOString()} ${endpoint} ${why}: ${String(standing.concurrency)} in flight at most, next in ${String(waitMilliseconds)} ms, backed off ${String(standing.backedOff)} times\n`);

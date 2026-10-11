@@ -934,6 +934,10 @@ export async function sampleAPI(setup: APIDiffSetup): Promise<APIDiffSummary> {
 					return;
 				}
 				const compared = await compareRequest(request, setup.follower, representative, othersThan(setup.representatives, representative), quiet);
+				// A stop ends what the request waited on, a read of the follower's database among them, which compared nothing.
+				if (isStopped(setup.stopped)) {
+					return;
+				}
 				const record = recordOf(representative, request, compared);
 				for (const behavior of record.behaviors) {
 					if (!setup.knownBehaviors.has(behavior) && !newBehaviors.has(behavior)) {

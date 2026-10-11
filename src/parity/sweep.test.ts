@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import { startFakeAPI } from '../testing/fake-api.js';
 import type { FakeAPI } from '../testing/fake-api.js';
+import { followerStoreOf } from '../testing/follower-store.js';
 import { httpSource } from './api-source.js';
 import type { FollowerProgress, KnownAccount } from './follower-store.js';
 import { ParityLog } from './log.js';
@@ -11,6 +12,7 @@ import type { SweepBatchRecord, SweepRecord, SweepWalk } from './log.js';
 import { recordsOf } from './report.js';
 import { compareAccount, firstDifference, QUIET_MARGIN_MILLISECONDS, readSweepCursor, recheckDivergences, sweepAccounts, sweepCursorPaths } from './sweep.js';
 import type { SweepCursorPaths, SweepStore, SweepSummary, WalkSummary } from './sweep.js';
+import { retryingStore } from './transient-store.js';
 
 const ACCOUNTS = [
 	'keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai',
@@ -184,6 +186,39 @@ async function outcomes(running: Running): Promise<readonly SweepRecord['outcome
 		return([record.outcome]);
 	}));
 }
+
+describe('a follower database under load', function() {
+	test('is waited out, the walk going on and recording the account it compared, never the failure', async function() {
+		const running = await setup();
+		const account = ACCOUNTS[0];
+		serveAccount(running, account, [state(account, '0x10')], state(account, '0x10'), history(STAPLE, [QUIET_VOTE]));
+		const store = memoryStore({ [account]: [STAPLE] });
+		let failures = 2;
+		const loaded = followerStoreOf({
+			...store,
+			historyHolds(held: string, blocksHash: string): Promise<boolean> {
+				failures--;
+				if (failures >= 0) {
+					return(Promise.reject(new Error('timeout exceeded when trying to connect')));
+				}
+				return(store.historyHolds(held, blocksHash));
+			}
+		});
+		const waits: number[] = [];
+		const clock = {
+			pause(milliseconds: number): Promise<void> {
+				waits.push(milliseconds);
+				return(Promise.resolve());
+			}
+		};
+
+		const summary = await sweep(running, retryingStore(loaded, { clock, stopped: new AbortController().signal }), 1);
+
+		expect(waits).toEqual([1000, 2000]);
+		expect(summary).toMatchObject({ compared: 1, matched: 1, skipped: 0 });
+		expect(await outcomes(running)).toEqual([{ kind: 'match', head: HEAD, staple: STAPLE }]);
+	});
+});
 
 describe('the first difference between two bodies', function() {
 	test('is named by its path', function() {

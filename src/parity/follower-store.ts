@@ -163,15 +163,30 @@ export function heldBeforeOf(layout: RangeLayout | undefined, peers: readonly Pe
 	return(new Date(furthest));
 }
 
+/*
+ * The sessions the tools hold at most. The cluster serves the node and the
+ * offline ledger of the shadow votes too, so the tools take few, and the
+ * walks that keep several reads in flight queue for them: a read that waits
+ * past the connection timeout, or runs past the statement timeout, is the
+ * cluster's load, which the tools wait out (src/parity/transient-store.ts).
+ */
+const FOLLOWER_POOL_CONNECTIONS = 4;
+
+/*
+ * Every account with a chain is read a thousand at a time, a page a
+ * statement; beside the shadow votes' replay, a page ran past the pool's
+ * 30 s, so the pages get minutes of their own.
+ */
+const CHAIN_ACCOUNTS_STATEMENT_MILLISECONDS = 300_000;
+
 /**
  * A pool whose sessions cannot write: the follower's node owns its
- * database, and the parity tools only read it. One connection serves the
- * tools, which query one at a time.
+ * database, and the parity tools only read it.
  */
 export function readOnlyPool(connectionString: string): pg.Pool {
 	const pool = new pg.Pool({
 		connectionString,
-		max: 1,
+		max: FOLLOWER_POOL_CONNECTIONS,
 		options: '-c default_transaction_read_only=on',
 		statement_timeout: 30_000,
 		connectionTimeoutMillis: 10_000
@@ -457,6 +472,23 @@ async function knownAccounts(pool: pg.Pool, query: string, rowID: string, count:
 	return(result.rows.map(knownAccountOf));
 }
 
+/** As knownAccounts, its statement given a timeout of its own. */
+async function knownAccountsWithin(pool: pg.Pool, milliseconds: number, query: string, rowID: string, count: number): Promise<readonly KnownAccount[]> {
+	const client = await pool.connect();
+	try {
+		await client.query('BEGIN READ ONLY');
+		try {
+			await client.query(`SET LOCAL statement_timeout = ${String(milliseconds)}`);
+			const result = await client.query<{ id: string; public_key: string; newest_staple: Date | null }>(query, [rowID, count]);
+			return(result.rows.map(knownAccountOf));
+		} finally {
+			await client.query('ROLLBACK');
+		}
+	} finally {
+		client.release();
+	}
+}
+
 /** Reads every query in one view of the database, so that no commit lands between them. */
 async function inOneView<Result>(pool: pg.Pool, read: (client: pg.PoolClient) => Promise<Result>): Promise<Result> {
 	const client = await pool.connect();
@@ -510,7 +542,7 @@ export function openFollowerStore(connectionString: string): FollowerStore {
 		async chainAccounts(): Promise<readonly KnownAccount[]> {
 			const accounts: KnownAccount[] = [];
 			for (;;) {
-				const page = await knownAccounts(pool, CHAIN_ACCOUNTS_AFTER, accounts.at(-1)?.rowID ?? '0', CHAIN_ACCOUNTS_PAGE);
+				const page = await knownAccountsWithin(pool, CHAIN_ACCOUNTS_STATEMENT_MILLISECONDS, CHAIN_ACCOUNTS_AFTER, accounts.at(-1)?.rowID ?? '0', CHAIN_ACCOUNTS_PAGE);
 				accounts.push(...page);
 				if (page.length < CHAIN_ACCOUNTS_PAGE) {
 					return(accounts);
