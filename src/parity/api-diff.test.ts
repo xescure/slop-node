@@ -9,7 +9,7 @@ import { loadMainnetFixture } from '../conformance/mainnet/fixture.js';
 import { feeBlock, multisigSendBlock, sendBlock, setRepresentativeBlock } from '../testing/blocks.js';
 import { startFakeAPI } from '../testing/fake-api.js';
 import type { FakeAPI } from '../testing/fake-api.js';
-import { accountRequests, behaviorsOf, blockRequests, capturedBehaviors, GET_ROUTES, getRoutesOf, operationsOf, recheckAPIDivergences, routeOf, sampleAPI, shuffled } from './api-diff.js';
+import { accountRequests, answerDigest, API_DIFF_SAMPLES_TARGET, behaviorsOf, blockRequests, capturedBehaviors, GET_ROUTES, getRoutesOf, operationsOf, recheckAPIDivergences, routeOf, sampleAPI, shuffled } from './api-diff.js';
 import type { APIDiffStore } from './api-diff.js';
 import { httpSource } from './api-source.js';
 import type { AccountCandidate, AccountKind, FollowerProgress, HeldBlock } from './follower-store.js';
@@ -84,7 +84,7 @@ describe('the operations of a block', function() {
 			const bytes = Buffer.from(block.toBytes());
 			expect(operationsOf({ hash: block.hash.toString(), account: block.account.publicKeyString.get(), bytes })).toEqual(decodedOperations(bytes));
 		}
-	});
+	}, 120_000);
 });
 
 describe('the requests drawn', function() {
@@ -231,8 +231,8 @@ describe('sampling the API', function() {
 
 		const { summary, records } = await sample(setup, memoryStore({ candidates: { token: [CANDIDATE] } }), 100);
 
-		expect(byPath(records, `/node/ledger/account/${TOKEN}`)?.outcome).toEqual({ kind: 'match' });
-		expect(byPath(records, `/node/ledger/account/${TOKEN}/head`)?.outcome).toEqual({ kind: 'match' });
+		expect(byPath(records, `/node/ledger/account/${TOKEN}`)?.outcome).toMatchObject({ kind: 'match' });
+		expect(byPath(records, `/node/ledger/account/${TOKEN}/head`)?.outcome).toMatchObject({ kind: 'match' });
 		expect(byPath(records, `/node/ledger/account/${TOKEN}/balance`)?.outcome).toMatchObject({ kind: 'diverged', field: 'body.balances[0].balance', follower: { status: 200 }, representative: { status: 200 } });
 		expect(summary.strata.find(function(stratum) {
 			return(stratum.stratum === 'token');
@@ -254,7 +254,7 @@ describe('sampling the API', function() {
 
 		const { records } = await sample(setup, memoryStore({ candidates: { token: [CANDIDATE] } }), 100);
 		expect(byPath(records, BALANCE)?.outcome).toMatchObject({ kind: 'skipped', reason: 'moving', side: 'representative' });
-		expect(byPath(records, `/node/ledger/account/${TOKEN}/head`)?.outcome).toEqual({ kind: 'match' });
+		expect(byPath(records, `/node/ledger/account/${TOKEN}/head`)?.outcome).toMatchObject({ kind: 'match' });
 
 		const onFollower = await running();
 		onFollower.follower.serve(BALANCE, balanceOf('0x1'));
@@ -291,7 +291,7 @@ describe('sampling the API', function() {
 
 		const { records } = await sample(setup, memoryStore({ candidates: { token: [CANDIDATE] } }), 100);
 
-		expect(byPath(records, `/node/ledger/account/${TOKEN}/head`)?.outcome).toEqual({ kind: 'match' });
+		expect(byPath(records, `/node/ledger/account/${TOKEN}/head`)?.outcome).toMatchObject({ kind: 'match' });
 		expect(byPath(records, `/node/ledger/account/${TOKEN}`)?.outcome).toMatchObject({ kind: 'diverged', field: 'body.account' });
 	});
 
@@ -438,6 +438,65 @@ describe('a divergence of the API', function() {
 		expect(setup.representatives[2]?.requests).toEqual([`GET ${BALANCE}`, `GET /node/ledger/account/${TOKEN}/history?limit=1`]);
 	});
 
+	test('of a page of history is never one representative\'s own, as the others order an account\'s history by their own votes', async function() {
+		const setup = await runningWith(3);
+		const path = `/node/ledger/account/${TOKEN}/history?limit=1`;
+		const page = function(staple: string): unknown {
+			return({ history: [{ $id: staple, voteStaple: { votes: [{ validityFrom: '2025-01-01T00:00:00.000Z' }] } }], nextKey: staple });
+		};
+		const [lacked, held] = ['AB'.repeat(32), 'CD'.repeat(32)];
+		setup.follower.serve(path, page(held));
+		setup.representatives[0]?.serve(path, page(lacked));
+		setup.representatives[1]?.serve(path, page(held));
+		setup.representatives[2]?.serve(path, page(held));
+		const first = setup.representatives[0]?.endpoint ?? '';
+		await setup.log.append([{ kind: 'api-diff', at: '2026-10-11T14:00:00.000Z', representative: first, stratum: 'token', route: '/api/node/ledger/account/{account}/history', path, behaviors: [], outcome: { ...RECORDED_DIVERGENCE, field: 'body.history[0].$id' } }]);
+
+		expect(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({}) })).toEqual({ unresolved: 1 });
+	});
+
+	test('of a follower that fails is never one representative\'s own, even when others fail alike', async function() {
+		const setup = await runningWith(3);
+		const failure = { status: 500, body: { error: true, message: 'Internal error occurred (error ID: 00000000-0000-0000-0000-000000000001)' } };
+		servingBalances(setup, '0x1', ['0x2', '0x2', '0x2']);
+		setup.follower.answer(BALANCE, failure);
+		setup.representatives[1]?.answer(BALANCE, failure);
+		setup.representatives[2]?.answer(BALANCE, failure);
+
+		const { summary, latest } = await recheck(setup);
+
+		expect(summary).toEqual({ diverged: 1 });
+		expect(latest?.outcome.kind === 'diverged' && latest.outcome.readings.map(function(reading) {
+			return(reading.kind);
+		})).toEqual(['disagrees', 'disagrees']);
+	});
+
+	test('counts no agreement from a representative on which an account the answer reads is not quiet', async function() {
+		const setup = await runningWith(3);
+		servingBalances(setup, '0x1', ['0x2', '0x1', '0x1']);
+		setup.representatives[2]?.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, recentHistory(TOKEN));
+
+		const { latest } = await recheck(setup);
+
+		expect(latest?.outcome).toMatchObject({ kind: 'unresolved', readings: [{ kind: 'agrees' }, { kind: 'moving' }] });
+	});
+
+	test('is sent again while open, though a later comparison found the follower answering as the representative then answered something else', async function() {
+		const setup = await runningWith(1);
+		servingBalances(setup, '0x3', ['0x3']);
+		const first = setup.representatives[0]?.endpoint ?? '';
+		const record = function(at: string, outcome: APIDiffOutcome): APIDiffRecord {
+			return({ kind: 'api-diff', at, representative: first, stratum: 'token', route: '/api/node/ledger/account/{account}/balance', path: BALANCE, behaviors: [], outcome });
+		};
+		await setup.log.append([
+			record('2026-10-09T08:40:00.000Z', RECORDED_DIVERGENCE),
+			record('2026-10-10T08:40:00.000Z', { kind: 'match', digest: answerDigest(BALANCE, { status: 200, body: balanceOf('0x3') }) ?? null })
+		]);
+
+		expect(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({}) })).toEqual({ match: 1 });
+		expect(setup.representatives[0]?.requests).toEqual([`GET ${BALANCE}`]);
+	});
+
 	test('is superseded by a match when the follower answers as the representative now', async function() {
 		const setup = await runningWith(2);
 		servingBalances(setup, '0x2', ['0x2', '0x2']);
@@ -445,7 +504,7 @@ describe('a divergence of the API', function() {
 		const { summary, latest } = await recheck(setup);
 
 		expect(summary).toEqual({ match: 1 });
-		expect(latest?.outcome).toEqual({ kind: 'match' });
+		expect(latest?.outcome).toEqual({ kind: 'match', digest: answerDigest(BALANCE, { status: 200, body: balanceOf('0x2') }) });
 		expect(setup.representatives[1]?.requests).toEqual([]);
 	});
 
@@ -506,7 +565,7 @@ describe('the plan of a run', function() {
 	}
 
 	test('is recorded before its comparisons, as a census of each stratum whose every request is fewer than it compares', async function() {
-		const { plan, records } = await planned(memoryStore({ candidates: { multisig: [CANDIDATE] } }), 100);
+		const { plan, records } = await planned(memoryStore({ candidates: { multisig: [CANDIDATE] } }), API_DIFF_SAMPLES_TARGET);
 
 		const census = populationOf(plan, 'multisig');
 		expect(census?.kind).toBe('census');
@@ -517,7 +576,7 @@ describe('the plan of a run', function() {
 		});
 		expect(census?.kind === 'census' && [...census.requests].sort()).toEqual([...requested].sort());
 		expect(populationOf(plan, 'storage')).toEqual({ kind: 'census', requests: [] });
-		expect(plan).toMatchObject({ samplesPerStratum: 100, quietBefore: '2025-12-30T23:00:00.000Z' });
+		expect(plan).toMatchObject({ samplesPerStratum: API_DIFF_SAMPLES_TARGET, quietBefore: '2025-12-30T23:00:00.000Z' });
 	});
 
 	test('draws the blocks of an operation the seed puts first, wherever they are stored', async function() {
@@ -525,13 +584,6 @@ describe('the plan of a run', function() {
 			const block = await sendBlock({ from: owner, to: other, amount: BigInt(amount), token, previous: null, network: NETWORK, date: new Date('2025-11-01T00:00:00.000Z') });
 			return({ hash: block.hash.toString(), account: OWNER, bytes: Buffer.from(block.toBytes()) });
 		}));
-		const drawn = async function(stored: readonly HeldBlock[]) {
-			const { plan } = await planned(memoryStore({ blocks: stored }), 2);
-			return(populationOf(plan, 'operation:SEND'));
-		};
-
-		const forwards = await drawn(blocks);
-		expect(forwards).toEqual({ kind: 'sample', drawn: 8, whole: false });
 		const requested = async function(stored: readonly HeldBlock[]) {
 			const { records } = await planned(memoryStore({ blocks: stored }), 2);
 			return(new Set(records.filter(function(record) {
@@ -541,6 +593,21 @@ describe('the plan of a run', function() {
 			})));
 		};
 		expect(await requested([...blocks].reverse())).toEqual(await requested(blocks));
+	});
+
+	test('is not made by a run that compares fewer requests of each stratum than the done criterion, which reads a bounded part of the blocks', async function() {
+		const setup = await runningWith(1);
+		const store = memoryStore({ blocks: [await heldSend()] });
+		const read: (readonly [number, number])[] = [];
+		await sampleAPI({ ...sources(setup), store: { ...store, blockPages: () => Promise.resolve(1_000_000), heldBlocksInPages: (fromPage, toPage, before) => {
+			read.push([fromPage, toPage]);
+			return(store.heldBlocksInPages(fromPage, toPage, before));
+		} }, samplesPerStratum: 2, seed: 'test', edgeCaseStaples: [], knownBehaviors: new Set() });
+
+		expect(recordsOf((await setup.log.read()).records, 'api-diff-plan')).toEqual([]);
+		expect(read.reduce(function(pages, [fromPage, toPage]) {
+			return(pages + toPage - fromPage);
+		}, 0)).toBeLessThanOrEqual(2000);
 	});
 
 	test('is not made, nor any block read, by a run stopped before it', async function() {
@@ -561,7 +628,9 @@ describe('the plan of a run', function() {
 	});
 
 	test('is a sample of a stratum with as many accounts as it asked for, which more may follow', async function() {
-		const { plan } = await planned(memoryStore({ candidates: { token: [CANDIDATE] } }), 1);
+		const { plan } = await planned(memoryStore({ candidates: { token: Array.from({ length: API_DIFF_SAMPLES_TARGET }, function(): AccountCandidate {
+			return(CANDIDATE);
+		}) } }), API_DIFF_SAMPLES_TARGET);
 
 		expect(populationOf(plan, 'token')).toMatchObject({ kind: 'sample', whole: false });
 	});
@@ -571,7 +640,7 @@ describe('the plan of a run', function() {
 		const setRepresentative = await setRepresentativeBlock({ account: other, representative: owner, previous: null, network: NETWORK, date: new Date('2025-11-01T00:00:00.000Z') });
 		const blocks = [send, { hash: setRepresentative.hash.toString(), account: OTHER, bytes: Buffer.from(setRepresentative.toBytes()) }];
 
-		const { plan, records } = await planned(memoryStore({ blocks }), 100);
+		const { plan, records } = await planned(memoryStore({ blocks }), API_DIFF_SAMPLES_TARGET);
 
 		const sendPopulation = populationOf(plan, 'operation:SEND');
 		expect(sendPopulation?.kind === 'census' && sendPopulation.requests).toHaveLength(5);

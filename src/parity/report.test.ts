@@ -7,6 +7,7 @@ import { httpSource } from './api-source.js';
 import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-store.js';
 import { ParityLog } from './log.js';
 import type { APIDiffOutcome, APIDiffPlanRecord, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, ShadowRunRecord, ShadowWindowTally, SweepBatchRecord, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
+import { answerDigest } from './api-diff.js';
 import { parityReportOf, runParity, neverComparedCandidatesOf } from './report.js';
 import type { SweepPosition } from './report.js';
 import { sweepCursorPaths } from './sweep.js';
@@ -65,8 +66,19 @@ function diverged(account: string, field: string, kind: 'diverged' | 'representa
 
 const KNOWN_BEHAVIOR = '/api/node/ledger/account/{account} 200 error=-';
 
+/** The representative's answer an API divergence was about, and the follower's. */
+const REPRESENTATIVE_INFO = { status: 200, body: { info: { name: 'KTA' } } };
+
+const FOLLOWER_INFO = { status: 200, body: { info: { name: '' } } };
+
 /** An API answer apart, with no other representative read again. */
-const DIVERGED_INFO = { kind: 'diverged', field: 'body.info', follower: {}, representative: {}, readings: [] } as const;
+const DIVERGED_INFO = { kind: 'diverged', field: 'body.info.name', follower: FOLLOWER_INFO, representative: REPRESENTATIVE_INFO, readings: [] } as const;
+
+/** A comparison of an account's state that found the follower answering what the representative answered in DIVERGED_INFO. */
+const MATCHED_INFO: APIDiffOutcome = { kind: 'match', digest: answerDigest(`/node/ledger/account/${ACCOUNT}`, REPRESENTATIVE_INFO) ?? null };
+
+/** A comparison that found both answering alike, on a state no divergence here is about. */
+const MATCHED: APIDiffOutcome = { kind: 'match', digest: 'EF'.repeat(32) };
 
 function apiDiff(at: string, stratum: Stratum, path: string, outcome: APIDiffOutcome, behaviors: readonly string[] = [KNOWN_BEHAVIOR]): APIDiffRecord {
 	return({ kind: 'api-diff', at, representative: REPRESENTATIVE, stratum, route: '/api/node/ledger/account/{account}', path, behaviors, outcome });
@@ -171,10 +183,10 @@ describe('the parity report', function() {
 		const path = `/node/ledger/account/${ACCOUNT}`;
 		const signal = report([
 			apiDiff('2026-10-09T01:00:00.000Z', 'token', path, DIVERGED_INFO),
-			apiDiff('2026-10-09T01:00:01.000Z', 'token', path, { kind: 'match' }),
-			apiDiff('2026-10-09T01:00:02.000Z', 'token', `${path}/head`, { kind: 'match' }),
+			apiDiff('2026-10-09T01:00:01.000Z', 'token', path, MATCHED_INFO),
+			apiDiff('2026-10-09T01:00:02.000Z', 'token', `${path}/head`, MATCHED),
 			apiDiff('2026-10-09T01:00:03.000Z', 'storage', path, { kind: 'skipped', reason: 'moving', side: 'representative', detail: 'recent' }),
-			apiDiff('2026-10-09T01:00:04.000Z', 'operation:SEND', '/vote/AB', { kind: 'match' }, ['/api/vote/{blockhash} 200 error=-', 'operation=SEND'])
+			apiDiff('2026-10-09T01:00:04.000Z', 'operation:SEND', '/vote/AB', MATCHED, ['/api/vote/{blockhash} 200 error=-', 'operation=SEND'])
 		]).signals.apiDiff;
 		expect(signal).toMatchObject({
 			verdict: 'pass',
@@ -193,38 +205,48 @@ describe('the parity report', function() {
 	test('fails the API diff while a request\'s latest comparison diverges, naming it', function() {
 		const path = `/node/ledger/account/${ACCOUNT}`;
 		const signal = report([
-			apiDiff('2026-10-09T01:00:00.000Z', 'token', path, { kind: 'match' }),
+			apiDiff('2026-10-09T01:00:00.000Z', 'token', path, MATCHED),
 			apiDiff('2026-10-09T01:00:01.000Z', 'token', path, DIVERGED_INFO)
 		]).signals.apiDiff;
-		expect(signal).toMatchObject({ verdict: 'fail', firstDivergence: { at: '2026-10-09T01:00:01.000Z', representative: REPRESENTATIVE, stratum: 'token', path, field: 'body.info' } });
+		expect(signal).toMatchObject({ verdict: 'fail', firstDivergence: { at: '2026-10-09T01:00:01.000Z', representative: REPRESENTATIVE, stratum: 'token', path, field: 'body.info.name' } });
 	});
 
-	test('supersedes a divergence by a later comparison of the identical request, listing both rather than dropping it', function() {
-		const path = `/node/ledger/account/${ACCOUNT}/history?limit=1`;
-		const divergence = apiDiff('2026-10-09T08:40:25.000Z', 'token', path, { kind: 'diverged', field: 'body.history[0].$id', follower: {}, representative: {}, readings: [] });
-		const later = apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'match' });
+	test('supersedes a divergence by a later comparison of the identical request that finds the follower answering as the representative then did, listing both rather than dropping it', function() {
+		const path = `/node/ledger/account/${ACCOUNT}`;
+		const divergence = apiDiff('2026-10-09T08:40:25.000Z', 'token', path, DIVERGED_INFO);
+		const later = apiDiff('2026-10-11T15:00:00.000Z', 'token', path, MATCHED_INFO);
 		const signal = report([divergence, apiDiff('2026-10-10T00:00:00.000Z', 'token', path, { kind: 'skipped', reason: 'moving', side: 'representative', detail: 'recent' }), later]).signals.apiDiff;
-		expect(signal).toMatchObject({ verdict: 'pass', counts: { diverged: 0, superseded: 1, divergenceRecords: 1 }, superseded: [{ divergence, by: later }], firstDivergence: null });
+		expect(signal).toMatchObject({ verdict: 'pass', counts: { diverged: 0, superseded: 1, divergenceRecords: 1 }, superseded: [{ divergence, by: later }], retestedOnAnotherState: [], firstDivergence: null });
+	});
+
+	test('keeps a divergence failing that a later comparison retested only on a state either side reached since', function() {
+		const path = `/node/ledger/account/${ACCOUNT}`;
+		const divergence = apiDiff('2026-10-09T08:40:25.000Z', 'token', path, DIVERGED_INFO);
+		const later = apiDiff('2026-10-11T15:00:00.000Z', 'token', path, MATCHED);
+		const signal = report([divergence, later]).signals.apiDiff;
+		expect(signal).toMatchObject({ verdict: 'fail', counts: { diverged: 1, superseded: 0 }, superseded: [], retestedOnAnotherState: [{ divergence, by: later }], firstDivergence: { at: divergence.at, path } });
+		expect(report([divergence, apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'match', digest: null })]).signals.apiDiff.verdict).toBe('fail');
 	});
 
 	test('fails the API diff on an unresolved request, but counts one representative\'s own difference apart without failing', function() {
 		const path = `/node/ledger/account/${ACCOUNT}`;
-		const disputed = { field: 'body.info', follower: {}, representative: {}, readings: [] };
+		const disputed = { field: 'body.info', follower: FOLLOWER_INFO, representative: REPRESENTATIVE_INFO, readings: [] };
 		const local = report([apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'representative-local', ...disputed })]).signals.apiDiff;
 		expect(local).toMatchObject({ verdict: 'pass', counts: { requestsCompared: 1, matched: 0, diverged: 0, representativeLocal: 1 }, representativeLocal: { [REPRESENTATIVE]: 1 } });
 		const unresolved = report([apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'unresolved', ...disputed })]).signals.apiDiff;
 		expect(unresolved).toMatchObject({ verdict: 'fail', counts: { diverged: 1, unresolved: 1 }, firstDivergence: { path, field: 'body.info' } });
 	});
 
-	test('states a census of a stratum whose every planned request was compared, and covers a stratum by 300 requests or its census', function() {
+	test('states a census of a stratum whose every planned request was compared, which a later plan drawing a sample of it does not end, and covers a stratum by 300 requests or its census', function() {
 		const census = [`/node/ledger/account/${ACCOUNT}`, `/node/ledger/account/${ACCOUNT}/head`];
 		const plan: APIDiffPlanRecord = { kind: 'api-diff-plan', at: '2026-10-11T14:00:00.000Z', quietBefore: '2026-10-11T13:00:00.000Z', samplesPerStratum: 300, strata: [{ stratum: 'multisig', population: { kind: 'census', requests: census } }, { stratum: 'storage', population: { kind: 'census', requests: [`/node/ledger/account/${OTHER_ACCOUNT}`] } }] };
 		const tokens = Array.from({ length: 300 }, function(_, index) {
-			return(apiDiff('2026-10-11T14:01:00.000Z', 'token', `/node/ledger/account/${ACCOUNT}/history/start/${index.toString(16).padStart(64, '0')}`, { kind: 'match' }));
+			return(apiDiff('2026-10-11T14:01:00.000Z', 'token', `/node/ledger/account/${ACCOUNT}/history/start/${index.toString(16).padStart(64, '0')}`, MATCHED));
 		});
+		const sampled: APIDiffPlanRecord = { ...plan, at: '2026-10-11T16:00:00.000Z', strata: [{ stratum: 'multisig', population: { kind: 'sample', drawn: 2, whole: false } }, { stratum: 'operation:TOKEN_ADMIN_MODIFY_BALANCE', population: { kind: 'census', requests: [] } }] };
 		const signal = report([plan, ...census.map(function(path) {
-			return(apiDiff('2026-10-11T14:02:00.000Z', 'multisig', path, { kind: 'match' }));
-		}), ...tokens]).signals.apiDiff;
+			return(apiDiff('2026-10-11T14:02:00.000Z', 'multisig', path, MATCHED));
+		}), ...tokens, sampled]).signals.apiDiff;
 		const of = function(stratum: Stratum) {
 			return(signal.strata.find(function(entry) {
 				return(entry.stratum === stratum);
@@ -234,6 +256,7 @@ describe('the parity report', function() {
 		expect(of('storage')).toMatchObject({ requestsCompared: 0, census: { requests: 1, compared: 0 }, covered: false });
 		expect(of('token')).toMatchObject({ requestsCompared: 300, census: null, covered: true, confidence: { kind: 'rule-of-three', samples: 300, divergenceRateBelow: 0.01 } });
 		expect(of('permissions')).toMatchObject({ census: null, covered: false });
+		expect(of('operation:TOKEN_ADMIN_MODIFY_BALANCE')).toMatchObject({ census: { requests: 0, compared: 0 }, covered: true, confidence: { kind: 'empty-population' } });
 		expect(signal).toMatchObject({ samplesTarget: 300, everyStratumCovered: false });
 	});
 

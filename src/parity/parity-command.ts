@@ -49,7 +49,7 @@ export const DEFAULT_SHADOW_BATCH = 500;
 /** A database of the follower's cluster, as Postgres names one without quotes. */
 const DATABASE_NAME = /^[a-z_][a-z0-9_]{0,62}$/;
 
-/** The fresh API diff sample of a report: a couple of requests of each stratum, a minute or so at the representatives' pace. */
+/** The fresh API diff sample of a report: a couple of requests of each stratum, drawn from a bounded part of the blocks, a minute or so in all. */
 export const DEFAULT_REPORT_API_SAMPLES = 2;
 
 const MAX_GAP_MILLISECONDS = 600_000;

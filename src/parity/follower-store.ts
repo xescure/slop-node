@@ -304,7 +304,13 @@ const HELD_BLOCKS = `
 
 const BLOCK_PAGES = 'SELECT (pg_relation_size(\'blocks\') / current_setting(\'block_size\')::bigint)::text AS pages';
 
-/* A range of tuple IDs is read in the order the pages are stored, as a TID range scan. */
+/*
+ * A range of tuple IDs is read in the order the pages are stored, as a TID
+ * range scan. Each range is read in a view of its own, so a block whose
+ * row an update moves from a page not read yet to one read already is
+ * missed; only the blocks of staples before the moment are read, and those
+ * are no longer written to.
+ */
 const HELD_BLOCKS_IN_PAGES = `
 	SELECT b.hash, b.bytes, a.public_key FROM blocks b
 	JOIN staples s ON s.blocks_hash = b.staple

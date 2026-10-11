@@ -237,7 +237,8 @@ export type APIDiffReading =
 
 /** The comparison of one sampled request's answers. */
 export type APIDiffOutcome =
-	| { readonly kind: 'match' }
+	/** The digest of the answer both gave once normalized, or null in a record written before matches kept one. */
+	| { readonly kind: 'match'; readonly digest: string | null }
 	/**
 	 * The field is the path of the first that differs once both are
 	 * normalized; the answers are kept as served, with every other
@@ -261,9 +262,15 @@ export type APIDiffRecord = {
 	readonly outcome: APIDiffOutcome;
 };
 
-/** The requests of a stratum an API diff run drew, out of every request the follower's data forms for it. */
+/**
+ * The requests of a stratum an API diff run drew, out of every request the
+ * sampler forms from the follower's data: from the accounts of the kind
+ * quiet before the margin, each naming at most three tokens, certificates,
+ * entities and blocks of its chain, or from every block within reach
+ * carrying the operation.
+ */
 export type StratumPopulation =
-	/** Every request the data forms, fewer than the run compares, so the run sends each of them. */
+	/** Every such request, fewer than the run compares, so the run sends each of them. */
 	| { readonly kind: 'census'; readonly requests: readonly string[] }
 	/** So many requests drawn, every one the data forms when whole. */
 	| { readonly kind: 'sample'; readonly drawn: number; readonly whole: boolean };
@@ -850,8 +857,13 @@ function apiDiffOutcomeOf(value: unknown): APIDiffOutcome | undefined {
 		return(undefined);
 	}
 	switch (value['kind']) {
-		case 'match':
-			return({ kind: 'match' });
+		case 'match': {
+			const digest = value['digest'] ?? null;
+			if (!isStringOrNull(digest)) {
+				return(undefined);
+			}
+			return({ kind: 'match', digest });
+		}
 		case 'diverged':
 		case 'representative-local':
 		case 'unresolved': {

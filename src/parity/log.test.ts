@@ -92,7 +92,7 @@ const SHADOW_RUN: ShadowRunRecord = {
 	cost: { seconds: 61.5, staples: 4500, shadowVotes: 450, maxResidentMiB: 812 }
 };
 
-const API_DIFF: APIDiffRecord = { kind: 'api-diff', at: CHECKSUM.at, representative: REPRESENTATIVE, stratum: 'token', route: '/api/node/ledger/account/{account}', path: `/node/ledger/account/${ACCOUNT}`, behaviors: ['account=TOKEN'], outcome: { kind: 'match' } };
+const API_DIFF: APIDiffRecord = { kind: 'api-diff', at: CHECKSUM.at, representative: REPRESENTATIVE, stratum: 'token', route: '/api/node/ledger/account/{account}', path: `/node/ledger/account/${ACCOUNT}`, behaviors: ['account=TOKEN'], outcome: { kind: 'match', digest: 'AB'.repeat(32) } };
 
 const API_DIFFS: readonly APIDiffRecord[] = [
 	API_DIFF,
@@ -173,6 +173,13 @@ describe('the parity log', function() {
 		await appendFile(log.path, `${JSON.stringify({ ...API_DIFF, outcome })}\n`);
 
 		expect(await log.read()).toEqual({ records: [{ ...API_DIFF, outcome: { ...outcome, readings: [] } }], unreadableLines: 0 });
+	});
+
+	test('reads an API match recorded before matches kept a digest as one with none', async function() {
+		const log = await scratchLog();
+		await appendFile(log.path, `${JSON.stringify({ ...API_DIFF, outcome: { kind: 'match' } })}\n`);
+
+		expect(await log.read()).toEqual({ records: [{ ...API_DIFF, outcome: { kind: 'match', digest: null } }], unreadableLines: 0 });
 	});
 
 	test('counts a line cut short, or one it does not know, apart from the records', async function() {

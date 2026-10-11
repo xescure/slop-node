@@ -1,5 +1,6 @@
 import { assertNever } from '../util/assert-never.js';
-import { sampleAPI } from './api-diff.js';
+import { API_DIFF_SAMPLES_TARGET, keyOf, requestStandings, sampleAPI, standingCensuses } from './api-diff.js';
+import type { RequestStanding, SupersededDivergence } from './api-diff.js';
 import type { APIDiffSetup } from './api-diff.js';
 import type { APISource } from './api-source.js';
 import { checksumsEqual, compareChecksums, crossCheckChecksum } from './checksum.js';
@@ -28,6 +29,8 @@ export type ConfidenceBound =
 	| { readonly kind: 'not-sampled' }
 	/** Every request of the population was compared, and none diverged. */
 	| { readonly kind: 'census'; readonly requests: number }
+	/** The population holds no request at all, so nothing live was compared and the stratum needs offline evidence. */
+	| { readonly kind: 'empty-population' }
 	| { readonly kind: 'none'; readonly why: string };
 
 /** The first divergence a signal holds, with the staple and account to start from where it names them. */
@@ -206,7 +209,7 @@ export type ShadowVotesSignal = {
 	readonly firstDivergence: { readonly at: string; readonly staple: string; readonly code: string; readonly why: string } | null;
 };
 
-/** A stratum the latest plan made a census of: its every request, and how many of them were compared. */
+/** The census a stratum stands on: its every request, and how many of them were compared. */
 export type APIDiffCensus = {
 	readonly requests: number;
 	readonly compared: number;
@@ -217,7 +220,7 @@ export type APIDiffCensus = {
 export type APIDiffStratum = {
 	readonly stratum: Stratum;
 	readonly requestsCompared: number;
-	/** Requests the follower diverges on, or that the representatives split on. */
+	/** Requests with a divergence no later comparison settled: the follower's, or one the representatives split on. */
 	readonly diverged: number;
 	/** Requests one representative alone answered apart from the follower and the others. */
 	readonly representativeLocal: number;
@@ -227,11 +230,7 @@ export type APIDiffStratum = {
 	readonly confidence: ConfidenceBound;
 };
 
-/** A divergence a later comparison of the identical request stands in place of. */
-export type SupersededDivergence = {
-	readonly divergence: APIDiffRecord;
-	readonly by: APIDiffRecord;
-};
+export type { SupersededDivergence };
 
 export type APIDiffSignal = {
 	readonly verdict: Verdict;
@@ -248,7 +247,7 @@ export type APIDiffSignal = {
 		readonly representativeLocal: number;
 		/** Every divergence recorded, each to be explained. */
 		readonly divergenceRecords: number;
-		/** Divergences recorded whose request a later comparison answered alike, or found one representative's own. */
+		/** Divergences a later comparison of the identical request settled, the follower answering as the representative then did. */
 		readonly superseded: number;
 	};
 	/** Requests compared per stratum for its rate of divergence to be below 1% at 95%, by the rule of three. */
@@ -257,6 +256,8 @@ export type APIDiffSignal = {
 	/** The requests whose latest comparison found one representative alone apart, by that representative. */
 	readonly representativeLocal: Readonly<Record<string, number>>;
 	readonly superseded: readonly SupersededDivergence[];
+	/** Open divergences whose request a later comparison answered on another state, which settles nothing; each with that comparison. */
+	readonly retestedOnAnotherState: readonly { readonly divergence: APIDiffRecord; readonly by: APIDiffRecord }[];
 	/** Answers of a kind the capture set holds none of, each with a request that drew it, to be captured. */
 	readonly newBehaviors: readonly { readonly behavior: string; readonly path: string }[];
 	readonly firstDivergence: { readonly at: string; readonly representative: string; readonly stratum: Stratum; readonly path: string; readonly field: string } | null;
@@ -276,9 +277,6 @@ export type ParityReport = {
 
 /** The 95% bound of the rule of three. */
 const RULE_OF_THREE = 3;
-
-/** The requests of a stratum the API diff compares for its rate of divergence to be below 1% at 95%. */
-export const API_DIFF_SAMPLES_TARGET = 300;
 
 function isoOrNull(moment: Date | undefined): string | null {
 	if (moment === undefined) {
@@ -791,94 +789,85 @@ function confidenceOf(compared: number, diverged: number, unit: string): Confide
 	return({ kind: 'rule-of-three', samples: compared, level: 0.95, divergenceRateBelow: RULE_OF_THREE / compared });
 }
 
-function followerDivergesOn(record: APIDiffRecord): boolean {
-	return(record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved');
-}
-
-function keyOf(record: APIDiffRecord): string {
-	return(`${record.stratum} ${record.path}`);
-}
-
-/** The census each stratum's latest plan made of it, if any, against the requests compared. */
-function censusOf(plans: readonly APIDiffPlanRecord[], stratum: Stratum, compared: ReadonlyMap<string, APIDiffRecord>): APIDiffCensus | null {
-	const plan = [...plans].reverse().find(function(record): boolean {
-		return(record.strata.some(function(planned): boolean {
-			return(planned.stratum === stratum);
-		}));
+function apiDiffStratumOf(stratum: Stratum, standings: readonly RequestStanding[], census: { readonly plan: APIDiffPlanRecord; readonly requests: readonly string[] } | undefined, compared: ReadonlySet<string>): APIDiffStratum {
+	const own = standings.filter(function({ latest }): boolean {
+		return(latest.stratum === stratum);
 	});
-	const population = plan?.strata.find(function(planned): boolean {
-		return(planned.stratum === stratum);
-	})?.population;
-	if (plan === undefined || population?.kind !== 'census') {
-		return(null);
-	}
-	return({
-		requests: population.requests.length,
-		compared: population.requests.filter(function(path): boolean {
-			return(compared.has(`${stratum} ${path}`));
-		}).length,
-		plannedAt: plan.at
-	});
-}
-
-function apiDiffStratumOf(stratum: Stratum, latest: readonly APIDiffRecord[], compared: ReadonlyMap<string, APIDiffRecord>, plans: readonly APIDiffPlanRecord[]): APIDiffStratum {
-	const own = latest.filter(function(record): boolean {
-		return(record.stratum === stratum);
-	});
-	const diverged = own.filter(followerDivergesOn).length;
-	const representativeLocal = own.filter(function(record): boolean {
-		return(record.outcome.kind === 'representative-local');
+	const diverged = own.filter(function({ open }): boolean {
+		return(open !== undefined);
 	}).length;
-	const census = censusOf(plans, stratum, compared);
-	const censusComplete = census !== null && census.compared === census.requests;
+	const representativeLocal = own.filter(function({ latest, open }): boolean {
+		return(open === undefined && latest.outcome.kind === 'representative-local');
+	}).length;
+	let standingCensus: APIDiffCensus | null = null;
+	if (census !== undefined) {
+		standingCensus = {
+			requests: census.requests.length,
+			compared: census.requests.filter(function(path): boolean {
+				return(compared.has(keyOf(stratum, path)));
+			}).length,
+			plannedAt: census.plan.at
+		};
+	}
+	const censusComplete = standingCensus !== null && standingCensus.compared === standingCensus.requests;
 	let confidence = confidenceOf(own.length, diverged, 'request');
 	if (censusComplete && diverged === 0) {
-		confidence = { kind: 'census', requests: census.requests };
+		confidence = { kind: 'census', requests: standingCensus?.requests ?? 0 };
+		if (standingCensus?.requests === 0) {
+			confidence = { kind: 'empty-population' };
+		}
 	}
-	return({ stratum, requestsCompared: own.length, diverged, representativeLocal, census, covered: censusComplete || own.length >= API_DIFF_SAMPLES_TARGET, confidence });
+	return({ stratum, requestsCompared: own.length, diverged, representativeLocal, census: standingCensus, covered: censusComplete || own.length >= API_DIFF_SAMPLES_TARGET, confidence });
 }
 
 /**
  * Each request is counted by its latest comparison, so a request drawn
  * again on a later run is one sample, and the rule of three bounds each
  * stratum's rate of divergence over its distinct requests. A divergence
- * whose identical request a later comparison answered alike, or found one
- * representative's own, no longer fails the signal, and is listed with that
- * comparison, so that it stays to be explained.
+ * fails until a later comparison of the identical request finds the
+ * follower answering as the representative answered then; one of a state
+ * either side reached since settles nothing. A settled divergence is
+ * listed with the comparison that settled it, so that it stays to be
+ * explained.
  */
 function apiDiffSignalOf(records: readonly APIDiffRecord[], plans: readonly APIDiffPlanRecord[], knownBehaviors: ReadonlySet<string>): APIDiffSignal {
-	const compared = new Map<string, APIDiffRecord>();
 	const attempted = new Map<string, APIDiffRecord>();
 	const newBehaviors = new Map<string, string>();
 	for (const record of records) {
-		const key = keyOf(record);
-		attempted.set(key, record);
+		attempted.set(keyOf(record.stratum, record.path), record);
 		if (record.outcome.kind === 'skipped') {
 			continue;
 		}
-		compared.set(key, record);
 		for (const behavior of record.behaviors) {
 			if (!knownBehaviors.has(behavior) && !newBehaviors.has(behavior)) {
 				newBehaviors.set(behavior, record.path);
 			}
 		}
 	}
-	const latest = [...compared.values()];
-	const diverging = latest.filter(followerDivergesOn);
-	const local = latest.filter(function(record): boolean {
-		return(record.outcome.kind === 'representative-local');
-	});
-	const representativeLocal: Record<string, number> = {};
-	for (const record of local) {
-		representativeLocal[record.representative] = (representativeLocal[record.representative] ?? 0) + 1;
-	}
-	const divergenceRecords = records.filter(followerDivergesOn);
-	const superseded = divergenceRecords.flatMap(function(divergence): SupersededDivergence[] {
-		const by = compared.get(keyOf(divergence));
-		if (by === undefined || followerDivergesOn(by)) {
+	const standingsByKey = requestStandings(records);
+	const standings = [...standingsByKey.values()];
+	const compared = new Set(standingsByKey.keys());
+	const open = standings.flatMap(function(standing): APIDiffRecord[] {
+		if (standing.open === undefined) {
 			return([]);
 		}
-		return([{ divergence, by }]);
+		return([standing.open]);
+	});
+	const local = standings.filter(function({ latest, open: divergence }): boolean {
+		return(divergence === undefined && latest.outcome.kind === 'representative-local');
+	});
+	const representativeLocal: Record<string, number> = {};
+	for (const { latest } of local) {
+		representativeLocal[latest.representative] = (representativeLocal[latest.representative] ?? 0) + 1;
+	}
+	const superseded = standings.flatMap(function(standing): readonly SupersededDivergence[] {
+		return(standing.superseded);
+	});
+	const retestedOnAnotherState = standings.flatMap(function(standing): { readonly divergence: APIDiffRecord; readonly by: APIDiffRecord }[] {
+		if (standing.open === undefined || standing.retested === undefined) {
+			return([]);
+		}
+		return([{ divergence: standing.open, by: standing.retested }]);
 	});
 	let skippedMoving = 0;
 	let unanswered = 0;
@@ -897,20 +886,23 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], plans: readonly APID
 				assertNever(record.outcome);
 		}
 	}
+	const censuses = standingCensuses(plans, compared);
 	const strata = STRATA.map(function(stratum): APIDiffStratum {
-		return(apiDiffStratumOf(stratum, latest, compared, plans));
+		return(apiDiffStratumOf(stratum, standings, censuses.get(stratum), compared));
 	});
 	const counts = {
-		requestsCompared: latest.length,
-		matched: latest.length - diverging.length - local.length,
-		diverged: diverging.length,
+		requestsCompared: standings.length,
+		matched: standings.length - open.length - local.length,
+		diverged: open.length,
 		skippedMoving,
 		unanswered,
-		unresolved: diverging.filter(function(record): boolean {
+		unresolved: open.filter(function(record): boolean {
 			return(record.outcome.kind === 'unresolved');
 		}).length,
 		representativeLocal: local.length,
-		divergenceRecords: divergenceRecords.length,
+		divergenceRecords: records.filter(function(record): boolean {
+			return(record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved');
+		}).length,
 		superseded: superseded.length
 	};
 	const behaviors = [...newBehaviors].map(function([behavior, path]) {
@@ -922,14 +914,17 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], plans: readonly APID
 			return(stratum.covered);
 		}),
 		representativeLocal,
-		superseded
+		superseded,
+		retestedOnAnotherState
 	};
-	const first = diverging[0];
+	const [first] = [...open].sort(function(left, right): number {
+		return(left.at.localeCompare(right.at));
+	});
 	if (first !== undefined && first.outcome.kind !== 'match' && first.outcome.kind !== 'skipped') {
 		return({ verdict: 'fail', strata, counts, ...coverage, newBehaviors: behaviors, firstDivergence: { at: first.at, representative: first.representative, stratum: first.stratum, path: first.path, field: first.outcome.field } });
 	}
 	let verdict: Verdict = 'not-comparable-yet';
-	if (latest.length > 0) {
+	if (standings.length > 0) {
 		verdict = 'pass';
 	}
 	return({ verdict, strata, counts, ...coverage, newBehaviors: behaviors, firstDivergence: null });
