@@ -30,11 +30,10 @@ export const BOOTSTRAP_MARGIN_MILLISECONDS: number = VOTE_SLOP_MILLISECONDS + PE
 export const BLOOM_CAPACITY = 1200;
 
 /**
- * A staple the filter names by mistake is one the peer leaves out
- * [Keeta TS] index.js:69686-69690. A pass loses one only when it then
- * concludes that it holds every staple up to a moment past it, which the
- * deep re-scans undo; at this rate a catch-up of a million staples expects
- * to lose a tenth of one.
+ * The rate a full filter's cells are sized for: that every cell of a staple
+ * it was not given is set. A staple the filter names by mistake is one the
+ * peer leaves out [Keeta TS] index.js:69686-69690; the filter names one at a
+ * higher rate in all (errorRateOf).
  */
 export const BLOOM_ERROR_RATE = 1e-7;
 
@@ -60,17 +59,31 @@ function hashesFor(named: number): number {
 	return(Math.max(1, Math.round(FILTER_BITS / named * Math.LN2)));
 }
 
-/** How likely a filter of FILTER_BITS naming that many staples is to name another by mistake. */
+/**
+ * How likely a filter of FILTER_BITS naming that many staples is to name
+ * another by mistake: that every cell of the staple is set, or that its
+ * cells are those of a staple the filter names. The client places a staple's
+ * cells by the low 32 bits of two hashes of its bytes
+ * [Keeta TS] index.js:26784-26786, 90743-90745, 90799-90809, 90820-90842, so
+ * a staple whose two hashes agree with a named staple's modulo the filter's
+ * size is named on every cell, which with FILTER_BITS cells happens once in
+ * FILTER_BITS squared for each staple named: about 7.4e-7 for a full filter,
+ * seven times what its cells are sized for.
+ */
 function errorRateOf(named: number): number {
 	const hashes = hashesFor(named);
-	return((1 - Math.exp(-hashes * named / FILTER_BITS)) ** hashes);
+	return((1 - Math.exp(-hashes * named / FILTER_BITS)) ** hashes + named / FILTER_BITS ** 2);
 }
 
 /**
  * The error rate a pass accepts for a conclusion that it holds every staple
- * up to a moment: that of one full filter, about BLOOM_ERROR_RATE. Filters
- * that name more are each less certain, so the conclusion rests on several,
- * each with a seed of its own, whose rates multiply.
+ * up to a moment: that of one full filter, about 8.4e-7. Filters that name
+ * more are each less certain, so the conclusion rests on several, each with
+ * a seed of its own, whose rates multiply. A pass that concludes on one
+ * filter leaves out a staple it lacks at about this rate, about one in a
+ * catch-up of a million staples; the deep re-scans read every staple again
+ * with filters of their own (src/node/bootstrap-pass.ts, bootstrapPeer), so
+ * a staple is lost only when both err, at about the square of it.
  */
 export const ACCEPTED_ERROR_RATE: number = errorRateOf(BLOOM_CAPACITY);
 

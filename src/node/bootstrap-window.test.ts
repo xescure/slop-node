@@ -103,14 +103,43 @@ describe('the staples a filter names', function() {
 		expect(rate).toBeLessThan(0.01);
 	});
 
-	test('name a full filter at the error rate it was made for', function() {
+	test('name a full filter at the rate a pass accepts: the rate its cells were made for, and the chance that a staple\'s cells are a named staple\'s', function() {
 		const named = new NamedStaples();
 		named.receive(staplesNamed('sent', BLOOM_CAPACITY));
+		const cells = filterOf(named).size;
 		expect(named.filter(1).errorRate).toBe(ACCEPTED_ERROR_RATE);
-		expect(ACCEPTED_ERROR_RATE / BLOOM_ERROR_RATE).toBeCloseTo(1, 1);
+		expect(ACCEPTED_ERROR_RATE - BLOOM_CAPACITY / cells ** 2).toBeCloseTo(BLOOM_ERROR_RATE, 9);
 		const fewer = new NamedStaples();
 		fewer.receive(staplesNamed('sent', BLOOM_CAPACITY / 2));
 		expect(fewer.filter(1).errorRate).toBeLessThan(ACCEPTED_ERROR_RATE);
+		expect(fewer.filter(1).errorRate).toBeGreaterThan(BLOOM_CAPACITY / 2 / cells ** 2);
+	});
+
+	/*
+	 * The client places a staple's cells by two 32-bit hashes of its bytes
+	 * [Keeta TS] index.js:90799-90809, so a filter names, on every cell, a
+	 * staple whose two hashes agree with a named staple's modulo its size. In
+	 * a filter of 53 cells, which one staple's 24 cells leave mostly clear,
+	 * such a staple turns up among some three thousand.
+	 */
+	test('are named by a filter that names a staple whose hashes agree with theirs modulo its size', function() {
+		const filter = new lib.Utils.Bloom.BloomFilter(53, 24);
+		filter.seed = 7;
+		const named = stapleNamed('named').toBytes();
+		filter.add(named);
+		const cellsOf = function(bytes: ArrayBuffer): string {
+			return(filter._hashing.getIndexes(bytes, filter.size, 24, filter.seed).join());
+		};
+		const namedCells = cellsOf(named);
+		let alike: ArrayBuffer | undefined;
+		for (let index = 0; alike === undefined; index++) {
+			const bytes = stapleNamed(`other ${String(index)}`).toBytes();
+			if (cellsOf(bytes) === namedCells) {
+				alike = bytes;
+			}
+		}
+
+		expect(filter.has(alike)).toBe(true);
 	});
 
 	test('tell staples apart by their bytes, so that the same blocks with other votes are not named', function() {
