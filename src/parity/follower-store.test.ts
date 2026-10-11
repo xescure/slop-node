@@ -4,7 +4,7 @@ import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RANGES_KEY } from '../node/bootstrap-cursors.js';
 import type { PeerProgress } from '../node/bootstrap-pass.js';
 import type { RangeLayout } from '../node/bootstrap-ranges.js';
-import { confirmedStaple, setRepresentativeBlock } from '../testing/blocks.js';
+import { confirmedStaple, sendBlock, setRepresentativeBlock } from '../testing/blocks.js';
 import { createDatabase } from '../testing/postgres.js';
 import type { TestDatabase } from '../testing/postgres.js';
 import { CHAIN_ACCOUNTS_AFTER, heldBeforeOf, openFollowerStore, readOnlyPool } from './follower-store.js';
@@ -293,6 +293,30 @@ describe('the follower\'s store, read from its database', function() {
 		expect(await store.heldBlocksOfStaples([OTHER_STAPLE], quietBefore)).toEqual([]);
 
 		expect(await store.newestStaples([first, second, third])).toEqual(new Map([[first, quietTime], [second, recentTime]]));
+	});
+
+	test('reads the balances an account\'s history leaves it with from the staples of that history', async function() {
+		const database = await followerDatabase({});
+		const pool = database.pool();
+		const sender = lib.Account.fromSeed('5e'.repeat(32), 0);
+		const recipient = lib.Account.fromSeed('5e'.repeat(32), 1);
+		const token = sender.generateIdentifier(lib.Account.AccountKeyAlgorithm.TOKEN, undefined, 0);
+		const RECIPIENT = recipient.publicKeyString.get();
+		await pool.query('INSERT INTO accounts (public_key, key_type) VALUES ($1, 0)', [RECIPIENT]);
+		let previous: VoteStaple | undefined;
+		for (const [day, amount] of [[1, 5n], [2, 7n]] as const) {
+			const block = await sendBlock({ from: sender, to: recipient, amount, token, previous: previous?.blocks[0]?.hash ?? null, network: 0x5382n, date: new Date(Date.UTC(2025, 10, day)) });
+			const staple = await confirmedStaple([block], [sender]);
+			previous = staple;
+			const key = Buffer.from(staple.blocksHash.toString(), 'hex');
+			await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, bytes, checksum) VALUES ($1, $2, $2, $3, repeat(\'0\', 256)::bit(256))', [key, staple.timestamp(), Buffer.from(staple.toBytes())]);
+			await pool.query('INSERT INTO history (account_id, blocks_hash, staple_time) SELECT id, $2, $3 FROM accounts WHERE public_key = $1', [RECIPIENT, key, staple.timestamp()]);
+		}
+		await database.endPools();
+		const store = storeOf(database);
+
+		expect(await store.balancesFromHistory(RECIPIENT)).toEqual(new Map([[token.publicKeyString.get(), 12n]]));
+		expect(await store.balancesFromHistory(ACCOUNTS[2] ?? '')).toEqual(new Map());
 	});
 
 	test('reads the staples in the order the ledger added them, rebuilding one stored without its bytes', async function() {

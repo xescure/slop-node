@@ -69,7 +69,10 @@ function history(staple: string, votedAt: readonly Date[]): unknown {
  * given or, by default, quiet since long before the follower's reach; the
  * accounts named passive have no chain, the rest have one.
  */
-function memoryStore(histories: Readonly<Record<string, readonly string[]>>, progress: FollowerProgress = { completedPass: undefined, heldBefore: HELD_BEFORE, staged: 0 }, newest: Readonly<Record<string, Date>> = {}, passive: readonly string[] = [], late: readonly KnownAccount[] = []): SweepStore {
+/** The balance of TOKEN the follower's history leaves every account with in these tests, which its states serve unless a test says otherwise. */
+const HISTORY_BALANCE = 0x10n;
+
+function memoryStore(histories: Readonly<Record<string, readonly string[]>>, progress: FollowerProgress = { completedPass: undefined, heldBefore: HELD_BEFORE, staged: 0 }, newest: Readonly<Record<string, Date>> = {}, passive: readonly string[] = [], late: readonly KnownAccount[] = [], historyBalance: bigint = HISTORY_BALANCE): SweepStore {
 	const known: KnownAccount[] = Object.entries(histories).map(function([account, staples], index): KnownAccount {
 		let newestStaple: Date | undefined;
 		if (staples.length > 0) {
@@ -103,6 +106,9 @@ function memoryStore(histories: Readonly<Record<string, readonly string[]>>, pro
 		},
 		historyHolds(account: string, blocksHash: string): Promise<boolean> {
 			return(Promise.resolve(histories[account]?.includes(blocksHash) ?? false));
+		},
+		balancesFromHistory(): Promise<ReadonlyMap<string, bigint>> {
+			return(Promise.resolve(new Map([[TOKEN, historyBalance]])));
 		}
 	});
 }
@@ -260,7 +266,8 @@ describe('the sweep over the follower\'s accounts', function() {
 			divergence: { account, field: 'balances[0].balance', staple: STAPLE },
 			follower: state(account, '0x10'),
 			representative: state(account, '0x11'),
-			readings: []
+			readings: [],
+			selfCheck: null
 		}]);
 	});
 
@@ -329,7 +336,7 @@ describe('the sweep over the follower\'s accounts', function() {
 
 		await sweep(running, memoryStore({ [account]: [STAPLE] }), 1);
 
-		expect(await outcomes(running)).toEqual([{ kind: 'diverged', divergence: { account, field: 'status', staple: STAPLE }, follower: { status: 500, body: failure }, representative: state(account, '0x10'), readings: [] }]);
+		expect(await outcomes(running)).toEqual([{ kind: 'diverged', divergence: { account, field: 'status', staple: STAPLE }, follower: { status: 500, body: failure }, representative: state(account, '0x10'), readings: [], selfCheck: null }]);
 	});
 
 	test('skips an account the follower fails to answer for while the representative shows it moving', async function() {
@@ -657,15 +664,36 @@ describe('a divergence from one representative', function() {
 		expect(await outcomes(running)).toMatchObject([{ kind: 'unresolved', readings: [{ kind: 'agrees' }, { kind: 'unanswered' }] }]);
 	});
 
-	test('is unresolved when the representatives split evenly', async function() {
+	test('is the dissenting representatives\' own when two answer as the follower and each other answers a value of its own', async function() {
 		const running = await setup(4);
 		const account = ACCOUNTS[0];
 		serveSplit(running, account, '0x10', ['0x11', '0x10', '0x10', '0x12']);
 
 		const summary = await sweep(running, memoryStore({ [account]: [STAPLE] }), 1);
 
-		expect(await outcomes(running)).toMatchObject([{ kind: 'unresolved' }]);
+		expect(await outcomes(running)).toMatchObject([{ kind: 'representative-local', selfCheck: { kind: 'consistent', tokens: 1 } }]);
+		expect(summary).toMatchObject({ diverged: 0, representativeLocal: 1 });
+	});
+
+	test('is unresolved when as many representatives answer one other value as answer the follower\'s', async function() {
+		const running = await setup(4);
+		const account = ACCOUNTS[0];
+		serveSplit(running, account, '0x10', ['0x11', '0x10', '0x10', '0x11']);
+
+		const summary = await sweep(running, memoryStore({ [account]: [STAPLE] }), 1);
+
+		expect(await outcomes(running)).toMatchObject([{ kind: 'unresolved', selfCheck: { kind: 'consistent' } }]);
 		expect(summary).toMatchObject({ diverged: 1, representativeLocal: 0 });
+	});
+
+	test('is the follower\'s whatever the representatives answer when its balances are not those its own history leaves the account with', async function() {
+		const running = await setup(3);
+		const account = ACCOUNTS[0];
+		serveSplit(running, account, '0x10', ['0x11', '0x10', '0x10']);
+
+		await sweep(running, memoryStore({ [account]: [STAPLE] }, undefined, {}, [], [], 0x11n), 1);
+
+		expect(await outcomes(running)).toMatchObject([{ kind: 'diverged', selfCheck: { kind: 'inconsistent', token: TOKEN, served: '0x10', fromHistory: '0x11' } }]);
 	});
 
 	test('does not count the reading of a representative that shows the account moving', async function() {
@@ -697,7 +725,7 @@ describe('a divergence from one representative', function() {
 		const running = await setup(3);
 		const account = ACCOUNTS[0];
 		serveSplit(running, account, '0x10', ['0x11', '0x10', '0x10']);
-		const older: SweepRecord = { kind: 'sweep', at: '2026-10-11T12:34:11.610Z', representative: running.representatives[0]?.endpoint ?? '', account, lap: 0, walk: 'passive', outcome: { kind: 'diverged', divergence: { account, field: 'balances[0].balance', staple: STAPLE }, follower: {}, representative: {}, readings: [] } };
+		const older: SweepRecord = { kind: 'sweep', at: '2026-10-11T12:34:11.610Z', representative: running.representatives[0]?.endpoint ?? '', account, lap: 0, walk: 'passive', outcome: { kind: 'diverged', divergence: { account, field: 'balances[0].balance', staple: STAPLE }, follower: {}, representative: {}, readings: [], selfCheck: null } };
 		await running.log.append([older, { ...older, account: ACCOUNTS[1], representative: 'https://elsewhere.example/api' }]);
 
 		const summary = await recheckDivergences({
@@ -895,7 +923,7 @@ describe('a chain divergence recorded before', function() {
 		const running = await setup();
 		const account = ACCOUNTS[0];
 		await serveMovingChain(running, account, [[chainBlock(FOLLOWER_HEAD, STAPLE, QUIET_VOTE)]]);
-		const older: SweepRecord = { kind: 'sweep', at: '2026-10-11T13:00:00.000Z', representative: running.representatives[0]?.endpoint ?? '', account, lap: 0, walk: 'chain', outcome: { kind: 'diverged', divergence: { account, field: 'chain', staple: null }, follower: { head: null }, representative: {}, readings: [] } };
+		const older: SweepRecord = { kind: 'sweep', at: '2026-10-11T13:00:00.000Z', representative: running.representatives[0]?.endpoint ?? '', account, lap: 0, walk: 'chain', outcome: { kind: 'diverged', divergence: { account, field: 'chain', staple: null }, follower: { head: null }, representative: {}, readings: [], selfCheck: null } };
 		await running.log.append([older]);
 
 		const summary = await recheckDivergences({

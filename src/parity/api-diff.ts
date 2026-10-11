@@ -577,12 +577,20 @@ export function answerDigest(path: string, answer: unknown): string | undefined 
 
 type Compared = { readonly outcome: APIDiffOutcome; readonly representativeAnswer: APIAnswer | undefined };
 
-/** The rule the sweep judges whose a divergence is by reads only whether each other representative agrees. */
-function judgedAsTheSweepDoes(reading: APIDiffReading): RepresentativeReading {
+/** The value an answer gives once normalized, which the sweep's rule tells apart from the others by. */
+function judgedValueOf(route: RoutePath, answer: unknown): unknown {
+	if (!isAnswer(answer)) {
+		return(answer);
+	}
+	return(normalizedAnswer(route, answer));
+}
+
+/** The rule the sweep judges whose a divergence is by reads whether each other representative agrees, and which value each that does not answers. */
+function judgedAsTheSweepDoes(route: RoutePath, reading: APIDiffReading): RepresentativeReading {
 	switch (reading.kind) {
 		case 'agrees':
 		case 'disagrees':
-			return({ representative: reading.representative, kind: reading.kind, state: reading.answer, staple: null });
+			return({ representative: reading.representative, kind: reading.kind, state: judgedValueOf(route, reading.answer), staple: null });
 		case 'unanswered':
 		case 'moving':
 			return(reading);
@@ -699,7 +707,9 @@ async function compareRequest(request: SampledRequest, follower: APISource, repr
 	const readings = await Promise.all(others.map(function(other) {
 		return(readingOf(request, other, answered, judged, quiet));
 	}));
-	const kind = disputedKindOf(readings.map(judgedAsTheSweepDoes), judged);
+	const kind = disputedKindOf(readings.map(function(reading): RepresentativeReading {
+		return(judgedAsTheSweepDoes(request.route, reading));
+	}), judged, normalizedAnswer(request.route, representativeAnswer));
 	/*
 	 * A representative failing internally to serve a page of history is
 	 * asked again later rather than counted its own, or split on: the

@@ -5,6 +5,7 @@ import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY, BOOTSTRAP_CURSOR_AR
 import type { PeerProgress } from '../node/bootstrap-pass.js';
 import type { RangeLayout } from '../node/bootstrap-ranges.js';
 import { assertNever } from '../util/assert-never.js';
+import { balancesOfHistory } from './self-check.js';
 
 const lib = KeetaNet.lib;
 
@@ -116,6 +117,8 @@ export type FollowerStore = {
 	rowIDsOf(accounts: readonly string[]): Promise<ReadonlyMap<string, string>>;
 	/** Whether the staple, by the hash of its blocks, is in the account's history on the follower's main ledger. */
 	historyHolds(account: string, blocksHash: string): Promise<boolean>;
+	/** The balance of each token the staples of the account's history leave it with, oldest first. */
+	balancesFromHistory(account: string): Promise<ReadonlyMap<string, bigint>>;
 	checksumSnapshot(): Promise<ChecksumSnapshot>;
 	/**
 	 * Accounts of the kind with a staple in their history and none from the
@@ -232,6 +235,12 @@ export async function everyChainAccount(after: (rowID: string, count: number) =>
 const PASSIVE_ACCOUNTS_AFTER = `
 	SELECT a.id, a.public_key, (SELECT max(h.staple_time) FROM history h WHERE h.account_id = a.id) AS newest_staple
 	FROM accounts a WHERE a.id > $1::bigint AND NOT EXISTS (SELECT 1 FROM heads c WHERE c.account_id = a.id) ORDER BY a.id LIMIT $2`;
+
+/** An account's history, oldest first, in the order of its key. */
+const HISTORY_STAPLES = `
+	SELECT s.blocks_hash, s.staple_time, s.bytes FROM history h JOIN staples s ON s.blocks_hash = h.blocks_hash
+	WHERE h.account_id = (SELECT id FROM accounts WHERE public_key = $1)
+	ORDER BY h.staple_time, h.blocks_hash`;
 
 /** The history key is (account, staple time, blocks hash), and the staple's time is found from its hash. */
 const HISTORY_HOLDS = `
@@ -588,6 +597,12 @@ export function openFollowerStore(connectionString: string): FollowerStore {
 		},
 		async heldBlocks(fromHash: string, before: Date, count: number): Promise<readonly HeldBlock[]> {
 			return((await pool.query<HeldBlockRow>(HELD_BLOCKS, [Buffer.from(fromHash, 'hex'), before, count])).rows.map(heldBlockOf));
+		},
+		async balancesFromHistory(account: string): Promise<ReadonlyMap<string, bigint>> {
+			const rows = (await pool.query<{ blocks_hash: Buffer; staple_time: Date; bytes: Buffer | null }>(HISTORY_STAPLES, [account])).rows;
+			return(balancesOfHistory((await heldStaplesOf(pool, rows)).map(function({ staple }) {
+				return(staple);
+			}), account));
 		},
 		async blockPages(): Promise<number> {
 			return(Number((await pool.query<{ pages: string }>(BLOCK_PAGES)).rows[0]?.pages ?? '0'));

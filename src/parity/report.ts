@@ -679,7 +679,18 @@ function sweepCoverageOf(records: readonly SweepRecord[], batches: readonly Swee
 function representativeLocalOf(records: readonly SweepRecord[], localNow: readonly SweepRecord[]): RepresentativeLocal {
 	const byRepresentative: Record<string, number> = {};
 	for (const record of localNow) {
-		byRepresentative[record.representative] = (byRepresentative[record.representative] ?? 0) + 1;
+		// Every representative that answered apart from the follower and the others is charged with the difference.
+		const dissenting = [record.representative];
+		if (record.outcome.kind === 'representative-local') {
+			for (const reading of record.outcome.readings) {
+				if (reading.kind === 'disagrees') {
+					dissenting.push(reading.representative);
+				}
+			}
+		}
+		for (const representative of dissenting) {
+			byRepresentative[representative] = (byRepresentative[representative] ?? 0) + 1;
+		}
 	}
 	const accounts = new Set(localNow.map(function(record): string {
 		return(record.account);

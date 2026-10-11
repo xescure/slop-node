@@ -38,9 +38,9 @@ const SWEEPS: readonly SweepRecord[] = [
 	MATCHED,
 	{ ...MATCHED, outcome: { kind: 'compared-chain', head: 'CD'.repeat(32), representativeHead: 'EF'.repeat(32), lacking: 3 } },
 	{ ...MATCHED, walk: 'passive', outcome: { kind: 'error-both', error: 'Error: Unable to parse account information' } },
-	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 0, walk: 'passive', outcome: { kind: 'diverged', divergence: { account: ACCOUNT, field: 'representative', staple: null }, follower: { representative: null }, representative: { representative: ACCOUNT }, readings: [] } },
-	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 0, walk: 'chain', outcome: { kind: 'representative-local', divergence: { account: ACCOUNT, field: 'balances[0].balance', staple: 'AB'.repeat(32) }, follower: { balances: [] }, representative: { balances: [1] }, readings: [{ representative: 'https://rep2.example/api', kind: 'agrees', state: { balances: [] }, staple: 'AB'.repeat(32) }, { representative: 'https://rep3.example/api', kind: 'unanswered', detail: 'answered 504' }] } },
-	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 0, walk: 'chain', outcome: { kind: 'unresolved', divergence: { account: ACCOUNT, field: 'balances[0].balance', staple: null }, follower: { balances: [] }, representative: { balances: [1] }, readings: [{ representative: 'https://rep2.example/api', kind: 'disagrees', state: { balances: [2] }, staple: null }] } },
+	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 0, walk: 'passive', outcome: { kind: 'diverged', divergence: { account: ACCOUNT, field: 'representative', staple: null }, follower: { representative: null }, representative: { representative: ACCOUNT }, readings: [], selfCheck: null } },
+	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 0, walk: 'chain', outcome: { kind: 'representative-local', divergence: { account: ACCOUNT, field: 'balances[0].balance', staple: 'AB'.repeat(32) }, follower: { balances: [] }, representative: { balances: [1] }, readings: [{ representative: 'https://rep2.example/api', kind: 'agrees', state: { balances: [] }, staple: 'AB'.repeat(32) }, { representative: 'https://rep3.example/api', kind: 'unanswered', detail: 'answered 504' }], selfCheck: { kind: 'consistent', tokens: 1 } } },
+	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 0, walk: 'chain', outcome: { kind: 'unresolved', divergence: { account: ACCOUNT, field: 'balances[0].balance', staple: null }, follower: { balances: [] }, representative: { balances: [1] }, readings: [{ representative: 'https://rep2.example/api', kind: 'disagrees', state: { balances: [2] }, staple: null }], selfCheck: { kind: 'inconsistent', token: 'keeta_t', served: '0x1', fromHistory: '0x2' } } },
 	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 1, walk: 'chain', outcome: { kind: 'skipped', reason: 'moving', side: 'follower', detail: 'its state changed' } },
 	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 1, walk: 'passive', outcome: { kind: 'skipped', reason: 'unanswered', detail: '500' } }
 ];
@@ -174,7 +174,7 @@ describe('the parity log', function() {
 		const outcome = { kind: 'diverged', divergence: { account: ACCOUNT, field: 'history', staple: null }, follower: {}, representative: {} };
 		await appendFile(log.path, `${JSON.stringify({ ...MATCHED, outcome })}\n`);
 
-		expect(await log.read()).toEqual({ records: [{ ...MATCHED, outcome: { ...outcome, readings: [] } }], unreadableLines: 0 });
+		expect(await log.read()).toEqual({ records: [{ ...MATCHED, outcome: { ...outcome, readings: [], selfCheck: null } }], unreadableLines: 0 });
 	});
 
 	test('reads an API divergence recorded before divergences were sent again as one with no other representative\'s reading', async function() {

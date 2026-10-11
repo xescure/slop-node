@@ -61,7 +61,7 @@ const MOVING: SweepOutcome = { kind: 'skipped', reason: 'moving', side: 'represe
 const UNANSWERED: SweepOutcome = { kind: 'skipped', reason: 'unanswered', detail: '500' };
 
 function diverged(account: string, field: string, kind: 'diverged' | 'representative-local' | 'unresolved' = 'diverged'): SweepOutcome {
-	return({ kind, divergence: { account, field, staple: STAPLE }, follower: {}, representative: {}, readings: [] });
+	return({ kind, divergence: { account, field, staple: STAPLE }, follower: {}, representative: {}, readings: [], selfCheck: null });
 }
 
 const KNOWN_BEHAVIOR = '/api/node/ledger/account/{account} 200 error=-';
@@ -559,6 +559,20 @@ describe('the parity report', function() {
 		});
 	});
 
+	test('counts a difference of each representative\'s own against every one that answered apart', function() {
+		const THIRD_REPRESENTATIVE = 'https://rep3.example/api';
+		const local: SweepOutcome = {
+			kind: 'representative-local',
+			divergence: { account: ACCOUNT, field: 'balances[0].balance', staple: STAPLE },
+			follower: {},
+			representative: {},
+			readings: [{ representative: OTHER_REPRESENTATIVE, kind: 'agrees', state: {}, staple: STAPLE }, { representative: THIRD_REPRESENTATIVE, kind: 'disagrees', state: {}, staple: STAPLE }],
+			selfCheck: { kind: 'consistent', tokens: 1 }
+		};
+		const sweep = report([swept('2026-10-09T01:00:00.000Z', ACCOUNT, local)]).signals.sweep;
+		expect(sweep.representativeLocal).toMatchObject({ records: 1, accounts: 1, byRepresentative: { [REPRESENTATIVE]: 1, [THIRD_REPRESENTATIVE]: 1 } });
+	});
+
 	test('fails the sweep on an account the representatives split on', function() {
 		const sweep = report([
 			swept('2026-10-09T01:00:00.000Z', ACCOUNT, diverged(ACCOUNT, 'balances[0].balance', 'unresolved'))
@@ -616,6 +630,7 @@ describe('a parity run', function() {
 			chainAccounts: () => Promise.resolve(known),
 			rowIDsOf: () => Promise.resolve(new Map()),
 			historyHolds: () => Promise.resolve(false),
+			balancesFromHistory: () => Promise.resolve(new Map()),
 			checksumSnapshot: () => Promise.resolve({ stored: 0n, folded: 0n, mainBlocks: 0, mismatched: [] }),
 			quietAccounts: () => Promise.resolve([]),
 			lastSequence: () => Promise.resolve(0n),

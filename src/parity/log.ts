@@ -89,6 +89,13 @@ export type RepresentativeReading =
 	/** No reading that counts: it did not answer, or its newest staple of the account is from within the margin of the follower's reach. */
 	| { readonly representative: string; readonly kind: 'unanswered' | 'moving'; readonly detail: string };
 
+/** Whether the follower's balances of an account are those its own history leaves it with. */
+export type SelfCheck =
+	| { readonly kind: 'consistent'; readonly tokens: number }
+	/** The first token whose balance the follower serves is not the net of its history's changes, both "0x" hexadecimal. */
+	| { readonly kind: 'inconsistent'; readonly token: string; readonly served: string; readonly fromHistory: string }
+	| { readonly kind: 'unchecked'; readonly why: string };
+
 /** What the follower and the representative compared with answered apart, and what the other representatives answered when read again. */
 export type Disputed = {
 	readonly divergence: Divergence;
@@ -96,6 +103,8 @@ export type Disputed = {
 	readonly representative: unknown;
 	/** None in a record written before divergences were read again. */
 	readonly readings: readonly RepresentativeReading[];
+	/** For a divergence the representatives leave to one of them or split on, the follower's check of its own balances; null otherwise, or in a record written before it was made. */
+	readonly selfCheck: SelfCheck | null;
 };
 
 /** What a divergence from one representative turns out to be, once the others are read. */
@@ -767,6 +776,33 @@ function representativeReadingOf(value: unknown): RepresentativeReading | undefi
 	}
 }
 
+function selfCheckOf(value: unknown): SelfCheck | undefined {
+	if (!isFields(value)) {
+		return(undefined);
+	}
+	switch (value['kind']) {
+		case 'consistent':
+			if (!isCount(value['tokens'])) {
+				return(undefined);
+			}
+			return({ kind: 'consistent', tokens: value['tokens'] });
+		case 'inconsistent': {
+			const { token, served, fromHistory } = value;
+			if (!isString(token) || !isString(served) || !isString(fromHistory)) {
+				return(undefined);
+			}
+			return({ kind: 'inconsistent', token, served, fromHistory });
+		}
+		case 'unchecked':
+			if (!isString(value['why'])) {
+				return(undefined);
+			}
+			return({ kind: 'unchecked', why: value['why'] });
+		default:
+			return(undefined);
+	}
+}
+
 function sweepOutcomeOf(value: unknown): SweepOutcome | undefined {
 	if (!isFields(value)) {
 		return(undefined);
@@ -797,10 +833,11 @@ function sweepOutcomeOf(value: unknown): SweepOutcome | undefined {
 			if (value['readings'] !== undefined) {
 				readings = listOf(value['readings'], representativeReadingOf);
 			}
-			if (divergence === undefined || readings === undefined) {
+			const selfCheck = nullable(value['selfCheck'] ?? null, selfCheckOf);
+			if (divergence === undefined || readings === undefined || selfCheck === undefined) {
 				return(undefined);
 			}
-			return({ kind: value['kind'], divergence, follower: value['follower'], representative: value['representative'], readings });
+			return({ kind: value['kind'], divergence, follower: value['follower'], representative: value['representative'], readings, selfCheck });
 		}
 		case 'skipped': {
 			const detail = value['detail'];

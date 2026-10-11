@@ -6,7 +6,8 @@ import { getOK } from './api-source.js';
 import type { APIAnswer, APISource } from './api-source.js';
 import type { FollowerStore, KnownAccount } from './follower-store.js';
 import { sweepCursorOf } from './log.js';
-import type { Disputed, DisputedKind, ParityLog, RecordedWalk, RepresentativeReading, SweepBatchRecord, SweepCursor, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
+import { selfCheckOf } from './self-check.js';
+import type { Disputed, DisputedKind, ParityLog, RecordedWalk, RepresentativeReading, SelfCheck, SweepBatchRecord, SweepCursor, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
 
 /** Where each walk of the sweep resumes, in the follower's directory. */
 export const SWEEP_CURSOR_FILES: Readonly<Record<SweepWalk, string>> = { chain: 'parity-sweep-chain.json', passive: 'parity-sweep-passive.json' };
@@ -228,10 +229,10 @@ export async function compareAccount(comparison: AccountComparison): Promise<Swe
 	}
 	const staple = newest?.staple ?? null;
 	if (followerAfter.status !== 200) {
-		return({ kind: 'diverged', divergence: { account, field: 'status', staple }, follower: followerAfter, representative: representativeState, readings: [] });
+		return({ kind: 'diverged', divergence: { account, field: 'status', staple }, follower: followerAfter, representative: representativeState, readings: [], selfCheck: null });
 	}
 	if (newest !== undefined && !await store.historyHolds(account, newest.staple)) {
-		return({ kind: 'diverged', divergence: { account, field: 'history', staple }, follower: followerAfter.body, representative: representativeState, readings: [] });
+		return({ kind: 'diverged', divergence: { account, field: 'history', staple }, follower: followerAfter.body, representative: representativeState, readings: [], selfCheck: null });
 	}
 	/*
 	 * The account's state has no node-local field: a node holding the same
@@ -245,13 +246,13 @@ export async function compareAccount(comparison: AccountComparison): Promise<Swe
 		return({ kind: 'error-both', error });
 	}
 	if (field !== undefined) {
-		return({ kind: 'diverged', divergence: { account, field, staple }, follower: followerAfter.body, representative: representativeState, readings: [] });
+		return({ kind: 'diverged', divergence: { account, field, staple }, follower: followerAfter.body, representative: representativeState, readings: [], selfCheck: null });
 	}
 	return({ kind: 'match', head: headOf(representativeState), staple });
 }
 
 /** What the sweep reads of the follower's storage. */
-export type SweepStore = Pick<FollowerStore, 'progress' | 'chainAccountsAfter' | 'passiveAccountsAfter' | 'chainAccounts' | 'historyHolds'>;
+export type SweepStore = Pick<FollowerStore, 'progress' | 'chainAccountsAfter' | 'passiveAccountsAfter' | 'chainAccounts' | 'historyHolds' | 'balancesFromHistory'>;
 
 export type SweepSetup = {
 	readonly follower: APISource;
@@ -365,24 +366,48 @@ async function readingOf(store: Pick<SweepStore, 'historyHolds'>, representative
 	return({ representative: representative.endpoint, kind: 'disagrees', state, staple });
 }
 
+/** How many of the values are each distinct value, by deep equality. */
+function tallies(values: readonly unknown[]): readonly number[] {
+	const distinct: { readonly value: unknown; count: number }[] = [];
+	for (const value of values) {
+		const known = distinct.find(function(entry): boolean {
+			return(isDeepStrictEqual(entry.value, value));
+		});
+		if (known === undefined) {
+			distinct.push({ value, count: 1 });
+		} else {
+			known.count++;
+		}
+	}
+	return(distinct.map(function(entry): number {
+		return(entry.count);
+	}));
+}
+
 /**
  * Whose a divergence is, by the representatives that gave a reading, the one
- * compared with among them: the follower's when most disagree with it, that
- * representative's own when most agree with it and at least two do, so that
- * one other representative alone never outweighs the one compared with. A
- * staple the follower lacks is never one representative's own: another
+ * compared with among them, which answered the value given: the
+ * representatives' own that answer apart when at least two answer as the
+ * follower and every other value is answered by fewer, so that one other
+ * representative alone never outweighs the one compared with, nor do as many
+ * answering one value; the follower's when most disagree with it. A staple
+ * the follower lacks is never one representative's own: another
  * representative may list a different staple first, ordering its history by
  * its own votes, and agree on a state the lacked staple left unchanged.
  */
-export function disputedKindOf(readings: readonly RepresentativeReading[], field: string): DisputedKind {
+export function disputedKindOf(readings: readonly RepresentativeReading[], field: string, compared: unknown): DisputedKind {
 	const agreeing = readings.filter(function(reading): boolean {
 		return(reading.kind === 'agrees');
 	}).length;
-	const disagreeing = 1 + readings.filter(function(reading): boolean {
-		return(reading.kind === 'disagrees');
-	}).length;
+	const dissenting = [compared, ...readings.flatMap(function(reading): unknown[] {
+		if (reading.kind !== 'disagrees') {
+			return([]);
+		}
+		return([reading.state]);
+	})];
+	const disagreeing = dissenting.length;
 	const read = agreeing + disagreeing;
-	if (agreeing >= 2 && agreeing * 2 > read && field !== 'history') {
+	if (agreeing >= 2 && Math.max(...tallies(dissenting)) < agreeing && field !== 'history') {
 		return('representative-local');
 	}
 	if (disagreeing * 2 > read) {
@@ -409,7 +434,34 @@ async function compareAdjudicated(setup: Comparing, representative: APISource, a
 	const readings = await Promise.all(others.map(function(other) {
 		return(readingOf(setup.store, other, account, outcome, quietBefore));
 	}));
-	return({ ...outcome, kind: disputedKindOf(readings, outcome.divergence.field), readings });
+	return(await withSelfCheck(setup, { ...outcome, kind: disputedKindOf(readings, outcome.divergence.field, outcome.representative), readings }));
+}
+
+/** Whether the follower's balances of the account are those its own history leaves it with, read from its state now. */
+async function selfCheckOfAccount(setup: Comparing, account: string): Promise<SelfCheck> {
+	try {
+		const state = await getOK(setup.follower, `/node/ledger/account/${account}`);
+		return(selfCheckOf(state, await setup.store.balancesFromHistory(account)));
+	} catch (error: unknown) {
+		return({ kind: 'unchecked', why: messageOf(error) });
+	}
+}
+
+/**
+ * A divergence the representatives leave to one of them, or split on, rests
+ * on more than their votes: the follower's balances of the account must be
+ * those its own history leaves it with, or the divergence is the
+ * follower's whatever they answer.
+ */
+async function withSelfCheck(setup: Comparing, outcome: { readonly kind: DisputedKind } & Disputed): Promise<SweepOutcome> {
+	if (outcome.kind === 'diverged') {
+		return(outcome);
+	}
+	const selfCheck = await selfCheckOfAccount(setup, outcome.divergence.account);
+	if (selfCheck.kind === 'inconsistent') {
+		return({ ...outcome, kind: 'diverged', selfCheck });
+	}
+	return({ ...outcome, selfCheck });
 }
 
 /** A block of a page of a chain, as far as the comparison of chains reads it. */
@@ -529,7 +581,8 @@ async function compareByChain(setup: Comparing, representative: APISource, accou
 		return(chainReadingOf(other, await chainCheckOf(setup.follower, other, account, quietBefore)));
 	}));
 	const divergence = { account, field: 'chain', staple: null };
-	return({ kind: disputedKindOf(readings, divergence.field), divergence, follower: { head: check.head }, representative: { head: check.representativeHead, detail: check.detail }, readings });
+	const representativeChain = { head: check.representativeHead, detail: check.detail };
+	return(await withSelfCheck(setup, { kind: disputedKindOf(readings, divergence.field, representativeChain), divergence, follower: { head: check.head }, representative: representativeChain, readings, selfCheck: null }));
 }
 
 function isMoving(outcome: SweepOutcome): boolean {
