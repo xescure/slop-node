@@ -159,7 +159,8 @@ conformance: node_modules/.patched
 # Stryker reruns a module's tests once per mutant, which takes minutes to
 # hours, so it is never part of test. It reads the module from the
 # environment, and validates it there. Its incremental run reuses what it can
-# of the last one, unless FULL is set.
+# of the last one, unless FULL is set or stryker.config.mjs finds that what it
+# would reuse may be stale.
 mutation-usage:
 	@echo "Usage: make mutation MODULE=<name>" >&2
 	@exit 2

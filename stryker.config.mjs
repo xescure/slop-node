@@ -1,5 +1,5 @@
 // @ts-check
-import { globSync, statSync } from 'node:fs';
+import { globSync, readFileSync, statSync } from 'node:fs';
 import { selectedModule } from './mutation/modules.js';
 
 const module = selectedModule();
@@ -26,8 +26,25 @@ const UNTRACKED_INPUTS = [
 ];
 
 /**
- * Whether an input Stryker does not track is newer than the last run, after
- * which every mutant runs again.
+ * Whether the last run had a static mutant, one in code that runs as its
+ * module loads: Stryker ties its result to no test, so its incremental mode
+ * reuses that result whichever tests changed.
+ * @returns {boolean}
+ */
+function lastRunHadStaticMutants() {
+	/** @type {{ files: Record<string, { mutants: { static?: boolean }[] }> }} */
+	const lastRun = JSON.parse(readFileSync(incrementalFile, 'utf8'));
+	return(Object.values(lastRun.files).some(function(file) {
+		return(file.mutants.some(function(mutant) {
+			return(mutant.static === true);
+		}));
+	}));
+}
+
+/**
+ * Whether an input Stryker does not track is newer than the last run, or a
+ * test of the module is and the last run had a static mutant, after which
+ * every mutant runs again.
  * @returns {boolean}
  */
 function inputsChangedSinceLastRun() {
@@ -40,10 +57,14 @@ function inputsChangedSinceLastRun() {
 		}
 		throw(error);
 	}
+	const newer = function(/** @type {string} */ path) {
+		return(statSync(path).mtimeMs > lastRun);
+	};
 	const tracked = new Set(globSync([...module.mutate]));
-	return(globSync(UNTRACKED_INPUTS).some(function(path) {
-		return(!path.endsWith('.test.ts') && !tracked.has(path) && statSync(path).mtimeMs > lastRun);
-	}));
+	const untracked = globSync(UNTRACKED_INPUTS).some(function(path) {
+		return(!path.endsWith('.test.ts') && !tracked.has(path) && newer(path));
+	});
+	return(untracked || (globSync([...module.tests]).some(newer) && lastRunHadStaticMutants()));
 }
 
 /** @type {import('@stryker-mutator/api/core').PartialStrykerOptions} */
