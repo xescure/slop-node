@@ -473,11 +473,22 @@ async function compareAdjudicated(setup: Comparing, representative: APISource, a
 	return(await withSelfCheck(setup, { ...outcome, kind: disputedKindOf(readings, outcome.divergence.field, { compared: outcome.representative, followerHoldsDissent }), readings }));
 }
 
-/** Whether the follower's balances of the account are those its own history leaves it with, read from its state now. */
+/**
+ * Whether the follower's balances of the account are those its own history
+ * leaves it with: the state is read before and after the history, and the
+ * two must be one, so that a staple the follower adds in between is not
+ * taken for a difference.
+ */
 async function selfCheckOfAccount(setup: Comparing, account: string): Promise<SelfCheck> {
+	const path = `/node/ledger/account/${account}`;
 	try {
-		const state = await getOK(setup.follower, `/node/ledger/account/${account}`);
-		return(selfCheckOf(state, await setup.store.balancesFromHistory(account)));
+		const before = await getOK(setup.follower, path);
+		const fromHistory = await setup.store.balancesFromHistory(account);
+		const after = await getOK(setup.follower, path);
+		if (!isDeepStrictEqual(before, after)) {
+			return({ kind: 'unchecked', why: 'the follower changed the account while its history was read' });
+		}
+		return(selfCheckOf(after, fromHistory));
 	} catch (error: unknown) {
 		return({ kind: 'unchecked', why: messageOf(error) });
 	}

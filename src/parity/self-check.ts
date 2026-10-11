@@ -16,6 +16,12 @@ const lib = KeetaNet.lib;
  */
 export function balancesOfHistory(staples: readonly VoteStaple[], account: string): ReadonlyMap<string, bigint> {
 	const balances = new Map<string, bigint>();
+	foldBalances(balances, staples, account);
+	return(balances);
+}
+
+/** Folds the balance changes the staples make to the account into the balances given, in order, as balancesOfHistory does over a whole history. */
+export function foldBalances(balances: Map<string, bigint>, staples: readonly VoteStaple[], account: string): void {
 	for (const staple of staples) {
 		const [first] = staple.blocks;
 		if (first === undefined) {
@@ -39,7 +45,6 @@ export function balancesOfHistory(staples: readonly VoteStaple[], account: strin
 			}
 		}
 	}
-	return(balances);
 }
 
 function isFields(value: unknown): value is Readonly<Record<string, unknown>> {

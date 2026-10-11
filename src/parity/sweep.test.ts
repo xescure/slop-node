@@ -692,6 +692,17 @@ describe('a divergence from one representative', function() {
 		expect(summary).toMatchObject({ diverged: 1, representativeLocal: 0 });
 	});
 
+	test('records no check of the follower\'s balances when the follower changes the account while its history is read', async function() {
+		const running = await setup(3);
+		const account = ACCOUNTS[0];
+		serveSplit(running, account, '0x10', ['0x11', '0x10', '0x10']);
+		running.follower.serve(`/node/ledger/account/${account}`, state(account, '0x10'), state(account, '0x10'), state(account, '0x10'), state(account, '0x12'));
+
+		await sweep(running, memoryStore({ [account]: [STAPLE] }, undefined, {}, [], [], 0x12n), 1);
+
+		expect(await outcomes(running)).toMatchObject([{ kind: 'representative-local', selfCheck: { kind: 'unchecked', why: 'the follower changed the account while its history was read' } }]);
+	});
+
 	test('is never the representatives\' own when one answers the follower\'s state with a newest staple the follower lacks', async function() {
 		const running = await setup(4);
 		const account = ACCOUNTS[0];

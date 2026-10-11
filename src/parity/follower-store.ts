@@ -5,7 +5,7 @@ import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY, BOOTSTRAP_CURSOR_AR
 import type { PeerProgress } from '../node/bootstrap-pass.js';
 import type { RangeLayout } from '../node/bootstrap-ranges.js';
 import { assertNever } from '../util/assert-never.js';
-import { balancesOfHistory } from './self-check.js';
+import { foldBalances } from './self-check.js';
 
 const lib = KeetaNet.lib;
 
@@ -119,7 +119,7 @@ export type FollowerStore = {
 	historyHolds(account: string, blocksHash: string): Promise<boolean>;
 	/** Whether the block, by its hash, is on the follower's main ledger. */
 	holdsBlock(hash: string): Promise<boolean>;
-	/** The balance of each token the staples of the account's history leave it with, read oldest first. */
+	/** The balance of each token the staples of the account's history leave it with, read in the order the ledger added them. */
 	balancesFromHistory(account: string): Promise<ReadonlyMap<string, bigint>>;
 	checksumSnapshot(): Promise<ChecksumSnapshot>;
 	/**
@@ -241,10 +241,13 @@ const PASSIVE_ACCOUNTS_AFTER = `
 const HOLDS_BLOCK = 'SELECT EXISTS (SELECT 1 FROM blocks WHERE hash = $1 AND ledger = \'main\') AS holds';
 
 /** An account's history, oldest first, in the order of its key. */
-const HISTORY_STAPLES = `
-	SELECT s.blocks_hash, s.staple_time, s.bytes FROM history h JOIN staples s ON s.blocks_hash = h.blocks_hash
-	WHERE h.account_id = (SELECT id FROM accounts WHERE public_key = $1)
-	ORDER BY h.staple_time, h.blocks_hash`;
+const HISTORY_STAPLES_AFTER = `
+	SELECT s.blocks_hash, s.staple_time, s.bytes, s.sequence::text AS place FROM history h JOIN staples s ON s.blocks_hash = h.blocks_hash
+	WHERE h.account_id = (SELECT id FROM accounts WHERE public_key = $1) AND s.sequence > $2::bigint
+	ORDER BY s.sequence LIMIT $3`;
+
+/** Staples of an account's history one statement reads and decodes, so that a history of any length is read in statements that end and in bounded memory. */
+const HISTORY_STAPLES_PAGE = 200;
 
 /** The history key is (account, staple time, blocks hash), and the staple's time is found from its hash. */
 const HISTORY_HOLDS = `
@@ -606,10 +609,19 @@ export function openFollowerStore(connectionString: string): FollowerStore {
 			return((await pool.query<{ holds: boolean }>(HOLDS_BLOCK, [Buffer.from(hash, 'hex')])).rows[0]?.holds ?? false);
 		},
 		async balancesFromHistory(account: string): Promise<ReadonlyMap<string, bigint>> {
-			const rows = (await pool.query<{ blocks_hash: Buffer; staple_time: Date; bytes: Buffer | null }>(HISTORY_STAPLES, [account])).rows;
-			return(balancesOfHistory((await heldStaplesOf(pool, rows)).map(function({ staple }) {
-				return(staple);
-			}), account));
+			const balances = new Map<string, bigint>();
+			let after = '0';
+			for (;;) {
+				const rows = (await pool.query<SequencedStapleRow>(HISTORY_STAPLES_AFTER, [account, after, HISTORY_STAPLES_PAGE])).rows;
+				foldBalances(balances, (await heldStaplesOf(pool, rows)).map(function({ staple }) {
+					return(staple);
+				}), account);
+				const last = rows.at(-1);
+				if (last === undefined || rows.length < HISTORY_STAPLES_PAGE) {
+					return(balances);
+				}
+				after = last.place;
+			}
 		},
 		async blockPages(): Promise<number> {
 			return(Number((await pool.query<{ pages: string }>(BLOCK_PAGES)).rows[0]?.pages ?? '0'));
