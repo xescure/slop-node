@@ -743,6 +743,25 @@ describe('a divergence from one representative', function() {
 	});
 });
 
+describe('a difference of one representative\'s own recorded before', function() {
+	test('is compared again on recheck while it records no check of the follower\'s balances, and not once it does', async function() {
+		const running = await setup(3);
+		const account = ACCOUNTS[0];
+		serveSplit(running, account, '0x10', ['0x11', '0x10', '0x10']);
+		const older: SweepRecord = { kind: 'sweep', at: '2026-10-11T12:34:11.610Z', representative: running.representatives[0]?.endpoint ?? '', account, lap: 0, walk: 'passive', outcome: { kind: 'representative-local', divergence: { account, field: 'balances[0].balance', staple: STAPLE }, follower: {}, representative: {}, readings: [], selfCheck: null } };
+		await running.log.append([older]);
+		const recheck = async function() {
+			return(await recheckDivergences({ follower: httpSource(running.follower.endpoint), representatives: running.representatives.map(function(api) {
+				return(httpSource(api.endpoint));
+			}), store: memoryStore({ [account]: [STAPLE] }), log: running.log, stopped: new AbortController().signal }));
+		};
+
+		expect(await recheck()).toEqual({ 'representative-local': 1 });
+		expect(recordsOf((await running.log.read()).records, 'sweep').at(-1)?.outcome).toMatchObject({ kind: 'representative-local', selfCheck: { kind: 'consistent' } });
+		expect(await recheck()).toEqual({});
+	});
+});
+
 const FOLLOWER_HEAD = '11'.repeat(32);
 const NEWER_BLOCK = '22'.repeat(32);
 

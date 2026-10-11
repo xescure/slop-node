@@ -936,8 +936,9 @@ function latestReadings(records: readonly SweepRecord[]): readonly SweepRecord[]
 
 /**
  * Compares again each account whose latest comparison diverged or was
- * unresolved, or whose latest reading both sides answered with the same
- * error, with the representative it was compared with and read again
+ * unresolved, or found one representative's own difference without a check
+ * of the follower's balances, recorded before such checks were made, or
+ * whose latest reading both sides answered with the same error, with the representative it was compared with and read again
  * from every other, and records the outcome in that comparison's walk and
  * lap, where it stands as the account's latest. A representative the run
  * does not reach leaves its accounts as they stand.
@@ -950,7 +951,7 @@ export async function recheckDivergences(setup: RecheckSetup): Promise<RecheckSu
 	const disputed = latestReadings((await setup.log.read()).records.filter(function(record): record is SweepRecord {
 		return(record.kind === 'sweep');
 	})).filter(function(record): boolean {
-		return(record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved' || record.outcome.kind === 'error-both');
+		return(record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved' || record.outcome.kind === 'error-both' || (record.outcome.kind === 'representative-local' && record.outcome.selfCheck === null));
 	});
 	const summary: Partial<Record<SweepOutcome['kind'], number>> = {};
 	for (const record of disputed) {
