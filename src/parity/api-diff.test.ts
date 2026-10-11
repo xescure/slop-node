@@ -456,7 +456,7 @@ describe('a divergence of the API', function() {
 		expect(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({}) })).toEqual({ unresolved: 1 });
 	});
 
-	test('of a page of history the representative failed to serve is sent again later, unless most representatives fail alike', async function() {
+	test('of a page of history the representative failed to serve is sent again later, unless most representatives answer apart from the follower, failing or serving another page', async function() {
 		const path = `/node/ledger/account/${TOKEN}/history/start/${'AB'.repeat(32)}?limit=1`;
 		const page = { status: 200, body: { history: [{ $id: 'CD'.repeat(32), voteStaple: { votes: [{ validityFrom: '2025-01-01T00:00:00.000Z' }] } }], nextKey: 'CD'.repeat(32) } };
 		const failure = { status: 500, body: { error: true, message: 'Internal error occurred (error ID: 00000000-0000-0000-0000-000000000001)' } };
@@ -472,8 +472,10 @@ describe('a divergence of the API', function() {
 			return(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({}) }));
 		};
 
+		const anotherPage = { status: 200, body: { ...page.body, nextKey: 'EF'.repeat(32) } };
 		expect(await recheckWith([page, page])).toEqual({ skipped: 1 });
 		expect(await recheckWith([failure, failure])).toEqual({ diverged: 1 });
+		expect(await recheckWith([anotherPage, page])).toEqual({ diverged: 1 });
 	});
 
 	test('of a follower that fails is never one representative\'s own, even when others fail alike', async function() {

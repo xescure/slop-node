@@ -701,13 +701,16 @@ async function compareRequest(request: SampledRequest, follower: APISource, repr
 	}));
 	const kind = disputedKindOf(readings.map(judgedAsTheSweepDoes), judged);
 	/*
-	 * A representative failing to serve a page of history, which most others
-	 * serve as the follower does, is asked again later rather than counted
-	 * its own: the failure names no cause, and a page it does serve may show
-	 * a staple the follower lacks.
+	 * A representative failing internally to serve a page of history is
+	 * asked again later rather than counted its own, or split on: the
+	 * failure names no cause, and a page it does serve may show a staple the
+	 * follower lacks. Only when most of the answers read, the failure among
+	 * them, differ from the follower's, failing or serving another page, is
+	 * the divergence the follower's; it carries the failure, which no later
+	 * comparison settles, so only a triage closes it.
 	 */
 	if (HISTORY_ROUTES.has(request.route) && isAnonymousFailure(representativeAnswer) && kind !== 'diverged') {
-		return({ outcome: { kind: 'skipped', reason: 'unanswered', detail: `${representative.endpoint} failed internally, as most representatives did not` }, representativeAnswer: undefined });
+		return({ outcome: { kind: 'skipped', reason: 'unanswered', detail: `${representative.endpoint} failed internally, and most representatives did not answer apart from the follower` }, representativeAnswer: undefined });
 	}
 	return({ outcome: { kind, field, follower: followerAfter, representative: representativeAnswer, readings }, representativeAnswer });
 }
