@@ -134,10 +134,20 @@ function isWeightRefusal(error: unknown): boolean {
 	return(lib.Error.isInstance(error) && error.code === 'LEDGER_INSUFFICIENT_VOTING_WEIGHT');
 }
 
+/** The ledger's refusal of a staple whose blocks it holds already [Keeta TS] index.js:67683-67687. */
+function isAlreadyHeld(error: unknown): boolean {
+	return(lib.Error.isInstance(error) && error.code === 'LEDGER_BLOCK_ALREADY_EXISTS');
+}
+
 /**
  * Adds staples as the follower's bootstrap does: one refused for want of
  * voting weight waits, and is tried again once more staples were added
- * (src/node/bootstrap-pass.ts).
+ * (src/node/bootstrap-pass.ts), and one refused because the ledger holds
+ * its blocks is held, as the follower's retry queue counts it
+ * (src/node/bootstrap-retry.ts). The ledger holds a staple before its place
+ * when a replay applied a deferred copy of it, which a snapshot keeps: the
+ * follower applied it the same way, at the place of the staple before it on
+ * its chain, so the ledger stands as the follower's did either way.
  */
 class WeightedAdds {
 	readonly #ledger: Ledger;
@@ -156,6 +166,10 @@ class WeightedAdds {
 			await this.#ledger.add(held.staple);
 			this.#waiting.delete(keyOf(held.staple));
 		} catch (error: unknown) {
+			if (isAlreadyHeld(error) && (await appliedOf(this.#ledger, [held.staple])).has(keyOf(held.staple))) {
+				this.#waiting.delete(keyOf(held.staple));
+				return;
+			}
 			if (!isWeightRefusal(error)) {
 				throw(error);
 			}
@@ -347,6 +361,10 @@ export async function runShadowVotes(run: ShadowRun): Promise<ShadowRunState> {
 					if (vote === undefined) {
 						if (held.has(blocksHash)) {
 							throw(new Error(`the offline ledger holds the staple ${blocksHash}, whose shadow vote was never recorded`));
+						}
+						// A vote on a staple the ledger holds already would judge it by a ledger past it.
+						if ((await appliedOf(ledger, [staple])).has(blocksHash)) {
+							throw(new Error(`the offline ledger applied staple ${blocksHash} before its place ${sequence.toString()}, replaying a deferred copy of it, so a vote on it would see a ledger that holds it`));
 						}
 						const outcome = await atMoment(staple.timestamp(), async function() {
 							return(outcomeOf(await shadowVote(staple, ledger), ledger));

@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { afterEach, describe, expect, inject, test, vi } from 'vitest';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
-import { loadMainnetFixture } from '../conformance/mainnet/fixture.js';
+import * as KeetaNet from '@keetanetwork/keetanet-client';
+import { loadMainnetFixture, mainnetNodeConfig } from '../conformance/mainnet/fixture.js';
 import { REPLAY_TIMEOUT_MILLISECONDS } from '../conformance/mainnet/head-replay.js';
 import { replayOrder } from '../conformance/mainnet/replay.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
@@ -13,10 +14,22 @@ import type { ShadowBase, ShadowRunState, ShadowTarget, ShadowVoteEntry } from '
 import { SHADOW_GC_SLICE_MILLISECONDS, freshShadowRun, runShadowVotes, sampledForInformation, shadowRunComplete, shadowWindowOf, votedFrom } from './shadow-live.js';
 import type { ShadowScope, ShadowSource, ShadowState } from './shadow-live.js';
 
+const lib = KeetaNet.lib;
+
 const GENESIS_BASE: ShadowBase = { database: null, sequence: '0', blocksHash: null, scopedStaples: 0 };
 
 function keyOf(staple: VoteStaple): string {
 	return(staple.blocksHash.toString());
+}
+
+/** Whether a block of the staple builds on a block of the earlier one. */
+function buildsOn(staple: VoteStaple, earlier: VoteStaple | undefined): boolean {
+	const hashes = new Set(earlier?.blocks.map(function(block): string {
+		return(block.hash.toString());
+	}));
+	return(staple.blocks.some(function(block): boolean {
+		return(hashes.has(block.previous.toString()));
+	}));
 }
 
 /** The follower's store holding the staples at the places of the list, from 1 on, as its ledger added them. */
@@ -217,6 +230,57 @@ describe('shadow votes on the follower\'s history', function() {
 		});
 		expect(new Set(voted).size).toBe(voted.length);
 		expect(voted.length).toBe(whole.scoped.shadowVoted + whole.informational.shadowVoted);
+	}, REPLAY_TIMEOUT_MILLISECONDS);
+
+	/*
+	 * A snapshot holds deferred copies of staples the follower applied later,
+	 * by a replay of the staple before on their chain, in the same
+	 * transaction; the offline ledger replays them as the follower did, ahead
+	 * of their own places.
+	 */
+	test('skip as held a staple the offline ledger applied before its place, replaying a deferred copy, unless it is to be voted on', async function() {
+		const head = replayOrder(await loadMainnetFixture('head')).slice(0, 400);
+		// Past the first staples, whose votes the weight that later staples give carries.
+		const earlier = head.findIndex(function(staple, index): boolean {
+			return(index >= 200 && head.slice(index + 1).some(function(later): boolean {
+				return(buildsOn(later, staple));
+			}));
+		});
+		const later = head.findIndex(function(staple, index): boolean {
+			return(index > earlier && buildsOn(staple, head[earlier]));
+		});
+		const laterStaple = head[later];
+		if (earlier < 0 || laterStaple === undefined) {
+			throw(new Error('no staple of the head extends an earlier one'));
+		}
+		const scope = scopeFrom(head, head.length - 1);
+		const every = [1000, 1001, 1003].find(function(candidate): boolean {
+			return(!sampledForInformation(keyOf(laterStaple), candidate));
+		}) ?? 1000;
+		const start = freshShadowRun(scope, every, GENESIS_BASE, targetOf(head));
+		const whole = await runShadowVotes({ source: sourceOf(head), state: memoryState(), storage: new MemoryLedgerStorage(), start, batchStaples: 50 });
+
+		const withDeferredCopy = async function(informationalEvery: number): Promise<ShadowRunState> {
+			const inLedger = await offlineLedger();
+			const state = memoryState();
+			const before = await inLedger(function(storage) {
+				return(runShadowVotes({ source: sourceOf(head.slice(0, earlier)), state, storage, start: { ...start, informationalEvery, target: targetOf(head.slice(0, earlier)) }, batchStaples: 50 }));
+			});
+			await inLedger(async function(storage) {
+				const node = new lib.Node(mainnetNodeConfig(storage));
+				try {
+					expect(await node.ledger.add(laterStaple)).toEqual([]);
+				} finally {
+					await node.stop();
+				}
+			});
+			return(await inLedger(function(storage) {
+				return(runShadowVotes({ source: sourceOf(head), state, storage, start: { ...before, target: targetOf(head) }, batchStaples: 50 }));
+			}));
+		};
+
+		expect(await withDeferredCopy(every)).toEqual(whole);
+		await expect(withDeferredCopy(1)).rejects.toThrow(`the offline ledger applied staple ${keyOf(laterStaple)} before its place ${String(later + 1)}`);
 	}, REPLAY_TIMEOUT_MILLISECONDS);
 
 	test('stop rather than miscount when the ledger holds a staple whose vote was never recorded', async function() {

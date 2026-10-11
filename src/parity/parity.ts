@@ -117,6 +117,9 @@ async function databaseExists(client: pg.Client, name: string): Promise<boolean>
 const BASE_LAST_STAPLE = 'SELECT sequence::text AS place, blocks_hash FROM staples ORDER BY sequence DESC LIMIT 1';
 
 /** Staples whose every vote is from the moment on: those of the scoped window. */
+/** Forgets every deferred staple; the rows of what each waits on go with it (schema/migrations/0001_ledger.sql, 0006_deferred_checks.sql). */
+const FORGET_DEFERRED_STAPLES = 'DELETE FROM deferred_staples';
+
 const BASE_SCOPED_STAPLES = `
 	SELECT count(*) AS count FROM (
 		SELECT blocks_hash FROM votes
@@ -150,6 +153,15 @@ async function prepareShadowLedger(directory: string, base: string | undefined, 
 	const copy = new pg.Client({ connectionString: followerDatabaseURLOf(directory, SHADOW_DATABASE) });
 	await copy.connect();
 	try {
+		/*
+		 * The follower lists every staple it applied at the place it applied
+		 * it, those a replay of a deferred one applied included, so the run
+		 * adds each itself and needs no deferred copy. A copy the snapshot
+		 * kept would be applied by the replay of the staple before it on its
+		 * chain, ahead of its own place, where its vote would see a ledger
+		 * that holds it (src/parity/shadow-live.ts).
+		 */
+		await copy.query(FORGET_DEFERRED_STAPLES);
 		const last = (await copy.query<{ place: string; blocks_hash: Buffer }>(BASE_LAST_STAPLE)).rows[0];
 		const scoped = await copy.query<{ count: string }>(BASE_SCOPED_STAPLES, [SHADOW_SCOPE.from]);
 		const sequence = last?.place ?? '0';
