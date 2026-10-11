@@ -75,6 +75,12 @@ const MODULES = {
 		ignorers: [],
 		selectedCases: {}
 	},
+	'bootstrap-pass': {
+		mutate: ['src/node/bootstrap-pass.ts', 'src/node/bootstrap-window.ts'],
+		tests: ['src/node/bootstrap-pass.test.ts', 'src/node/bootstrap-pass-evidence.test.ts', 'src/node/bootstrap-window.test.ts'],
+		ignorers: [],
+		selectedCases: {}
+	},
 	'bootstrap-pipeline': {
 		mutate: ['src/node/bootstrap-ranges.ts', 'src/node/bootstrap-stage.ts', 'src/node/bootstrap-retry.ts'],
 		tests: ['src/node/bootstrap-ranges.test.ts', 'src/node/bootstrap-stage.test.ts', 'src/node/bootstrap-retry.test.ts', 'src/node/bootstrap-simulation.test.ts'],

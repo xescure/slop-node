@@ -340,7 +340,6 @@ function failureOf(result: PromiseRejectedResult): Error {
 	return(new Error(String(reason)));
 }
 
-/** The horizon of a pass that begins at the moment given: the margin before. */
 /** A moment that stays where it is, as a pass reads its horizon and end. */
 function fixed(moment: Date): () => number {
 	const at = moment.getTime();
@@ -349,11 +348,12 @@ function fixed(moment: Date): () => number {
 	});
 }
 
+/** The horizon of a pass that begins at the moment given: the margin before. */
 function floorOf(now: number): Date {
 	return(new Date(Math.max(0, now - BOOTSTRAP_MARGIN_MILLISECONDS)));
 }
 
-function firstProgress(now: number, stagger: number, from: Date): PeerProgress {
+export function firstProgress(now: number, stagger: number, from: Date): PeerProgress {
 	return({ reached: from, caughtUp: false, deepScanFrom: from, nextDeepScan: new Date(now + DEEP_SCAN_PERIOD_MILLISECONDS + stagger), deepScan: undefined, keying: 'unknown' });
 }
 
@@ -366,7 +366,7 @@ function firstProgress(now: number, stagger: number, from: Date): PeerProgress {
  * before; a pass from where the last reached that the queue stops never
  * completes, and only a deep re-scan reads that far back.
  */
-function withDeepScanBegun(progress: PeerProgress, now: number, saturated: boolean): PeerProgress {
+export function withDeepScanBegun(progress: PeerProgress, now: number, saturated: boolean): PeerProgress {
 	if (progress.deepScan !== undefined) {
 		return(progress);
 	}
@@ -393,7 +393,7 @@ type Taken = { readonly outcomes: readonly Added[]; readonly held: boolean; read
  * its staples it listed for reads it listed in full, as the peer keys its
  * staples as far as the pass knows.
  */
-type Evidence<Staple extends PassStaple> = {
+export type Evidence<Staple extends PassStaple> = {
 	readonly page: readonly Staple[];
 	readonly start: number;
 	/** As the passes know it when the evidence is weighed, which only ever moves towards late-votes, so what was counted when the page came stays sound. */
@@ -419,7 +419,7 @@ function stampsOf(staple: PassStaple): number[] {
  * The peer keys none of its votes earlier, so whichever it listed the staple
  * for, it read a key at or after this moment.
  */
-function reachOf(staple: PassStaple): number {
+export function reachOf(staple: PassStaple): number {
 	return(Math.min(...stampsOf(staple)) - VOTE_KEY_TOLERANCE_MILLISECONDS);
 }
 
@@ -429,7 +429,7 @@ function listsTwice(staples: readonly PassStaple[]): boolean {
 }
 
 /** The first staple of the answer from the start none of whose votes was made at or after the tolerance before it, which a peer keyed by votes within the tolerance never lists. */
-function listedForEarlierVotes<Staple extends PassStaple>(staples: readonly Staple[], start: number): Staple | undefined {
+export function listedForEarlierVotes<Staple extends PassStaple>(staples: readonly Staple[], start: number): Staple | undefined {
 	return(staples.find(function(staple): boolean {
 		return(stampsOf(staple).every(function(stamp): boolean {
 			return(stamp < start - VOTE_KEY_TOLERANCE_MILLISECONDS);
@@ -467,7 +467,7 @@ function notKeyedByVotesInTime(keying: PeerKeying): PeerKeying {
  * What the passes over a peer learn of how it keys its staples from every
  * answer, kept with its progress, and reported once it keys votes late.
  */
-class KeyingRecord {
+export class KeyingRecord {
 	#current: PeerKeying;
 	readonly #changed: (keying: PeerKeying) => Promise<void>;
 	readonly #report: (event: PassEvent) => void;
@@ -509,7 +509,7 @@ class KeyingRecord {
  * two staples and their votes are distinct. A pass reads a bounded part of
  * a peer, so it keeps them all.
  */
-class KnownVotes {
+export class KnownVotes {
 	readonly #stamps = new Map<string, readonly number[]>();
 
 	learn(staples: readonly PassStaple[]): void {
@@ -554,7 +554,7 @@ class KnownVotes {
  * last MAX_VOTES_PER_READ staples, and every staple up to the first listing
  * of a staple it listed twice, which the read listing it again followed.
  */
-function wholeBelowOf(page: readonly PassStaple[], limit: number, longest: number): number {
+export function wholeBelowOf(page: readonly PassStaple[], limit: number, longest: number): number {
 	if (page.length < limit && page.length < longest) {
 		return(page.length);
 	}
@@ -582,7 +582,7 @@ function wholeBelowOf(page: readonly PassStaple[], limit: number, longest: numbe
  * that vote: those made from the tolerance after it up to twice the tolerance
  * before the staple's first vote.
  */
-function countedReach(page: readonly PassStaple[], start: number, known: KnownVotes): number {
+export function countedReach(page: readonly PassStaple[], start: number, known: KnownVotes): number {
 	const last = page.at(-1);
 	if (last === undefined) {
 		return(Number.NEGATIVE_INFINITY);
@@ -599,7 +599,7 @@ function countedReach(page: readonly PassStaple[], start: number, known: KnownVo
  * Whether the staple at the index of the page shows, once an answer from the
  * moment lists it, that the page read every key before the moment (see Pass).
  */
-function shows(evidence: Evidence<PassStaple>, index: number, moment: number): boolean {
+export function shows(evidence: Evidence<PassStaple>, index: number, moment: number): boolean {
 	const staple = evidence.page[index];
 	if (staple === undefined) {
 		return(false);
@@ -625,7 +625,7 @@ function shows(evidence: Evidence<PassStaple>, index: number, moment: number): b
  * those that do, which a peer keyed by votes lists first from there; nothing
  * when none shows one.
  */
-function shownTarget(evidence: Evidence<PassStaple>): { readonly at: number; readonly index: number } | undefined {
+export function shownTarget(evidence: Evidence<PassStaple>): { readonly at: number; readonly index: number } | undefined {
 	let target: { readonly at: number; readonly index: number; readonly reach: number } | undefined;
 	evidence.page.forEach(function(staple, index): void {
 		const reach = reachOf(staple);
@@ -644,12 +644,12 @@ function shownTarget(evidence: Evidence<PassStaple>): { readonly at: number; rea
 }
 
 /** Whether a staple of the page may show the page reached some moment past the start. */
-function mayShowPast(evidence: Evidence<PassStaple>): boolean {
+export function mayShowPast(evidence: Evidence<PassStaple>): boolean {
 	return(evidence.keying.current === 'applied' || shownTarget(evidence) !== undefined);
 }
 
 /** Whether a vote of the staple was made within the tolerance of the moments from the start up to the moment. */
-function madeBetween(staple: PassStaple, start: number, moment: number): boolean {
+export function madeBetween(staple: PassStaple, start: number, moment: number): boolean {
 	return(stampsOf(staple).some(function(stamp): boolean {
 		return(stamp >= start - VOTE_KEY_TOLERANCE_MILLISECONDS && stamp < moment + VOTE_KEY_TOLERANCE_MILLISECONDS);
 	}));
@@ -1366,7 +1366,7 @@ type PassSetup = {
  * once the pass has caught up, and so does one that answers short pages
  * while far behind, where probing after each would double the requests.
  */
-function probesHorizonAfter(shortPages: number): boolean {
+export function probesHorizonAfter(shortPages: number): boolean {
 	return(shortPages >= 2 && Number.isInteger(Math.log2(shortPages)));
 }
 

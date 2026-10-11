@@ -185,4 +185,43 @@ describe('the staples a filter names', function() {
 		named.hold([stapleNamed('held')]);
 		expect([filterOf(named, 7).seed, filterOf(named, 8).seed]).toEqual([7, 8]);
 	});
+
+	test('count a staple once whether the node held it or the peer sent it, or both', function() {
+		const named = new NamedStaples();
+		const [first, second] = staplesNamed('both', 2);
+		if (first === undefined || second === undefined) {
+			throw(new Error('two staples are made'));
+		}
+		named.receive([first]);
+		named.hold([first]);
+		expect(named.size).toBe(1);
+		named.hold([second]);
+		named.receive([second]);
+		expect(named.size).toBe(2);
+		const carrying = new NamedStaples();
+		carrying.receive([first]);
+		carrying.carry(named, function(): boolean {
+			return(true);
+		});
+		expect(carrying.size).toBe(2);
+	});
+
+	test('name exactly its capacity with as many hashes as a filter made for it at the target rate', function() {
+		const full = new NamedStaples();
+		full.hold(staplesNamed('full', BLOOM_CAPACITY));
+
+		expect(filterOf(full)._nbHashes).toBe(lib.Utils.Bloom.BloomFilter.create(BLOOM_CAPACITY, BLOOM_ERROR_RATE)._nbHashes);
+	});
+
+	test('keep every staple it held while what the peer sent fills it up to its capacity', function() {
+		const named = new NamedStaples();
+		const held = staplesNamed('held', BLOOM_CAPACITY - 1);
+		named.hold(held);
+		named.receive([stapleNamed('sent')]);
+
+		expect(named.size).toBe(BLOOM_CAPACITY);
+		expect(held.every(function(staple): boolean {
+			return(named.names(staple));
+		})).toBe(true);
+	});
 });
