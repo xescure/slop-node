@@ -6,7 +6,7 @@ import type { SimulatedKeying, SimulatedPeerOptions, SimulatedStaple } from '../
 import { advanceClock, freezeClock } from '../testing/network.js';
 import type { PeerKeying } from './bootstrap-evidence.js';
 import { DEEP_SCAN_DEPTH_MILLISECONDS, DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PrimingWindow, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, bootstrapPeer, bootstrapRange, completes, firstProgress } from './bootstrap-pass.js';
-import type { PassAnswer, PassEvent, PassOptions, PassRequest, PeerIO, PeerOutcome, PeerProgress, RangeSetup } from './bootstrap-pass.js';
+import type { PassAnswer, PassEvent, PassOptions, PassOutcome, PassRequest, PeerIO, PeerOutcome, PeerProgress, RangeSetup } from './bootstrap-pass.js';
 import type { QueueUse } from './bootstrap-retry.js';
 import { BLOOM_CAPACITY, BLOOM_ERROR_RATE, BOOTSTRAP_MARGIN_MILLISECONDS, MAX_NAMED } from './bootstrap-window.js';
 
@@ -146,6 +146,23 @@ function peerWith(count: number, options: SimulatedPeerOptions = {}): SimulatedP
 		peer.apply(madeAt, madeAt);
 	}
 	return(peer);
+}
+
+/** The staples of those given that the peer applied before the moment and the node neither holds nor has queued: those a pass that reached the moment lost. */
+function lostBefore(staples: readonly SimulatedStaple[], harness: Harness, at: number): number[] {
+	return(staples.filter(function(staple): boolean {
+		return(staple.moment < at && !harness.node.holds(staple));
+	}).map(function(staple): number {
+		return(staple.id);
+	}));
+}
+
+/** That the node holds or has queued every staple the peer applied before where the pass recorded it reached, and before its horizon when it completed. */
+function expectNoLoss(peer: SimulatedPeer, harness: Harness, live: PassOutcome): void {
+	expect(lostBefore(peer.staples, harness, harness.progress?.reached.getTime() ?? NOW)).toEqual([]);
+	if (completes(live)) {
+		expect(lostBefore(peer.staples, harness, NOW - BOOTSTRAP_MARGIN_MILLISECONDS)).toEqual([]);
+	}
 }
 
 function pageOf(staples: readonly SimulatedStaple[]): Promise<PassAnswer<SimulatedStaple>> {
@@ -885,6 +902,10 @@ function traceOf(harness: Harness): Trace {
 	});
 }
 
+const DRAINED: PassOutcome = { kind: 'drained' };
+
+const CAUGHT_UP: PassOutcome = { kind: 'caught-up' };
+
 describe('how much a pass asks of a peer', function() {
 	afterEach(function() {
 		vi.useRealTimers();
@@ -896,12 +917,12 @@ describe('how much a pass asks of a peer', function() {
 	 * pins how many it asks and how many staples the peer sends again, which
 	 * the rules for what a filter names and where the start moves decide.
 	 */
-	test.each<[string, () => SimulatedPeer, (harness: Harness, peer: SimulatedPeer) => Promise<void>, number, Trace]>([
+	test.each<[string, () => SimulatedPeer, (harness: Harness, peer: SimulatedPeer) => Promise<void>, number, PassOutcome, Trace]>([
 		['a history applied as it was made', function() {
 			return(peerWith(5000));
 		}, function() {
 			return(Promise.resolve());
-		}, 300, TRACES.applied],
+		}, 300, DRAINED, TRACES.applied],
 		['a history the node holds already', function() {
 			return(peerWith(5000));
 		}, async function(harness, peer) {
@@ -910,7 +931,7 @@ describe('how much a pass asks of a peer', function() {
 				await harness.node.add(staple);
 			}
 			freezeClock(new Date(NOW));
-		}, 1000, TRACES.held],
+		}, 1000, DRAINED, TRACES.held],
 		['a history keyed by votes whose pages a read cuts', function() {
 			const peer = new SimulatedPeer({ keying: { kind: 'votes', votesPerRead: 200, readsAtMost: Number.POSITIVE_INFINITY, readMilliseconds: 0 } });
 			for (let index = 0; index < 3000; index++) {
@@ -920,7 +941,7 @@ describe('how much a pass asks of a peer', function() {
 			return(peer);
 		}, function() {
 			return(Promise.resolve());
-		}, 300, TRACES.votes],
+		}, 300, DRAINED, TRACES.votes],
 		['a month of history applied an hour ago', function() {
 			const peer = new SimulatedPeer();
 			for (let index = 0; index < 3000; index++) {
@@ -929,12 +950,12 @@ describe('how much a pass asks of a peer', function() {
 			return(peer);
 		}, function() {
 			return(Promise.resolve());
-		}, 1000, TRACES.late],
+		}, 1000, DRAINED, TRACES.late],
 		['a peer whose time for a request runs out', function() {
 			return(peerWith(5000, { answersAtMost: 37 }));
 		}, function() {
 			return(Promise.resolve());
-		}, 1000, TRACES.short],
+		}, 1000, CAUGHT_UP, TRACES.short],
 		['a peer keyed by votes whose time runs out on a history the node holds part of', function() {
 			const peer = new SimulatedPeer({ keying: { kind: 'votes', votesPerRead: 20, readsAtMost: 10, readMilliseconds: 450 } });
 			for (let index = 0; index < 4000; index++) {
@@ -946,7 +967,7 @@ describe('how much a pass asks of a peer', function() {
 			for (const staple of peer.staples.slice(0, 1500)) {
 				await harness.node.add(staple);
 			}
-		}, 1000, TRACES.votesHeld],
+		}, 1000, { kind: 'bounded', reached: EPOCH }, TRACES.votesHeld],
 		['more staples at one moment than a filter and a page hold', function() {
 			const peer = new SimulatedPeer();
 			const moment = NOW - MINUTE;
@@ -959,26 +980,26 @@ describe('how much a pass asks of a peer', function() {
 			return(peer);
 		}, function() {
 			return(Promise.resolve());
-		}, 1000, TRACES.crowd],
+		}, 1000, DRAINED, TRACES.crowd],
 		['more staples at one moment than a filter and a page hold, from a peer it knows keys by when it applied them', crowdPeer, function(harness) {
 			harness.progress = { ...firstProgress(NOW, 0, EPOCH), keying: 'applied' };
 			return(Promise.resolve());
-		}, 1000, TRACES.crowdApplied],
+		}, 1000, DRAINED, TRACES.crowdApplied],
 		['more staples at one moment than a filter and a page hold, from a peer it takes to key by votes', crowdPeer, function(harness) {
 			harness.progress = { ...firstProgress(NOW, 0, EPOCH), keying: 'votes' };
 			return(Promise.resolve());
-		}, 1000, TRACES.crowdVotes],
+		}, 1000, DRAINED, TRACES.crowdVotes],
 		['a history from a peer it knows keys votes late', function() {
 			return(peerWith(3000));
 		}, function(harness) {
 			harness.progress = { ...firstProgress(NOW, 0, EPOCH), keying: 'late-votes' };
 			return(Promise.resolve());
-		}, 500, TRACES.lateVotes],
+		}, 500, DRAINED, TRACES.lateVotes],
 		['a peer whose time runs out reading what the filter names', function() {
 			return(peerWith(5000, { readsAtMost: 300 }));
 		}, function() {
 			return(Promise.resolve());
-		}, 1000, TRACES.readsOut],
+		}, 1000, DRAINED, TRACES.readsOut],
 		['a month of history applied an hour ago, half of which the node holds', function() {
 			const peer = new SimulatedPeer();
 			for (let index = 0; index < 3000; index++) {
@@ -989,8 +1010,8 @@ describe('how much a pass asks of a peer', function() {
 			for (const staple of peer.staples.slice(0, 1500)) {
 				await harness.node.add(staple);
 			}
-		}, 1000, TRACES.lateHeld]
-	])('reading %s', async function(_ignored: string, makePeer: () => SimulatedPeer, prepare: (harness: Harness, peer: SimulatedPeer) => Promise<void>, limit: number, trace: Trace) {
+		}, 1000, DRAINED, TRACES.lateHeld]
+	])('reading %s', async function(_ignored: string, makePeer: () => SimulatedPeer, prepare: (harness: Harness, peer: SimulatedPeer) => Promise<void>, limit: number, outcome: PassOutcome, trace: Trace) {
 		freezeClock(new Date(NOW));
 		const peer = makePeer();
 		const harness = new Harness(function(request) {
@@ -998,8 +1019,10 @@ describe('how much a pass asks of a peer', function() {
 		});
 		await prepare(harness, peer);
 
-		await bootstrapPeer(harness.io, passOptions(limit));
+		const { live } = await bootstrapPeer(harness.io, passOptions(limit));
 
+		expect(live).toEqual(outcome);
+		expectNoLoss(peer, harness, live);
 		expect(traceOf(harness)).toEqual(trace);
 	});
 });
@@ -1045,6 +1068,120 @@ describe('how much a pass over a range asks of a peer', function() {
 		expect(traceOf(harness)).toEqual(trace);
 	});
 });
+
+/** How a peer's staples at one moment an hour ago, and after it, are laid out (mistakenCrowd). */
+type CrowdLayout = {
+	/** The staples at the moment, voted on then. */
+	readonly crowd: number;
+	/** How many of those stay out of answers, spread among them. */
+	readonly hidden: number;
+	/** The staples after the moment, each voted on as it was applied. */
+	readonly after: number;
+	readonly afterFrom: number;
+	readonly spacing: number;
+	readonly options: SimulatedPeerOptions;
+	/** When the votes of the hidden staples were made, if not at the moment. */
+	readonly hiddenVotes?: readonly number[];
+};
+
+/**
+ * A peer whose staples at one moment, the moment the pass starts from, are
+ * more than a filter holds. Some of them stay out of every answer until a
+ * page from the moment, asked for with a filter that names more than a
+ * filter holds, reaches past the moment, and then out of every answer to
+ * that filter, as if it named them by mistake; every other filter, with a
+ * seed of its own, lists them.
+ */
+function mistakenCrowd(keying: PeerKeying, layout: CrowdLayout): { whole: SimulatedPeer; harness: Harness; mistaken: () => string | undefined } {
+	freezeClock(new Date(NOW));
+	const whole = new SimulatedPeer(layout.options);
+	const visible = new SimulatedPeer(layout.options);
+	const moment = NOW - HOUR;
+	let hidden = 0;
+	for (let index = 0; index < layout.crowd; index++) {
+		// Spread evenly: the staple is hidden when the count hidden so far falls behind its share.
+		if (hidden < Math.ceil((index + 1) * layout.hidden / layout.crowd)) {
+			hidden++;
+			whole.applyVoted(moment, moment, [], layout.hiddenVotes ?? [moment]);
+		} else {
+			visible.applyAlso(whole.applyVoted(moment, moment, [], [moment]), moment);
+		}
+	}
+	for (let index = 0; index < layout.after; index++) {
+		const at = layout.afterFrom + index * layout.spacing;
+		visible.applyAlso(whole.applyVoted(at, at, [], [at]), at);
+	}
+	const fullHashes = lib.Utils.Bloom.BloomFilter.create(BLOOM_CAPACITY, BLOOM_ERROR_RATE)._nbHashes;
+	let mistaken: string | undefined;
+	const harness = new Harness(async function(request) {
+		if (mistaken !== undefined && request.bloomFilter !== mistaken) {
+			return(await whole.page(request));
+		}
+		const answer = await visible.page(request);
+		const crowded = request.bloomFilter !== undefined && lib.Utils.Bloom.deserializeBloomFilter(request.bloomFilter)._nbHashes < fullHashes;
+		const pastMoment = answer.kind === 'page' && answer.staples.some(function(staple): boolean {
+			return(staple.moment > moment);
+		});
+		if (mistaken === undefined && crowded && request.start.getTime() === moment && request.limit > 1 && pastMoment) {
+			mistaken = request.bloomFilter;
+		}
+		return(answer);
+	});
+	harness.progress = { reached: new Date(moment), caughtUp: true, deepScanFrom: new Date(moment), nextDeepScan: new Date(NOW + HOUR), deepScan: undefined, keying };
+	return({ whole, harness, mistaken: function(): string | undefined {
+		return(mistaken);
+	} });
+}
+
+/**
+ * A peer whose 2101 staples at the moment an hour ago, voted on then, are more
+ * than a filter holds, and which answers at most 700 a request; 30 staples
+ * follow, 100 ms apart, then as many as asked for applied from 4 s past the
+ * moment, 1 ms apart, whose votes were made 1.5 s past it.
+ */
+function crowdEndingIn(late: number): { peer: SimulatedPeer; last: SimulatedStaple; moment: number } {
+	freezeClock(new Date(NOW));
+	const peer = new SimulatedPeer({ answersAtMost: 700 });
+	const moment = NOW - HOUR;
+	for (let index = 0; index < 2100; index++) {
+		peer.applyVoted(moment, moment, [], [moment]);
+	}
+	const last = peer.applyVoted(moment, moment, [], [moment]);
+	for (let index = 0; index < 30; index++) {
+		const at = moment + 1 + index * 100;
+		peer.applyVoted(at, at, [], [at]);
+	}
+	for (let index = 0; index < late; index++) {
+		const at = moment + 4 * SECOND + index;
+		peer.applyVoted(at, at, [], [moment + 1500]);
+	}
+	return({ peer, last, moment });
+}
+
+/**
+ * A pass's view of the peer, starting from the staple's moment, in which
+ * every answer to a filter `mistakes` picks, given a request and the peer's
+ * answer, and every later answer to that filter, leaves out the staple, as
+ * if the filter named it by mistake.
+ */
+function hidingFrom(peer: SimulatedPeer, staple: SimulatedStaple, mistakes: (request: PassRequest, answer: PassAnswer<SimulatedStaple>) => boolean, keying: PeerKeying): Harness {
+	const mistaken = new Set<string>();
+	const harness = new Harness(async function(request) {
+		const answer = await peer.page(request);
+		const filter = request.bloomFilter ?? '';
+		if (mistakes(request, answer)) {
+			mistaken.add(filter);
+		}
+		if (answer.kind !== 'page' || !mistaken.has(filter)) {
+			return(answer);
+		}
+		return({ kind: 'page', staples: answer.staples.filter(function(listed): boolean {
+			return(listed !== staple);
+		}) });
+	});
+	harness.progress = { reached: new Date(staple.moment), caughtUp: true, deepScanFrom: new Date(staple.moment), nextDeepScan: new Date(NOW + HOUR), deepScan: undefined, keying };
+	return(harness);
+}
 
 describe('a pass checking what it concludes', function() {
 	afterEach(function() {
@@ -1161,6 +1298,169 @@ describe('a pass checking what it concludes', function() {
 		expect(whole.staples.filter(function(staple): boolean {
 			return(!harness.node.holds(staple));
 		}).length).toBe(0);
+	});
+
+	/*
+	 * The peer answers at most 200 staples a request, and 2500 staples share
+	 * one moment: short pages come back while the filter names them all, at
+	 * a rate above the one the pass accepts, long before any page reaches
+	 * past them.
+	 */
+	test('ends caught up on a peer whose short pages cross more staples at one moment than a filter holds only once it holds every staple before its horizon', async function() {
+		freezeClock(new Date(NOW));
+		const peer = new SimulatedPeer({ answersAtMost: 200 });
+		const moment = NOW - HOUR;
+		for (let index = 0; index < 2500; index++) {
+			peer.applyVoted(moment, moment, [], [moment]);
+		}
+		for (let index = 0; index < 500; index++) {
+			const at = moment + 1 + index * SECOND;
+			peer.applyVoted(at, at, [], [at]);
+		}
+		const harness = new Harness(function(request) {
+			return(peer.page(request));
+		});
+
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(completes(live)).toBe(true);
+		expectNoLoss(peer, harness, live);
+	});
+
+	/*
+	 * 2500 staples share the moment the pass starts from, an hour ago, voted
+	 * on then, after which the peer holds nothing; the first further filter,
+	 * after the empty page, would find one more, but the pass's time runs out
+	 * as the empty page comes back.
+	 */
+	test('ends at its bound at the start of an empty page it has no time left to check, rather than drain the peer', async function() {
+		freezeClock(new Date(NOW));
+		const peer = new SimulatedPeer();
+		const other = new SimulatedPeer();
+		const moment = NOW - HOUR;
+		for (let index = 0; index < 2500; index++) {
+			other.applyAlso(peer.applyVoted(moment, moment, [], [moment]), moment);
+		}
+		const hidden = other.applyVoted(moment, moment, [], [moment]);
+		let emptyPage = false;
+		const harness = new Harness(async function(request) {
+			if (emptyPage && request.limit === 1 && request.start.getTime() === moment) {
+				return({ kind: 'page', staples: [hidden] });
+			}
+			const answer = await peer.page(request);
+			if (!emptyPage && request.start.getTime() === moment && request.limit > 1 && answer.kind === 'page' && answer.staples.length === 0) {
+				emptyPage = true;
+				advanceClock(MAX_PASS_MILLISECONDS);
+			}
+			return(answer);
+		});
+		harness.progress = { reached: new Date(moment), caughtUp: true, deepScanFrom: new Date(moment), nextDeepScan: new Date(NOW + HOUR), deepScan: undefined, keying: 'unknown' };
+
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(emptyPage).toBe(true);
+		expect(live).toEqual({ kind: 'bounded', reached: new Date(moment) });
+		expect(harness.progress.caughtUp).toBe(false);
+		expectNoLoss(other, harness, live);
+	});
+
+	/*
+	 * The peer answers at most 700 staples a request, so every page from the
+	 * crowded start is short. The fourth, after which the pass probes its
+	 * horizon, is the first whose filter, naming more than a filter holds,
+	 * reaches past the moment, and so the one that names 300 of the crowd by
+	 * mistake.
+	 */
+	test.each<[PeerKeying]>([['unknown'], ['applied'], ['votes'], ['late-votes']])('concludes neither that it has caught up nor that it may move past a moment on a filter that names more than it holds, from a peer it takes to key %s', async function(keying: PeerKeying) {
+		const { whole, harness, mistaken } = mistakenCrowd(keying, { crowd: 2500, hidden: 300, after: 50, afterFrom: NOW - 5 * MINUTE, spacing: SECOND, options: { answersAtMost: 700 } });
+
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(mistaken()).toBeDefined();
+		expectNoLoss(whole, harness, live);
+	});
+
+	/*
+	 * The page that reaches past the moment lists only part of the 1500
+	 * staples after it, so a further filter lists one first from where the
+	 * page shows the pass reached; from the start, it lists first the staples
+	 * the page's filter named by mistake, more than a page that checks holds.
+	 */
+	test.each<[PeerKeying]>([['unknown'], ['applied']])('moves past a moment only once each further filter lists first, from the start, the staple it lists first from there, from a peer it takes to key %s', async function(keying: PeerKeying) {
+		const { whole, harness, mistaken } = mistakenCrowd(keying, { crowd: 5000, hidden: 3000, after: 1500, afterFrom: NOW - HOUR + 1, spacing: 10, options: {} });
+
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(mistaken()).toBeDefined();
+		expectNoLoss(whole, harness, live);
+	});
+
+	/*
+	 * The hidden staples' votes were made long before the start, as from a
+	 * peer that keys votes late, which the pass has not learnt yet: a page
+	 * that lists them lacked nothing made about the moments it checks, and
+	 * shows nothing of how far it read.
+	 */
+	test('moves past a moment only once each further filter\'s page shows it read up to there, from a peer it takes to key votes', async function() {
+		const { whole, harness, mistaken } = mistakenCrowd('votes', { crowd: 5000, hidden: 3000, after: 1500, afterFrom: NOW - HOUR + 1, spacing: 10, options: {}, hiddenVotes: [NOW - 3 * HOUR] });
+
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(mistaken()).toBeDefined();
+		expectNoLoss(whole, harness, live);
+	});
+
+	/*
+	 * The peer answers at most 700 staples a request: the third page, whose
+	 * filter names more than a filter holds, lists every staple at the moment
+	 * but the last, and shows no move. Every filter that checks a move to a
+	 * millisecond past the moment names that last staple by mistake, and no
+	 * other filter does.
+	 */
+	test.each<[PeerKeying]>([['applied'], ['unknown']])('moves past a moment only once a probe with the page\'s own filter shows the page reached past it, from a peer it takes to key %s', async function(keying: PeerKeying) {
+		const { peer, last, moment } = crowdEndingIn(0);
+		const harness = hidingFrom(peer, last, function(request): boolean {
+			return(request.limit === 1 && request.start.getTime() === moment + 1);
+		}, keying);
+
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expectNoLoss(peer, harness, live);
+	});
+
+	/*
+	 * After the crowd, staples applied from 4 s past the moment whose votes
+	 * were made 1.5 s past it, before the moment a move is checked to. Keyed
+	 * by when they were applied, they lie past that moment, so a further
+	 * filter lists the same staple first from the start as from there; keyed
+	 * by their votes, they lie before it, and a page that lists them lacked
+	 * them. Each is voted on once, so no page shows which way the peer keys.
+	 * The filter of the page that reaches past the moment, and every filter
+	 * that checks a move, name the last staple of the crowd by mistake.
+	 */
+	test.each<[PeerKeying]>([['unknown'], ['votes']])('checks a move by the votes of what further filters list, from a peer it takes to key %s', async function(keying: PeerKeying) {
+		const { peer, last, moment } = crowdEndingIn(3000);
+		const fullHashes = lib.Utils.Bloom.BloomFilter.create(BLOOM_CAPACITY, BLOOM_ERROR_RATE)._nbHashes;
+		let reachedPast = false;
+		const harness = hidingFrom(peer, last, function(request, answer): boolean {
+			if (request.limit === 1) {
+				return(request.start.getTime() > moment);
+			}
+			const crowded = request.bloomFilter !== undefined && lib.Utils.Bloom.deserializeBloomFilter(request.bloomFilter)._nbHashes < fullHashes;
+			const pastMoment = answer.kind === 'page' && answer.staples.some(function(staple): boolean {
+				return(staple.moment > moment);
+			});
+			if (reachedPast || !crowded || request.start.getTime() !== moment || !pastMoment) {
+				return(false);
+			}
+			reachedPast = true;
+			return(true);
+		}, keying);
+
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(reachedPast).toBe(true);
+		expectNoLoss(peer, harness, live);
 	});
 
 	test('fails with the retry it ends with, when nothing before it failed', async function() {
