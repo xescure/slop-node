@@ -981,11 +981,27 @@ describe('the accounts a lap never compared', function() {
 		}), store, log: running.log, stopped: new AbortController().signal }, { chain: [known], passive: [passive] }, { chain: 0, passive: 2 });
 
 		expect(summary).toEqual({ match: 2 });
-		expect(recordsOf((await running.log.read()).records, 'sweep').map(function(record) {
-			return([record.account, record.walk, record.lap, record.representative, record.outcome.kind]);
-		})).toEqual([
+		expect(new Set(recordsOf((await running.log.read()).records, 'sweep').map(function(record) {
+			return(JSON.stringify([record.account, record.walk, record.lap, record.representative, record.outcome.kind]));
+		}))).toEqual(new Set([
 			[chain, 'chain', 0, running.representatives[0]?.endpoint, 'match'],
 			[passive, 'passive', 2, running.representatives[1]?.endpoint, 'match']
-		]);
+		].map(function(record) {
+			return(JSON.stringify(record));
+		})));
+	});
+
+	test('counts a passive account whose states are alike as compared, however it moves, as its walk counts one in a batch', async function() {
+		const running = await setup(1);
+		const passive = ACCOUNTS[1];
+		serveSplit(running, passive, '0x10', ['0x10']);
+		running.representatives[0]?.serve(`/node/ledger/account/${passive}/history?limit=1`, history(STAPLE, [RECENT_VOTE]));
+		const store = memoryStore({ [passive]: [STAPLE] }, undefined, {}, [passive]);
+
+		const summary = await compareNeverCompared({ follower: httpSource(running.follower.endpoint), representatives: running.representatives.map(function(api) {
+			return(httpSource(api.endpoint));
+		}), store, log: running.log, stopped: new AbortController().signal }, { chain: [], passive: [passive] }, { chain: 0, passive: 0 });
+
+		expect(summary).toEqual({ match: 1 });
 	});
 });

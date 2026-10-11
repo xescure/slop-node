@@ -970,6 +970,25 @@ export async function recheckDivergences(setup: RecheckSetup): Promise<RecheckSu
 	return(summary);
 }
 
+/**
+ * Compares a passive account by itself as its walk compares one in a batch:
+ * states alike match, as no lag of either side makes unequal states equal,
+ * and states apart are compared by themselves.
+ */
+async function comparePassiveAlone(setup: Comparing, representative: APISource, account: string, quietBefore: Date): Promise<SweepOutcome> {
+	const path = `/node/ledger/account/${account}`;
+	try {
+		const followerState = await getOK(setup.follower, path);
+		const representativeState = await getOK(representative, path);
+		if (stateErrorOf(representativeState) === undefined && firstDifference(followerState, representativeState) === undefined) {
+			return({ kind: 'match', head: headOf(representativeState), staple: null });
+		}
+	} catch {
+		// Compared by itself, which records why it was not answered.
+	}
+	return(await compareAdjudicated(setup, representative, account, quietBefore));
+}
+
 /** The accounts no lap compared, by the walk that missed them: those with a chain as the follower knows them. */
 export type NeverCompared = { readonly chain: readonly KnownAccount[]; readonly passive: readonly string[] };
 
@@ -1005,7 +1024,7 @@ export async function compareNeverCompared(setup: RecheckSetup, accounts: NeverC
 					outcome = await compareChainKnown(setup, representative, entry.known, quietBefore);
 					break;
 				case 'passive':
-					outcome = await compareAdjudicated(setup, representative, entry.known.account, quietBefore);
+					outcome = await comparePassiveAlone(setup, representative, entry.known.account, quietBefore);
 					break;
 				default:
 					outcome = assertNever(entry.walk);
