@@ -5,15 +5,16 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
-import { sendBlock, setRepresentativeBlock } from '../testing/blocks.js';
+import { loadMainnetFixture } from '../conformance/mainnet/fixture.js';
+import { feeBlock, multisigSendBlock, sendBlock, setRepresentativeBlock } from '../testing/blocks.js';
 import { startFakeAPI } from '../testing/fake-api.js';
 import type { FakeAPI } from '../testing/fake-api.js';
-import { accountRequests, behaviorsOf, blockRequests, capturedBehaviors, GET_ROUTES, getRoutesOf, operationsOf, routeOf, sampleAPI, shuffled } from './api-diff.js';
+import { accountRequests, behaviorsOf, blockRequests, capturedBehaviors, GET_ROUTES, getRoutesOf, operationsOf, recheckAPIDivergences, routeOf, sampleAPI, shuffled } from './api-diff.js';
 import type { APIDiffStore } from './api-diff.js';
 import { httpSource } from './api-source.js';
 import type { AccountCandidate, AccountKind, FollowerProgress, HeldBlock } from './follower-store.js';
 import { ParityLog } from './log.js';
-import type { APIDiffRecord } from './log.js';
+import type { APIDiffOutcome, APIDiffPlanRecord, APIDiffRecord } from './log.js';
 import { recordsOf } from './report.js';
 import { OPERATION_NAMES } from './strata.js';
 
@@ -58,6 +59,31 @@ describe('the routes the API diff samples', function() {
 		})).toEqual(OPERATION_NAMES.map(function(_name, index) {
 			return(index);
 		}));
+	});
+});
+
+describe('the operations of a block', function() {
+	function decodedOperations(bytes: Buffer): readonly string[] {
+		const types = new Set(new lib.Block(bytes).operations.map(function(operation): number {
+			return(operation.type);
+		}));
+		return(OPERATION_NAMES.filter(function(name): boolean {
+			return(types.has(lib.Block.OperationType[name]));
+		}));
+	}
+
+	test('are read from its encoding as the client decodes them, for every block of the main network fixtures and each form of block', async function() {
+		const staples = [...await loadMainnetFixture('head'), ...await loadMainnetFixture('edge-cases')];
+		const multisig = await multisigSendBlock({ from: owner, signer: [owner.generateIdentifier(lib.Account.AccountKeyAlgorithm.MULTISIG, undefined, 1), [owner, other]], to: other, amount: 1n, token, previous: null, network: NETWORK, date: new Date('2025-11-01T00:00:00.000Z') });
+		const fee = await feeBlock({ from: owner, payments: [{ to: other, token, amount: 1n }], previous: null, network: NETWORK, date: new Date('2025-11-01T00:00:00.000Z') });
+		const blocks = [...staples.flatMap(function(staple) {
+			return(staple.blocks);
+		}), multisig, fee];
+		expect(blocks.length).toBeGreaterThan(4000);
+		for (const block of blocks) {
+			const bytes = Buffer.from(block.toBytes());
+			expect(operationsOf({ hash: block.hash.toString(), account: block.account.publicKeyString.get(), bytes })).toEqual(decodedOperations(bytes));
+		}
 	});
 });
 
@@ -271,5 +297,197 @@ describe('sampling the API', function() {
 		expect(summary.newBehaviors.map(function(found) {
 			return(found.behavior);
 		})).not.toContain('operation=SET_REP');
+	});
+});
+
+type Representatives = { readonly follower: FakeAPI; readonly representatives: readonly FakeAPI[]; readonly log: ParityLog };
+
+async function runningWith(count: number): Promise<Representatives> {
+	const directory = await mkdtemp(join(tmpdir(), 'slop-api-diff-'));
+	directories.push(directory);
+	const representatives: FakeAPI[] = [];
+	for (let index = 0; index < count; index++) {
+		representatives.push(await startFakeAPI());
+	}
+	return({ follower: await startFakeAPI(), representatives, log: new ParityLog(join(directory, 'parity.jsonl')) });
+}
+
+const BALANCE = `/node/ledger/account/${TOKEN}/balance`;
+
+function balanceOf(amount: string): unknown {
+	return({ balances: [{ token: TOKEN, balance: amount }] });
+}
+
+/** The follower's balance, and each representative's, every account quiet on each of them. */
+function servingBalances(setup: Representatives, follower: string, representatives: readonly (string | undefined)[]): void {
+	setup.follower.serve(BALANCE, balanceOf(follower));
+	setup.representatives.forEach(function(representative, index) {
+		representative.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, QUIET_HISTORY);
+		const amount = representatives[index];
+		if (amount === undefined) {
+			representative.answer(BALANCE, { status: 504, body: 'gateway timeout' });
+			return;
+		}
+		representative.serve(BALANCE, balanceOf(amount));
+	});
+}
+
+function sources(setup: Representatives) {
+	return({
+		follower: httpSource(setup.follower.endpoint),
+		representatives: setup.representatives.map(function(representative) {
+			return(httpSource(representative.endpoint));
+		}),
+		log: setup.log,
+		stopped: new AbortController().signal
+	});
+}
+
+const RECORDED_DIVERGENCE: APIDiffOutcome = { kind: 'diverged', field: 'body.balances[0].balance', follower: { status: 200, body: balanceOf('0x1') }, representative: { status: 200, body: balanceOf('0x2') }, readings: [] };
+
+/** Compares again a divergence recorded with the first representative. */
+async function recheck(setup: Representatives, store: APIDiffStore = memoryStore({})) {
+	const first = setup.representatives[0];
+	if (first === undefined) {
+		throw(new Error('no representative'));
+	}
+	const recorded: APIDiffRecord = { kind: 'api-diff', at: '2026-10-09T08:40:00.000Z', representative: first.endpoint, stratum: 'token', route: '/api/node/ledger/account/{account}/balance', path: BALANCE, behaviors: [], outcome: RECORDED_DIVERGENCE };
+	await setup.log.append([recorded]);
+	const summary = await recheckAPIDivergences({ ...sources(setup), store });
+	const records = recordsOf((await setup.log.read()).records, 'api-diff');
+	return({ summary, recorded, latest: records.at(-1) });
+}
+
+describe('a divergence of the API', function() {
+	test('is read again from every other representative, and is the follower\'s when they answer as the one compared with', async function() {
+		const setup = await runningWith(3);
+		servingBalances(setup, '0x1', ['0x2', '0x2', '0x2']);
+
+		await sampleAPI({ ...sources(setup), store: memoryStore({ candidates: { token: [CANDIDATE] } }), samplesPerStratum: 100, seed: 'test', edgeCaseStaples: [], knownBehaviors: new Set() });
+
+		const records = recordsOf((await setup.log.read()).records, 'api-diff');
+		const outcome = byPath(records, BALANCE)?.outcome;
+		expect(outcome).toMatchObject({ kind: 'diverged', field: 'body.balances[0].balance' });
+		expect(outcome?.kind === 'diverged' && outcome.readings.map(function(reading) {
+			return(reading.kind);
+		})).toEqual(['disagrees', 'disagrees']);
+	});
+
+	test('is compared again with the representative it was recorded with, and is that representative\'s own when two others answer as the follower', async function() {
+		const setup = await runningWith(3);
+		servingBalances(setup, '0x1', ['0x2', '0x1', '0x1']);
+
+		const { summary, latest } = await recheck(setup);
+
+		expect(summary).toEqual({ 'representative-local': 1 });
+		expect(latest).toMatchObject({ representative: setup.representatives[0]?.endpoint, stratum: 'token', path: BALANCE, outcome: { kind: 'representative-local', field: 'body.balances[0].balance' } });
+		expect(latest?.outcome.kind === 'representative-local' && latest.outcome.readings).toEqual([
+			{ representative: setup.representatives[1]?.endpoint, kind: 'agrees', answer: { status: 200, body: balanceOf('0x1') } },
+			{ representative: setup.representatives[2]?.endpoint, kind: 'agrees', answer: { status: 200, body: balanceOf('0x1') } }
+		]);
+		expect(setup.representatives[0]?.requests).toEqual([`GET /node/ledger/account/${TOKEN}/history?limit=1`, `GET ${BALANCE}`]);
+	});
+
+	test('is unresolved when no side has most of the representatives that answered', async function() {
+		const setup = await runningWith(3);
+		servingBalances(setup, '0x1', ['0x2', '0x1', undefined]);
+
+		const { summary, latest } = await recheck(setup);
+
+		expect(summary).toEqual({ unresolved: 1 });
+		expect(latest?.outcome.kind === 'unresolved' && latest.outcome.readings.map(function(reading) {
+			return(reading.kind);
+		})).toEqual(['agrees', 'unanswered']);
+	});
+
+	test('counts no reading from a representative on which an account the answer reads is not quiet', async function() {
+		const setup = await runningWith(3);
+		servingBalances(setup, '0x1', ['0x2', '0x1', '0x1']);
+		setup.representatives[2]?.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, recentHistory(TOKEN));
+
+		const { latest } = await recheck(setup);
+
+		expect(latest?.outcome).toMatchObject({ kind: 'unresolved', readings: [{ kind: 'agrees' }, { kind: 'moving' }] });
+		expect(setup.representatives[2]?.requests).toEqual([`GET /node/ledger/account/${TOKEN}/history?limit=1`]);
+	});
+
+	test('is superseded by a match when the follower answers as the representative now', async function() {
+		const setup = await runningWith(2);
+		servingBalances(setup, '0x2', ['0x2', '0x2']);
+
+		const { summary, latest } = await recheck(setup);
+
+		expect(summary).toEqual({ match: 1 });
+		expect(latest?.outcome).toEqual({ kind: 'match' });
+		expect(setup.representatives[1]?.requests).toEqual([]);
+	});
+
+	test('of a block\'s successor needs the block\'s account quiet when compared again', async function() {
+		const setup = await runningWith(1);
+		const block = await heldSend();
+		const path = `/node/ledger/block/${block.hash}/successor`;
+		setup.follower.serve(path, { block: null });
+		setup.representatives[0]?.serve(path, { block: null });
+		setup.representatives[0]?.serve(`/node/ledger/account/${OWNER}/history?limit=1`, QUIET_HISTORY);
+		const recorded: APIDiffRecord = { kind: 'api-diff', at: '2026-10-09T08:40:00.000Z', representative: setup.representatives[0]?.endpoint ?? '', stratum: 'operation:SEND', route: '/api/node/ledger/block/{blockhash}/successor', path, behaviors: [], outcome: { ...RECORDED_DIVERGENCE, field: 'body.block' } };
+		await setup.log.append([recorded]);
+
+		expect(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({ blocks: [block] }) })).toEqual({ match: 1 });
+		expect(setup.representatives[0]?.requests).toEqual([`GET /node/ledger/account/${OWNER}/history?limit=1`, `GET ${path}`]);
+	});
+});
+
+describe('the plan of a run', function() {
+	async function planned(store: APIDiffStore, samplesPerStratum: number, edgeCaseStaples: readonly string[] = []): Promise<{ readonly plan: APIDiffPlanRecord | undefined; readonly records: readonly APIDiffRecord[] }> {
+		const setup = await runningWith(1);
+		setup.representatives[0]?.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, QUIET_HISTORY);
+		setup.representatives[0]?.serve(`/node/ledger/account/${OWNER}/history?limit=1`, QUIET_HISTORY);
+		await sampleAPI({ ...sources(setup), store, samplesPerStratum, seed: 'test', edgeCaseStaples, knownBehaviors: new Set() });
+		const { records } = await setup.log.read();
+		return({ plan: recordsOf(records, 'api-diff-plan')[0], records: recordsOf(records, 'api-diff') });
+	}
+
+	function populationOf(plan: APIDiffPlanRecord | undefined, stratum: string) {
+		return(plan?.strata.find(function(planned) {
+			return(planned.stratum === stratum);
+		})?.population);
+	}
+
+	test('is recorded before its comparisons, as a census of each stratum whose every request is fewer than it compares', async function() {
+		const { plan, records } = await planned(memoryStore({ candidates: { multisig: [CANDIDATE] } }), 100);
+
+		const census = populationOf(plan, 'multisig');
+		expect(census?.kind).toBe('census');
+		const requested = records.filter(function(record) {
+			return(record.stratum === 'multisig');
+		}).map(function(record) {
+			return(record.path);
+		});
+		expect(census?.kind === 'census' && [...census.requests].sort()).toEqual([...requested].sort());
+		expect(populationOf(plan, 'storage')).toEqual({ kind: 'census', requests: [] });
+		expect(plan).toMatchObject({ samplesPerStratum: 100, quietBefore: '2025-12-30T23:00:00.000Z' });
+	});
+
+	test('is a sample of a stratum with as many accounts as it asked for, which more may follow', async function() {
+		const { plan } = await planned(memoryStore({ candidates: { token: [CANDIDATE] } }), 1);
+
+		expect(populationOf(plan, 'token')).toMatchObject({ kind: 'sample', whole: false });
+	});
+
+	test('reads every held block once for the operations it lacks, so that a rare operation\'s every block is drawn, each request once', async function() {
+		const send = await heldSend();
+		const setRepresentative = await setRepresentativeBlock({ account: other, representative: owner, previous: null, network: NETWORK, date: new Date('2025-11-01T00:00:00.000Z') });
+		const blocks = [send, { hash: setRepresentative.hash.toString(), account: OTHER, bytes: Buffer.from(setRepresentative.toBytes()) }];
+
+		const { plan, records } = await planned(memoryStore({ blocks }), 100);
+
+		const sendPopulation = populationOf(plan, 'operation:SEND');
+		expect(sendPopulation?.kind === 'census' && sendPopulation.requests).toHaveLength(5);
+		expect(populationOf(plan, 'operation:TOKEN_ADMIN_MODIFY_BALANCE')).toEqual({ kind: 'census', requests: [] });
+		const paths = records.map(function(record) {
+			return(`${record.stratum} ${record.path}`);
+		});
+		expect(new Set(paths).size).toBe(paths.length);
+		expect(paths).toHaveLength(9);
 	});
 });

@@ -8,10 +8,10 @@ import type { Normalization } from '../conformance/api/normalize.js';
 import { assertNever } from '../util/assert-never.js';
 import type { APIAnswer, APISource } from './api-source.js';
 import type { AccountCandidate, FollowerStore, HeldBlock } from './follower-store.js';
-import type { APIDiffOutcome, APIDiffRecord, ParityLog } from './log.js';
+import type { APIDiffOutcome, APIDiffPlanRecord, APIDiffReading, APIDiffRecord, ParityLog, RepresentativeReading, StratumPopulation } from './log.js';
 import { ACCOUNT_KINDS, OPERATION_NAMES, operationStratum, STRATA } from './strata.js';
 import type { OperationName, Stratum } from './strata.js';
-import { firstDifference, newestStapleOf, QUIET_MARGIN_MILLISECONDS } from './sweep.js';
+import { disputedKindOf, firstDifference, newestStapleOf, QUIET_MARGIN_MILLISECONDS } from './sweep.js';
 
 const lib = KeetaNet.lib;
 
@@ -212,10 +212,41 @@ export function accountRequests(stratum: Stratum, candidate: AccountCandidate, p
 	return(requests);
 }
 
-/** The types of operation the block carries, each once. */
+type ASN1Value = ReturnType<typeof lib.Utils.ASN1.ASN1toJS>;
+
+function isExplicitTag(value: ASN1Value): value is Extract<ASN1Value, { readonly type: 'context'; readonly kind: 'explicit' }> {
+	return(lib.Utils.ASN1.ASN1CheckUtilities.isASN1ContextTag(value, 'explicit'));
+}
+
+/** A block's fields, of either version: a sequence, or a sequence tagged explicitly with 1 [Keeta TS] index.js:63202-63323. */
+function blockFieldsOf(bytes: Buffer): readonly ASN1Value[] {
+	const decoded = lib.Utils.ASN1.ASN1toJS(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+	if (Array.isArray(decoded)) {
+		return(decoded);
+	}
+	if (isExplicitTag(decoded) && decoded.value === 1 && Array.isArray(decoded.contains)) {
+		return(decoded.contains);
+	}
+	throw(new Error('not the encoding of a block'));
+}
+
+/**
+ * The types of operation the block carries, each once. Each operation is
+ * encoded tagged explicitly with its type [Keeta TS] index.js:64948-64959,
+ * in the one field of the block that is a sequence of such tags, so the
+ * types are read from the encoding alone; decoding the whole block would
+ * build every account and amount of its operations, which costs about ten
+ * times as much over the blocks of the main network's airdrops.
+ */
 export function operationsOf(block: HeldBlock): readonly OperationName[] {
-	const types = new Set(new lib.Block(block.bytes).operations.map(function(operation): number {
-		return(operation.type);
+	const operations = blockFieldsOf(block.bytes).find(function(field): field is ASN1Value[] {
+		return(Array.isArray(field) && field.length > 0 && field.every(isExplicitTag));
+	});
+	if (operations === undefined) {
+		throw(new Error(`the block ${block.hash} lists no operations`));
+	}
+	const types = new Set(operations.filter(isExplicitTag).map(function(operation): number {
+		return(operation.value);
 	}));
 	return(OPERATION_NAMES.filter(function(name): boolean {
 		return(types.has(lib.Block.OperationType[name]));
@@ -239,31 +270,43 @@ export function shuffled<Item>(items: readonly Item[], keyOf: (item: Item) => st
 export type APIDiffStore = Pick<FollowerStore, 'progress' | 'quietAccounts' | 'heldBlocks' | 'heldBlocksOfStaples' | 'newestStaples'>;
 
 /**
- * Held blocks are read in pages from a point the seed fixes, until every
- * type of operation has enough of them or so many blocks were read; the
- * rarest types are held by a few blocks in tens of thousands.
+ * Held blocks are read in pages from a point the seed fixes, round to it
+ * again, until every type of operation has enough of them. The rarest types
+ * are held by a few blocks in hundreds of thousands, so a run reads every
+ * held block once, and then has drawn every block of those types.
  */
 const BLOCKS_PER_PAGE = 1000;
 
-const MAX_BLOCKS_READ = 40_000;
-
 const LAST_HASH = 'F'.repeat(64);
 
-async function blocksByOperation(store: APIDiffStore, before: Date, wanted: number, seed: string): Promise<ReadonlyMap<OperationName, HeldBlock[]>> {
+const FIRST_HASH = '0'.repeat(64);
+
+type DrawnBlocks = {
+	readonly byOperation: ReadonlyMap<OperationName, readonly HeldBlock[]>;
+	/** Whether every held block was read, so that a type with fewer blocks than wanted has none besides them. */
+	readonly everyBlockRead: boolean;
+};
+
+function hashAfter(hash: string): string {
+	return((BigInt(`0x${hash}`) + 1n).toString(16).padStart(64, '0').toUpperCase());
+}
+
+async function blocksByOperation(store: APIDiffStore, before: Date, wanted: number, seed: string): Promise<DrawnBlocks> {
 	const byOperation = new Map<OperationName, HeldBlock[]>(OPERATION_NAMES.map(function(name) {
 		return([name, []]);
 	}));
-	let from = createHash('sha256').update(seed).digest('hex').toUpperCase();
+	const start = createHash('sha256').update(seed).digest('hex').toUpperCase();
+	let from = start;
 	let wrapped = false;
-	let read = 0;
 	const short = function(): boolean {
 		return([...byOperation.values()].some(function(blocks): boolean {
 			return(blocks.length < wanted);
 		}));
 	};
-	while (read < MAX_BLOCKS_READ && short()) {
-		const page = await store.heldBlocks(from, before, BLOCKS_PER_PAGE);
-		read += page.length;
+	while (short()) {
+		const page = (await store.heldBlocks(from, before, BLOCKS_PER_PAGE)).filter(function(block): boolean {
+			return(!wrapped || block.hash < start);
+		});
 		for (const block of page) {
 			for (const name of operationsOf(block)) {
 				const blocks = byOperation.get(name);
@@ -273,49 +316,76 @@ async function blocksByOperation(store: APIDiffStore, before: Date, wanted: numb
 			}
 		}
 		const last = page.at(-1);
-		if (last === undefined || page.length < BLOCKS_PER_PAGE) {
+		if (last === undefined || page.length < BLOCKS_PER_PAGE || last.hash === LAST_HASH) {
 			if (wrapped) {
-				break;
+				return({ byOperation, everyBlockRead: true });
 			}
 			wrapped = true;
-			from = '00'.repeat(32);
+			from = FIRST_HASH;
 			continue;
 		}
-		if (last.hash === LAST_HASH) {
-			break;
-		}
-		from = (BigInt(`0x${last.hash}`) + 1n).toString(16).padStart(64, '0').toUpperCase();
+		from = hashAfter(last.hash);
 	}
-	return(byOperation);
+	return({ byOperation, everyBlockRead: false });
+}
+
+/** A stratum's requests, and whether they are every request the follower's data forms for it. */
+export type PlannedStratum = {
+	readonly requests: readonly SampledRequest[];
+	readonly whole: boolean;
+};
+
+function pathOf(request: SampledRequest): string {
+	return(request.path);
+}
+
+/** The requests once each, in an order the seed fixes: two blocks of an account name it alike. */
+function planned(requests: readonly SampledRequest[], whole: boolean, seed: string): PlannedStratum {
+	const unique = [...new Map(requests.map(function(request) {
+		return([request.path, request]);
+	})).values()];
+	return({ requests: shuffled(unique, pathOf, seed), whole });
 }
 
 /**
  * The requests of each stratum, in an order the seed fixes: about quiet
- * accounts of each kind, about blocks carrying each type of operation, and
- * about the edge-case staples the follower holds, all within its reach.
+ * accounts of each kind, at most so many of them, about blocks carrying
+ * each type of operation, at most so many of each, and about the edge-case
+ * staples the follower holds, all within its reach. A stratum is whole when
+ * fewer accounts or blocks than that are all it has: then its requests are
+ * every request the sampler forms from the follower's data.
  */
-export async function samplingPlan(store: APIDiffStore, quietBefore: Date, perStratum: number, seed: string, edgeCaseStaples: readonly string[]): Promise<ReadonlyMap<Stratum, readonly SampledRequest[]>> {
-	const plan = new Map<Stratum, readonly SampledRequest[]>();
-	const pathOf = function(request: SampledRequest): string {
-		return(request.path);
-	};
+export async function samplingPlan(store: APIDiffStore, quietBefore: Date, perStratum: number, seed: string, edgeCaseStaples: readonly string[]): Promise<ReadonlyMap<Stratum, PlannedStratum>> {
+	const plan = new Map<Stratum, PlannedStratum>();
 	for (const kind of ACCOUNT_KINDS) {
 		const candidates = await store.quietAccounts(kind, quietBefore, perStratum, seed);
-		plan.set(kind, shuffled(candidates.flatMap(function(candidate, index): SampledRequest[] {
+		plan.set(kind, planned(candidates.flatMap(function(candidate, index): SampledRequest[] {
 			return(accountRequests(kind, candidate, candidates[index + 1]?.account));
-		}), pathOf, seed));
+		}), candidates.length < perStratum, seed));
 	}
-	for (const [name, blocks] of await blocksByOperation(store, quietBefore, perStratum, seed)) {
+	const { byOperation, everyBlockRead } = await blocksByOperation(store, quietBefore, perStratum, seed);
+	for (const [name, blocks] of byOperation) {
 		const stratum = operationStratum(name);
-		plan.set(stratum, shuffled(blocks.flatMap(function(block): SampledRequest[] {
+		plan.set(stratum, planned(blocks.flatMap(function(block): SampledRequest[] {
 			return(blockRequests(stratum, block));
-		}), pathOf, seed));
+		}), everyBlockRead && blocks.length < perStratum, seed));
 	}
 	const edgeBlocks = await store.heldBlocksOfStaples(edgeCaseStaples, quietBefore);
-	plan.set('edge-cases', shuffled(edgeBlocks.flatMap(function(block): SampledRequest[] {
+	plan.set('edge-cases', planned(edgeBlocks.flatMap(function(block): SampledRequest[] {
 		return([...blockRequests('edge-cases', block), { stratum: 'edge-cases', route: '/api/node/ledger/account/{account}', path: `/node/ledger/account/${segment(block.account)}`, quiet: [block.account], listsEntities: false }]);
-	}), pathOf, seed));
+	}), true, seed));
 	return(plan);
+}
+
+/**
+ * A stratum is a census when its whole population is fewer requests than
+ * the run compares of each, so that the run sends every one of them.
+ */
+export function populationOf(stratum: PlannedStratum, samplesPerStratum: number): StratumPopulation {
+	if (stratum.whole && stratum.requests.length < samplesPerStratum) {
+		return({ kind: 'census', requests: stratum.requests.map(pathOf) });
+	}
+	return({ kind: 'sample', drawn: stratum.requests.length, whole: stratum.whole });
 }
 
 /** Whether an account is quiet on one side, and why not. */
@@ -325,7 +395,9 @@ type Quietness = { readonly quiet: true } | { readonly quiet: false; readonly si
  * Decides whether accounts are quiet: the follower holds no staple of
  * theirs from the margin before its reach on, and a representative's
  * newest staple of theirs has no vote from then on, as the sweep decides
- * (src/parity/sweep.ts). A representative's answer is kept for the run.
+ * (src/parity/sweep.ts). Each representative is asked about an account
+ * once a run, since the one compared with and those read again may each
+ * hold it at a point of their own.
  */
 class QuietAccounts {
 	readonly #store: APIDiffStore;
@@ -359,7 +431,8 @@ class QuietAccounts {
 	}
 
 	#onRepresentative(account: string, representative: APISource): Promise<Quietness> {
-		const known = this.#representativeSide.get(account);
+		const key = `${representative.endpoint} ${account}`;
+		const known = this.#representativeSide.get(key);
 		if (known !== undefined) {
 			return(known);
 		}
@@ -376,10 +449,10 @@ class QuietAccounts {
 			}
 			return({ quiet: true });
 		})();
-		answers.set(account, asked);
+		answers.set(key, asked);
 		// A failed question is asked again for the next request.
 		asked.catch(function() {
-			answers.delete(account);
+			answers.delete(key);
 		});
 		return(asked);
 	}
@@ -432,41 +505,104 @@ function normalizedAnswer(route: RoutePath, answer: APIAnswer): unknown {
 
 type Compared = { readonly outcome: APIDiffOutcome; readonly representativeAnswer: APIAnswer | undefined };
 
+/** The rule the sweep judges whose a divergence is by reads only whether each other representative agrees. */
+function judgedAsTheSweepDoes(reading: APIDiffReading): RepresentativeReading {
+	switch (reading.kind) {
+		case 'agrees':
+		case 'disagrees':
+			return({ representative: reading.representative, kind: reading.kind, state: reading.answer, staple: null });
+		case 'unanswered':
+		case 'moving':
+			return(reading);
+		default:
+			return(assertNever(reading));
+	}
+}
+
+/** Whether the accounts a request reads, and those its answer lists, are quiet on the representative. */
+async function quietFor(request: SampledRequest, answers: readonly APIAnswer[], representative: APISource, quiet: QuietAccounts): Promise<Quietness> {
+	const accounts = [...request.quiet];
+	if (request.listsEntities) {
+		accounts.push(...answers.flatMap(function(answer): readonly string[] {
+			return(entitiesListed(answer.body));
+		}));
+	}
+	return(await quiet.of(accounts, representative));
+}
+
+/**
+ * Sends the request to another representative, as it was to the one
+ * compared with, and tells whether its answer is the follower's once both
+ * are normalized.
+ */
+async function readingOf(request: SampledRequest, other: APISource, followerAnswer: APIAnswer, quiet: QuietAccounts): Promise<APIDiffReading> {
+	const representative = other.endpoint;
+	try {
+		const before = await quiet.of(request.quiet, other);
+		if (!before.quiet) {
+			return({ representative, kind: 'moving', detail: before.detail });
+		}
+		const answer = await other.get(request.path);
+		if (GATEWAY_STATUSES.has(answer.status)) {
+			return({ representative, kind: 'unanswered', detail: `${representative} answered ${String(answer.status)}` });
+		}
+		const listed = await quietFor({ ...request, quiet: [] }, [followerAnswer, answer], other, quiet);
+		if (!listed.quiet) {
+			return({ representative, kind: 'moving', detail: listed.detail });
+		}
+		if (firstDifference(normalizedAnswer(request.route, followerAnswer), normalizedAnswer(request.route, answer)) === undefined) {
+			return({ representative, kind: 'agrees', answer });
+		}
+		return({ representative, kind: 'disagrees', answer });
+	} catch (error: unknown) {
+		return({ representative, kind: 'unanswered', detail: messageOf(error) });
+	}
+}
+
 /**
  * Sends the request to the follower before and after the representative,
  * so that an account the follower changes in between shows as a change,
  * and compares the two answers once normalized, when every account the
- * answer reads is quiet on both sides.
+ * answer reads is quiet on both sides. Answers that differ are read again
+ * from every other representative, and judged by the sweep's rule: the
+ * follower's when most disagree with it, the one representative's own when
+ * most agree with the follower and at least two do, and unresolved
+ * otherwise.
  */
-async function compareRequest(request: SampledRequest, follower: APISource, representative: APISource, quiet: QuietAccounts): Promise<Compared> {
+async function compareRequest(request: SampledRequest, follower: APISource, representative: APISource, others: readonly APISource[], quiet: QuietAccounts): Promise<Compared> {
+	let followerAfter: APIAnswer;
+	let representativeAnswer: APIAnswer;
 	try {
 		const before = await quiet.of(request.quiet, representative);
 		if (!before.quiet) {
 			return({ outcome: { kind: 'skipped', reason: 'moving', side: before.side, detail: before.detail }, representativeAnswer: undefined });
 		}
 		const followerBefore = await follower.get(request.path);
-		const representativeAnswer = await representative.get(request.path);
-		const followerAfter = await follower.get(request.path);
+		representativeAnswer = await representative.get(request.path);
+		followerAfter = await follower.get(request.path);
 		if (GATEWAY_STATUSES.has(representativeAnswer.status)) {
 			return({ outcome: { kind: 'skipped', reason: 'unanswered', detail: `${representative.endpoint} answered ${String(representativeAnswer.status)}` }, representativeAnswer: undefined });
 		}
 		if (!isDeepStrictEqual(followerBefore, followerAfter)) {
 			return({ outcome: { kind: 'skipped', reason: 'moving', side: 'follower', detail: 'the follower changed its answer while it was compared' }, representativeAnswer });
 		}
-		if (request.listsEntities) {
-			const listed = await quiet.of([...entitiesListed(followerAfter.body), ...entitiesListed(representativeAnswer.body)], representative);
-			if (!listed.quiet) {
-				return({ outcome: { kind: 'skipped', reason: 'moving', side: listed.side, detail: listed.detail }, representativeAnswer });
-			}
+		const listed = await quietFor({ ...request, quiet: [] }, [followerAfter, representativeAnswer], representative, quiet);
+		if (!listed.quiet) {
+			return({ outcome: { kind: 'skipped', reason: 'moving', side: listed.side, detail: listed.detail }, representativeAnswer });
 		}
-		const field = firstDifference(normalizedAnswer(request.route, followerAfter), normalizedAnswer(request.route, representativeAnswer));
-		if (field !== undefined) {
-			return({ outcome: { kind: 'diverged', field, follower: followerAfter, representative: representativeAnswer }, representativeAnswer });
-		}
-		return({ outcome: { kind: 'match' }, representativeAnswer });
 	} catch (error: unknown) {
 		return({ outcome: { kind: 'skipped', reason: 'unanswered', detail: messageOf(error) }, representativeAnswer: undefined });
 	}
+	const field = firstDifference(normalizedAnswer(request.route, followerAfter), normalizedAnswer(request.route, representativeAnswer));
+	if (field === undefined) {
+		return({ outcome: { kind: 'match' }, representativeAnswer });
+	}
+	const answered = followerAfter;
+	const readings = await Promise.all(others.map(function(other) {
+		return(readingOf(request, other, answered, quiet));
+	}));
+	const kind = disputedKindOf(readings.map(judgedAsTheSweepDoes), field);
+	return({ outcome: { kind, field, follower: followerAfter, representative: representativeAnswer, readings }, representativeAnswer });
 }
 
 /** The route of the document a request below the API's root is of, and its decoded path parameters. */
@@ -604,6 +740,22 @@ export type APIDiffSummary = {
 	readonly newBehaviors: readonly { readonly behavior: string; readonly path: string }[];
 };
 
+function othersThan(representatives: readonly APISource[], representative: APISource): readonly APISource[] {
+	return(representatives.filter(function(other): boolean {
+		return(other.endpoint !== representative.endpoint);
+	}));
+}
+
+/** A comparison's record, with the behaviors the representative's answer shows when it was compared. */
+function recordOf(representative: APISource, request: SampledRequest, compared: Compared): APIDiffRecord {
+	const { outcome, representativeAnswer } = compared;
+	let behaviors: readonly string[] = [];
+	if (representativeAnswer !== undefined && outcome.kind !== 'skipped') {
+		behaviors = behaviorsOf(request.path, representativeAnswer);
+	}
+	return({ kind: 'api-diff', at: new Date().toISOString(), representative: representative.endpoint, stratum: request.stratum, route: request.route, path: request.path, behaviors, outcome });
+}
+
 /** Read through a call, as a signal is aborted while the sampler awaits. */
 function isStopped(signal: AbortSignal): boolean {
 	return(signal.aborted);
@@ -629,10 +781,20 @@ export async function sampleAPI(setup: APIDiffSetup): Promise<APIDiffSummary> {
 	}
 	const quietBefore = new Date(heldBefore.getTime() - QUIET_MARGIN_MILLISECONDS);
 	const plan = await samplingPlan(setup.store, quietBefore, setup.samplesPerStratum, setup.seed, setup.edgeCaseStaples);
+	const planRecord: APIDiffPlanRecord = {
+		kind: 'api-diff-plan',
+		at: new Date().toISOString(),
+		quietBefore: quietBefore.toISOString(),
+		samplesPerStratum: setup.samplesPerStratum,
+		strata: STRATA.map(function(stratum) {
+			return({ stratum, population: populationOf(plan.get(stratum) ?? { requests: [], whole: true }, setup.samplesPerStratum) });
+		})
+	};
+	await setup.log.append([planRecord]);
 	const quiet = new QuietAccounts(setup.store, quietBefore);
 	const newBehaviors = new Map<string, string>();
 	for (const stratum of STRATA) {
-		const requests = plan.get(stratum) ?? [];
+		const requests = plan.get(stratum)?.requests ?? [];
 		const counts = { ...emptySummary(stratum, requests.length) };
 		let next = 0;
 		const workers = setup.representatives.map(async function(representative) {
@@ -641,24 +803,23 @@ export async function sampleAPI(setup: APIDiffSetup): Promise<APIDiffSummary> {
 				if (request === undefined) {
 					return;
 				}
-				const { outcome, representativeAnswer } = await compareRequest(request, setup.follower, representative, quiet);
-				let behaviors: readonly string[] = [];
-				if (representativeAnswer !== undefined && outcome.kind !== 'skipped') {
-					behaviors = behaviorsOf(request.path, representativeAnswer);
-				}
-				for (const behavior of behaviors) {
+				const compared = await compareRequest(request, setup.follower, representative, othersThan(setup.representatives, representative), quiet);
+				const record = recordOf(representative, request, compared);
+				for (const behavior of record.behaviors) {
 					if (!setup.knownBehaviors.has(behavior) && !newBehaviors.has(behavior)) {
 						newBehaviors.set(behavior, request.path);
 					}
 				}
-				const record: APIDiffRecord = { kind: 'api-diff', at: new Date().toISOString(), representative: representative.endpoint, stratum, route: request.route, path: request.path, behaviors, outcome };
 				await setup.log.append([record]);
+				const { outcome } = compared;
 				switch (outcome.kind) {
 					case 'match':
+					case 'representative-local':
 						counts.compared++;
 						counts.matched++;
 						break;
 					case 'diverged':
+					case 'unresolved':
 						counts.compared++;
 						counts.diverged++;
 						break;
@@ -683,4 +844,93 @@ export async function sampleAPI(setup: APIDiffSetup): Promise<APIDiffSummary> {
 			return({ behavior, path });
 		})
 	});
+}
+
+/** The accounts named in a request's path, each of which an account's answer may read. */
+function accountsNamed(parameters: Readonly<Record<string, string>>): string[] {
+	const named = [parameters['account'], parameters['entityList'], ...(parameters['accounts']?.split(',') ?? [])];
+	return(named.filter(function(account): account is string {
+		return(account !== undefined);
+	}));
+}
+
+const LISTING_ENTITIES: ReadonlySet<RoutePath> = new Set<RoutePath>(['/api/node/ledger/account/{account}/acl', '/api/node/ledger/account/{account}/acl/additional']);
+
+/**
+ * The request a record compared, with the accounts that must be quiet for
+ * it: every account its path names, which is as many as the sampler asked
+ * for or more, and for a block's successor the block's account, which the
+ * follower holds within its reach. Nothing when the follower no longer
+ * holds that block there.
+ */
+async function recordedRequestOf(record: APIDiffRecord, store: APIDiffStore, quietBefore: Date): Promise<SampledRequest | undefined> {
+	const matched = routeOf(record.path);
+	if (matched === undefined) {
+		return(undefined);
+	}
+	const { route, parameters } = matched;
+	const quiet = accountsNamed(parameters);
+	const successorOf = parameters['blockhash'];
+	if (route === '/api/node/ledger/block/{blockhash}/successor' && successorOf !== undefined) {
+		const [block] = await store.heldBlocks(successorOf, quietBefore, 1);
+		if (block?.hash !== successorOf) {
+			return(undefined);
+		}
+		quiet.push(block.account);
+	}
+	return({ stratum: record.stratum, route, path: record.path, quiet, listsEntities: LISTING_ENTITIES.has(route) });
+}
+
+export type APIRecheckSetup = Pick<APIDiffSetup, 'follower' | 'representatives' | 'store' | 'log' | 'stopped'>;
+
+/** How many requests were compared again, by the outcome each had. */
+export type APIRecheckSummary = Readonly<Partial<Record<APIDiffOutcome['kind'], number>>>;
+
+/** The latest comparison of each request of a stratum, in the order the requests were first compared. */
+function latestComparisons(records: readonly APIDiffRecord[]): readonly APIDiffRecord[] {
+	const latest = new Map<string, APIDiffRecord>();
+	for (const record of records) {
+		if (record.outcome.kind !== 'skipped') {
+			latest.set(`${record.stratum} ${record.path}`, record);
+		}
+	}
+	return([...latest.values()]);
+}
+
+/**
+ * Sends again each request whose latest comparison diverged or was
+ * unresolved, the identical request to the representative it was compared
+ * with, read again from every other, and records the outcome, which stands
+ * as the request's latest. A representative the run does not reach leaves
+ * its requests as they stand.
+ */
+export async function recheckAPIDivergences(setup: APIRecheckSetup): Promise<APIRecheckSummary> {
+	const { heldBefore } = await setup.store.progress();
+	if (heldBefore === undefined) {
+		throw(new Error('the follower has read from no representative yet'));
+	}
+	const quietBefore = new Date(heldBefore.getTime() - QUIET_MARGIN_MILLISECONDS);
+	const quiet = new QuietAccounts(setup.store, quietBefore);
+	const disputed = latestComparisons((await setup.log.read()).records.filter(function(record): record is APIDiffRecord {
+		return(record.kind === 'api-diff');
+	})).filter(function(record): boolean {
+		return(record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved');
+	});
+	const summary: Partial<Record<APIDiffOutcome['kind'], number>> = {};
+	for (const record of disputed) {
+		const representative = setup.representatives.find(function(source): boolean {
+			return(source.endpoint === record.representative);
+		});
+		const request = await recordedRequestOf(record, setup.store, quietBefore);
+		if (representative === undefined || request === undefined) {
+			continue;
+		}
+		const compared = await compareRequest(request, setup.follower, representative, othersThan(setup.representatives, representative), quiet);
+		if (isStopped(setup.stopped)) {
+			break;
+		}
+		await setup.log.append([recordOf(representative, request, compared)]);
+		summary[compared.outcome.kind] = (summary[compared.outcome.kind] ?? 0) + 1;
+	}
+	return(summary);
 }

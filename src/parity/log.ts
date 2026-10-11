@@ -228,11 +228,22 @@ export type CrossCheckRecord = {
 	readonly outcome: CrossCheckOutcome;
 };
 
+/** Another representative's answer to a request the follower and one representative answered apart, sent to it again to tell whose the difference is. */
+export type APIDiffReading =
+	/** Whether its answer, once normalized, is the follower's; kept as served. */
+	| { readonly representative: string; readonly kind: 'agrees' | 'disagrees'; readonly answer: unknown }
+	/** No reading that counts: it did not answer, or an account the answer reads is not quiet on it. */
+	| { readonly representative: string; readonly kind: 'unanswered' | 'moving'; readonly detail: string };
+
 /** The comparison of one sampled request's answers. */
 export type APIDiffOutcome =
 	| { readonly kind: 'match' }
-	/** The field is the path of the first that differs once both are normalized; the answers are kept as served. */
-	| { readonly kind: 'diverged'; readonly field: string; readonly follower: unknown; readonly representative: unknown }
+	/**
+	 * The field is the path of the first that differs once both are
+	 * normalized; the answers are kept as served, with every other
+	 * representative's, which decide whose the difference is.
+	 */
+	| { readonly kind: DisputedKind; readonly field: string; readonly follower: unknown; readonly representative: unknown; readonly readings: readonly APIDiffReading[] }
 	/** Not compared: an account the answer reads may be held at different points. */
 	| { readonly kind: 'skipped'; readonly reason: 'moving'; readonly side: MovingSide; readonly detail: string }
 	| { readonly kind: 'skipped'; readonly reason: 'unanswered'; readonly detail: string };
@@ -248,6 +259,23 @@ export type APIDiffRecord = {
 	/** The kinds of behavior the representative's answer shows, as the capture set is told apart by; none when it was not compared. */
 	readonly behaviors: readonly string[];
 	readonly outcome: APIDiffOutcome;
+};
+
+/** The requests of a stratum an API diff run drew, out of every request the follower's data forms for it. */
+export type StratumPopulation =
+	/** Every request the data forms, fewer than the run compares, so the run sends each of them. */
+	| { readonly kind: 'census'; readonly requests: readonly string[] }
+	/** So many requests drawn, every one the data forms when whole. */
+	| { readonly kind: 'sample'; readonly drawn: number; readonly whole: boolean };
+
+/** What an API diff run drew of each stratum, written before its comparisons. */
+export type APIDiffPlanRecord = {
+	readonly kind: 'api-diff-plan';
+	readonly at: string;
+	/** An account counts as quiet when the follower holds no staple of it from this moment on. */
+	readonly quietBefore: string;
+	readonly samplesPerStratum: number;
+	readonly strata: readonly { readonly stratum: Stratum; readonly population: StratumPopulation }[];
 };
 
 /** A staple of the window the offline ledger refused to vote on, and the classified difference that explains it. */
@@ -401,7 +429,7 @@ export type ShadowRunRecord = ShadowRunState & {
 	readonly cost: ShadowRunCost;
 };
 
-export type ParityRecord = ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | SweepBatchRecord | APIDiffRecord | ShadowLiveRecord | ShadowRunRecord;
+export type ParityRecord = ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | SweepBatchRecord | APIDiffRecord | APIDiffPlanRecord | ShadowLiveRecord | ShadowRunRecord;
 
 /** The records a log holds, and how many of its lines were not records, as the end of a line cut short by a crash. */
 export type ParityLogContents = {
@@ -752,6 +780,71 @@ function sweepOutcomeOf(value: unknown): SweepOutcome | undefined {
 	}
 }
 
+function apiDiffReadingOf(value: unknown): APIDiffReading | undefined {
+	if (!isFields(value) || !isString(value['representative'])) {
+		return(undefined);
+	}
+	const { representative, kind, answer, detail } = value;
+	switch (kind) {
+		case 'agrees':
+		case 'disagrees':
+			return({ representative, kind, answer });
+		case 'unanswered':
+		case 'moving':
+			if (!isString(detail)) {
+				return(undefined);
+			}
+			return({ representative, kind, detail });
+		default:
+			return(undefined);
+	}
+}
+
+function stratumPopulationOf(value: unknown): StratumPopulation | undefined {
+	if (!isFields(value)) {
+		return(undefined);
+	}
+	switch (value['kind']) {
+		case 'census': {
+			const requests = listOf(value['requests'], textOf);
+			if (requests === undefined) {
+				return(undefined);
+			}
+			return({ kind: 'census', requests });
+		}
+		case 'sample': {
+			const { drawn, whole } = value;
+			if (!isCount(drawn) || typeof whole !== 'boolean') {
+				return(undefined);
+			}
+			return({ kind: 'sample', drawn, whole });
+		}
+		default:
+			return(undefined);
+	}
+}
+
+function plannedStratumOf(value: unknown): APIDiffPlanRecord['strata'][number] | undefined {
+	if (!isFields(value)) {
+		return(undefined);
+	}
+	const stratum = stratumOf(value['stratum']);
+	const population = stratumPopulationOf(value['population']);
+	if (stratum === undefined || population === undefined) {
+		return(undefined);
+	}
+	return({ stratum, population });
+}
+
+function apiDiffPlanRecordOf(value: Fields): APIDiffPlanRecord | undefined {
+	const { at, quietBefore, samplesPerStratum } = value;
+	const strata = listOf(value['strata'], plannedStratumOf);
+	if (!isString(at) || !isString(quietBefore) || !isCount(samplesPerStratum) || strata === undefined) {
+		return(undefined);
+	}
+	return({ kind: 'api-diff-plan', at, quietBefore, samplesPerStratum, strata });
+}
+
 function apiDiffOutcomeOf(value: unknown): APIDiffOutcome | undefined {
 	if (!isFields(value)) {
 		return(undefined);
@@ -760,10 +853,17 @@ function apiDiffOutcomeOf(value: unknown): APIDiffOutcome | undefined {
 		case 'match':
 			return({ kind: 'match' });
 		case 'diverged':
-			if (!isString(value['field'])) {
+		case 'representative-local':
+		case 'unresolved': {
+			let readings: readonly APIDiffReading[] | undefined = [];
+			if (value['readings'] !== undefined) {
+				readings = listOf(value['readings'], apiDiffReadingOf);
+			}
+			if (!isString(value['field']) || readings === undefined) {
 				return(undefined);
 			}
-			return({ kind: 'diverged', field: value['field'], follower: value['follower'], representative: value['representative'] });
+			return({ kind: value['kind'], field: value['field'], follower: value['follower'], representative: value['representative'], readings });
+		}
 		case 'skipped': {
 			const skipped = sweepOutcomeOf(value);
 			if (skipped?.kind !== 'skipped') {
@@ -1046,6 +1146,8 @@ export function parityRecordOf(line: string): ParityRecord | undefined {
 			return(sweepBatchRecordOf(value));
 		case 'api-diff':
 			return(apiDiffRecordOf(value));
+		case 'api-diff-plan':
+			return(apiDiffPlanRecordOf(value));
 		case 'shadow-live':
 			return(shadowLiveRecordOf(value));
 		case 'shadow-run':

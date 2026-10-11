@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import { ParityLog, parityLogPath } from './log.js';
-import type { BlockCountRecord, ChecksumRecord, CrossCheckRecord, ParityRecord, ShadowRunRecord, SweepBatchRecord, SweepRecord } from './log.js';
+import type { APIDiffPlanRecord, APIDiffRecord, BlockCountRecord, ChecksumRecord, CrossCheckRecord, ParityRecord, ShadowRunRecord, SweepBatchRecord, SweepRecord } from './log.js';
 
 const REPRESENTATIVE = 'https://rep1.example/api';
 const ACCOUNT = 'keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai';
@@ -92,6 +92,27 @@ const SHADOW_RUN: ShadowRunRecord = {
 	cost: { seconds: 61.5, staples: 4500, shadowVotes: 450, maxResidentMiB: 812 }
 };
 
+const API_DIFF: APIDiffRecord = { kind: 'api-diff', at: CHECKSUM.at, representative: REPRESENTATIVE, stratum: 'token', route: '/api/node/ledger/account/{account}', path: `/node/ledger/account/${ACCOUNT}`, behaviors: ['account=TOKEN'], outcome: { kind: 'match' } };
+
+const API_DIFFS: readonly APIDiffRecord[] = [
+	API_DIFF,
+	{ ...API_DIFF, outcome: { kind: 'representative-local', field: 'body.balances[0].balance', follower: { status: 200, body: {} }, representative: { status: 200, body: { balances: [1] } }, readings: [{ representative: 'https://rep2.example/api', kind: 'agrees', answer: { status: 200, body: {} } }, { representative: 'https://rep3.example/api', kind: 'moving', detail: 'recent' }] } },
+	{ ...API_DIFF, outcome: { kind: 'unresolved', field: 'status', follower: { status: 200, body: {} }, representative: { status: 500, body: {} }, readings: [{ representative: 'https://rep2.example/api', kind: 'disagrees', answer: { status: 500, body: {} } }, { representative: 'https://rep3.example/api', kind: 'unanswered', detail: 'answered 504' }] } },
+	{ ...API_DIFF, outcome: { kind: 'skipped', reason: 'moving', side: 'representative', detail: 'recent' } }
+];
+
+const API_DIFF_PLAN: APIDiffPlanRecord = {
+	kind: 'api-diff-plan',
+	at: CHECKSUM.at,
+	quietBefore: '2026-10-09T05:00:00.000Z',
+	samplesPerStratum: 300,
+	strata: [
+		{ stratum: 'multisig', population: { kind: 'census', requests: [`/node/ledger/account/${ACCOUNT}`] } },
+		{ stratum: 'token', population: { kind: 'sample', drawn: 3600, whole: false } },
+		{ stratum: 'operation:SEND', population: { kind: 'sample', drawn: 1500, whole: true } }
+	]
+};
+
 const directories: string[] = [];
 
 async function scratchLog(): Promise<ParityLog> {
@@ -113,7 +134,7 @@ describe('the parity log', function() {
 
 	test('reads back every kind of record it was given, in order', async function() {
 		const log = await scratchLog();
-		const records: readonly ParityRecord[] = [CHECKSUM, ...SWEEPS, ...SWEEP_BATCHES, FAILED_CHECKSUM, ...CROSS_CHECKS, BLOCK_COUNT, SHADOW_RUN];
+		const records: readonly ParityRecord[] = [CHECKSUM, ...SWEEPS, ...SWEEP_BATCHES, FAILED_CHECKSUM, ...CROSS_CHECKS, BLOCK_COUNT, SHADOW_RUN, ...API_DIFFS, API_DIFF_PLAN];
 		await log.append(records.slice(0, 2));
 		await log.append(records.slice(2));
 
@@ -144,6 +165,14 @@ describe('the parity log', function() {
 		await appendFile(log.path, `${JSON.stringify({ ...MATCHED, outcome })}\n`);
 
 		expect(await log.read()).toEqual({ records: [{ ...MATCHED, outcome: { ...outcome, readings: [] } }], unreadableLines: 0 });
+	});
+
+	test('reads an API divergence recorded before divergences were sent again as one with no other representative\'s reading', async function() {
+		const log = await scratchLog();
+		const outcome = { kind: 'diverged', field: 'body.error', follower: { status: 200, body: {} }, representative: { status: 500, body: { error: true } } };
+		await appendFile(log.path, `${JSON.stringify({ ...API_DIFF, outcome })}\n`);
+
+		expect(await log.read()).toEqual({ records: [{ ...API_DIFF, outcome: { ...outcome, readings: [] } }], unreadableLines: 0 });
 	});
 
 	test('counts a line cut short, or one it does not know, apart from the records', async function() {
