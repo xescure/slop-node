@@ -268,7 +268,7 @@ export function shuffled<Item>(items: readonly Item[], keyOf: (item: Item) => st
 }
 
 /** What the API diff reads of the follower's storage. */
-export type APIDiffStore = Pick<FollowerStore, 'progress' | 'quietAccounts' | 'heldBlocks' | 'blockPages' | 'heldBlocksInPages' | 'heldBlocksOfStaples' | 'newestStaples'>;
+export type APIDiffStore = Pick<FollowerStore, 'progress' | 'quietAccounts' | 'heldBlocks' | 'blockPages' | 'heldBlocksInPages' | 'heldBlocksOfStaples' | 'newestStaples' | 'historyHolds'>;
 
 /**
  * Pages of the blocks' table read at a time: some two thousand blocks, in
@@ -440,6 +440,9 @@ export function populationOf(stratum: PlannedStratum, samplesPerStratum: number)
 /** Whether an account is quiet on one side, and why not. */
 type Quietness = { readonly quiet: true } | { readonly quiet: false; readonly side: 'representative' | 'follower'; readonly detail: string };
 
+/** Whether an account is quiet on a representative, with the newest staple of it the representative then held, if any. */
+type RepresentativeQuietness = { readonly quiet: true; readonly newest: string | null } | Extract<Quietness, { readonly quiet: false }>;
+
 /**
  * Decides whether accounts are quiet: the follower holds no staple of
  * theirs from the margin before its reach on, and a representative's
@@ -451,7 +454,7 @@ type Quietness = { readonly quiet: true } | { readonly quiet: false; readonly si
 class QuietAccounts {
 	readonly #store: APIDiffStore;
 	readonly #quietBefore: Date;
-	readonly #representativeSide = new Map<string, Promise<Quietness>>();
+	readonly #representativeSide = new Map<string, Promise<RepresentativeQuietness>>();
 
 	constructor(store: APIDiffStore, quietBefore: Date) {
 		this.#store = store;
@@ -479,7 +482,26 @@ class QuietAccounts {
 		return({ quiet: true });
 	}
 
-	#onRepresentative(account: string, representative: APISource): Promise<Quietness> {
+	/**
+	 * Whether the follower holds the newest staple of each account the
+	 * representative holds, as it was read when the account was found quiet
+	 * on it; a representative with no history of an account holds none the
+	 * follower could lack, and one on which an account moves is no evidence.
+	 */
+	async followerHoldsNewest(accounts: readonly string[], representative: APISource): Promise<boolean> {
+		for (const account of new Set(accounts)) {
+			const answer = await this.#onRepresentative(account, representative);
+			if (!answer.quiet) {
+				return(false);
+			}
+			if (answer.newest !== null && !await this.#store.historyHolds(account, answer.newest)) {
+				return(false);
+			}
+		}
+		return(true);
+	}
+
+	#onRepresentative(account: string, representative: APISource): Promise<RepresentativeQuietness> {
 		const key = `${representative.endpoint} ${account}`;
 		const known = this.#representativeSide.get(key);
 		if (known !== undefined) {
@@ -487,7 +509,7 @@ class QuietAccounts {
 		}
 		const quietBefore = this.#quietBefore;
 		const answers = this.#representativeSide;
-		const asked = (async function(): Promise<Quietness> {
+		const asked = (async function(): Promise<RepresentativeQuietness> {
 			const answer = await representative.get(`/node/ledger/account/${segment(account)}/history?limit=1`);
 			if (answer.status !== 200) {
 				throw(new Error(`${representative.endpoint} answered ${String(answer.status)} for the history of ${account}`));
@@ -496,7 +518,7 @@ class QuietAccounts {
 			if (newest !== undefined && newest.latestVote.getTime() >= quietBefore.getTime()) {
 				return({ quiet: false, side: 'representative', detail: `its newest staple of ${account}, ${newest.staple}, has a vote from ${newest.latestVote.toISOString()}` });
 			}
-			return({ quiet: true });
+			return({ quiet: true, newest: newest?.staple ?? null });
 		})();
 		answers.set(key, asked);
 		// A failed question is asked again for the next request.
@@ -664,6 +686,27 @@ async function readingOf(request: SampledRequest, other: APISource, followerAnsw
 }
 
 /**
+ * Whether the follower holds the newest staple each representative that
+ * answered apart, the one compared with included, holds of every account
+ * the answer reads, which the sweep's rule requires before it leaves a
+ * difference to them: a staple the follower lacks may change the answer of
+ * those that hold it while others that lack it answer as the follower.
+ */
+async function dissentHeld(request: SampledRequest, representative: APISource, readings: readonly APIDiffReading[], others: readonly APISource[], quiet: QuietAccounts): Promise<boolean> {
+	const dissenting = [representative, ...others.filter(function(other): boolean {
+		return(readings.some(function(reading): boolean {
+			return(reading.representative === other.endpoint && reading.kind === 'disagrees');
+		}));
+	})];
+	for (const source of dissenting) {
+		if (!await quiet.followerHoldsNewest(request.quiet, source)) {
+			return(false);
+		}
+	}
+	return(true);
+}
+
+/**
  * Sends the request to the follower before and after the representative,
  * so that an account the follower changes in between shows as a change,
  * and compares the two answers once normalized. Answers alike match, with
@@ -711,8 +754,7 @@ async function compareRequest(request: SampledRequest, follower: APISource, repr
 		return(judgedAsTheSweepDoes(request.route, reading));
 	}), judged, {
 		compared: normalizedAnswer(request.route, representativeAnswer),
-		// An answer apart shows no staple; one the follower lacks shows on a page of history, which is never one representative's own.
-		followerHoldsDissent: true
+		followerHoldsDissent: await dissentHeld(request, representative, readings, others, quiet)
 	});
 	/*
 	 * A representative failing internally to serve a page of history is

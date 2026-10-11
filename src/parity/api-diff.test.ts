@@ -160,6 +160,8 @@ type StoreContents = {
 	readonly candidates?: Partial<Readonly<Record<AccountKind, readonly AccountCandidate[]>>>;
 	readonly blocks?: readonly HeldBlock[];
 	readonly newest?: ReadonlyMap<string, Date>;
+	/** Staples, by the hash of their blocks, the follower holds in the history of every account. */
+	readonly held?: readonly string[];
 };
 
 function memoryStore(contents: StoreContents): APIDiffStore {
@@ -173,7 +175,8 @@ function memoryStore(contents: StoreContents): APIDiffStore {
 		blockPages: () => Promise.resolve(contents.blocks?.length ?? 0),
 		heldBlocksInPages: (fromPage, toPage) => Promise.resolve((contents.blocks ?? []).slice(fromPage, toPage)),
 		heldBlocksOfStaples: () => Promise.resolve([]),
-		newestStaples: () => Promise.resolve(contents.newest ?? new Map())
+		newestStaples: () => Promise.resolve(contents.newest ?? new Map()),
+		historyHolds: (_account, staple) => Promise.resolve(contents.held?.includes(staple) ?? false)
 	});
 }
 
@@ -442,6 +445,17 @@ describe('a divergence of the API', function() {
 		const { summary } = await recheck(setup);
 
 		expect(summary).toEqual({ 'representative-local': 1 });
+	});
+
+	test('is never the own of the representatives answering apart when the follower lacks the newest staple one of them holds of the account', async function() {
+		const setup = await runningWith(4);
+		servingBalances(setup, '0x1', ['0x2', '0x1', '0x1', '0x3']);
+		const lacked = 'EF'.repeat(32);
+		setup.representatives[0]?.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, { history: [{ $id: lacked, voteStaple: { votes: [{ validityFrom: '2025-01-01T00:00:00.000Z' }] } }], nextKey: lacked });
+
+		const { summary } = await recheck(setup);
+
+		expect(summary).toEqual({ unresolved: 1 });
 	});
 
 	test('is unresolved when two answer as the follower and two answer one failure, told apart only by its error ID', async function() {
