@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
+import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { confirmedStaple, sendBlock, setRepresentativeBlock } from '../../../testing/blocks.js';
 import { advanceClock } from '../../../testing/network.js';
@@ -463,6 +464,44 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			expect(left.map(function(waiter): string[] {
 				return(log.warningsMentioning(waiter));
 			})).toEqual([[`ledger deferred staple replay window elapsed; ${left[0]?.blocksHash.toString() ?? ''} stays deferred`]]);
+		});
+
+		test('lists the deferred staples that await a block the main ledger lacks, by their latest votes, with the blocks they lack, as of before a moment', async function() {
+			// A zero window leaves a released staple deferred, as an exhausted window would.
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0 });
+			await ledger.add(network.genesis);
+			const blocks = await sendsAfter(network, headOf(network.genesis, requireAt(network.users, 0)), [5n, 7n, 9n]);
+			const [first, second, third] = blocks;
+			const [firstStaple, secondStaple, thirdStaple] = await Promise.all(blocks.map(function(block) {
+				return(confirmedStaple([block], network.representatives));
+			}));
+			if (first === undefined || second === undefined || third === undefined || firstStaple === undefined || secondStaple === undefined || thirdStaple === undefined) {
+				throw(new Error('three staples expected'));
+			}
+			const stranded = async function(before: Date, limit: number): Promise<[string, (string | null)[]][]> {
+				return((await storage.listStrandedDeferredStaples(before, limit)).map(function({ staple, lacks }): [string, (string | null)[]] {
+					return([staple.blocksHash.toString(), lacks.map(hashOf)]);
+				}));
+			};
+			const latestVoteOf = function(staple: VoteStaple): Date {
+				return(new Date(Math.max(...staple.votes.map(function(vote): number {
+					return(vote.validityFrom.getTime());
+				}))));
+			};
+			const later = new Date(latestVoteOf(thirdStaple).getTime() + 1);
+			expect(await ledger.add(thirdStaple)).toEqual([]);
+			expect(await ledger.add(secondStaple)).toEqual([]);
+
+			expect(await stranded(later, 10)).toEqual([[secondStaple.blocksHash.toString(), [first.hash.toString()]], [thirdStaple.blocksHash.toString(), [second.hash.toString()]]]);
+			expect(await stranded(later, 1)).toEqual([[secondStaple.blocksHash.toString(), [first.hash.toString()]]]);
+			expect(await stranded(latestVoteOf(thirdStaple), 10)).toEqual([[secondStaple.blocksHash.toString(), [first.hash.toString()]]]);
+
+			// The second is released, not stranded: what it awaits is on main, and gc applies it.
+			expect(blocksHashesOf(await ledger.add(firstStaple))).toEqual(blocksHashesOf([firstStaple]));
+			expect(await stranded(later, 10)).toEqual([[thirdStaple.blocksHash.toString(), [second.hash.toString()]]]);
+			expect(await ledger.gc()).toBe(false);
+			expect(await stranded(later, 10)).toEqual([]);
+			expect(hashOf(await ledger.getBlock(third.hash, 'main'))).toBe(hashOf(third));
 		});
 	});
 }

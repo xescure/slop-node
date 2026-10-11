@@ -1293,6 +1293,38 @@ describe('bootstrapping against a peer keyed by votes, as the main network\'s re
 		expect(scenario.missing()).toEqual([]);
 	});
 
+	/*
+	 * A main network representative begins each read of a request a
+	 * millisecond past the key of the last vote of the read before, so a vote
+	 * keyed that close after a read's last vote is in no read of a request
+	 * aligned so. On 2026-07-08 only one representative voted, and of a
+	 * stretch of such staples a catch-up missed one in about thirty that
+	 * followed another's vote within a millisecond; the passes have no sign
+	 * of it, and the staple after it on its chain waits deferred for good,
+	 * which the client mends by asking for the block (src/node/bootstrap.ts).
+	 */
+	test('misses a staple whose only vote a peer leaves out by resuming its reads a millisecond past the last vote of a read', async function() {
+		freezeClock(new Date(NOW));
+		const scenario = new Scenario({ latency: 1300, keying: { kind: 'votes', votesPerRead: 15, readsAtMost: 4, readMilliseconds: 1000, resumesPast: 1 } });
+		const first = NOW - HOUR;
+		const voted = [];
+		for (let index = 0; index < 60; index++) {
+			const made = first + index * 100;
+			voted.push(scenario.peer.applyVoted(made, made, [], [made]));
+		}
+		const lastOfRead = voted[14];
+		if (lastOfRead === undefined) {
+			throw(new Error('no staples were applied'));
+		}
+		const madeAfter = lastOfRead.timestamp().getTime() + 1;
+		const leftOut = scenario.peer.applyVoted(madeAfter, madeAfter, [], [madeAfter]);
+		scenario.from = new Date(first);
+
+		await scenario.untilComplete(10);
+
+		expect(scenario.missing()).toEqual([leftOut.id]);
+	});
+
 	test('holds every staple of a peer that keys each vote up to the tolerance from when it was made', async function() {
 		freezeClock(new Date(NOW));
 		const jitter: VoteKey = function(made, staple, vote): number {

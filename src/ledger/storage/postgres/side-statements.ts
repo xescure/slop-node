@@ -225,6 +225,21 @@ export const listReadyDeferredStaples: Statement<[Buffer[], Buffer[]]> = stateme
  */
 
 // A deferred staple can never apply once the previous of any of its blocks has a confirmed successor (D6, D20).
+/*
+ * Deferred staples voted before $1 that await a block not on main, each with
+ * those blocks, by their latest votes; a staple whose awaited blocks are all
+ * on main is gc's to apply.
+ */
+export const strandedDeferredStaples: Statement<[Date, number], { readonly bytes: Buffer; readonly lacks: readonly Buffer[] }> = statement('stranded_deferred_staples', `
+	SELECT deferred_staples.bytes, array_agg(deferred_waits.block_hash::bytea ORDER BY deferred_waits.block_hash) AS lacks
+	FROM deferred_staples
+	JOIN deferred_waits ON deferred_waits.blocks_hash = deferred_staples.blocks_hash
+	WHERE deferred_staples.latest_vote_from < $1
+		AND NOT EXISTS (SELECT 1 FROM blocks WHERE blocks.hash = deferred_waits.block_hash AND blocks.ledger = 'main')
+	GROUP BY deferred_staples.blocks_hash
+	ORDER BY deferred_staples.latest_vote_from, deferred_staples.blocks_hash
+	LIMIT $2`);
+
 export const deadDeferredStaples: Statement<[number], DeferredStapleColumns> = statement('dead_deferred_staples', `
 	SELECT deferred_staples.blocks_hash, deferred_staples.bytes, deferred_staples.latest_vote_from
 	FROM deferred_staples

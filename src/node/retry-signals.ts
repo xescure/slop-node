@@ -1,8 +1,9 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
-import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
+import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import type { StrandedDeferredStaple } from '../ledger/storage/base.js';
 import type { Awaited } from './bootstrap-retry.js';
 
 const lib = KeetaNet.lib;
@@ -111,4 +112,28 @@ export async function weightSufficesOn(ledger: Pick<Ledger, 'runReadOnly'>, vote
 			return(weight >= required);
 		}));
 	}));
+}
+
+/**
+ * The blocks the staples await that none of them carries, each once, in the
+ * order the staples are listed: what the earliest staple of each chain of
+ * them lacks.
+ */
+export function lackedBlocksOf(stranded: readonly StrandedDeferredStaple[]): BlockHash[] {
+	const carried = new Set<string>();
+	for (const { staple } of stranded) {
+		for (const block of staple.blocks) {
+			carried.add(block.hash.toString());
+		}
+	}
+	const lacked = new Map<string, BlockHash>();
+	for (const { lacks } of stranded) {
+		for (const block of lacks) {
+			const key = block.toString();
+			if (!carried.has(key)) {
+				lacked.set(key, block);
+			}
+		}
+	}
+	return([...lacked.values()]);
 }

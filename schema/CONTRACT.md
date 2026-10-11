@@ -1056,6 +1056,16 @@ Returns the ledger checksum, the XOR of the hash of every block on the main ledg
 
 **Postgres.** One statement on a pooled connection outside any transaction: the `bit_xor` of the 256 `checksum` rows of `ledger_checksum`. The moment is the middle of the statement's round trip, and `momentRange` half its length.
 
+#### `listStrandedDeferredStaples`
+
+```ts
+abstract listStrandedDeferredStaples(before: Date, limit: number): Promise<readonly StrandedDeferredStaple[]>;
+```
+
+Not part of upstream's interface. Returns up to `limit` deferred staples whose latest vote was made before `before` and that await a block the main ledger lacks, each with those blocks in `lacks`, ascending by the latest vote, then by `blocksHash`, from one view of the committed ledger outside any transaction. A deferred staple whose awaited blocks are all on the main ledger is released, and `gc` applies it (section 2.6), so it is not listed. The node's bootstrap asks its peers for the staples holding the blocks these staples lack, once an update has completed without them: a peer may leave a staple out of every page it serves (`src/node/bootstrap.ts`). Tested by `deferral.ts: "lists the deferred staples that await a block the main ledger lacks, by their latest votes, with the blocks they lack, as of before a moment"`.
+
+**Postgres.** One statement on a pooled connection: `deferred_staples` joined to the `deferred_waits` rows whose `block_hash` is no main `blocks` row, grouped by staple, ordered by `latest_vote_from`, then `blocks_hash`.
+
 #### `confirmedHistoryConflict`
 
 ```ts

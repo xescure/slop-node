@@ -28,7 +28,7 @@ import { bootstrapEndpointsOf, bootstrapFrom, bootstrapSources } from './bootstr
 import { DEEP_SCAN_PERIOD_MILLISECONDS, MAX_PASS_MILLISECONDS } from './bootstrap-pass.js';
 import { REPORT_REFUSED_AFTER_MILLISECONDS } from './bootstrap-retry.js';
 import { stagedOf } from './bootstrap-stage.js';
-import { awaitedOf } from './retry-signals.js';
+import { awaitedOf, lackedBlocksOf } from './retry-signals.js';
 import { BOOTSTRAP_MARGIN_MILLISECONDS } from './bootstrap-window.js';
 import type { LocalNode } from './local.js';
 
@@ -207,6 +207,48 @@ describe('a bootstrap client', function() {
 		expect(again.flatMap(function(page): readonly string[] {
 			return(page.served);
 		})).toEqual([Buffer.from(committedLate.toBytes()).toString('base64')]);
+	});
+
+	/*
+	 * A main network representative leaves out of a page a vote made a
+	 * millisecond or less after the last vote of one of its reads, so a pass
+	 * moves past a staple that has no other vote; the staple after it on the
+	 * same chain then waits, deferred, for a block nothing brings.
+	 */
+	test('asks its peers for the staple holding a block that deferred staples await, once an update completes without it', async function() {
+		const peer = await representative();
+		const leftOut = new Set<string>();
+		const recording = await startRecordingPeer(peer.apiURL, { leavesOut: function(staple): boolean {
+			return(leftOut.has(new lib.Vote.Staple(Buffer.from(staple, 'base64')).blocksHash.toString()));
+		} });
+		const late = await joiner({ bootstrapFrom: [recording.apiURL] });
+		const [lost, after] = await sendsFrom(peer.network, 0, 2);
+		if (lost === undefined || after === undefined) {
+			throw(new Error('no staples were made'));
+		}
+		leftOut.add(lost.blocksHash.toString());
+		await addAll(peer.node, [lost, after]);
+		// Every pass has read past both staples' votes.
+		advanceClock(BOOTSTRAP_MARGIN_MILLISECONDS + 1000);
+		const lines = linesOf(late.node, 'info');
+
+		expect(await clientOf(late.node).update()).toEqual({ complete: true });
+
+		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
+		const [lostBlock] = lost.blocks;
+		expect(lines()).toContainEqual(expect.stringContaining(`lacked block ${lostBlock?.hash.toString() ?? ''}, which deferred staples await; staple ${lost.blocksHash.toString()} holding it, from ${recording.apiURL}, was added`));
+	});
+
+	test('asks only for the blocks deferred staples await that none of them carries, each once', async function() {
+		const peer = await representative();
+		const [first, second, third] = await sendsFrom(peer.network, 0, 3);
+		const [firstBlock] = first?.blocks ?? [];
+		const [secondBlock] = second?.blocks ?? [];
+		if (second === undefined || third === undefined || firstBlock === undefined || secondBlock === undefined) {
+			throw(new Error('no staples were made'));
+		}
+
+		expect(lackedBlocksOf([{ staple: second, lacks: [firstBlock.hash] }, { staple: third, lacks: [secondBlock.hash, firstBlock.hash] }]).map(String)).toEqual([firstBlock.hash.toString()]);
 	});
 
 	test('names the staples the node holds in its filter, so that a peer sends none of them', async function() {

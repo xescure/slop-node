@@ -142,7 +142,30 @@ export type RecordingPeerOptions = {
 	readonly padAboveLimit?: number;
 	/** Runs as each answer is about to be sent, as the time a slow representative takes would pass. */
 	readonly beforeAnswer?: () => void;
+	/**
+	 * Leaves out of every page of staples those whose bytes, in base64, it
+	 * names, as a main network representative leaves out a vote made a
+	 * millisecond or less after the last vote of one of its reads, while its
+	 * other routes still answer for the staple.
+	 */
+	readonly leavesOut?: (staple: string) => boolean;
 };
+
+const PAGE_ROUTE = '/node/bootstrap/votes';
+
+/** The answer with the staples named left out of a page of them; any other answer as it was. */
+function withLeftOut(path: string, body: string, leavesOut: ((staple: string) => boolean) | undefined): string {
+	if (leavesOut === undefined || !path.endsWith(PAGE_ROUTE)) {
+		return(body);
+	}
+	const parsed: unknown = JSON.parse(body);
+	if (!isRecord(parsed) || !Array.isArray(parsed['voteStaples'])) {
+		return(body);
+	}
+	return(JSON.stringify({ ...parsed, voteStaples: parsed['voteStaples'].filter(function(staple: unknown): boolean {
+		return(!isRecord(staple) || typeof staple['$binary'] !== 'string' || !leavesOut(staple['$binary']));
+	}) }));
+}
 
 function padding(query: URLSearchParams, padAboveLimit: number | undefined): string {
 	if (padAboveLimit === undefined || Number(query.get('limit')) <= padAboveLimit) {
@@ -162,11 +185,13 @@ export async function startRecordingPeer(apiURL: string, options: RecordingPeerO
 	const server = http.createServer(function(request, response): void {
 		const received = performance.now();
 		forward(target, request, options.filter ?? 'passed-on').then(function(answer): void {
-			const query = new URL(request.url ?? '/', target).searchParams;
+			const url = new URL(request.url ?? '/', target);
+			const query = url.searchParams;
+			const body = withLeftOut(url.pathname, answer.body, options.leavesOut);
 			options.beforeAnswer?.();
 			response.writeHead(answer.status, { 'content-type': answer.contentType ?? 'application/json' });
-			response.end(answer.body + padding(query, options.padAboveLimit));
-			pages.push({ start: query.get('start'), limit: query.get('limit'), bloomFilter: bloomFilterOf(query), status: answer.status, served: servedStaples(answer.body), received, answered: performance.now() });
+			response.end(body + padding(query, options.padAboveLimit));
+			pages.push({ start: query.get('start'), limit: query.get('limit'), bloomFilter: bloomFilterOf(query), status: answer.status, served: servedStaples(body), received, answered: performance.now() });
 		}, function(error: unknown): void {
 			response.writeHead(502);
 			response.end(String(error));

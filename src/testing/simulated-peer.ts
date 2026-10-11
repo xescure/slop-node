@@ -222,7 +222,21 @@ export class ConcurrentClock {
  */
 export type SimulatedKeying =
 	| { readonly kind: 'applied' }
-	| { readonly kind: 'votes'; readonly votesPerRead: number; readonly readsAtMost: number; readonly readMilliseconds: number; readonly keyedAt?: VoteKey; readonly readsVaryBy?: number };
+	| {
+		readonly kind: 'votes';
+		readonly votesPerRead: number;
+		readonly readsAtMost: number;
+		readonly readMilliseconds: number;
+		readonly keyedAt?: VoteKey;
+		readonly readsVaryBy?: number;
+		/**
+		 * How far past the key of a read's last vote the next read of a
+		 * request begins, leaving out the votes keyed up to that far after
+		 * it, as a main network representative's reads resume a millisecond
+		 * past it.
+		 */
+		readonly resumesPast?: number;
+	};
 
 /**
  * Where a peer keyed by votes keys a vote of a staple, by its index among
@@ -476,6 +490,13 @@ export class SimulatedPeer {
 				return(scrambled(left.id, at) - scrambled(right.id, at));
 			});
 			at += size;
+			const resumesPast = keying.resumesPast;
+			const lastKey = read.at(-1)?.key;
+			if (resumesPast !== undefined && lastKey !== undefined) {
+				while ((this.#votes[at]?.key ?? Number.POSITIVE_INFINITY) <= lastKey + resumesPast) {
+					at++;
+				}
+			}
 			reads++;
 			for (const staple of listed) {
 				if (staples.length >= limit) {

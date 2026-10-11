@@ -7,7 +7,7 @@ import type { Vote, VoteBlockHash, VoteBlockHashMap, VoteStaple } from '@keetane
 import { LedgerInternals } from '../../../upstream/internals.js';
 import { assertNever } from '../../../util/assert-never.js';
 import { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
-import type { CollectedDeferredStaples, LedgerChecksum, LedgerCountsSnapshot, TransactionOptions } from '../base.js';
+import type { CollectedDeferredStaples, LedgerChecksum, LedgerCountsSnapshot, StrandedDeferredStaple, TransactionOptions } from '../base.js';
 import type { AccountInfoUpdate, ConfirmedStapleChange } from '../confirmed.js';
 import { createIdempotentKeyError, createLedgerError, HistoryStartNotListed } from '../errors.js';
 import { isVoteUnexpired } from '../expiry.js';
@@ -744,6 +744,40 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	}
 
 	/* Read from the committed state, as the counts are. */
+	listStrandedDeferredStaples(before: Date, limit: number): Promise<readonly StrandedDeferredStaple[]> {
+		const committed = this.#committed;
+		const stranded: { readonly latestVote: number; readonly key: StapleKey; readonly found: StrandedDeferredStaple }[] = [];
+		for (const [key, row] of committed.deferredStaples.entries()) {
+			const latestVote = Math.max(...row.staple.votes.map(function(vote): number {
+				return(vote.validityFrom.getTime());
+			}));
+			const lacked = new Set(row.waitingOn.filter(function(blockKey): boolean {
+				return(committed.blocks.get(blockKey) === undefined);
+			}));
+			if (latestVote >= before.getTime() || lacked.size === 0) {
+				continue;
+			}
+			// The keys name previous blocks of the staple's own blocks, whose hashes it holds.
+			const lacks = new Map<BlockHashKey, BlockHash>();
+			for (const block of row.staple.blocks) {
+				const previousKey = toBlockHashKey(block.previous);
+				if (lacked.has(previousKey)) {
+					lacks.set(previousKey, block.previous);
+				}
+			}
+			stranded.push({ latestVote, key, found: { staple: row.staple, lacks: [...lacks.entries()].sort(compareKeyed).map(function([, hash]): BlockHash {
+				return(hash);
+			}) } });
+		}
+		stranded.sort(function(left, right): number {
+			return(left.latestVote - right.latestVote || compareText(left.key, right.key));
+		});
+		return(Promise.resolve(stranded.slice(0, limit).map(function({ found }): StrandedDeferredStaple {
+			return(found);
+		})));
+	}
+
+	/* Read from the committed state, as the counts are. */
 	ledgerChecksum(): Promise<LedgerChecksum> {
 		return(Promise.resolve({ moment: new Date(), momentRange: 0, checksum: this.#committed.ledgerChecksum.get('main') ?? 0n }));
 	}
@@ -1284,4 +1318,18 @@ function resolveAccount<T extends AccountKeyAlgorithm>(account: Account<T> | str
 	}
 	// The caller's type parameter is the only key-type information a string carries.
 	return(lib.Account.fromPublicKeyString(account) as Account<T>);
+}
+
+function compareText(left: string, right: string): number {
+	if (left < right) {
+		return(-1);
+	}
+	if (left > right) {
+		return(1);
+	}
+	return(0);
+}
+
+function compareKeyed(left: readonly [string, unknown], right: readonly [string, unknown]): number {
+	return(compareText(left[0], right[0]));
 }

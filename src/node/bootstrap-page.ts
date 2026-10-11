@@ -1,7 +1,8 @@
 import http from 'node:http';
 import https from 'node:https';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
+import type { Vote, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { P2PInternals } from '../upstream/internals.js';
 import { assertNever } from '../util/assert-never.js';
 import { NODE_VERSION } from '../version.js';
@@ -10,6 +11,12 @@ const lib = KeetaNet.lib;
 
 /** The route a representative serves its staples on, below its API endpoint [Keeta TS] index.js:59175. */
 const BOOTSTRAP_ROUTE = '/node/bootstrap/votes';
+
+/** Where a representative answers the votes it holds on a block [Keeta TS] index.js:59900. */
+const VOTES_ROUTE = '/vote';
+
+/** Where a representative answers a block it holds [Keeta TS] index.js:58782. */
+const BLOCK_ROUTE = '/node/ledger/block';
 
 const SUCCESS_STATUS = 200;
 
@@ -162,6 +169,54 @@ function staplesOf(endpoint: string, answer: Answer): VoteStaple[] {
 	}));
 }
 
+/** Sends one request to a peer when the peer's pacing lets it. */
+export type Pace = <Result>(request: () => Promise<Result>) => Promise<Result>;
+
+/** The votes a representative answers it holds on a block, none when it holds none [Keeta TS] index.js:59900-59933. */
+function votesOf(endpoint: string, parsed: unknown): Vote[] {
+	if (!isRecord(parsed) || !('votes' in parsed)) {
+		throw(new PageError(endpoint, { kind: 'malformed', detail: 'it holds no votes' }));
+	}
+	const written = parsed['votes'];
+	if (written === null) {
+		return([]);
+	}
+	if (!Array.isArray(written)) {
+		throw(new PageError(endpoint, { kind: 'malformed', detail: 'its votes are no list' }));
+	}
+	return(written.map(function(vote: unknown): Vote {
+		const encoded = stapleBytesOf(vote);
+		if (encoded === undefined) {
+			throw(new PageError(endpoint, { kind: 'malformed', detail: 'a vote carries no bytes' }));
+		}
+		try {
+			return(new lib.Vote(Buffer.from(encoded, 'base64')));
+		} catch (error: unknown) {
+			throw(new PageError(endpoint, { kind: 'malformed', detail: 'a vote cannot be read' }, { cause: error }));
+		}
+	}));
+}
+
+/** The block a representative answers it holds, nothing when it holds none [Keeta TS] index.js:58778-58796. */
+function blockOf(endpoint: string, parsed: unknown): Block | undefined {
+	if (!isRecord(parsed) || !('block' in parsed)) {
+		throw(new PageError(endpoint, { kind: 'malformed', detail: 'it holds no block' }));
+	}
+	const written = parsed['block'];
+	if (written === null) {
+		return(undefined);
+	}
+	const encoded = stapleBytesOf(written);
+	if (encoded === undefined) {
+		throw(new PageError(endpoint, { kind: 'malformed', detail: 'a block carries no bytes' }));
+	}
+	try {
+		return(new lib.Block(Buffer.from(encoded, 'base64')));
+	} catch (error: unknown) {
+		throw(new PageError(endpoint, { kind: 'malformed', detail: 'a block cannot be read' }, { cause: error }));
+	}
+}
+
 /**
  * Requests pages of peers' staples over HTTP, reusing connections until it
  * is closed, which ends every connection it opened.
@@ -188,6 +243,72 @@ export class PageFetcher {
 			}
 			if (timer.signal.aborted) {
 				throw(new PageError(request.endpoint, { kind: 'timeout', milliseconds: timeoutMilliseconds }, { cause: error }));
+			}
+			throw(error);
+		} finally {
+			clearTimeout(timeout);
+		}
+	}
+
+	/**
+	 * The staple on the main ledger that holds the block, as the peer holds
+	 * it, or nothing when the peer holds no such staple: its votes on the
+	 * block, then each block they cover, as the client builds a staple
+	 * [Keeta TS] index.js:58802-58842, 59887-59933, 58778-58796, each request
+	 * sent as the pacing lets it. A PageError
+	 * as for a page: a timeout once that many milliseconds have passed for a
+	 * request, or a stop once the signal is aborted.
+	 */
+	async stapleHolding(endpoint: string, block: BlockHash, timeoutMilliseconds: number, stopped: AbortSignal, pace: Pace): Promise<VoteStaple | undefined> {
+		const read = (url: URL): Promise<unknown> => {
+			return(pace(() => {
+				return(this.#read(endpoint, url, timeoutMilliseconds, stopped));
+			}));
+		};
+		const votes = votesOf(endpoint, await read(new URL(`${endpoint}${VOTES_ROUTE}/${block.toString()}?side=main`)));
+		const [sample] = votes;
+		if (sample === undefined) {
+			return(undefined);
+		}
+		const blocks: Block[] = [];
+		for (const covered of sample.blocks) {
+			const found = blockOf(endpoint, await read(new URL(`${endpoint}${BLOCK_ROUTE}/${covered.toString()}?side=main`)));
+			if (found === undefined) {
+				return(undefined);
+			}
+			blocks.push(found);
+		}
+		let staple: VoteStaple;
+		try {
+			staple = lib.Vote.Staple.fromVotesAndBlocks(votes, blocks);
+		} catch (error: unknown) {
+			throw(new PageError(endpoint, { kind: 'malformed', detail: 'its votes and blocks make no staple' }, { cause: error }));
+		}
+		if (!staple.blocks.some(function(held): boolean {
+			return(held.hash.compare(block));
+		})) {
+			throw(new PageError(endpoint, { kind: 'malformed', detail: `the staple it holds for block ${block.toString()} lacks it` }));
+		}
+		return(staple);
+	}
+
+	async #read(endpoint: string, url: URL, timeoutMilliseconds: number, stopped: AbortSignal): Promise<unknown> {
+		const timer = new AbortController();
+		const timeout = setTimeout(function(): void {
+			timer.abort();
+		}, timeoutMilliseconds);
+		try {
+			const answer = await this.#get(endpoint, url, MAX_SINGLE_STAPLE_PAGE_BYTES, AbortSignal.any([stopped, timer.signal]));
+			if (answer.status !== SUCCESS_STATUS) {
+				throw(new PageError(endpoint, { kind: 'status', status: answer.status, message: errorMessageOf(answer.body) }));
+			}
+			return(parseJSON(endpoint, answer.body));
+		} catch (error: unknown) {
+			if (stopped.aborted) {
+				throw(new PageError(endpoint, { kind: 'stopped' }, { cause: error }));
+			}
+			if (timer.signal.aborted) {
+				throw(new PageError(endpoint, { kind: 'timeout', milliseconds: timeoutMilliseconds }, { cause: error }));
 			}
 			throw(error);
 		} finally {

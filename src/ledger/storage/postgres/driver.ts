@@ -9,7 +9,7 @@ import type pg from 'pg';
 import { LedgerInternals } from '../../../upstream/internals.js';
 import { assertNever } from '../../../util/assert-never.js';
 import { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
-import type { CollectedDeferredStaples, LedgerChecksum, LedgerCountsSnapshot, TransactionOptions } from '../base.js';
+import type { CollectedDeferredStaples, LedgerChecksum, LedgerCountsSnapshot, StrandedDeferredStaple, TransactionOptions } from '../base.js';
 import { historyAccountsOf } from '../confirmed.js';
 import type { AccountInfoUpdate, ConfirmedStapleChange } from '../confirmed.js';
 import { createIdempotentKeyError, createLedgerError, HistoryStartNotListed } from '../errors.js';
@@ -110,7 +110,8 @@ import {
 	sideSuccessor,
 	sideVoteBlocks,
 	sideVotesOfBlock,
-	sideVotesOfPrevious
+	sideVotesOfPrevious,
+	strandedDeferredStaples
 } from './side-statements.js';
 import type { DeferredStapleColumns } from './side-statements.js';
 import {
@@ -1273,6 +1274,15 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 
 	bootstrapStage(): BootstrapStage {
 		return(this.#stage);
+	}
+
+	/* One statement on a pooled connection, so one snapshot of the committed deferrals and main blocks. */
+	async listStrandedDeferredStaples(before: Date, limit: number): Promise<readonly StrandedDeferredStaple[]> {
+		const { pool } = await this.#pool.connection();
+		const result = await pool.query<{ readonly bytes: Buffer; readonly lacks: readonly Buffer[] }>({ name: strandedDeferredStaples.name, text: strandedDeferredStaples.text, values: [before, limit] });
+		return(result.rows.map(function(row): StrandedDeferredStaple {
+			return({ staple: new lib.Vote.Staple(row.bytes), lacks: row.lacks.map(toBlockHash) });
+		}));
 	}
 
 	/*
