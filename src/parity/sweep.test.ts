@@ -634,7 +634,7 @@ function serveSplit(running: Running, account: string, follower: string, represe
 }
 
 describe('a divergence from one representative', function() {
-	test('is that representative\'s own when the follower agrees with most of the others, and is recorded with every one\'s reading', async function() {
+	test('is that representative\'s own when the follower agrees with the others, and is recorded with every one\'s reading', async function() {
 		const running = await setup(3);
 		const account = ACCOUNTS[0];
 		serveSplit(running, account, '0x10', ['0x11', '0x10', '0x10']);

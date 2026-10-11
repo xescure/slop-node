@@ -111,7 +111,7 @@ export type Disputed = {
 export type DisputedKind =
 	/** The follower disagrees with most of the representatives that answered: the follower's own. */
 	| 'diverged'
-	/** The follower agrees with most of them, at least two besides the one compared with: that representative's own. */
+	/** At least two answer as the follower, every other value fewer, and the follower holds what each apart holds newest: the own of those apart. */
 	| 'representative-local'
 	/** Neither side has most of them. */
 	| 'unresolved';

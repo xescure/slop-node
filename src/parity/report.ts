@@ -124,8 +124,9 @@ export type SweepCoverage = {
 };
 
 /**
- * Accounts one representative alone answered apart, the follower agreeing
- * with most of the others: an artifact of that representative's own node.
+ * Accounts the representatives apart answered apart, at least two answering
+ * as the follower and every other value fewer, borne out by a check of the
+ * follower's balances: an artifact of those representatives' own nodes.
  */
 export type RepresentativeLocal = {
 	readonly records: number;
@@ -231,7 +232,7 @@ export type APIDiffStratum = {
 	readonly standingOnExplanation: number;
 	/** Requests with a divergence no later comparison settled: the follower's, or one the representatives split on. */
 	readonly diverged: number;
-	/** Requests one representative alone answered apart from the follower and the others. */
+	/** Requests the representatives apart answered apart from the follower and at least two others. */
 	readonly representativeLocal: number;
 	readonly census: APIDiffCensus | null;
 	/** Requests never compared, by their route and why their latest attempt was not. */
@@ -271,7 +272,7 @@ export type APIDiffSignal = {
 	/** Requests compared per stratum for its rate of divergence to be below 1% at 95%, by the rule of three. */
 	readonly samplesTarget: number;
 	readonly everyStratumCovered: boolean;
-	/** The requests whose latest comparison found one representative alone apart, by that representative. */
+	/** The requests whose latest comparison left the difference to the representatives apart, by each of them. */
 	readonly representativeLocal: Readonly<Record<string, number>>;
 	readonly superseded: readonly SupersededDivergence[];
 	/** Divergences of a state that moved on, closed by a triage record that names their class and fix. */
@@ -686,7 +687,7 @@ function sweepCoverageOf(records: readonly SweepRecord[], batches: readonly Swee
 	});
 }
 
-/** The accounts whose latest comparison found one representative alone apart, by that representative, with the first such record. */
+/** The accounts whose latest comparison left the difference to the representatives apart, by each of them, with the first such record. */
 function representativeLocalOf(records: readonly SweepRecord[], localNow: readonly SweepRecord[]): RepresentativeLocal {
 	const byRepresentative: Record<string, number> = {};
 	for (const record of localNow) {
@@ -942,7 +943,18 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], plans: readonly APID
 	});
 	const representativeLocal: Record<string, number> = {};
 	for (const { latest } of local) {
-		representativeLocal[latest.representative] = (representativeLocal[latest.representative] ?? 0) + 1;
+		// Every representative that answered apart from the follower and the others is charged with the difference.
+		const dissenting = [latest.representative];
+		if (latest.outcome.kind === 'representative-local') {
+			for (const reading of latest.outcome.readings) {
+				if (reading.kind === 'disagrees') {
+					dissenting.push(reading.representative);
+				}
+			}
+		}
+		for (const representative of dissenting) {
+			representativeLocal[representative] = (representativeLocal[representative] ?? 0) + 1;
+		}
 	}
 	const superseded = [...standingsByKey.values()].flatMap(function(standing): readonly SupersededDivergence[] {
 		return(standing.superseded);

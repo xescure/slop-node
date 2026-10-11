@@ -286,7 +286,7 @@ export type WalkSummary = {
 	readonly matched: number;
 	/** Accounts the follower disagrees with most representatives about, or that they split on. */
 	readonly diverged: number;
-	/** Accounts one representative alone disagreed about, the follower agreeing with most of the others. */
+	/** Accounts left to the representatives apart: at least two answer as the follower and every other value fewer. */
 	readonly representativeLocal: number;
 	/** Chain accounts moving on every attempt, compared by their chains, among those compared and apart from those matched. */
 	readonly comparedByChain: number;
@@ -1011,10 +1011,11 @@ function latestReadings(records: readonly SweepRecord[]): readonly SweepRecord[]
  * Compares again each account whose latest comparison diverged or was
  * unresolved, or left the difference to the representatives apart without
  * a consistent check of the follower's balances, or whose latest reading
- * both sides answered with the same error, with the representative it was compared with and read again
- * from every other, and records the outcome in that comparison's walk and
- * lap, where it stands as the account's latest. A representative the run
- * does not reach leaves its accounts as they stand.
+ * both sides answered with the same error, with the representative it was
+ * compared with and read again from every other, and records the outcome in
+ * that comparison's walk and lap, where it stands as the account's latest.
+ * A representative the run does not reach leaves its accounts as they
+ * stand.
  */
 export async function recheckDivergences(setup: RecheckSetup): Promise<RecheckSummary> {
 	const quietBefore = await quietBeforeOf(setup.store);

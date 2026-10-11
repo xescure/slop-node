@@ -312,6 +312,8 @@ describe('the parity report', function() {
 		const disputed = { field: 'body.info', follower: FOLLOWER_INFO, representative: REPRESENTATIVE_INFO, readings: [] };
 		const local = report([apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'representative-local', ...disputed })]).signals.apiDiff;
 		expect(local).toMatchObject({ verdict: 'pass', counts: { requestsCompared: 1, matched: 0, diverged: 0, representativeLocal: 1 }, representativeLocal: { [REPRESENTATIVE]: 1 } });
+		const alsoApart = report([apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'representative-local', ...disputed, readings: [{ representative: OTHER_REPRESENTATIVE, kind: 'disagrees', answer: {} }] })]).signals.apiDiff;
+		expect(alsoApart.representativeLocal).toEqual({ [REPRESENTATIVE]: 1, [OTHER_REPRESENTATIVE]: 1 });
 		const unresolved = report([apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'unresolved', ...disputed })]).signals.apiDiff;
 		expect(unresolved).toMatchObject({ verdict: 'fail', counts: { diverged: 1, unresolved: 1 }, firstDivergence: { path, field: 'body.info' } });
 	});

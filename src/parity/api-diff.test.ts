@@ -435,6 +435,29 @@ describe('a divergence of the API', function() {
 		expect(setup.representatives[0]?.requests).toEqual([`GET ${BALANCE}`, `GET /node/ledger/account/${TOKEN}/history?limit=1`]);
 	});
 
+	test('is the own of the representatives answering apart when two answer as the follower and each other answers a value of its own', async function() {
+		const setup = await runningWith(4);
+		servingBalances(setup, '0x1', ['0x2', '0x1', '0x1', '0x3']);
+
+		const { summary } = await recheck(setup);
+
+		expect(summary).toEqual({ 'representative-local': 1 });
+	});
+
+	test('is unresolved when two answer as the follower and two answer one failure, told apart only by its error ID', async function() {
+		const setup = await runningWith(4);
+		servingBalances(setup, '0x1', ['0x2', '0x1', '0x1', '0x2']);
+		const failure = function(id: string) {
+			return({ status: 500, body: { error: true, message: `Internal error occurred (error ID: 00000000-0000-0000-0000-00000000000${id})` } });
+		};
+		setup.representatives[0]?.answer(BALANCE, failure('1'));
+		setup.representatives[3]?.answer(BALANCE, failure('2'));
+
+		const { summary } = await recheck(setup);
+
+		expect(summary).toEqual({ unresolved: 1 });
+	});
+
 	test('is unresolved when no side has most of the representatives that answered', async function() {
 		const setup = await runningWith(3);
 		servingBalances(setup, '0x1', ['0x2', '0x1', undefined]);
