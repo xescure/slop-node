@@ -154,12 +154,23 @@ export function newestStapleOf(page: unknown): NewestStaple | undefined {
 	return({ staple: entry['$id'], latestVote: new Date(latest) });
 }
 
-/** The head an answer names in the field, or null. */
-function headOf(answer: unknown, field: 'currentHeadBlock' | 'block' = 'currentHeadBlock'): string | null {
-	if (isFields(answer) && typeof answer[field] === 'string') {
-		return(answer[field]);
+function headOf(state: unknown): string | null {
+	if (isFields(state) && typeof state['currentHeadBlock'] === 'string') {
+		return(state['currentHeadBlock']);
 	}
 	return(null);
+}
+
+/** The hash of the head block an account's head answers with, the block whole (api/node.d.ts, getAccountsHead), or null for an account without one. */
+function headBlockOf(answer: unknown): string | null {
+	if (!isFields(answer) || answer['block'] === null) {
+		return(null);
+	}
+	const block = answer['block'];
+	if (!isFields(block) || typeof block['$hash'] !== 'string') {
+		throw(new Error(`not the head of an account: ${JSON.stringify(answer).slice(0, 200)}`));
+	}
+	return(block['$hash']);
 }
 
 function messageOf(error: unknown): string {
@@ -229,6 +240,10 @@ export async function compareAccount(comparison: AccountComparison): Promise<Swe
 	 * bodies are compared whole.
 	 */
 	const field = firstDifference(followerAfter.body, representativeState);
+	const error = stateErrorOf(representativeState);
+	if (field === undefined && error !== undefined) {
+		return({ kind: 'error-both', error });
+	}
 	if (field !== undefined) {
 		return({ kind: 'diverged', divergence: { account, field, staple }, follower: followerAfter.body, representative: representativeState, readings: [] });
 	}
@@ -262,7 +277,7 @@ export type WalkSummary = {
 	readonly diverged: number;
 	/** Accounts one representative alone disagreed about, the follower agreeing with most of the others. */
 	readonly representativeLocal: number;
-	/** Chain accounts moving on every attempt, compared by their chains, among those compared. */
+	/** Chain accounts moving on every attempt, compared by their chains, among those compared and apart from those matched. */
 	readonly comparedByChain: number;
 	/** Accounts not compared: found moving, unanswered, or answered with the same error by both; each is compared again on the next lap. */
 	readonly skipped: number;
@@ -304,7 +319,6 @@ function count(tally: Tally, outcome: SweepOutcome): void {
 			break;
 		case 'compared-chain':
 			tally.compared++;
-			tally.matched++;
 			tally.comparedByChain++;
 			break;
 		case 'skipped':
@@ -433,7 +447,7 @@ type ChainCheck =
 async function chainCheckOf(follower: APISource, representative: APISource, account: string, quietBefore: Date): Promise<ChainCheck> {
 	const path = `/node/ledger/account/${account}`;
 	try {
-		const head = headOf(await getOK(follower, `${path}/head`), 'block');
+		const head = headBlockOf(await getOK(follower, `${path}/head`));
 		let representativeHead: string | null = null;
 		let oldestLacked: ChainBlock | undefined;
 		let lacking = 0;
@@ -585,7 +599,7 @@ async function compareChainAccounts(setup: SweepSetup, batch: readonly KnownAcco
  * account the lap did not walk: one that gained its chain after the walk
  * passed its row, which the passive walk may not have reached either.
  */
-async function compareLateChainAccounts(setup: SweepSetup, lap: number, quietBefore: Date): Promise<Tally> {
+async function compareLateChainAccounts(setup: SweepSetup, lap: number, quietBefore: Date, limit: number): Promise<LapEnd> {
 	const walked = new Set<string>();
 	for (const record of (await setup.log.read()).records) {
 		if (record.kind === 'sweep' && record.walk === 'chain' && record.lap === lap) {
@@ -595,7 +609,7 @@ async function compareLateChainAccounts(setup: SweepSetup, lap: number, quietBef
 	const late = (await setup.store.chainAccounts()).filter(function(known): boolean {
 		return(!walked.has(known.account));
 	});
-	return(await compareChainAccounts(setup, late, lap, quietBefore));
+	return({ tally: await compareChainAccounts(setup, late.slice(0, limit), lap, quietBefore), done: late.length <= limit });
 }
 
 /** The error an entry of a list of states holds in place of a state, or nothing. */
@@ -731,14 +745,17 @@ async function quietBeforeOf(store: SweepStore): Promise<Date | undefined> {
 	return(new Date(heldBefore.getTime() - QUIET_MARGIN_MILLISECONDS));
 }
 
+/** What a walk compared at the end of a lap, and whether it compared all it had to, so that the lap may end. */
+type LapEnd = { readonly tally: Tally; readonly done: boolean };
+
 type Walk = {
 	readonly name: SweepWalk;
 	/** How many accounts one batch walks past, before the cursor moves. */
 	readonly batchSize: number;
 	accountsAfter(rowID: string, count: number): Promise<readonly KnownAccount[]>;
 	compare(batch: readonly KnownAccount[], cursor: SweepCursor, quietBefore: Date): Promise<Tally>;
-	/** What the walk compares once it has gone past the last account of the lap, before the lap ends. */
-	lapEnd(lap: number, quietBefore: Date): Promise<Tally>;
+	/** What the walk compares once it has gone past the last account of the lap, before the lap ends, at most so many accounts. */
+	lapEnd(lap: number, quietBefore: Date, limit: number): Promise<LapEnd>;
 };
 
 /**
@@ -762,8 +779,9 @@ async function walk(setup: SweepSetup, walking: Walk): Promise<WalkSummary> {
 		const batch = await walking.accountsAfter(cursor.afterRowID, Math.min(limit - tally.walked, walking.batchSize));
 		const last = batch.at(-1);
 		if (last === undefined) {
-			addTally(tally, await walking.lapEnd(cursor.lap, quietBefore));
-			if (isStopped(setup.stopped)) {
+			const ending = await walking.lapEnd(cursor.lap, quietBefore, limit - tally.walked);
+			addTally(tally, ending.tally);
+			if (isStopped(setup.stopped) || !ending.done) {
 				break;
 			}
 			cursor = { lap: cursor.lap + 1, afterRowID: START.afterRowID };
@@ -806,8 +824,8 @@ export async function sweepAccounts(setup: SweepSetup): Promise<SweepSummary> {
 			compare(batch, cursor, quietBefore) {
 				return(compareChainAccounts(setup, batch, cursor.lap, quietBefore));
 			},
-			lapEnd(lap, quietBefore) {
-				return(compareLateChainAccounts(setup, lap, quietBefore));
+			lapEnd(lap, quietBefore, limit) {
+				return(compareLateChainAccounts(setup, lap, quietBefore, limit));
 			}
 		}),
 		walk(setup, {
@@ -820,11 +838,19 @@ export async function sweepAccounts(setup: SweepSetup): Promise<SweepSummary> {
 				return(comparePassiveAccounts(setup, batch, cursor, quietBefore));
 			},
 			lapEnd() {
-				return(Promise.resolve(emptyTally()));
+				return(Promise.resolve({ tally: emptyTally(), done: true }));
 			}
 		})
 	]);
 	return({ chain, passive });
+}
+
+/** A chain divergence is compared again by the chain, which its account was compared by for moving on every attempt. */
+function compareAgain(setup: Comparing, representative: APISource, record: SweepRecord, quietBefore: Date): Promise<SweepOutcome> {
+	if ((record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved') && record.outcome.divergence.field === 'chain') {
+		return(compareByChain(setup, representative, record.account, quietBefore));
+	}
+	return(compareAdjudicated(setup, representative, record.account, quietBefore));
 }
 
 export type RecheckSetup = Pick<SweepSetup, 'follower' | 'representatives' | 'store' | 'log' | 'stopped'>;
@@ -832,8 +858,8 @@ export type RecheckSetup = Pick<SweepSetup, 'follower' | 'representatives' | 'st
 /** How many accounts were compared again, by the outcome each had. */
 export type RecheckSummary = Readonly<Partial<Record<SweepOutcome['kind'], number>>>;
 
-/** The latest comparison of each account, in the order the accounts were first compared. */
-function latestComparisons(records: readonly SweepRecord[]): readonly SweepRecord[] {
+/** The latest record of each account that read something of it, a comparison or an error both sides answered, in the order the accounts were first read. */
+function latestReadings(records: readonly SweepRecord[]): readonly SweepRecord[] {
 	const latest = new Map<string, SweepRecord>();
 	for (const record of records) {
 		if (record.outcome.kind !== 'skipped') {
@@ -845,7 +871,8 @@ function latestComparisons(records: readonly SweepRecord[]): readonly SweepRecor
 
 /**
  * Compares again each account whose latest comparison diverged or was
- * unresolved, with the representative it was compared with and read again
+ * unresolved, or whose latest reading both sides answered with the same
+ * error, with the representative it was compared with and read again
  * from every other, and records the outcome in that comparison's walk and
  * lap, where it stands as the account's latest. A representative the run
  * does not reach leaves its accounts as they stand.
@@ -855,10 +882,10 @@ export async function recheckDivergences(setup: RecheckSetup): Promise<RecheckSu
 	if (quietBefore === undefined) {
 		throw(new Error('the follower has read from no representative yet'));
 	}
-	const disputed = latestComparisons((await setup.log.read()).records.filter(function(record): record is SweepRecord {
+	const disputed = latestReadings((await setup.log.read()).records.filter(function(record): record is SweepRecord {
 		return(record.kind === 'sweep');
 	})).filter(function(record): boolean {
-		return(record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved');
+		return(record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved' || record.outcome.kind === 'error-both');
 	});
 	const summary: Partial<Record<SweepOutcome['kind'], number>> = {};
 	for (const record of disputed) {
@@ -868,7 +895,7 @@ export async function recheckDivergences(setup: RecheckSetup): Promise<RecheckSu
 		if (representative === undefined) {
 			continue;
 		}
-		const outcome = await compareAdjudicated(setup, representative, record.account, quietBefore);
+		const outcome = await compareAgain(setup, representative, record, quietBefore);
 		if (isStopped(setup.stopped)) {
 			break;
 		}

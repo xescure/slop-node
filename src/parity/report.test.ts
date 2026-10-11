@@ -65,6 +65,9 @@ function diverged(account: string, field: string, kind: 'diverged' | 'representa
 
 const KNOWN_BEHAVIOR = '/api/node/ledger/account/{account} 200 error=-';
 
+/** An API answer apart, with no other representative read again. */
+const DIVERGED_INFO = { kind: 'diverged', field: 'body.info', follower: {}, representative: {}, readings: [] } as const;
+
 function apiDiff(at: string, stratum: Stratum, path: string, outcome: APIDiffOutcome, behaviors: readonly string[] = [KNOWN_BEHAVIOR]): APIDiffRecord {
 	return({ kind: 'api-diff', at, representative: REPRESENTATIVE, stratum, route: '/api/node/ledger/account/{account}', path, behaviors, outcome });
 }
@@ -167,7 +170,7 @@ describe('the parity report', function() {
 	test('passes the API diff with the rule of three in each stratum, counting each request by its latest comparison', function() {
 		const path = `/node/ledger/account/${ACCOUNT}`;
 		const signal = report([
-			apiDiff('2026-10-09T01:00:00.000Z', 'token', path, { kind: 'diverged', field: 'body.info', follower: {}, representative: {} }),
+			apiDiff('2026-10-09T01:00:00.000Z', 'token', path, DIVERGED_INFO),
 			apiDiff('2026-10-09T01:00:01.000Z', 'token', path, { kind: 'match' }),
 			apiDiff('2026-10-09T01:00:02.000Z', 'token', `${path}/head`, { kind: 'match' }),
 			apiDiff('2026-10-09T01:00:03.000Z', 'storage', path, { kind: 'skipped', reason: 'moving', side: 'representative', detail: 'recent' }),
@@ -191,7 +194,7 @@ describe('the parity report', function() {
 		const path = `/node/ledger/account/${ACCOUNT}`;
 		const signal = report([
 			apiDiff('2026-10-09T01:00:00.000Z', 'token', path, { kind: 'match' }),
-			apiDiff('2026-10-09T01:00:01.000Z', 'token', path, { kind: 'diverged', field: 'body.info', follower: {}, representative: {} })
+			apiDiff('2026-10-09T01:00:01.000Z', 'token', path, DIVERGED_INFO)
 		]).signals.apiDiff;
 		expect(signal).toMatchObject({ verdict: 'fail', firstDivergence: { at: '2026-10-09T01:00:01.000Z', representative: REPRESENTATIVE, stratum: 'token', path, field: 'body.info' } });
 	});
@@ -351,9 +354,23 @@ describe('the parity report', function() {
 		expect(report(records, { ...position, chainAccounts: [chainAccount(OTHER_ACCOUNT), chainAccount(ACCOUNT, new Date('2026-10-09T02:00:00.000Z'))] }).signals.sweep.coverage).toMatchObject({ neverCompared: 0, everyAccountCompared: true });
 	});
 
-	test('counts a chain account compared by its chain as compared, and how many were', function() {
-		const sweep = report([swept('2026-10-09T01:00:00.000Z', ACCOUNT, { kind: 'compared-chain', head: STAPLE, representativeHead: STAPLE, lacking: 2 })], { chainAccounts: [chainAccount(ACCOUNT)] }).signals.sweep;
-		expect(sweep).toMatchObject({ verdict: 'pass', counts: { accountsCompared: 1, matched: 1, comparedByChain: 1 }, coverage: { neverCompared: 0 } });
+	test('does not excuse a chain account the last complete lap attempted, however recently the follower holds a staple of it', function() {
+		const records = [
+			swept('2026-10-09T01:00:00.000Z', OTHER_ACCOUNT, MATCH, 0),
+			swept('2026-10-09T01:00:01.000Z', ACCOUNT, UNANSWERED, 0)
+		];
+		const cursors = { chain: { lap: 1, afterRowID: '0' }, passive: { lap: 1, afterRowID: '0' } };
+		const sweep = report(records, { cursors, chainAccounts: [chainAccount(OTHER_ACCOUNT), chainAccount(ACCOUNT, new Date('2026-10-09T02:00:00.000Z'))] }).signals.sweep;
+		expect(sweep.coverage).toMatchObject({ neverCompared: 1, neverComparedChain: 1, everyAccountCompared: false });
+		expect(sweep.coverage.walks.chain.laps[0]).toMatchObject({ lap: 0, complete: true, notCompared: 1 });
+	});
+
+	test('counts a chain account compared by its chain apart from the state matches, and not among the samples', function() {
+		const sweep = report([
+			swept('2026-10-09T01:00:00.000Z', OTHER_ACCOUNT, MATCH),
+			swept('2026-10-09T01:00:01.000Z', ACCOUNT, { kind: 'compared-chain', head: STAPLE, representativeHead: STAPLE, lacking: 2 })
+		], { chainAccounts: [chainAccount(ACCOUNT), chainAccount(OTHER_ACCOUNT)] }).signals.sweep;
+		expect(sweep).toMatchObject({ verdict: 'pass', counts: { accountsCompared: 2, matched: 1, comparedByChain: 1 }, coverage: { neverCompared: 0 }, confidence: { samples: 1 } });
 	});
 
 	test('counts the passive walk\'s batch matches of one lap only among the samples, however the spans fall in each', function() {

@@ -140,7 +140,7 @@ export type SweepSignal = {
 		readonly diverged: number;
 		/** Of those, the ones the representatives split on. */
 		readonly unresolved: number;
-		/** Of those compared, the chain accounts moving on every attempt, compared by their chains. */
+		/** Of those compared, the chain accounts moving on every attempt, compared by their chains only, which are neither among those matched nor among the samples. */
 		readonly comparedByChain: number;
 		/** Accounts never compared, whose latest attempt found them moving. */
 		readonly skippedMoving: number;
@@ -507,16 +507,22 @@ function chainLapRecordsOf(records: readonly SweepRecord[]): readonly ChainLapRe
 	}));
 }
 
-/** Whether the follower holds a staple of the account from after the moment: it may have gained its chain since. */
-function changedSince(known: KnownAccount, moment: string): boolean {
-	return(known.newestStaple !== undefined && known.newestStaple.getTime() > Date.parse(moment));
+/**
+ * Whether the account may have gained its chain after the lap: the lap,
+ * whose end compares every account with a chain it did not walk, holds no
+ * record of it, and the follower holds a staple of it from after the lap's
+ * last record. An account the lap attempted had its chain then, however
+ * recently a staple touched it since.
+ */
+function chainedAfter(known: KnownAccount, lap: ChainLapRecords): boolean {
+	return(!lap.latest.has(known.account) && known.newestStaple !== undefined && known.newestStaple.getTime() > Date.parse(lap.lastAt));
 }
 
-/** The chain accounts known now that the lap did not compare, but for those that may have gained their chain since it. */
+/** The chain accounts known now that the lap did not compare, but for those that may have gained their chain after it. */
 function chainNotComparedIn(lap: ChainLapRecords, chainAccounts: readonly KnownAccount[]): number {
 	return(chainAccounts.filter(function(known): boolean {
 		const record = lap.latest.get(known.account);
-		return((record === undefined || !wasCompared(record.outcome)) && !changedSince(known, lap.lastAt));
+		return((record === undefined || !wasCompared(record.outcome)) && !chainedAfter(known, lap));
 	}).length);
 }
 
@@ -566,10 +572,10 @@ function passiveLapsOf(records: readonly SweepRecord[], batches: readonly SweepB
  * Who is never compared. A chain account counts by its comparisons by
  * itself in the chain walk (or the walk over every account before it) only,
  * since the passive walk's batches went over its row while it may have had
- * a chain; one whose newest staple is from after the last complete lap of
- * the chain walk ended may have gained its chain since, and waits for the
- * next lap. A passive account counts by any comparison by itself, or by a
- * batch over its row.
+ * a chain; one the last complete lap of the chain walk holds no record of,
+ * whose newest staple is from after that lap ended, may have gained its
+ * chain since, and waits for the next lap. A passive account counts by any
+ * comparison by itself, or by a batch over its row.
  */
 function neverComparedOf(records: readonly SweepRecord[], batches: readonly SweepBatchRecord[], position: SweepPosition, chainLaps: readonly ChainLapRecords[], candidates: readonly string[]): { readonly chain: readonly string[]; readonly passive: readonly string[] } {
 	const comparedInChainWalk = new Set<string>();
@@ -582,7 +588,7 @@ function neverComparedOf(records: readonly SweepRecord[], batches: readonly Swee
 		return(lap.lap < position.cursors.chain.lap);
 	}).at(-1);
 	const chain = position.chainAccounts.filter(function(known): boolean {
-		return(!comparedInChainWalk.has(known.account) && (lastComplete === undefined || !changedSince(known, lastComplete.lastAt)));
+		return(!comparedInChainWalk.has(known.account) && (lastComplete === undefined || !chainedAfter(known, lastComplete)));
 	}).map(function(known): string {
 		return(known.account);
 	});
@@ -693,16 +699,17 @@ function sweepSignalOf(allRecords: readonly ParityRecord[], position: SweepPosit
 	const divergenceRecords = records.filter(function(record): boolean {
 		return(followerDiverged(record.outcome));
 	}).length;
+	const byChain = latest.filter(function(record): boolean {
+		return(record.outcome.kind === 'compared-chain');
+	}).length;
 	const counts = {
 		accountsCompared: latest.length,
-		matched: latest.length - divergedNow.length - localNow.length,
+		matched: latest.length - divergedNow.length - localNow.length - byChain,
 		diverged: divergedNow.length,
 		unresolved: divergedNow.filter(function(record): boolean {
 			return(record.outcome.kind === 'unresolved');
 		}).length,
-		comparedByChain: latest.filter(function(record): boolean {
-			return(record.outcome.kind === 'compared-chain');
-		}).length,
+		comparedByChain: byChain,
 		skippedMoving,
 		unanswered,
 		errorBoth,
@@ -710,7 +717,11 @@ function sweepSignalOf(allRecords: readonly ParityRecord[], position: SweepPosit
 		divergenceRecords
 	};
 	const coverage = sweepCoverageOf(records, batches, position, neverCompared, chainLaps);
-	const samples = latest.length + matchedInBatchesOf(batches);
+	/*
+	 * An account compared by its chain had neither its state nor its history
+	 * compared, so it is no sample of how often those diverge.
+	 */
+	const samples = latest.length - byChain + matchedInBatchesOf(batches);
 	const confidence = confidenceOf(samples, divergedNow.length, 'account');
 	const representativeLocal = representativeLocalOf(records, localNow);
 	if (samples === 0) {

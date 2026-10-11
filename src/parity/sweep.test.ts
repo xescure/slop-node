@@ -654,9 +654,22 @@ function chainBlock(hash: string, previous: string, date: Date): unknown {
 }
 
 /** Serves a chain account moving on the representatives on every attempt, with the follower's head and each representative's chain above it. */
-function serveMovingChain(running: Running, account: string, chains: readonly (readonly unknown[])[]): void {
+/** The head of an account as the API answers it, the block whole, from the capture of a representative's answer, with the hash given. */
+async function capturedHead(account: string, hash: string): Promise<unknown> {
+	const capture: unknown = JSON.parse(await readFile(new URL('../../conformance/api/mainnet/ledger-account-head.json', import.meta.url), 'utf8'));
+	if (!isRecord(capture) || !isRecord(capture['body']) || !isRecord(capture['body']['block'])) {
+		throw(new Error('the capture of an account\'s head holds no block'));
+	}
+	return({ ...capture['body'], account, block: { ...capture['body']['block'], $hash: hash } });
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+	return(typeof value === 'object' && value !== null && !Array.isArray(value));
+}
+
+async function serveMovingChain(running: Running, account: string, chains: readonly (readonly unknown[])[]): Promise<void> {
 	serveAccount(running, account, [state(account, '0x10')], state(account, '0x11'), history(STAPLE, [RECENT_VOTE]));
-	running.follower.serve(`/node/ledger/account/${account}/head`, { account, block: FOLLOWER_HEAD, height: '0x1' });
+	running.follower.serve(`/node/ledger/account/${account}/head`, await capturedHead(account, FOLLOWER_HEAD));
 	for (const [index, api] of running.representatives.entries()) {
 		api.serve(chainPath(account, FOLLOWER_HEAD), { account, blocks: chains[index] ?? chains[0] ?? [], nextKey: null });
 	}
@@ -677,12 +690,12 @@ describe('a chain account moving on every attempt', function() {
 	test('is compared by its chain once still moving: the follower\'s head is a block of the representative\'s chain, and what it lacks is recent', async function() {
 		const running = await setup();
 		const account = ACCOUNTS[0];
-		serveMovingChain(running, account, [[chainBlock(NEWER_BLOCK, FOLLOWER_HEAD, HELD_BEFORE), chainBlock(FOLLOWER_HEAD, STAPLE, QUIET_VOTE)]]);
+		await serveMovingChain(running, account, [[chainBlock(NEWER_BLOCK, FOLLOWER_HEAD, HELD_BEFORE), chainBlock(FOLLOWER_HEAD, STAPLE, QUIET_VOTE)]]);
 
 		const summary = await sweep(running, memoryStore({ [account]: [STAPLE] }), 1);
 
 		expect(await outcomes(running)).toEqual([{ kind: 'compared-chain', head: FOLLOWER_HEAD, representativeHead: NEWER_BLOCK, lacking: 1 }]);
-		expect(summary).toMatchObject({ compared: 1, matched: 1, comparedByChain: 1, skipped: 0 });
+		expect(summary).toMatchObject({ compared: 1, matched: 0, comparedByChain: 1, skipped: 0 });
 		expect(running.representatives[0]?.requests.filter(function(request): boolean {
 			return(request.endsWith('/history?limit=1'));
 		})).toHaveLength(3);
@@ -691,7 +704,7 @@ describe('a chain account moving on every attempt', function() {
 	test('diverges by its chain when the follower lacks a block dated before its reach less the margin', async function() {
 		const running = await setup();
 		const account = ACCOUNTS[0];
-		serveMovingChain(running, account, [[chainBlock(NEWER_BLOCK, FOLLOWER_HEAD, new Date(QUIET_VOTE.getTime() - 6 * 60_000)), chainBlock(FOLLOWER_HEAD, STAPLE, QUIET_VOTE)]]);
+		await serveMovingChain(running, account, [[chainBlock(NEWER_BLOCK, FOLLOWER_HEAD, new Date(QUIET_VOTE.getTime() - 6 * 60_000)), chainBlock(FOLLOWER_HEAD, STAPLE, QUIET_VOTE)]]);
 
 		await sweep(running, memoryStore({ [account]: [STAPLE] }), 1);
 
@@ -702,7 +715,7 @@ describe('a chain account moving on every attempt', function() {
 		const running = await setup(3);
 		const account = ACCOUNTS[0];
 		const holding = [chainBlock(FOLLOWER_HEAD, STAPLE, QUIET_VOTE)];
-		serveMovingChain(running, account, [[chainBlock(NEWER_BLOCK, STAPLE, QUIET_VOTE)], holding, holding]);
+		await serveMovingChain(running, account, [[chainBlock(NEWER_BLOCK, STAPLE, QUIET_VOTE)], holding, holding]);
 
 		await sweep(running, memoryStore({ [account]: [STAPLE] }), 1);
 
@@ -712,7 +725,7 @@ describe('a chain account moving on every attempt', function() {
 	test('the follower itself holds a staple of from within the margin is compared by its chain without being read again', async function() {
 		const running = await setup();
 		const account = ACCOUNTS[0];
-		serveMovingChain(running, account, [[chainBlock(FOLLOWER_HEAD, STAPLE, QUIET_VOTE)]]);
+		await serveMovingChain(running, account, [[chainBlock(FOLLOWER_HEAD, STAPLE, QUIET_VOTE)]]);
 
 		await sweep(running, memoryStore({ [account]: [STAPLE] }, undefined, { [account]: RECENT_VOTE }), 1);
 
@@ -783,5 +796,69 @@ describe('a divergence in the history', function() {
 		await sweep(running, memoryStore({ [account]: [held] }), 1);
 
 		expect(await outcomes(running)).toMatchObject([{ kind: 'unresolved', divergence: { field: 'history' } }]);
+	});
+});
+
+describe('fix round 3', function() {
+	test('a chain divergence recorded before is compared again by the chain', async function() {
+		const running = await setup();
+		const account = ACCOUNTS[0];
+		await serveMovingChain(running, account, [[chainBlock(FOLLOWER_HEAD, STAPLE, QUIET_VOTE)]]);
+		const older: SweepRecord = { kind: 'sweep', at: '2026-10-11T13:00:00.000Z', representative: running.representatives[0]?.endpoint ?? '', account, lap: 0, walk: 'chain', outcome: { kind: 'diverged', divergence: { account, field: 'chain', staple: null }, follower: { head: null }, representative: {}, readings: [] } };
+		await running.log.append([older]);
+
+		const summary = await recheckDivergences({
+			follower: httpSource(running.follower.endpoint),
+			representatives: [httpSource(running.representatives[0]?.endpoint ?? '')],
+			store: memoryStore({ [account]: [STAPLE] }),
+			log: running.log,
+			stopped: new AbortController().signal
+		});
+
+		expect(summary).toEqual({ 'compared-chain': 1 });
+	});
+
+	test('the end of a lap compares no more accounts than the walk has left, and the lap ends only once it has compared them all', async function() {
+		const running = await setup();
+		const [walked, late, later] = ACCOUNTS;
+		for (const account of ACCOUNTS) {
+			serveAccount(running, account, [state(account, '0x10')], state(account, '0x10'), history(STAPLE, [QUIET_VOTE]));
+		}
+		const quiet = new Date('2025-06-01T00:00:00.000Z');
+		const store = memoryStore({ [walked]: [STAPLE], [late]: [STAPLE], [later]: [STAPLE] }, undefined, {}, [], [{ rowID: '8', account: late, newestStaple: quiet }, { rowID: '9', account: later, newestStaple: quiet }]);
+
+		const first = await sweepWalks(running, store, { chain: 2 }, true);
+		expect(first.chain).toMatchObject({ walked: 2, cursor: { lap: 0, afterRowID: '1' } });
+		const second = await sweepWalks(running, store, { chain: 2 }, true);
+		expect(second.chain).toMatchObject({ walked: 1, cursor: { lap: 1, afterRowID: '0' } });
+		expect(recordsOf((await running.log.read()).records, 'sweep').map(function(record) {
+			return(record.account);
+		})).toEqual([walked, late, later]);
+	});
+});
+
+describe('an account both sides answer with the same error', function() {
+	test('is not a match when compared by itself, and recheck reads it again', async function() {
+		const running = await setup();
+		const account = ACCOUNTS[0];
+		const failed = { account, error: 'Error: Unable to parse account information' };
+		serveAccount(running, account, [failed], failed, history(STAPLE, [QUIET_VOTE]));
+		expect(await compareAlone(running, memoryStore({ [account]: [STAPLE] }), account)).toEqual({ kind: 'error-both', error: failed.error });
+
+		await running.log.append([{ kind: 'sweep', at: '2026-10-11T13:00:00.000Z', representative: running.representatives[0]?.endpoint ?? '', account, lap: 0, walk: 'passive', outcome: { kind: 'error-both', error: failed.error } }]);
+		running.follower.serve(`/node/ledger/account/${account}`, state(account, '0x10', null));
+		for (const api of running.representatives) {
+			api.serve(`/node/ledger/account/${account}`, state(account, '0x10', null));
+		}
+		const summary = await recheckDivergences({
+			follower: httpSource(running.follower.endpoint),
+			representatives: running.representatives.map(function(api) {
+				return(httpSource(api.endpoint));
+			}),
+			store: memoryStore({ [account]: [STAPLE] }),
+			log: running.log,
+			stopped: new AbortController().signal
+		});
+		expect(summary).toEqual({ match: 1 });
 	});
 });
