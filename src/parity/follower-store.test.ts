@@ -297,7 +297,7 @@ describe('the follower\'s store, read from its database', function() {
 		expect(await store.newestStaples([first, second, third])).toEqual(new Map([[first, quietTime], [second, recentTime]]));
 	});
 
-	test('reads the balances an account\'s history leaves it with from the staples of that history', async function() {
+	test('reads in one view an account\'s stored balances and those its history leaves it with, the history in reads of so many staples', async function() {
 		const database = await followerDatabase({});
 		const pool = database.pool();
 		const sender = lib.Account.fromSeed('5e'.repeat(32), 0);
@@ -314,11 +314,17 @@ describe('the follower\'s store, read from its database', function() {
 			await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, bytes, checksum) VALUES ($1, $2, $2, $3, repeat(\'0\', 256)::bit(256))', [key, staple.timestamp(), Buffer.from(staple.toBytes())]);
 			await pool.query('INSERT INTO history (account_id, blocks_hash, staple_time) SELECT id, $2, $3 FROM accounts WHERE public_key = $1', [RECIPIENT, key, staple.timestamp()]);
 		}
+		await pool.query('INSERT INTO balances (account_id, token_id, balance) SELECT a.id, t.id, 12 FROM accounts a, accounts t WHERE a.public_key = $1 AND t.public_key = $2', [RECIPIENT, ACCOUNTS[0]]);
 		await database.endPools();
-		const store = storeOf(database);
+		const store = openFollowerStore(database.connectionString, { historyStaplesPerRead: 1 });
+		stores.push(store);
 
-		expect(await store.balancesFromHistory(RECIPIENT)).toEqual(new Map([[token.publicKeyString.get(), 12n]]));
-		expect(await store.balancesFromHistory(ACCOUNTS[2] ?? '')).toEqual(new Map());
+		expect(await store.balancesSnapshot(RECIPIENT, function() {
+			return(Promise.resolve('seen'));
+		})).toEqual({ stored: new Map([[ACCOUNTS[0], 12n]]), fromHistory: new Map([[token.publicKeyString.get(), 12n]]), during: 'seen' });
+		expect(await store.balancesSnapshot(ACCOUNTS[2] ?? '', function() {
+			return(Promise.resolve(null));
+		})).toEqual({ stored: new Map(), fromHistory: new Map(), during: null });
 	});
 
 	test('reads the staples in the order the ledger added them, rebuilding one stored without its bytes', async function() {

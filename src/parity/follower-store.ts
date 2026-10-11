@@ -67,6 +67,13 @@ export type ChecksumSnapshot = {
 /** The most staples a snapshot lists whose stored checksum is not the fold of their blocks. */
 export const MISMATCHES_LISTED = 20;
 
+/** An account's balances, by token, as the follower stores them and as its history leaves them, read in one view, with what was read while that view held. */
+export type BalancesSnapshot = {
+	readonly stored: ReadonlyMap<string, bigint>;
+	readonly fromHistory: ReadonlyMap<string, bigint>;
+	readonly during: unknown;
+};
+
 /** Accounts the API diff draws on, by what makes them a risk. */
 export type AccountKind = 'token' | 'storage' | 'multisig' | 'certificates' | 'permissions';
 
@@ -119,8 +126,13 @@ export type FollowerStore = {
 	historyHolds(account: string, blocksHash: string): Promise<boolean>;
 	/** Whether the block, by its hash, is on the follower's main ledger. */
 	holdsBlock(hash: string): Promise<boolean>;
-	/** The balance of each token the staples of the account's history leave it with, read in the order the ledger added them. */
-	balancesFromHistory(account: string): Promise<ReadonlyMap<string, bigint>>;
+	/**
+	 * In one view of the database: the account's balances as the follower
+	 * stores them, and those the staples of its history leave it with, read
+	 * in the order the ledger added them; and what the call given returns,
+	 * made once that view is fixed.
+	 */
+	balancesSnapshot(account: string, during: () => Promise<unknown>): Promise<BalancesSnapshot>;
 	checksumSnapshot(): Promise<ChecksumSnapshot>;
 	/**
 	 * Accounts of the kind with a staple in their history and none from the
@@ -241,13 +253,24 @@ const PASSIVE_ACCOUNTS_AFTER = `
 const HOLDS_BLOCK = 'SELECT EXISTS (SELECT 1 FROM blocks WHERE hash = $1 AND ledger = \'main\') AS holds';
 
 /** An account's history, oldest first, in the order of its key. */
-const HISTORY_STAPLES_AFTER = `
-	SELECT s.blocks_hash, s.staple_time, s.bytes, s.sequence::text AS place FROM history h JOIN staples s ON s.blocks_hash = h.blocks_hash
-	WHERE h.account_id = (SELECT id FROM accounts WHERE public_key = $1) AND s.sequence > $2::bigint
-	ORDER BY s.sequence LIMIT $3`;
+/* The staples of an account's history by their hashes alone, in the order the ledger added them, which one statement reads whatever its length. */
+const HISTORY_STAPLE_HASHES = `
+	SELECT s.blocks_hash FROM history h JOIN staples s ON s.blocks_hash = h.blocks_hash
+	WHERE h.account_id = (SELECT id FROM accounts WHERE public_key = $1)
+	ORDER BY s.sequence`;
+
+const STORED_BALANCES = `
+	SELECT t.public_key AS token, b.balance::text AS balance FROM balances b JOIN accounts t ON t.id = b.token_id
+	WHERE b.account_id = (SELECT id FROM accounts WHERE public_key = $1)`;
 
 /** Staples of an account's history one statement reads and decodes, so that a history of any length is read in statements that end and in bounded memory. */
-const HISTORY_STAPLES_PAGE = 200;
+const HISTORY_STAPLES_PER_READ = 200;
+
+/** How the follower's store reads. */
+export type FollowerStoreSettings = {
+	/** Staples of an account's history one statement reads with their bytes. */
+	readonly historyStaplesPerRead: number;
+};
 
 /** The history key is (account, staple time, blocks hash), and the staple's time is found from its hash. */
 const HISTORY_HOLDS = `
@@ -537,7 +560,7 @@ function isWholeNumber(value: unknown): value is number {
 }
 
 /** The follower's store, read through a pool of read-only sessions on its database. */
-export function openFollowerStore(connectionString: string): FollowerStore {
+export function openFollowerStore(connectionString: string, settings: FollowerStoreSettings = { historyStaplesPerRead: HISTORY_STAPLES_PER_READ }): FollowerStore {
 	const pool = readOnlyPool(connectionString);
 	return({
 		async progress(): Promise<FollowerProgress> {
@@ -608,20 +631,24 @@ export function openFollowerStore(connectionString: string): FollowerStore {
 		async holdsBlock(hash: string): Promise<boolean> {
 			return((await pool.query<{ holds: boolean }>(HOLDS_BLOCK, [Buffer.from(hash, 'hex')])).rows[0]?.holds ?? false);
 		},
-		async balancesFromHistory(account: string): Promise<ReadonlyMap<string, bigint>> {
-			const balances = new Map<string, bigint>();
-			let after = '0';
-			for (;;) {
-				const rows = (await pool.query<SequencedStapleRow>(HISTORY_STAPLES_AFTER, [account, after, HISTORY_STAPLES_PAGE])).rows;
-				foldBalances(balances, (await heldStaplesOf(pool, rows)).map(function({ staple }) {
-					return(staple);
-				}), account);
-				const last = rows.at(-1);
-				if (last === undefined || rows.length < HISTORY_STAPLES_PAGE) {
-					return(balances);
+		async balancesSnapshot(account: string, during: () => Promise<unknown>): Promise<BalancesSnapshot> {
+			return(await inOneView(pool, async function(client) {
+				const stored = new Map((await client.query<{ token: string; balance: string }>(STORED_BALANCES, [account])).rows.map(function(row): [string, bigint] {
+					return([row.token, BigInt(row.balance)]);
+				}));
+				const seen = await during();
+				const hashes = (await client.query<{ blocks_hash: Buffer }>(HISTORY_STAPLE_HASHES, [account])).rows.map(function(row): Buffer {
+					return(row.blocks_hash);
+				});
+				const fromHistory = new Map<string, bigint>();
+				for (let start = 0; start < hashes.length; start += settings.historyStaplesPerRead) {
+					const rows = (await client.query<SequencedStapleRow>(STAPLES_OF, [hashes.slice(start, start + settings.historyStaplesPerRead)])).rows;
+					foldBalances(fromHistory, (await heldStaplesOf(pool, rows)).map(function({ staple }) {
+						return(staple);
+					}), account);
 				}
-				after = last.place;
-			}
+				return({ stored, fromHistory, during: seen });
+			}));
 		},
 		async blockPages(): Promise<number> {
 			return(Number((await pool.query<{ pages: string }>(BLOCK_PAGES)).rows[0]?.pages ?? '0'));

@@ -133,6 +133,17 @@ export type SweepOutcome =
 	| { readonly kind: 'skipped'; readonly reason: 'unanswered'; readonly detail: string };
 
 /**
+ * Whether an account's comparison leaves it diverging: a divergence of the
+ * follower's or one the representatives split on, and one left to the
+ * representatives apart that no check of the follower's balances bore out,
+ * as nothing but their votes then rests on it; it stands unresolved until
+ * a check is consistent.
+ */
+export function standsDiverging(outcome: SweepOutcome): boolean {
+	return(outcome.kind === 'diverged' || outcome.kind === 'unresolved' || (outcome.kind === 'representative-local' && outcome.selfCheck?.kind !== 'consistent'));
+}
+
+/**
  * Which of the follower's accounts a walk of the sweep goes over: those with
  * blocks on its main ledger, compared one at a time by their heads, or the
  * rest, compared in batches.

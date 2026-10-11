@@ -6,7 +6,7 @@ import { startFakeAPI } from '../testing/fake-api.js';
 import type { FakeAPI } from '../testing/fake-api.js';
 import { followerStoreOf } from '../testing/follower-store.js';
 import { httpSource } from './api-source.js';
-import type { FollowerProgress, KnownAccount } from './follower-store.js';
+import type { BalancesSnapshot, FollowerProgress, KnownAccount } from './follower-store.js';
 import { ParityLog } from './log.js';
 import type { SweepBatchRecord, SweepRecord, SweepWalk } from './log.js';
 import { recordsOf } from './report.js';
@@ -72,10 +72,10 @@ const HISTORY_BALANCE = 0x10n;
  * in its history the staples listed, the newest of them from the moment
  * given or, by default, quiet since long before the follower's reach; the
  * accounts named passive have no chain, the rest have one. Its main ledger
- * holds the blocks given, and the history of each account leaves it the
- * balance of TOKEN given.
+ * holds the blocks given, and of each account it stores the balance of
+ * TOKEN given, and its history leaves it the one given.
  */
-function memoryStore(histories: Readonly<Record<string, readonly string[]>>, progress: FollowerProgress = { completedPass: undefined, heldBefore: HELD_BEFORE, staged: 0 }, newest: Readonly<Record<string, Date>> = {}, passive: readonly string[] = [], late: readonly KnownAccount[] = [], historyBalance: bigint = HISTORY_BALANCE, blocks: readonly string[] = []): SweepStore {
+function memoryStore(histories: Readonly<Record<string, readonly string[]>>, progress: FollowerProgress = { completedPass: undefined, heldBefore: HELD_BEFORE, staged: 0 }, newest: Readonly<Record<string, Date>> = {}, passive: readonly string[] = [], late: readonly KnownAccount[] = [], historyBalance: bigint = HISTORY_BALANCE, blocks: readonly string[] = [], storedBalance: bigint = HISTORY_BALANCE): SweepStore {
 	const known: KnownAccount[] = Object.entries(histories).map(function([account, staples], index): KnownAccount {
 		let newestStaple: Date | undefined;
 		if (staples.length > 0) {
@@ -113,8 +113,8 @@ function memoryStore(histories: Readonly<Record<string, readonly string[]>>, pro
 		holdsBlock(hash: string): Promise<boolean> {
 			return(Promise.resolve(blocks.includes(hash)));
 		},
-		balancesFromHistory(): Promise<ReadonlyMap<string, bigint>> {
-			return(Promise.resolve(new Map([[TOKEN, historyBalance]])));
+		async balancesSnapshot(_account: string, during: () => Promise<unknown>): Promise<BalancesSnapshot> {
+			return({ stored: new Map([[TOKEN, storedBalance]]), fromHistory: new Map([[TOKEN, historyBalance]]), during: await during() });
 		}
 	});
 }
@@ -692,15 +692,16 @@ describe('a divergence from one representative', function() {
 		expect(summary).toMatchObject({ diverged: 1, representativeLocal: 0 });
 	});
 
-	test('records no check of the follower\'s balances when the follower changes the account while its history is read', async function() {
+	test('records no check of the follower\'s balances when the state it serves is not the one it stores, as the account moved', async function() {
 		const running = await setup(3);
 		const account = ACCOUNTS[0];
 		serveSplit(running, account, '0x10', ['0x11', '0x10', '0x10']);
-		running.follower.serve(`/node/ledger/account/${account}`, state(account, '0x10'), state(account, '0x10'), state(account, '0x10'), state(account, '0x12'));
 
-		await sweep(running, memoryStore({ [account]: [STAPLE] }, undefined, {}, [], [], 0x12n), 1);
+		const summary = await sweep(running, memoryStore({ [account]: [STAPLE] }, undefined, {}, [], [], 0x12n, [], 0x12n), 1);
 
-		expect(await outcomes(running)).toMatchObject([{ kind: 'representative-local', selfCheck: { kind: 'unchecked', why: 'the follower changed the account while its history was read' } }]);
+		expect(await outcomes(running)).toMatchObject([{ kind: 'representative-local', selfCheck: { kind: 'unchecked', why: 'the state the follower served is not the one it stored, as the account moved' } }]);
+		// Counted as the report counts it: unresolved until a check bears it out.
+		expect(summary).toMatchObject({ compared: 1, diverged: 1, representativeLocal: 0 });
 	});
 
 	test('is never the representatives\' own when one answers the follower\'s state with a newest staple the follower lacks', async function() {
@@ -719,7 +720,7 @@ describe('a divergence from one representative', function() {
 		const account = ACCOUNTS[0];
 		serveSplit(running, account, '0x10', ['0x11', '0x10', '0x10']);
 
-		await sweep(running, memoryStore({ [account]: [STAPLE] }, undefined, {}, [], [], 0x11n), 1);
+		await sweep(running, memoryStore({ [account]: [STAPLE] }, undefined, {}, [], [], 0x11n, [], 0x10n), 1);
 
 		expect(await outcomes(running)).toMatchObject([{ kind: 'diverged', selfCheck: { kind: 'inconsistent', token: TOKEN, served: '0x10', fromHistory: '0x11' } }]);
 	});
@@ -783,6 +784,18 @@ describe('a difference of one representative\'s own recorded before', function()
 			return(httpSource(api.endpoint));
 		}), store: memoryStore({ [account]: [STAPLE] }), log: running.log, stopped: new AbortController().signal })).toEqual({ 'representative-local': 1 });
 		expect(recordsOf((await running.log.read()).records, 'sweep').at(-1)?.outcome).toMatchObject({ selfCheck: { kind: 'consistent' } });
+	});
+
+	test('counts as unresolved on recheck, as the report does, while its check of the follower\'s balances still cannot be made', async function() {
+		const running = await setup(3);
+		const account = ACCOUNTS[0];
+		serveSplit(running, account, '0x10', ['0x11', '0x10', '0x10']);
+		const older: SweepRecord = { kind: 'sweep', at: '2026-10-11T12:34:11.610Z', representative: running.representatives[0]?.endpoint ?? '', account, lap: 0, walk: 'passive', outcome: { kind: 'representative-local', divergence: { account, field: 'balances[0].balance', staple: STAPLE }, follower: {}, representative: {}, readings: [], selfCheck: null } };
+		await running.log.append([older]);
+
+		expect(await recheckDivergences({ follower: httpSource(running.follower.endpoint), representatives: running.representatives.map(function(api) {
+			return(httpSource(api.endpoint));
+		}), store: memoryStore({ [account]: [STAPLE] }, undefined, {}, [], [], HISTORY_BALANCE, [], 0x12n), log: running.log, stopped: new AbortController().signal })).toEqual({ unresolved: 1 });
 	});
 
 	test('found by its chain is compared again by its chain', async function() {

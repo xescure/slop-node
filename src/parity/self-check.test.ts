@@ -3,7 +3,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import { confirmedStaple, sendBlock } from '../testing/blocks.js';
-import { balancesOfHistory, selfCheckOf } from './self-check.js';
+import { balancesCheckOf, balancesOfHistory, selfCheckOf } from './self-check.js';
 
 const lib = KeetaNet.lib;
 
@@ -41,5 +41,10 @@ describe('the follower\'s balances against its own history', function() {
 		expect(selfCheckOf({ account: OTHER, balances: [{ token: TOKEN, balance: '0xD' }] }, fromHistory)).toEqual({ kind: 'inconsistent', token: TOKEN, served: '0xD', fromHistory: '0xC' });
 		expect(selfCheckOf({ account: OTHER, balances: [] }, fromHistory)).toEqual({ kind: 'inconsistent', token: TOKEN, served: '0x0', fromHistory: '0xC' });
 		expect(selfCheckOf({ error: true }, fromHistory)).toEqual({ kind: 'unchecked', why: 'the follower served no state with balances' });
+	});
+
+	test('of what the follower stores are checked against those of its history token by token', function() {
+		expect(balancesCheckOf(new Map([[TOKEN, 12n]]), new Map([[TOKEN, 12n]]))).toEqual({ kind: 'consistent', tokens: 1 });
+		expect(balancesCheckOf(new Map(), new Map([[TOKEN, 12n]]))).toEqual({ kind: 'inconsistent', token: TOKEN, served: '0x0', fromHistory: '0xC' });
 	});
 });

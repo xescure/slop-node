@@ -70,19 +70,24 @@ function hex(value: bigint): string {
 	return(`0x${value.toString(16).toUpperCase()}`);
 }
 
-/** Whether the balances the follower serves are those its own history leaves the account with, token by token. */
+/** Whether two accounts of the balances, token by token, are one: the first's, as checked, against the second's, as expected. */
+export function balancesCheckOf(checked: ReadonlyMap<string, bigint>, expected: ReadonlyMap<string, bigint>): SelfCheck {
+	const tokens = [...new Set([...checked.keys(), ...expected.keys()])].sort();
+	for (const token of tokens) {
+		const own = checked.get(token) ?? 0n;
+		const wanted = expected.get(token) ?? 0n;
+		if (own !== wanted) {
+			return({ kind: 'inconsistent', token, served: hex(own), fromHistory: hex(wanted) });
+		}
+	}
+	return({ kind: 'consistent', tokens: tokens.length });
+}
+
+/** Whether the balances a served state holds are those given, token by token. */
 export function selfCheckOf(state: unknown, fromHistory: ReadonlyMap<string, bigint>): SelfCheck {
 	const served = servedBalances(state);
 	if (served === undefined) {
 		return({ kind: 'unchecked', why: 'the follower served no state with balances' });
 	}
-	const tokens = [...new Set([...served.keys(), ...fromHistory.keys()])].sort();
-	for (const token of tokens) {
-		const own = served.get(token) ?? 0n;
-		const expected = fromHistory.get(token) ?? 0n;
-		if (own !== expected) {
-			return({ kind: 'inconsistent', token, served: hex(own), fromHistory: hex(expected) });
-		}
-	}
-	return({ kind: 'consistent', tokens: tokens.length });
+	return(balancesCheckOf(served, fromHistory));
 }

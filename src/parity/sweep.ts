@@ -5,8 +5,8 @@ import { assertNever } from '../util/assert-never.js';
 import { getOK } from './api-source.js';
 import type { APIAnswer, APISource } from './api-source.js';
 import type { FollowerStore, KnownAccount } from './follower-store.js';
-import { sweepCursorOf } from './log.js';
-import { selfCheckOf } from './self-check.js';
+import { standsDiverging, sweepCursorOf } from './log.js';
+import { balancesCheckOf, selfCheckOf } from './self-check.js';
 import type { Disputed, DisputedKind, ParityLog, RecordedWalk, RepresentativeReading, SelfCheck, SweepBatchRecord, SweepCursor, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
 
 /** Where each walk of the sweep resumes, in the follower's directory. */
@@ -260,7 +260,7 @@ export async function compareAccount(comparison: AccountComparison): Promise<Swe
 }
 
 /** What the sweep reads of the follower's storage. */
-export type SweepStore = Pick<FollowerStore, 'progress' | 'chainAccountsAfter' | 'passiveAccountsAfter' | 'chainAccounts' | 'historyHolds' | 'holdsBlock' | 'balancesFromHistory'>;
+export type SweepStore = Pick<FollowerStore, 'progress' | 'chainAccountsAfter' | 'passiveAccountsAfter' | 'chainAccounts' | 'historyHolds' | 'holdsBlock' | 'balancesSnapshot'>;
 
 export type SweepSetup = {
 	readonly follower: APISource;
@@ -326,7 +326,12 @@ function count(tally: Tally, outcome: SweepOutcome): void {
 			break;
 		case 'representative-local':
 			tally.compared++;
-			tally.representativeLocal++;
+			// Counted as the report counts it: unresolved until a check of the follower's balances bears it out.
+			if (standsDiverging(outcome)) {
+				tally.diverged++;
+			} else {
+				tally.representativeLocal++;
+			}
 			break;
 		case 'compared-chain':
 			tally.compared++;
@@ -475,20 +480,21 @@ async function compareAdjudicated(setup: Comparing, representative: APISource, a
 
 /**
  * Whether the follower's balances of the account are those its own history
- * leaves it with: the state is read before and after the history, and the
- * two must be one, so that a staple the follower adds in between is not
- * taken for a difference.
+ * leaves it with, both read from one view of its database, so that a staple
+ * added meanwhile cannot set them apart; and whether the state its API
+ * serves, read while that view holds, is the one it stores, which it is not
+ * when the account moved in between, and then nothing is checked of the
+ * state compared.
  */
 async function selfCheckOfAccount(setup: Comparing, account: string): Promise<SelfCheck> {
-	const path = `/node/ledger/account/${account}`;
 	try {
-		const before = await getOK(setup.follower, path);
-		const fromHistory = await setup.store.balancesFromHistory(account);
-		const after = await getOK(setup.follower, path);
-		if (!isDeepStrictEqual(before, after)) {
-			return({ kind: 'unchecked', why: 'the follower changed the account while its history was read' });
+		const { stored, fromHistory, during } = await setup.store.balancesSnapshot(account, function() {
+			return(getOK(setup.follower, `/node/ledger/account/${account}`));
+		});
+		if (selfCheckOf(during, stored).kind !== 'consistent') {
+			return({ kind: 'unchecked', why: 'the state the follower served is not the one it stored, as the account moved' });
 		}
-		return(selfCheckOf(after, fromHistory));
+		return(balancesCheckOf(stored, fromHistory));
 	} catch (error: unknown) {
 		return({ kind: 'unchecked', why: messageOf(error) });
 	}
@@ -991,6 +997,14 @@ function compareAgain(setup: Comparing, representative: APISource, record: Sweep
 	return(compareAdjudicated(setup, representative, record.account, quietBefore));
 }
 
+/** The kind a summary counts an outcome under, as the report counts it: a difference left to the representatives apart that no check bore out as unresolved. */
+function summaryKindOf(outcome: SweepOutcome): SweepOutcome['kind'] {
+	if (outcome.kind === 'representative-local' && standsDiverging(outcome)) {
+		return('unresolved');
+	}
+	return(outcome.kind);
+}
+
 export type RecheckSetup = Pick<SweepSetup, 'follower' | 'representatives' | 'store' | 'log' | 'stopped'>;
 
 /** How many accounts were compared again, by the outcome each had. */
@@ -1040,7 +1054,7 @@ export async function recheckDivergences(setup: RecheckSetup): Promise<RecheckSu
 			break;
 		}
 		await setup.log.append([recordOf(representative, record.account, record.lap, record.walk, outcome)]);
-		summary[outcome.kind] = (summary[outcome.kind] ?? 0) + 1;
+		summary[summaryKindOf(outcome)] = (summary[summaryKindOf(outcome)] ?? 0) + 1;
 	}
 	return(summary);
 }
@@ -1179,7 +1193,7 @@ export async function compareNeverCompared(setup: RecheckSetup, accounts: NeverC
 				return;
 			}
 			await setup.log.append([recordOf(representative, accountOf(missed), missed.lap, missed.walk, outcome)]);
-			summary[outcome.kind] = (summary[outcome.kind] ?? 0) + 1;
+			summary[summaryKindOf(outcome)] = (summary[summaryKindOf(outcome)] ?? 0) + 1;
 		}
 	}));
 	return(summary);

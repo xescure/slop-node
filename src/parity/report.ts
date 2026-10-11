@@ -7,6 +7,7 @@ import { checksumsEqual, compareChecksums, crossCheckChecksum } from './checksum
 import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-store.js';
 import { SHADOW_REFUSAL_REASONS, SHADOW_REFUSAL_RELEASES } from '../conformance/mainnet/shadow.js';
 import type { ShadowRefusalReason } from '../conformance/mainnet/shadow.js';
+import { standsDiverging } from './log.js';
 import type { APIDiffExplainedRecord, APIDiffPlanRecord, APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, ShadowBase, ShadowRunCost, ShadowRunRecord, ShadowTarget, ShadowWindowTally, SweepBatchRecord, SweepCursor, SweepOutcome, SweepPointer, SweepRecord, SweepWalk } from './log.js';
 import { STRATA } from './strata.js';
 import type { Stratum } from './strata.js';
@@ -425,16 +426,6 @@ export function followerDiverged(outcome: SweepOutcome): boolean {
 	return(outcome.kind === 'diverged' || outcome.kind === 'unresolved');
 }
 
-/**
- * Whether an account's latest comparison leaves it diverging: a divergence
- * of the follower's or one the representatives split on, and one left to
- * the representatives apart that the follower's balances were not found to
- * bear out, as nothing but their votes then rests on it; it stands
- * unresolved until a check of the follower's balances is consistent.
- */
-function standsDiverging(outcome: SweepOutcome): boolean {
-	return(followerDiverged(outcome) || (outcome.kind === 'representative-local' && outcome.selfCheck?.kind !== 'consistent'));
-}
 
 /** Whether the account was compared: an outcome other than a skip or an error both sides answered. */
 export function wasCompared(outcome: SweepOutcome): boolean {
