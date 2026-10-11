@@ -260,7 +260,7 @@ describe('shadow votes on the follower\'s history', function() {
 		const start = freshShadowRun(scope, every, GENESIS_BASE, targetOf(head));
 		const whole = await runShadowVotes({ source: sourceOf(head), state: memoryState(), storage: new MemoryLedgerStorage(), start, batchStaples: 50 });
 
-		const withDeferredCopy = async function(informationalEvery: number): Promise<ShadowRunState> {
+		const withDeferredCopy = async function(informationalEvery: number, batchStaples = 50): Promise<ShadowRunState> {
 			const inLedger = await offlineLedger();
 			const state = memoryState();
 			const before = await inLedger(function(storage) {
@@ -274,13 +274,25 @@ describe('shadow votes on the follower\'s history', function() {
 					await node.stop();
 				}
 			});
+			if (batchStaples === 1) {
+				// Each batch collects at its end, so the one of the staple the copy builds on applies the copy.
+				return(await inLedger(function(storage) {
+					return(runShadowVotes({ source: sourceOf(head), state, storage, start: { ...before, target: targetOf(head) }, batchStaples }));
+				}));
+			}
+			// A run that ends at the staple the copy builds on collects at its end, which applies the copy.
+			const through = await inLedger(function(storage) {
+				return(runShadowVotes({ source: sourceOf(head.slice(0, earlier + 1)), state, storage, start: { ...before, target: targetOf(head.slice(0, earlier + 1)) }, batchStaples }));
+			});
 			return(await inLedger(function(storage) {
-				return(runShadowVotes({ source: sourceOf(head), state, storage, start: { ...before, target: targetOf(head) }, batchStaples: 50 }));
+				return(runShadowVotes({ source: sourceOf(head), state, storage, start: { ...through, target: targetOf(head) }, batchStaples }));
 			}));
 		};
 
 		expect(await withDeferredCopy(every)).toEqual(whole);
-		await expect(withDeferredCopy(1)).rejects.toThrow(`the offline ledger applied staple ${keyOf(laterStaple)} before its place ${String(later + 1)}`);
+		// Resumed past the copy's root, the run finds the copy held with no vote recorded, which no vote now could judge.
+		await expect(withDeferredCopy(1)).rejects.toThrow(`the offline ledger holds the staple ${keyOf(laterStaple)}, whose shadow vote was never recorded`);
+		await expect(withDeferredCopy(1, 1)).rejects.toThrow(`the offline ledger applied staple ${keyOf(laterStaple)} before its place ${String(later + 1)}`);
 	}, REPLAY_TIMEOUT_MILLISECONDS);
 
 	test('stop rather than miscount when the ledger holds a staple whose vote was never recorded', async function() {
@@ -349,6 +361,26 @@ describe('shadow votes on the follower\'s history', function() {
 	}, REPLAY_TIMEOUT_MILLISECONDS);
 
 	/*
+	 * A staple the follower held deferred at the base was weighed as it
+	 * arrived, and applied later by a replay, which weighs nothing
+	 * [Keeta TS] index.js:69397-69411: its place in the follower's list is
+	 * where the replay applied it, under weights that may no longer pass it.
+	 */
+	test('apply a staple the follower held deferred at the base as its replay did, without weighing its votes again', async function() {
+		const head = replayOrder(await loadMainnetFixture('head')).slice(0, 200);
+		// Listed before the genesis staple, which gives their voters weight, the first staples would be refused for it.
+		const rest = head.slice(1);
+		const late = [...rest.slice(0, 5), ...head.slice(0, 1), ...rest.slice(5)];
+		const run = function(deferredAtBase: ReadonlySet<string>): Promise<ShadowRunState> {
+			return(runShadowVotes({ source: sourceOf(late), state: memoryState(), storage: new MemoryLedgerStorage(), start: freshShadowRun(scopeFrom(head, 150), 1000, GENESIS_BASE, targetOf(late)), batchStaples: 3, deferredAtBase }));
+		};
+
+		expect((await run(new Set())).refusedForWeight).toBeGreaterThan(0);
+		const replayed = await run(new Set(rest.slice(0, 5).map(keyOf)));
+		expect(replayed).toMatchObject({ refusedForWeight: 0, reached: { sequence: '200' }, unapplied: [] });
+	}, REPLAY_TIMEOUT_MILLISECONDS);
+
+	/*
 	 * The offline ledger lives in the follower's cluster, where a
 	 * serializable transaction left open holds back what every other one may
 	 * forget, and the follower's transactions then fail as conflicts. A
@@ -366,7 +398,7 @@ describe('shadow votes on the follower\'s history', function() {
 		});
 		const collected: { readonly limit: number | undefined; readonly at: number }[] = [];
 		const collect = storage.gc.bind(storage);
-		vi.spyOn(storage, 'gc').mockImplementation(function(transaction: unknown, limit?: number): Promise<boolean> {
+		vi.spyOn(storage, 'gc').mockImplementation(function(...[transaction, limit]: Parameters<typeof storage.gc>): Promise<boolean> {
 			collected.push({ limit, at: Date.now() });
 			return(collect(transaction, limit));
 		});
@@ -379,6 +411,97 @@ describe('shadow votes on the follower\'s history', function() {
 			return(at > (head[batch * 20 + 19]?.timestamp().getTime() ?? Number.POSITIVE_INFINITY));
 		})).toEqual([true, true]);
 	});
+
+	/*
+	 * Staples the follower listed before the one they build on are deferred
+	 * at their places, and the staple they wait on releases them all. Each
+	 * must be applied before the next vote, whatever the machine's pace, but
+	 * across as many short transactions as the release takes: a stopped
+	 * clock, or a replay as the add runs, would apply the chain in one.
+	 */
+	test('apply a deferred chain the next staple releases before the next vote, one staple to a transaction, at any pace', async function() {
+		const head = replayOrder(await loadMainnetFixture('head')).slice(0, 400);
+		const chainOf = function(root: number): number[] {
+			const chain: number[] = [];
+			let tip = root;
+			for (let index = root + 1; index < head.length && chain.length < 3; index++) {
+				const staple = head[index];
+				if (staple !== undefined && buildsOn(staple, head[tip])) {
+					chain.push(index);
+					tip = index;
+				}
+			}
+			return(chain);
+		};
+		const root = head.findIndex(function(_staple, index): boolean {
+			return(index >= 200 && chainOf(index).length === 3);
+		});
+		const chain = chainOf(root);
+		if (root < 0) {
+			throw(new Error('no chain of three staples in the head'));
+		}
+		// The chain listed just before the staple it builds on.
+		const listed = [...head.slice(0, root).filter(function(_staple, index): boolean {
+			return(!chain.includes(index));
+		}), ...chain.flatMap(function(index): VoteStaple[] {
+			return(head.slice(index, index + 1));
+		}), ...head.slice(root).filter(function(_staple, index): boolean {
+			return(!chain.includes(index + root));
+		})];
+		const rootPlace = root + chain.length;
+		const places = new Map(listed.map(function(staple, index): [string, number] {
+			return([keyOf(staple), index]);
+		}));
+		const blocksBefore = function(place: number | undefined): number {
+			return(listed.slice(0, place).reduce(function(count, staple): number {
+				return(count + staple.blocks.length);
+			}, 0));
+		};
+		const largest = Math.max(...listed.map(function(staple): number {
+			return(staple.blocks.length);
+		}));
+
+		const runAt = async function(step: number): Promise<{ readonly reached: ShadowRunState; readonly seenAtNextVote: { readonly place: number; readonly blocks: number } | undefined; readonly mostInOne: number }> {
+			vi.restoreAllMocks();
+			let ticks = 0;
+			vi.spyOn(performance, 'now').mockImplementation(function(): number {
+				ticks += step;
+				return(ticks);
+			});
+			const storage = new MemoryLedgerStorage();
+			let committed = 0;
+			let mostInOne = 0;
+			const commit = storage.commitTransaction.bind(storage);
+			vi.spyOn(storage, 'commitTransaction').mockImplementation(async function(transaction: Parameters<typeof storage.commitTransaction>[0]): Promise<void> {
+				await commit(transaction);
+				const { blockCount } = await storage.stats();
+				mostInOne = Math.max(mostInOne, blockCount - committed);
+				committed = blockCount;
+			});
+			let seenAtNextVote: { readonly place: number; readonly blocks: number } | undefined;
+			const vote = storage.addPendingVote.bind(storage);
+			vi.spyOn(storage, 'addPendingVote').mockImplementation(async function(...args: Parameters<typeof storage.addPendingVote>): Promise<void> {
+				const [, staple] = args;
+				const place = places.get(staple.blocksHash.toString()) ?? -1;
+				if (seenAtNextVote === undefined && place > rootPlace) {
+					seenAtNextVote = { place, blocks: (await storage.stats()).blockCount };
+				}
+				await vote(...args);
+			});
+			const reached = await runShadowVotes({ source: sourceOf(listed), state: memoryState(), storage, start: freshShadowRun(scopeFrom(listed, listed.length - 1), 1, GENESIS_BASE, targetOf(listed)), batchStaples: 500 });
+			return({ reached, seenAtNextVote, mostInOne });
+		};
+
+		const fast = await runAt(1);
+		const slow = await runAt(10_000);
+
+		// Every staple before the first voted on after the chain's root is applied when it is voted on, the chain included.
+		expect(fast.seenAtNextVote?.blocks).toBe(blocksBefore(fast.seenAtNextVote?.place));
+		expect(slow.seenAtNextVote).toEqual(fast.seenAtNextVote);
+		expect(slow.reached).toEqual(fast.reached);
+		// Genesis may land in one transaction with what its own staple holds; past it, no transaction holds two staples of the chain.
+		expect(slow.mostInOne).toBeLessThanOrEqual(Math.max(largest, listed[0]?.blocks.length ?? 0));
+	}, REPLAY_TIMEOUT_MILLISECONDS);
 
 	test('replay nothing past a target they have reached', async function() {
 		const head = replayOrder(await loadMainnetFixture('head')).slice(0, 3);

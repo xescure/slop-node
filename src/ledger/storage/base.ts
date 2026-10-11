@@ -143,6 +143,9 @@ const DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS = 5000;
 // Upstream's gc loop checks its time budget only between batches, so a batch stays small.
 const GC_BATCH_LIMIT = 100;
 
+/** Upstream's default time budget of one gc [Keeta TS] index.js:67852. */
+const DEFAULT_GC_TIME_LIMIT_MILLISECONDS = 280_000;
+
 /**
  * The node statistic upstream's ledger folds every applied block's hash into
  * by XOR [Keeta TS] index.js:69415.
@@ -291,8 +294,25 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	}
 
 	/**
-	 * One batch of upstream's gc loop, which runs batches in one transaction
-	 * until a batch reports that nothing remains or the time budget is spent.
+	 * Upstream's gc loop, but for its first batch: upstream reads the time
+	 * before running any, so a budget spent by then, by a slow start or a
+	 * clock moved on, runs no batch and reports nothing left, which ends a
+	 * caller collecting until nothing is. One batch always runs here, and
+	 * the result is whether more remain.
+	 * [Keeta TS] index.js:67852-67861
+	 */
+	override async gc(transaction: Transaction, timeLimitMS: number = DEFAULT_GC_TIME_LIMIT_MILLISECONDS): Promise<boolean> {
+		const startTime = Date.now();
+		let more = await this.gcBatch(transaction);
+		while (more && Date.now() - startTime < timeLimitMS) {
+			more = await this.gcBatch(transaction);
+		}
+		return(more);
+	}
+
+	/**
+	 * One batch of the gc loop, which runs batches in one transaction until a
+	 * batch reports that nothing remains or the time budget is spent.
 	 * [Keeta TS] index.js:67852-67862
 	 */
 	protected override async gcBatch(transaction: Transaction): Promise<boolean> {
@@ -653,7 +673,11 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * replayed when the last of them arrived; the replay window may have run
 	 * out, or the replay failed. It is retried the way a replay would run it.
 	 * One that fails again stays deferred and is logged, and is not retried
-	 * again by the same gc pass, so it never keeps the pass going.
+	 * again by the same gc pass, so it never keeps the pass going. Once the
+	 * replay window is spent the batch stops, after one staple at least, and
+	 * the staples it listed and left are listed again by the next: a batch
+	 * runs in the gc's one transaction, which a hundred staples of hundreds
+	 * of operations each would hold open for minutes.
 	 */
 	async #retryReleasedDeferredStaples(transaction: Transaction, limit: number): Promise<boolean> {
 		const { config } = this.initialized;
@@ -663,7 +687,12 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			completed: new Set(),
 			deadline: Date.now() + (config.heapProcessWindowMs ?? DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS)
 		};
+		let tried = 0;
 		for (const staple of await this.listReleasedDeferredStaples(transaction, limit, retried)) {
+			if (tried > 0 && Date.now() >= replay.deadline) {
+				break;
+			}
+			tried++;
 			const stapleKey = toStapleKey(staple.blocksHash);
 			retried.add(stapleKey);
 			if (await this.#isDead(transaction, staple)) {

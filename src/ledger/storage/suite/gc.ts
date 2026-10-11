@@ -394,6 +394,56 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			await expect(node.ledger.add(secondStaple)).rejects.toMatchObject({ code: 'LEDGER_BLOCK_ALREADY_EXISTS' });
 		});
 
+		test('a gc batch retries the released staples it listed only until the replay window is spent, applying one at least, and says more remain', async function() {
+			const { network, startNode } = await startNetwork();
+			// A zero window is spent before the batch begins.
+			const { node, storage } = await startNode(0, { heapProcessWindowMs: 0 });
+			const firsts = [await sendFromGenesis(network, 0, 5n), await sendFromGenesis(network, 1, 5n)];
+			const seconds = await Promise.all(firsts.map(function(first, user) {
+				return(sendFrom(network, user, first.hash, 7n));
+			}));
+			for (const second of seconds) {
+				expect(await node.ledger.add(await confirmedStaple([second], network.representatives))).toEqual([]);
+			}
+			for (const first of firsts) {
+				await node.ledger.add(await confirmedStaple([first], network.representatives));
+			}
+			const appliedSeconds = async function(): Promise<number> {
+				let applied = 0;
+				for (const second of seconds) {
+					if (await node.ledger.getBlock(second.hash, 'main') !== null) {
+						applied++;
+					}
+				}
+				return(applied);
+			};
+			const batch = function(): Promise<boolean> {
+				return(writeStorage(storage, function(transaction) {
+					return(storage._Testing(TESTING_KEY).gcBatch(transaction, 100));
+				}));
+			};
+
+			expect(await batch()).toBe(true);
+			expect(await appliedSeconds()).toBe(1);
+			expect(await batch()).toBe(false);
+			expect(await appliedSeconds()).toBe(2);
+		});
+
+		test('gc runs one batch at least however short its time, and reports whether more remains', async function() {
+			const { network, startNode } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			const { node } = await startNode(0, { heapProcessWindowMs: 0 });
+			const first = await sendFromGenesis(network, 0, 5n);
+			const second = await sendFrom(network, 0, first.hash, 7n);
+			expect(await node.ledger.add(await confirmedStaple([second], network.representatives))).toEqual([]);
+			await node.ledger.add(await confirmedStaple([first], network.representatives));
+
+			// Upstream's loop reads the time before its first batch, so a limit spent by then would run none and report nothing left [Keeta TS] index.js:67852-67861.
+			expect(await node.ledger.gc(-1)).toBe(false);
+
+			expect(hashOf(await node.ledger.getHeadBlock(user, 'main'))).toBe(hashOf(second));
+		});
+
 		test('a gc retry that fails after its write leaves nothing behind and stays deferred', async function() {
 			const { network, startNode } = await startNetwork();
 			const user = requireAt(network.users, 0);
