@@ -107,6 +107,25 @@ describe('a read of the follower\'s database under load', function() {
 		expect(waited).toBeLessThan(UNREACHABLE_LIMIT_MILLISECONDS + 30_000);
 	});
 
+	test('counts the 15 minutes from the first failure to reach the database, whatever load failures come between', async function() {
+		const refused = Object.assign(new Error('connect ECONNREFUSED /home/follower/run/.s.PGSQL.54329'), { code: 'ECONNREFUSED' });
+		let reads = 0;
+		const retry = recordedRetry(200);
+		const store = retryingStore(followerStoreOf({
+			accountCount: () => Promise.resolve(1),
+			lastSequence(): Promise<bigint> {
+				reads++;
+				if (reads % 2 === 0) {
+					return(Promise.reject(statementTimeout()));
+				}
+				return(Promise.reject(refused));
+			}
+		}), retry);
+		expect(await store.accountCount()).toBe(1);
+
+		await expect(store.lastSequence()).rejects.toThrow('has not been reachable for 15 min');
+	});
+
 	test('reads every account with a chain again from the page a failure cut, not from the first', async function() {
 		const accounts = Array.from({ length: 1500 }, function(_, index): KnownAccount {
 			return({ rowID: String(index + 1), account: `keeta_${String(index + 1)}`, newestStaple: undefined });

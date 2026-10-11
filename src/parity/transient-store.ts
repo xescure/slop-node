@@ -93,6 +93,7 @@ class TransientReads {
 	async run<Result>(read: () => Promise<Result>): Promise<Result> {
 		const { clock, stopped } = this.#retry;
 		const began = clock.now();
+		// From the read's first failure to reach the database: load failures between mend nothing of it.
 		let unreachableSince: number | undefined;
 		let waitMilliseconds = FIRST_WAIT_MILLISECONDS;
 		for (let attempt = 1; ; attempt++) {
@@ -113,8 +114,6 @@ class TransientReads {
 					if (clock.now() - unreachableSince >= UNREACHABLE_LIMIT_MILLISECONDS) {
 						throw(new Error(`the follower's database has not been reachable for ${String(Math.round((clock.now() - unreachableSince) / 60_000))} min (${messageOf(error)}); the read is given up`, { cause: error }));
 					}
-				} else {
-					unreachableSince = undefined;
 				}
 				this.#retry.retrying?.(error, { attempt, elapsedMilliseconds: clock.now() - began, waitMilliseconds });
 				try {

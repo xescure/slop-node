@@ -565,6 +565,32 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			expect(hashOf(await node.ledger.getBlock(second.hash, 'main'))).toBe(hashOf(second));
 		});
 
+		test('a released staple whose retry fails with an error that asks for the transaction to run again every time is recorded as failed after the third, and keeps no gc going', async function() {
+			const { network, startNode } = await startNetwork();
+			const { node, storage } = await startNode(0, { heapProcessWindowMs: 0 });
+			const first = await sendFromGenesis(network, 0, 5n);
+			const second = await sendFrom(network, 0, first.hash, 7n);
+			const secondStaple = await confirmedStaple([second], network.representatives);
+			expect(await node.ledger.add(secondStaple)).toEqual([]);
+			await node.ledger.add(await confirmedStaple([first], network.representatives));
+			let attempts = 0;
+			afterPersisting(storage, [secondStaple], function(blocksHash): void {
+				attempts++;
+				throw(createLedgerError('LEDGER_TRANSACTION_ABORTED', `injected conflict after persisting ${blocksHash}`, { retry: true }));
+			});
+
+			for (let call = 0; call < 5; call++) {
+				expect(await node.ledger.gc()).toBe(false);
+			}
+
+			// Retried by each of the first three gcs, then left until a staple is applied.
+			expect(attempts).toBe(3);
+			expect(await node.ledger.getBlock(second.hash, 'main')).toBeNull();
+			await node.ledger.add(await confirmedStaple([await sendFromGenesis(network, 1, 5n)], network.representatives));
+			expect(await node.ledger.gc()).toBe(false);
+			expect(attempts).toBe(4);
+		});
+
 		/*
 		 * Each failing retry spends the window and moves the clock on past
 		 * any time a gc could wait out, so only the order gc lists released

@@ -144,6 +144,14 @@ const DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS = 5000;
 // Upstream's gc loop checks its time budget only between batches, so a batch stays small.
 const GC_BATCH_LIMIT = 100;
 
+/*
+ * Retryable failures in a row after which a staple's retry counts as failed:
+ * a conflict passes once the other transaction ends, so one that recurs on
+ * every retry is the staple's own, and left alone it would roll back every
+ * gc that retries it.
+ */
+const RETRYABLE_FAILURES_LIMIT = 3;
+
 /** A released deferred staple whose last gc retry failed: when, among such failures, and how many staples the driver had applied then. */
 type FailedRetry = { readonly order: number; readonly appliedBefore: number };
 
@@ -177,6 +185,8 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	// Each released deferred staple whose last gc retry failed; it outlives the transaction, as the failure does not roll back.
 	readonly #failedRetries = new Map<StapleKey, FailedRetry>();
 	#failedRetriesSoFar = 0;
+	// Retryable failures in a row of each released deferred staple's gc retries.
+	readonly #retryableFailures = new Map<StapleKey, number>();
 	// Staples this driver has applied to the main ledger in a transaction, committed or not, by an add or a gc retry with what each released: the one change that can make a failed retry succeed. A unit undone counts none.
 	#staplesApplied = 0;
 	// The tail of the work queued on each transaction that may open isolated units; it never rejects.
@@ -694,7 +704,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * on the same ledger would fail the same way, so that it keeps no gc
 	 * reporting more left. Neither depends on the clock. A failure the
 	 * transaction is to run again for is not the staple's, and the next gc
-	 * retries it as one that never failed.
+	 * retries it as one that never failed, but for the third in a row.
 	 */
 	async #retryReleasedDeferredStaples(transaction: Transaction, limit: number): Promise<boolean> {
 		const { config } = this.initialized;
@@ -715,6 +725,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			if (await this.#isDead(transaction, staple)) {
 				await this.removeDeferredStaple(transaction, stapleKey);
 				this.#failedRetries.delete(stapleKey);
+				this.#retryableFailures.delete(stapleKey);
 				this.#reportDeadDeferredStaple(staple);
 				continue;
 			}
@@ -723,11 +734,15 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 				recordSettlement(transaction, applied);
 				this.#staplesApplied += applied.length;
 				this.#failedRetries.delete(stapleKey);
+				this.#retryableFailures.delete(stapleKey);
 			} catch (error: unknown) {
-				if (await this.#asksToRunAgain(error)) {
+				const inARow = (this.#retryableFailures.get(stapleKey) ?? 0) + 1;
+				if (await this.#asksToRunAgain(error) && inARow < RETRYABLE_FAILURES_LIMIT) {
+					this.#retryableFailures.set(stapleKey, inARow);
 					config.log?.warn(LOG_SOURCE, `retrying deferred staple ${stapleKey} met a failure the transaction is to run again for; it stays deferred, and the next gc retries it`, error);
 					continue;
 				}
+				this.#retryableFailures.delete(stapleKey);
 				this.#failedRetries.set(stapleKey, { order: this.#failedRetriesSoFar++, appliedBefore: this.#staplesApplied });
 				config.log?.error(LOG_SOURCE, `retrying deferred staple ${stapleKey} failed; it stays deferred, and gc retries it again once a staple has been applied since`, error);
 			}
@@ -750,7 +765,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 		return(Reflect.get(evaluated, 'shouldRetry') === true);
 	}
 
-	/** The staples whose last retry failed, and of them those due again, a staple written since, or those not, oldest failure first. */
+	/** The staples whose last retry failed, and of them those due again, a staple applied since, or those not, oldest failure first. */
 	#failedRetryKeys(due: boolean): StapleKey[] {
 		return([...this.#failedRetries].filter(([, failure]): boolean => {
 			return((failure.appliedBefore < this.#staplesApplied) === due);
