@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
+import type { BloomFilter } from '@keetanetwork/keetanet-client/lib/utils/bloom.js';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { SimulatedNode, SimulatedPeer } from '../testing/simulated-peer.js';
 import type { SimulatedKeying, SimulatedPeerOptions, SimulatedStaple } from '../testing/simulated-peer.js';
 import { advanceClock, freezeClock } from '../testing/network.js';
+import { assertNever } from '../util/assert-never.js';
 import type { PeerKeying } from './bootstrap-evidence.js';
 import { DEEP_SCAN_DEPTH_MILLISECONDS, DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PrimingWindow, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, bootstrapPeer, bootstrapRange, completes, firstProgress } from './bootstrap-pass.js';
 import type { PassAnswer, PassEvent, PassOptions, PassOutcome, PassRequest, PeerIO, PeerOutcome, PeerProgress, RangeSetup } from './bootstrap-pass.js';
@@ -157,12 +159,38 @@ function lostBefore(staples: readonly SimulatedStaple[], harness: Harness, at: n
 	}));
 }
 
-/** That the node holds or has queued every staple the peer applied before where the pass recorded it reached, and before its horizon when it completed. */
+/**
+ * That the node holds or has queued every staple the peer applied before
+ * where the pass recorded it reached, and every staple the pass's outcome
+ * claims: up to its horizon once it caught up, and all the peer applied
+ * before it began once it drained the peer.
+ */
 function expectNoLoss(peer: SimulatedPeer, harness: Harness, live: PassOutcome): void {
 	expect(lostBefore(peer.staples, harness, harness.progress?.reached.getTime() ?? NOW)).toEqual([]);
-	if (completes(live)) {
-		expect(lostBefore(peer.staples, harness, NOW - BOOTSTRAP_MARGIN_MILLISECONDS)).toEqual([]);
+	let claimed = Number.NEGATIVE_INFINITY;
+	switch (live.kind) {
+		case 'drained':
+			claimed = NOW;
+			break;
+		case 'caught-up':
+			claimed = NOW - BOOTSTRAP_MARGIN_MILLISECONDS;
+			break;
+		case 'bounded':
+			break;
+		default:
+			assertNever(live);
 	}
+	expect(lostBefore(peer.staples, harness, claimed)).toEqual([]);
+}
+
+/** A peer keyed by votes that answers at most 100 staples a request, with 2000 staples from two hours ago, 3 s apart, each voted on twice within the 300 ms before it. */
+function shortVotedPeer(): SimulatedPeer {
+	const peer = new SimulatedPeer({ answersAtMost: 100, keying: { kind: 'votes', votesPerRead: 200, readsAtMost: Number.POSITIVE_INFINITY, readMilliseconds: 0 } });
+	for (let index = 0; index < 2000; index++) {
+		const at = NOW - 2 * HOUR + index * 3 * SECOND;
+		peer.applyVoted(at, at, [], [at - 300, at]);
+	}
+	return(peer);
 }
 
 function pageOf(staples: readonly SimulatedStaple[]): Promise<PassAnswer<SimulatedStaple>> {
@@ -562,6 +590,21 @@ describe('deep re-scans of a peer', function() {
 		expect(harness.starts().sort()).toEqual([caughtUp.deepScanFrom.getTime(), caughtUp.reached.getTime()].sort());
 		expect(harness.written[0]).toEqual({ ...caughtUp, deepScanFrom: caughtUp.reached, nextDeepScan: new Date(NOW + DEEP_SCAN_PERIOD_MILLISECONDS), deepScan: { reached: caughtUp.deepScanFrom, horizon: new Date(NOW - BOOTSTRAP_MARGIN_MILLISECONDS) } });
 		expect(harness.progress).toMatchObject({ caughtUp: true, deepScanFrom: caughtUp.reached, deepScan: undefined });
+	});
+
+	test('complete only once the node holds every staple before their horizon, from a peer keyed by votes that answers short pages', async function() {
+		freezeClock(new Date(NOW));
+		const peer = shortVotedPeer();
+		const harness = new Harness(function(request) {
+			return(peer.page(request));
+		});
+		const horizon = NOW - HOUR;
+		harness.progress = { ...caughtUp, keying: 'votes', nextDeepScan: new Date(NOW + HOUR), deepScan: { reached: new Date(NOW - 3 * HOUR), horizon: new Date(horizon) } };
+
+		const { deepScan } = await bootstrapPeer(harness.io, passOptions(500));
+
+		expect(['drained', 'caught-up']).toContain(deepScan?.kind);
+		expect(lostBefore(peer.staples, harness, horizon)).toEqual([]);
 	});
 
 	test('begin at least the depth back', async function() {
@@ -1538,6 +1581,121 @@ describe('a pass checking what it concludes', function() {
 	});
 });
 
+/** A peer it knows keys by when it applied them, with 2500 staples at the moment an hour ago it starts from, voted on 5 s before, and MAX_NAMED + 1000 after it, 100 ms apart; the next deep re-scan due in a day. */
+function crowdThenMany(): { peer: SimulatedPeer; harness: Harness } {
+	freezeClock(new Date(NOW));
+	const peer = new SimulatedPeer();
+	const moment = NOW - HOUR;
+	for (let index = 0; index < 2500; index++) {
+		peer.applyVoted(moment, moment, [], [moment - 5000]);
+	}
+	for (let index = 0; index < MAX_NAMED + 1000; index++) {
+		const at = moment + 1 + index * 100;
+		peer.applyVoted(at, at, [], [at - 5000]);
+	}
+	const harness = new Harness(function(request) {
+		return(peer.page(request));
+	});
+	harness.progress = { reached: new Date(moment), caughtUp: true, deepScanFrom: new Date(moment), nextDeepScan: new Date(NOW + DAY), deepScan: undefined, keying: 'applied' };
+	return({ peer, harness });
+}
+
+describe('passes that go on making progress', function() {
+	afterEach(function() {
+		vi.useRealTimers();
+	});
+
+	/*
+	 * The peer reads at most 300 staples a request, those the filter names
+	 * included, and 400 staples share one moment: each page after the
+	 * first lists one staple, and none shows a move.
+	 */
+	test('drain a peer whose time runs out reading what the filter names at one moment, naming what each page sent', async function() {
+		freezeClock(new Date(NOW));
+		const peer = new SimulatedPeer({ readsAtMost: 300 });
+		const moment = NOW - HOUR;
+		for (let index = 0; index < 400; index++) {
+			peer.applyVoted(moment, moment, [], [moment]);
+		}
+		const harness = new Harness(function(request) {
+			return(peer.page(request));
+		});
+
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(live).toEqual({ kind: 'drained' });
+		expectNoLoss(peer, harness, live);
+	});
+
+	/*
+	 * 2500 staples share the moment the pass starts from, from a peer it knows
+	 * keys by when it applied them, and more than MAX_NAMED follow, so no page
+	 * from the moment ever comes back empty: only a move past it, which
+	 * further filters check by order, lets the passes go on.
+	 */
+	test('move past more staples at one moment than a filter holds, from a peer keyed by when it applied them that holds more than MAX_NAMED after them', async function() {
+		const { harness } = crowdThenMany();
+
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(completes(live)).toBe(true);
+		expect(harness.events).toEqual([]);
+	});
+
+	/*
+	 * With the seeds passOptions draws, the full filter of one page the pass
+	 * moves on by names a staple by mistake: the two hashes the client places
+	 * its cells by agree, modulo the filter's size, with those of a staple the
+	 * filter names, which is most of the rate a full filter names one at
+	 * (bootstrap-window.ts, errorRateOf). The pass leaves it out; the deep
+	 * re-scan, with filters of its own, reads it.
+	 */
+	test('read again, in the deep re-scan, a staple a full filter named by mistake that a pass moved past', async function() {
+		const { peer, harness } = crowdThenMany();
+
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(live).toEqual({ kind: 'drained' });
+		const lost = peer.staples.filter(function(staple): boolean {
+			return(!harness.node.holds(staple));
+		});
+		expect(lost.map(function(staple): number {
+			return(staple.id);
+		})).toEqual([20561]);
+		// The filter that named it is full, and the staple's cells are those of a staple it names.
+		const filters = harness.requests.flatMap(function(request): BloomFilter[] {
+			if (request.bloomFilter === undefined) {
+				return([]);
+			}
+			return([lib.Utils.Bloom.deserializeBloomFilter(request.bloomFilter)]);
+		}).filter(function(filter): boolean {
+			return(lost.every(function(staple): boolean {
+				return(filter.has(staple.toBytes()));
+			}));
+		});
+		expect(filters.map(function(filter): number {
+			return(filter._nbHashes);
+		})).toEqual([lib.Utils.Bloom.BloomFilter.create(BLOOM_CAPACITY, BLOOM_ERROR_RATE)._nbHashes]);
+		const [filter] = filters;
+		const cellsOf = function(staple: SimulatedStaple): string {
+			return(filter?._hashing.getIndexes(staple.toBytes(), filter.size, filter._nbHashes, filter.seed).join() ?? '');
+		};
+		expect(peer.staples.filter(function(staple): boolean {
+			return(lost.every(function(missed): boolean {
+				return(staple !== missed && cellsOf(staple) === cellsOf(missed));
+			}));
+		}).map(function(staple): number {
+			return(staple.id);
+		})).toEqual([19856]);
+
+		freezeClock(new Date(NOW + DAY));
+		const { deepScan } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(deepScan).toEqual({ kind: 'drained' });
+		expect(lostBefore(peer.staples, harness, NOW)).toEqual([]);
+	});
+});
+
 describe('a pass over more staples at one moment than it may name', function() {
 	afterEach(function() {
 		vi.useRealTimers();
@@ -1635,6 +1793,26 @@ describe('a pass over a range of a peer\'s history', function() {
 		})).toEqual([]);
 		expect(harness.written[0]).toEqual(firstProgress(NOW, 42, new Date(5)));
 		expect(new Set(harness.uses)).toEqual(new Set(['ahead']));
+	});
+
+	/*
+	 * Its pages short, the peer keyed by votes as the pass knows, and no
+	 * staple of a page voted on at or past the end: the pass probes the end
+	 * only once a page shows it may have read there.
+	 */
+	test('completes only once it holds every staple before the range\'s end, from a peer keyed by votes that answers short pages', async function() {
+		freezeClock(new Date(NOW));
+		const peer = shortVotedPeer();
+		const harness = new Harness(function(request) {
+			return(peer.page(request));
+		});
+		harness.progress = { ...firstProgress(NOW, 0, EPOCH), keying: 'votes' };
+		const end = NOW - HOUR;
+
+		const outcome = await bootstrapRange(harness.io, { ...rangeOf(end, []), reached: new Date(NOW - 3 * HOUR) }, passOptions(500));
+
+		expect(completes(outcome)).toBe(true);
+		expect(lostBefore(peer.staples, harness, end)).toEqual([]);
 	});
 
 	test('ends at once, caught up, on a range it has read to its end, and at its bound once the update\'s time is up', async function() {
