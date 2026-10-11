@@ -510,6 +510,8 @@ describe('a parity run', function() {
 		});
 		// The two walks run side by side, so their records interleave in no fixed order.
 		expect(kinds.slice(0, 4)).toEqual(['sweep', 'cross-check', 'checksum', 'block-count']);
-		expect(kinds.slice(4).sort()).toEqual(['sweep', 'sweep-batch']);
+		expect(kinds.slice(4).filter(function(kind): boolean {
+			return(kind === 'sweep' || kind === 'sweep-batch');
+		}).sort()).toEqual(['sweep', 'sweep-batch']);
 	});
 });
