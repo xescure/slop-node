@@ -144,13 +144,8 @@ const DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS = 5000;
 // Upstream's gc loop checks its time budget only between batches, so a batch stays small.
 const GC_BATCH_LIMIT = 100;
 
-/*
- * How long gc leaves a released deferred staple whose retry failed before it
- * retries it again. A persistent failure that every gc retried first would
- * spend each slice on itself, and enough of them would leave every gc
- * reporting more left without ever reaching the staples after them.
- */
-export const FAILED_RETRY_PAUSE_MILLISECONDS = 60_000;
+/** A released deferred staple whose last gc retry failed: when, among such failures, and how many staples the driver had applied then. */
+type FailedRetry = { readonly order: number; readonly appliedBefore: number };
 
 /** Upstream's default time budget of one gc [Keeta TS] index.js:67852. */
 const DEFAULT_GC_TIME_LIMIT_MILLISECONDS = 280_000;
@@ -179,8 +174,11 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	#driver: DriverState = { state: 'uninitialized' };
 	// Deferred staples each gc transaction has already retried; one that fails is not retried again in the same pass.
 	readonly #retriedByGc = new WeakMap<Transaction, Set<StapleKey>>();
-	// When each released deferred staple whose gc retry failed may be retried again; it outlives the transaction, as the failure does not roll back.
-	readonly #failedRetryPausedUntil = new Map<StapleKey, number>();
+	// Each released deferred staple whose last gc retry failed; it outlives the transaction, as the failure does not roll back.
+	readonly #failedRetries = new Map<StapleKey, FailedRetry>();
+	#failedRetriesSoFar = 0;
+	// Staples this driver has applied to the main ledger, by an add or a gc retry with what each released, the one change that can make a failed retry succeed; a unit undone counts none.
+	#stapleWrites = 0;
 	// The tail of the work queued on each transaction that may open isolated units; it never rejects.
 	readonly #exclusiveWork = new WeakMap<Transaction, Promise<void>>();
 
@@ -227,6 +225,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			}));
 		});
 		recordSettlement(transaction, applied);
+		this.#stapleWrites += applied.length;
 		return(applied.map(function({ staple }): VoteStaple {
 			return(staple);
 		}));
@@ -684,14 +683,16 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * A deferred staple whose awaited blocks are all on main should have been
 	 * replayed when the last of them arrived; the replay window may have run
 	 * out, or the replay failed. It is retried the way a replay would run it.
-	 * One that fails again stays deferred and is logged, and no gc retries it
-	 * again until the retry pause has passed, so it never keeps a gc going,
-	 * is never listed ahead of the staples after it, and costs its retry once
-	 * a pause rather than once a slice. Once the replay window is spent the
-	 * batch stops, after it tried one staple at least, and the staples it
-	 * listed and left are listed again by the next: a batch runs in the gc's
-	 * one transaction, which a hundred staples of hundreds of operations each
-	 * would hold open for minutes.
+	 * Once the replay window is spent the batch stops, after it tried one
+	 * staple at least, and the staples it listed and left are listed again by
+	 * the next: a batch runs in the gc's one transaction, which a hundred
+	 * staples of hundreds of operations each would hold open for minutes. One
+	 * whose retry fails stays deferred and is logged, and from then on is
+	 * listed after every staple whose retry never failed, so failures however
+	 * slow or many never hold back a staple that applies; and it is retried
+	 * again only once this driver has written a staple since, as its retry
+	 * on the same ledger would fail the same way, so that it keeps no gc
+	 * reporting more left. Neither depends on the clock.
 	 */
 	async #retryReleasedDeferredStaples(transaction: Transaction, limit: number): Promise<boolean> {
 		const { config } = this.initialized;
@@ -701,11 +702,8 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			completed: new Set(),
 			deadline: Date.now() + (config.heapProcessWindowMs ?? DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS)
 		};
-		const passedOver = (): ReadonlySet<StapleKey> => {
-			return(new Set([...retried, ...this.#pausedAfterFailedRetry()]));
-		};
 		let tried = 0;
-		for (const staple of await this.listReleasedDeferredStaples(transaction, limit, passedOver())) {
+		for (const staple of await this.#releasedToRetry(transaction, limit, retried)) {
 			if (tried > 0 && Date.now() >= replay.deadline) {
 				break;
 			}
@@ -714,33 +712,70 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			retried.add(stapleKey);
 			if (await this.#isDead(transaction, staple)) {
 				await this.removeDeferredStaple(transaction, stapleKey);
+				this.#failedRetries.delete(stapleKey);
 				this.#reportDeadDeferredStaple(staple);
 				continue;
 			}
 			try {
 				const applied = await this.#applyIsolated(transaction, staple, replay);
 				recordSettlement(transaction, applied);
-				this.#failedRetryPausedUntil.delete(stapleKey);
+				this.#stapleWrites += applied.length;
+				this.#failedRetries.delete(stapleKey);
 			} catch (error: unknown) {
-				this.#failedRetryPausedUntil.set(stapleKey, Date.now() + FAILED_RETRY_PAUSE_MILLISECONDS);
-				config.log?.error(LOG_SOURCE, `retrying deferred staple ${stapleKey} failed; it stays deferred, and gc retries it again in ${String(FAILED_RETRY_PAUSE_MILLISECONDS / 1000)} s at the earliest`, error);
+				this.#failedRetries.set(stapleKey, { order: this.#failedRetriesSoFar++, appliedBefore: this.#stapleWrites });
+				config.log?.error(LOG_SOURCE, `retrying deferred staple ${stapleKey} failed; it stays deferred, and gc retries it again once a staple has been applied since`, error);
 			}
 		}
-		return((await this.listReleasedDeferredStaples(transaction, 1, passedOver())).length > 0);
+		const passedOver = new Set([...retried, ...this.#failedRetryKeys(false)]);
+		return((await this.listReleasedDeferredStaples(transaction, 1, passedOver)).length > 0);
 	}
 
-	/** The staples whose failed gc retry is still in its pause; those whose pause has passed are forgotten. */
-	#pausedAfterFailedRetry(): StapleKey[] {
-		const now = Date.now();
-		const paused: StapleKey[] = [];
-		for (const [stapleKey, pausedUntil] of this.#failedRetryPausedUntil) {
-			if (now < pausedUntil) {
-				paused.push(stapleKey);
-			} else {
-				this.#failedRetryPausedUntil.delete(stapleKey);
-			}
+	/** The staples whose last retry failed, and of them those due again, a staple written since, or those not, oldest failure first. */
+	#failedRetryKeys(due: boolean): StapleKey[] {
+		return([...this.#failedRetries].filter(([, failure]): boolean => {
+			return((failure.appliedBefore < this.#stapleWrites) === due);
+		}).sort(function([, left], [, right]): number {
+			return(left.order - right.order);
+		}).map(function([stapleKey]): StapleKey {
+			return(stapleKey);
+		}));
+	}
+
+	/**
+	 * Released staples this transaction has not retried, at most the limit:
+	 * those whose retry never failed first, then those whose last retry
+	 * failed and that are due again, oldest failure first. Listing every
+	 * other staple apart lists exactly those due, as the first listing,
+	 * when short of the limit, held every staple that never failed.
+	 */
+	async #releasedToRetry(transaction: Transaction, limit: number, retried: ReadonlySet<StapleKey>): Promise<VoteStaple[]> {
+		const failed = new Set(this.#failedRetries.keys());
+		const fresh = await this.listReleasedDeferredStaples(transaction, limit, new Set([...retried, ...failed]));
+		const due = this.#failedRetryKeys(true).filter(function(stapleKey): boolean {
+			return(!retried.has(stapleKey));
+		}).slice(0, limit - fresh.length);
+		if (due.length === 0) {
+			return([...fresh]);
 		}
-		return(paused);
+		const taking = new Set(due);
+		const others = new Set([...retried, ...fresh.map(function(staple): StapleKey {
+			return(toStapleKey(staple.blocksHash));
+		}), ...[...failed].filter(function(stapleKey): boolean {
+			return(!taking.has(stapleKey));
+		})]);
+		const listed = new Map((await this.listReleasedDeferredStaples(transaction, limit, others)).map(function(staple): [StapleKey, VoteStaple] {
+			return([toStapleKey(staple.blocksHash), staple]);
+		}));
+		const again = due.flatMap((stapleKey): VoteStaple[] => {
+			const staple = listed.get(stapleKey);
+			if (staple === undefined) {
+				// Released once, it stays released, so it is no longer deferred: a replay or an add applied it.
+				this.#failedRetries.delete(stapleKey);
+				return([]);
+			}
+			return([staple]);
+		});
+		return([...fresh, ...again]);
 	}
 
 	/*

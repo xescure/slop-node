@@ -8,7 +8,6 @@ import { LedgerInternals } from '../../../upstream/internals.js';
 import { confirmedStaple, feeBlock, manageCertificateBlock, modifyPermissionsBlock, sendBlock } from '../../../testing/blocks.js';
 import { advanceClock } from '../../../testing/network.js';
 import type { TestLedgerOptions, TestNetwork } from '../../../testing/network.js';
-import { FAILED_RETRY_PAUSE_MILLISECONDS } from '../base.js';
 import type { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
 import {
 	ChainCursor,
@@ -524,7 +523,7 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			expect(await node.ledger.getBlock(requireAt(secondFailing.blocks, 0).hash, 'main')).toBeNull();
 		});
 
-		test('a released staple whose retry failed waits out the retry pause before gc retries it, and gc reports nothing left meanwhile', async function() {
+		test('a released staple whose retry failed is retried once the ledger has applied a staple since, however long ago it failed, and gc reports nothing left meanwhile', async function() {
 			const { network, startNode } = await startNetwork();
 			const { node, storage } = await startNode(0, { heapProcessWindowMs: 0 });
 			const first = await sendFromGenesis(network, 0, 5n);
@@ -538,12 +537,54 @@ export function defineGcCases(driver: DriverUnderTest): void {
 
 			expect(await node.ledger.gc()).toBe(false);
 			expect(await node.ledger.getBlock(second.hash, 'main')).toBeNull();
-			advanceClock(FAILED_RETRY_PAUSE_MILLISECONDS - 1);
+			advanceClock(24 * 60 * 60 * 1000);
 			expect(await node.ledger.gc()).toBe(false);
 			expect(await node.ledger.getBlock(second.hash, 'main')).toBeNull();
-			advanceClock(1);
+			await node.ledger.add(await confirmedStaple([await sendFromGenesis(network, 1, 5n)], network.representatives));
 			expect(await node.ledger.gc()).toBe(false);
 			expect(hashOf(await node.ledger.getBlock(second.hash, 'main'))).toBe(hashOf(second));
+		});
+
+		/*
+		 * Each failing retry spends the window and moves the clock on past
+		 * any time a gc could wait out, so only the order gc lists released
+		 * staples in decides whether the applicable one is ever reached.
+		 */
+		test.each([2, 4])('%i released staples whose slow retries fail, ahead of an applicable one, hold it back one gc each at most, and gc ends once each was retried after the last staple applied', async function(failing) {
+			const { network, startNode } = await startNetwork(Array.from({ length: failing + 1 }, function(): bigint {
+				return(100n);
+			}));
+			const { node, storage } = await startNode(0, { heapProcessWindowMs: 0 });
+			const firsts = await Promise.all(network.users.map(function(_user, index) {
+				return(sendFromGenesis(network, index, 5n));
+			}));
+			const seconds = sortedByHash(await Promise.all(firsts.map(async function(first, user) {
+				return(await confirmedStaple([await sendFrom(network, user, first.hash, 7n)], network.representatives));
+			})));
+			const applying = requireAt(seconds, failing);
+			for (const staple of seconds) {
+				expect(await node.ledger.add(staple)).toEqual([]);
+			}
+			for (const first of firsts) {
+				await node.ledger.add(await confirmedStaple([first], network.representatives));
+			}
+			afterPersisting(storage, seconds.slice(0, failing), function(blocksHash): void {
+				advanceClock(61_000);
+				throw(new Error(`injected slow failure after persisting ${blocksHash}`));
+			});
+
+			const reported: boolean[] = [];
+			let appliedIn: number | undefined;
+			for (let call = 1; call <= 3 * failing + 3 && reported.at(-1) !== false; call++) {
+				reported.push(await node.ledger.gc(2000));
+				if (appliedIn === undefined && await node.ledger.getBlock(requireAt(applying.blocks, 0).hash, 'main') !== null) {
+					appliedIn = call;
+				}
+			}
+
+			expect(appliedIn).toBeDefined();
+			expect(appliedIn ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(failing + 1);
+			expect(reported.at(-1)).toBe(false);
 		});
 
 		test('a gc retry that fails after its write leaves nothing behind and stays deferred', async function() {
