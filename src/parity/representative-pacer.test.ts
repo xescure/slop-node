@@ -240,4 +240,17 @@ describe('the representatives\' pacer', function() {
 		third.release();
 		await Promise.all(answers);
 	});
+
+	test('counts no internal failure that names no code of the API toward stepping back up', async function() {
+		const pacer = new RepresentativePacer({ concurrency: 4, gapMilliseconds: 0 }, fakeClock());
+		const failure = served({ status: 500, body: { error: true, message: 'Internal error occurred (error ID: 1)' } });
+		await pacer.paced(REP, RUNNING, served({ status: 502, body: '' }));
+		await pacer.paced(REP, RUNNING, served({ status: 502, body: '' }));
+		for (let round = 0; round < 10; round++) {
+			await pacer.paced(REP, RUNNING, failure);
+			await pacer.paced(REP, RUNNING, failure);
+			await pacer.paced(REP, RUNNING, served(OK));
+		}
+		expect(pacer.standing()).toEqual({ [REP]: { concurrency: 1, backedOff: 2 } });
+	});
 });

@@ -3,14 +3,20 @@ import { join } from 'node:path';
 import { assertNever } from '../util/assert-never.js';
 import { DEFAULT_CHECKSUM_GAP_MILLISECONDS } from './checksum.js';
 import { defaultFollowerDirectory, optionsOf, setting } from './follower-config.js';
+import { DIVERGENCE_CLASSES } from './log.js';
+import type { DivergenceClass } from './log.js';
 import { DEFAULT_REPRESENTATIVE_PACING } from './representative-pacer.js';
 import type { RepresentativePacing } from './representative-pacer.js';
+import { stratumOf } from './strata.js';
+import type { Stratum } from './strata.js';
 
 export type ParityCommand =
 	| { readonly kind: 'checksum'; readonly directory: string; readonly gapMilliseconds: number; readonly pacing: RepresentativePacing }
 	| { readonly kind: 'sweep'; readonly directory: string; readonly accounts: number; readonly toLapEnd: boolean; readonly pacing: RepresentativePacing }
 	| { readonly kind: 'recheck'; readonly directory: string; readonly pacing: RepresentativePacing }
 	| { readonly kind: 'api-diff'; readonly directory: string; readonly samplesPerStratum: number; readonly seed: string | undefined; readonly pacing: RepresentativePacing }
+	/** Records the triage of an API divergence of a state that moved on, which closes it. */
+	| { readonly kind: 'explain'; readonly directory: string; readonly stratum: Stratum; readonly path: string; readonly divergenceAt: string; readonly divergence: DivergenceClass; readonly reference: string }
 	| { readonly kind: 'shadow'; readonly directory: string; readonly base: string | undefined; readonly informationalEvery: number; readonly batchStaples: number; readonly restart: boolean }
 	| {
 		readonly kind: 'report';
@@ -32,8 +38,8 @@ export const DEFAULT_REPORT_SAMPLE_ACCOUNTS = 16;
 /** The fresh sample of passive accounts of a report: one request's worth for each representative. */
 export const DEFAULT_REPORT_PASSIVE_SAMPLE_ACCOUNTS = 400;
 
-/** Requests of each stratum an API diff compares: by the rule of three, a divergence rate below 6% at 95% for each. */
-export const DEFAULT_API_SAMPLES = 50;
+/** Requests of each stratum an API diff compares: the done criterion, by the rule of three a divergence rate below 1% at 95% for each, so that a run records its plan. */
+export const DEFAULT_API_SAMPLES = 300;
 
 /**
  * One in so many staples voted for before the scoped window is put to a
@@ -101,6 +107,9 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 			valued = ['--directory', '--base', '--informational-every', '--batch'];
 			flags = ['--restart'];
 			break;
+		case 'explain':
+			valued = ['--directory', '--stratum', '--path', '--at', '--class', '--reference'];
+			break;
 		case 'report':
 			valued = ['--directory', '--sample', '--passive-sample', '--api-samples', '--gap-ms', ...PACING_OPTIONS];
 			flags = ['--log-only'];
@@ -138,6 +147,19 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 		}
 		case 'recheck':
 			return({ kind: name, directory, pacing });
+		case 'explain': {
+			const stratum = stratumOf(options.get('--stratum'));
+			const divergence = DIVERGENCE_CLASSES.find(function(known): boolean {
+				return(known === options.get('--class'));
+			});
+			const path = options.get('--path');
+			const divergenceAt = options.get('--at');
+			const reference = options.get('--reference');
+			if (stratum === undefined || divergence === undefined || path === undefined || divergenceAt === undefined || reference === undefined) {
+				return(undefined);
+			}
+			return({ kind: name, directory, stratum, path, divergenceAt, divergence, reference });
+		}
 		case 'api-diff': {
 			const samplesPerStratum = setting(options, '--samples', Number.MAX_SAFE_INTEGER, DEFAULT_API_SAMPLES);
 			if (samplesPerStratum === undefined) {

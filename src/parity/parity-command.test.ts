@@ -19,7 +19,7 @@ describe('the parity command line', function() {
 		expect(parseParityCommand(['shadow', '--base', 'follower_snapshot_20261010061500', '--informational-every', '1', '--batch', '50', '--restart'], HOME)).toEqual({ kind: 'shadow', directory: DIRECTORY, base: 'follower_snapshot_20261010061500', informationalEvery: 1, batchStaples: 50, restart: true });
 		expect(parseParityCommand(['shadow', '--base', 'follower; DROP DATABASE follower'], HOME)).toBeUndefined();
 		expect(parseParityCommand(['shadow', '--informational-every', '0'], HOME)).toBeUndefined();
-		expect(parseParityCommand(['api-diff'], HOME)).toEqual({ kind: 'api-diff', directory: DIRECTORY, samplesPerStratum: 50, seed: undefined, pacing: PACING });
+		expect(parseParityCommand(['api-diff'], HOME)).toEqual({ kind: 'api-diff', directory: DIRECTORY, samplesPerStratum: 300, seed: undefined, pacing: PACING });
 		expect(parseParityCommand(['report'], HOME)).toEqual({ kind: 'report', directory: DIRECTORY, sampleAccounts: 16, passiveSampleAccounts: 400, apiSamples: 2, gapMilliseconds: 10_000, logOnly: false, pacing: PACING });
 	});
 
@@ -31,6 +31,14 @@ describe('the parity command line', function() {
 		expect(parseParityCommand(['sweep', '--lap', '--rep-concurrency', '2', '--rep-gap-ms', '1000'], HOME)).toMatchObject({ kind: 'sweep', pacing: { concurrency: 2, gapMilliseconds: 1000 } });
 		expect(parseParityCommand(['recheck', '--rep-gap-ms', '0'], HOME)).toMatchObject({ pacing: PACING });
 		expect(parseParityCommand(['api-diff', '--samples', '300', '--seed', 'run-1'], HOME)).toEqual({ kind: 'api-diff', directory: DIRECTORY, samplesPerStratum: 300, seed: 'run-1', pacing: PACING });
+	});
+
+	test('names a triage of an API divergence with every part of it', function() {
+		const path = '/node/ledger/account/keeta_x/history?limit=1';
+		expect(parseParityCommand(['explain', '--stratum', 'token', '--path', path, '--at', '2026-10-09T08:40:27.413Z', '--class', 'our-bug', '--reference', 'fixed by e27cc4e'], HOME)).toEqual({ kind: 'explain', directory: DIRECTORY, stratum: 'token', path, divergenceAt: '2026-10-09T08:40:27.413Z', divergence: 'our-bug', reference: 'fixed by e27cc4e' });
+		expect(parseParityCommand(['explain', '--stratum', 'token', '--path', path, '--at', '2026-10-09T08:40:27.413Z', '--class', 'our-bug'], HOME)).toBeUndefined();
+		expect(parseParityCommand(['explain', '--stratum', 'tokens', '--path', path, '--at', '2026-10-09T08:40:27.413Z', '--class', 'our-bug', '--reference', 'x'], HOME)).toBeUndefined();
+		expect(parseParityCommand(['explain', '--stratum', 'token', '--path', path, '--at', '2026-10-09T08:40:27.413Z', '--class', 'a-guess', '--reference', 'x'], HOME)).toBeUndefined();
 	});
 
 	test('refuses what it does not understand', function() {

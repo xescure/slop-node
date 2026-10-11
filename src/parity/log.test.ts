@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import { ParityLog, parityLogPath } from './log.js';
-import type { APIDiffPlanRecord, APIDiffRecord, BlockCountRecord, ChecksumRecord, CrossCheckRecord, ParityRecord, ShadowRunRecord, SweepBatchRecord, SweepRecord } from './log.js';
+import type { APIDiffExplainedRecord, APIDiffPlanRecord, APIDiffRecord, BlockCountRecord, ChecksumRecord, CrossCheckRecord, ParityRecord, ShadowRunRecord, SweepBatchRecord, SweepRecord } from './log.js';
 
 const REPRESENTATIVE = 'https://rep1.example/api';
 const ACCOUNT = 'keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai';
@@ -113,6 +113,16 @@ const API_DIFF_PLAN: APIDiffPlanRecord = {
 	]
 };
 
+const API_DIFF_EXPLAINED: APIDiffExplainedRecord = {
+	kind: 'api-diff-explained',
+	at: CHECKSUM.at,
+	stratum: 'token',
+	path: `/node/ledger/account/${ACCOUNT}`,
+	divergenceAt: '2026-10-09T08:40:27.413Z',
+	divergence: 'our-bug',
+	reference: 'fixed by e27cc4e, with the history reindexed by 8ccbb10 (schema/CONTRACT.md, D18)'
+};
+
 const directories: string[] = [];
 
 async function scratchLog(): Promise<ParityLog> {
@@ -134,7 +144,7 @@ describe('the parity log', function() {
 
 	test('reads back every kind of record it was given, in order', async function() {
 		const log = await scratchLog();
-		const records: readonly ParityRecord[] = [CHECKSUM, ...SWEEPS, ...SWEEP_BATCHES, FAILED_CHECKSUM, ...CROSS_CHECKS, BLOCK_COUNT, SHADOW_RUN, ...API_DIFFS, API_DIFF_PLAN];
+		const records: readonly ParityRecord[] = [CHECKSUM, ...SWEEPS, ...SWEEP_BATCHES, FAILED_CHECKSUM, ...CROSS_CHECKS, BLOCK_COUNT, SHADOW_RUN, ...API_DIFFS, API_DIFF_PLAN, API_DIFF_EXPLAINED];
 		await log.append(records.slice(0, 2));
 		await log.append(records.slice(2));
 

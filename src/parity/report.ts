@@ -1,13 +1,13 @@
 import { assertNever } from '../util/assert-never.js';
 import { API_DIFF_SAMPLES_TARGET, keyOf, requestStandings, sampleAPI, standingCensuses } from './api-diff.js';
-import type { RequestStanding, SupersededDivergence } from './api-diff.js';
+import type { ExplainedDivergence, RequestStanding, SupersededDivergence } from './api-diff.js';
 import type { APIDiffSetup } from './api-diff.js';
 import type { APISource } from './api-source.js';
 import { checksumsEqual, compareChecksums, crossCheckChecksum } from './checksum.js';
 import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-store.js';
 import { SHADOW_REFUSAL_REASONS, SHADOW_REFUSAL_RELEASES } from '../conformance/mainnet/shadow.js';
 import type { ShadowRefusalReason } from '../conformance/mainnet/shadow.js';
-import type { APIDiffPlanRecord, APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, ShadowBase, ShadowRunCost, ShadowRunRecord, ShadowTarget, ShadowWindowTally, SweepBatchRecord, SweepCursor, SweepOutcome, SweepPointer, SweepRecord, SweepWalk } from './log.js';
+import type { APIDiffExplainedRecord, APIDiffPlanRecord, APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, ShadowBase, ShadowRunCost, ShadowRunRecord, ShadowTarget, ShadowWindowTally, SweepBatchRecord, SweepCursor, SweepOutcome, SweepPointer, SweepRecord, SweepWalk } from './log.js';
 import { STRATA } from './strata.js';
 import type { Stratum } from './strata.js';
 import { readSweepCursor, sweepAccounts } from './sweep.js';
@@ -225,12 +225,16 @@ export type APIDiffStratum = {
 	/** Requests one representative alone answered apart from the follower and the others. */
 	readonly representativeLocal: number;
 	readonly census: APIDiffCensus | null;
-	/** Whether so many requests were compared as the done criterion asks, or the census is complete. */
+	/** Requests never compared, by their route and why their latest attempt was not. */
+	readonly skippedByRoute: Readonly<Record<string, { readonly moving: number; readonly unanswered: number }>>;
+	/** Routes of the stratum attempted and never compared, which its samples leave out. */
+	readonly routesNeverCompared: readonly string[];
+	/** Whether so many requests were compared as the done criterion asks, or the census is complete, and no route attempted was left out. */
 	readonly covered: boolean;
 	readonly confidence: ConfidenceBound;
 };
 
-export type { SupersededDivergence };
+export type { ExplainedDivergence, SupersededDivergence };
 
 export type APIDiffSignal = {
 	readonly verdict: Verdict;
@@ -249,6 +253,8 @@ export type APIDiffSignal = {
 		readonly divergenceRecords: number;
 		/** Divergences a later comparison of the identical request settled, the follower answering as the representative then did. */
 		readonly superseded: number;
+		/** Divergences a triage record explains. */
+		readonly explained: number;
 	};
 	/** Requests compared per stratum for its rate of divergence to be below 1% at 95%, by the rule of three. */
 	readonly samplesTarget: number;
@@ -256,6 +262,8 @@ export type APIDiffSignal = {
 	/** The requests whose latest comparison found one representative alone apart, by that representative. */
 	readonly representativeLocal: Readonly<Record<string, number>>;
 	readonly superseded: readonly SupersededDivergence[];
+	/** Divergences of a state that moved on, closed by a triage record that names their class and fix. */
+	readonly explained: readonly ExplainedDivergence[];
 	/** Open divergences whose request a later comparison answered on another state, which settles nothing; each with that comparison. */
 	readonly retestedOnAnotherState: readonly { readonly divergence: APIDiffRecord; readonly by: APIDiffRecord }[];
 	/** Answers of a kind the capture set holds none of, each with a request that drew it, to be captured. */
@@ -789,16 +797,33 @@ function confidenceOf(compared: number, diverged: number, unit: string): Confide
 	return({ kind: 'rule-of-three', samples: compared, level: 0.95, divergenceRateBelow: RULE_OF_THREE / compared });
 }
 
-function apiDiffStratumOf(stratum: Stratum, standings: readonly RequestStanding[], census: { readonly plan: APIDiffPlanRecord; readonly requests: readonly string[] } | undefined, compared: ReadonlySet<string>): APIDiffStratum {
+type RouteSkips = Record<string, { moving: number; unanswered: number }>;
+
+function apiDiffStratumOf(stratum: Stratum, standings: readonly RequestStanding[], attempts: readonly APIDiffRecord[], census: { readonly plan: APIDiffPlanRecord; readonly requests: readonly string[] } | undefined, compared: ReadonlySet<string>): APIDiffStratum {
 	const own = standings.filter(function({ latest }): boolean {
 		return(latest.stratum === stratum);
 	});
 	const diverged = own.filter(function({ open }): boolean {
-		return(open !== undefined);
+		return(open.length > 0);
 	}).length;
 	const representativeLocal = own.filter(function({ latest, open }): boolean {
-		return(open === undefined && latest.outcome.kind === 'representative-local');
+		return(open.length === 0 && latest.outcome.kind === 'representative-local');
 	}).length;
+	const skippedByRoute: RouteSkips = {};
+	const comparedRoutes = new Set(own.map(function({ latest }): string {
+		return(latest.route);
+	}));
+	for (const attempt of attempts) {
+		if (attempt.stratum !== stratum || compared.has(keyOf(attempt.stratum, attempt.path)) || attempt.outcome.kind !== 'skipped') {
+			continue;
+		}
+		const skips = skippedByRoute[attempt.route] ?? { moving: 0, unanswered: 0 };
+		skips[attempt.outcome.reason]++;
+		skippedByRoute[attempt.route] = skips;
+	}
+	const routesNeverCompared = Object.keys(skippedByRoute).filter(function(route): boolean {
+		return(!comparedRoutes.has(route));
+	}).sort();
 	let standingCensus: APIDiffCensus | null = null;
 	if (census !== undefined) {
 		standingCensus = {
@@ -817,7 +842,8 @@ function apiDiffStratumOf(stratum: Stratum, standings: readonly RequestStanding[
 			confidence = { kind: 'empty-population' };
 		}
 	}
-	return({ stratum, requestsCompared: own.length, diverged, representativeLocal, census: standingCensus, covered: censusComplete || own.length >= API_DIFF_SAMPLES_TARGET, confidence });
+	const sampled = censusComplete || own.length >= API_DIFF_SAMPLES_TARGET;
+	return({ stratum, requestsCompared: own.length, diverged, representativeLocal, census: standingCensus, skippedByRoute, routesNeverCompared, covered: sampled && routesNeverCompared.length === 0, confidence });
 }
 
 /**
@@ -825,12 +851,12 @@ function apiDiffStratumOf(stratum: Stratum, standings: readonly RequestStanding[
  * again on a later run is one sample, and the rule of three bounds each
  * stratum's rate of divergence over its distinct requests. A divergence
  * fails until a later comparison of the identical request finds the
- * follower answering as the representative answered then; one of a state
- * either side reached since settles nothing. A settled divergence is
- * listed with the comparison that settled it, so that it stays to be
- * explained.
+ * follower answering as the representative answered then, or a triage
+ * record explains it; one of a state either side reached since settles
+ * nothing. A settled or explained divergence is listed with what settled
+ * or explains it, so that it stays to be read.
  */
-function apiDiffSignalOf(records: readonly APIDiffRecord[], plans: readonly APIDiffPlanRecord[], knownBehaviors: ReadonlySet<string>): APIDiffSignal {
+function apiDiffSignalOf(records: readonly APIDiffRecord[], plans: readonly APIDiffPlanRecord[], explanations: readonly APIDiffExplainedRecord[], knownBehaviors: ReadonlySet<string>): APIDiffSignal {
 	const attempted = new Map<string, APIDiffRecord>();
 	const newBehaviors = new Map<string, string>();
 	for (const record of records) {
@@ -844,17 +870,19 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], plans: readonly APID
 			}
 		}
 	}
-	const standingsByKey = requestStandings(records);
+	const standingsByKey = requestStandings(records, explanations);
 	const standings = [...standingsByKey.values()];
 	const compared = new Set(standingsByKey.keys());
-	const open = standings.flatMap(function(standing): APIDiffRecord[] {
-		if (standing.open === undefined) {
-			return([]);
-		}
-		return([standing.open]);
+	const open = standings.flatMap(function(standing): readonly APIDiffRecord[] {
+		return(standing.open.map(function({ divergence }): APIDiffRecord {
+			return(divergence);
+		}));
 	});
-	const local = standings.filter(function({ latest, open: divergence }): boolean {
-		return(divergence === undefined && latest.outcome.kind === 'representative-local');
+	const diverging = standings.filter(function(standing): boolean {
+		return(standing.open.length > 0);
+	});
+	const local = standings.filter(function({ latest, open: divergences }): boolean {
+		return(divergences.length === 0 && latest.outcome.kind === 'representative-local');
 	});
 	const representativeLocal: Record<string, number> = {};
 	for (const { latest } of local) {
@@ -863,11 +891,16 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], plans: readonly APID
 	const superseded = standings.flatMap(function(standing): readonly SupersededDivergence[] {
 		return(standing.superseded);
 	});
+	const explained = standings.flatMap(function(standing): readonly ExplainedDivergence[] {
+		return(standing.explained);
+	});
 	const retestedOnAnotherState = standings.flatMap(function(standing): { readonly divergence: APIDiffRecord; readonly by: APIDiffRecord }[] {
-		if (standing.open === undefined || standing.retested === undefined) {
-			return([]);
-		}
-		return([{ divergence: standing.open, by: standing.retested }]);
+		return(standing.open.flatMap(function({ divergence, retestedBy }): { readonly divergence: APIDiffRecord; readonly by: APIDiffRecord }[] {
+			if (retestedBy === undefined) {
+				return([]);
+			}
+			return([{ divergence, by: retestedBy }]);
+		}));
 	});
 	let skippedMoving = 0;
 	let unanswered = 0;
@@ -886,24 +919,28 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], plans: readonly APID
 				assertNever(record.outcome);
 		}
 	}
-	const censuses = standingCensuses(plans, compared);
+	const latestAttempts = [...attempted.values()];
+	const censuses = standingCensuses(plans);
 	const strata = STRATA.map(function(stratum): APIDiffStratum {
-		return(apiDiffStratumOf(stratum, standings, censuses.get(stratum), compared));
+		return(apiDiffStratumOf(stratum, standings, latestAttempts, censuses.get(stratum), compared));
 	});
 	const counts = {
 		requestsCompared: standings.length,
-		matched: standings.length - open.length - local.length,
-		diverged: open.length,
+		matched: standings.length - diverging.length - local.length,
+		diverged: diverging.length,
 		skippedMoving,
 		unanswered,
-		unresolved: open.filter(function(record): boolean {
-			return(record.outcome.kind === 'unresolved');
+		unresolved: diverging.filter(function(standing): boolean {
+			return(standing.open.some(function({ divergence }): boolean {
+				return(divergence.outcome.kind === 'unresolved');
+			}));
 		}).length,
 		representativeLocal: local.length,
 		divergenceRecords: records.filter(function(record): boolean {
 			return(record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved');
 		}).length,
-		superseded: superseded.length
+		superseded: superseded.length,
+		explained: explained.length
 	};
 	const behaviors = [...newBehaviors].map(function([behavior, path]) {
 		return({ behavior, path });
@@ -915,6 +952,7 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], plans: readonly APID
 		}),
 		representativeLocal,
 		superseded,
+		explained,
 		retestedOnAnotherState
 	};
 	const [first] = [...open].sort(function(left, right): number {
@@ -1029,7 +1067,7 @@ export function parityReportOf(input: ReportInput): ParityReport {
 		signals: {
 			checksum: checksumSignalOf(records),
 			sweep: sweepSignalOf(records, input.sweep),
-			apiDiff: apiDiffSignalOf(recordsOf(records, 'api-diff'), recordsOf(records, 'api-diff-plan'), input.knownBehaviors),
+			apiDiff: apiDiffSignalOf(recordsOf(records, 'api-diff'), recordsOf(records, 'api-diff-plan'), recordsOf(records, 'api-diff-explained'), input.knownBehaviors),
 			shadowVotes: shadowVotesSignalOf(recordsOf(records, 'shadow-run'))
 		}
 	});

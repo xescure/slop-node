@@ -8,7 +8,7 @@ import pg from 'pg';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
 import { assertNever } from '../util/assert-never.js';
-import { capturedBehaviors, recheckAPIDivergences, sampleAPI } from './api-diff.js';
+import { capturedBehaviors, explainDivergence, recheckAPIDivergences, sampleAPI } from './api-diff.js';
 import { httpSource, pacedSource } from './api-source.js';
 import type { APISource } from './api-source.js';
 import { compareChecksums, crossCheckChecksum } from './checksum.js';
@@ -40,7 +40,7 @@ const WALL_CLOCK: PacerClock = {
 
 /** The shadow votes send no request, so they take the pacing they never use. */
 function pacingOf(command: ParityCommand): RepresentativePacing {
-	if (command.kind === 'shadow') {
+	if (command.kind === 'shadow' || command.kind === 'explain') {
 		return(DEFAULT_REPRESENTATIVE_PACING);
 	}
 	return(command.pacing);
@@ -74,7 +74,8 @@ const USAGE = [
 	'            follower and to a representative, and compare the answers, stratum by stratum; a stratum',
 	'            with fewer requests than --samples in all is a census, each of its requests sent; answers',
 	'            that differ are sent again to every other representative and judged as the sweep judges',
-	'            --samples <n>      how many requests of each stratum to compare (50)',
+	'            --samples <n>      how many requests of each stratum to compare (300, the done criterion; fewer',
+	'                               reads a bounded part of the blocks and records no plan)',
 	'            --seed <text>      fixes which requests are drawn (the time of the run)',
 	'  shadow    replay the follower\'s main staples, in the order its ledger added them, into an offline',
 	'            ledger in a database of the follower\'s cluster (follower_shadow), and before each is added,',
@@ -87,6 +88,9 @@ const USAGE = [
 	'            --informational-every <n>  vote on one in n staples voted for before the scope (10)',
 	'            --batch <n>                staples replayed between two saves of the standing (500)',
 	'            --restart                  drop the offline ledger and the standing, and start again',
+	'  explain   record the triage of an open API divergence of a state that has moved on, which closes it:',
+	'            --stratum <stratum> --path <path> --at <moment the divergence was recorded>',
+	'            --class our-bug|upstream-version|operational-artifact --reference <fixing change or document section>',
 	'  report    check the checksum and compare a sweep sample and an API diff sample, then print the',
 	'            parity report as JSON, with the latest shadow-vote run from the log; exits 1 when a signal fails',
 	'            --sample <n>       how many chain accounts the sweep sample compares (16)',
@@ -382,6 +386,12 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 		}
 		case 'shadow':
 			return(await shadow(command, tools.directory, tools));
+		case 'explain': {
+			const { stratum, path, divergenceAt, divergence, reference } = command;
+			const explained = await explainDivergence(tools.log, { stratum, path, divergenceAt, divergence, reference });
+			process.stdout.write(`${JSON.stringify(explained, null, '\t')}\n`);
+			return(0);
+		}
 		case 'report': {
 			if (command.logOnly) {
 				const report = await reportOnLog({ ...tools, knownBehaviors: await capturedBehaviors(fileURLToPath(CAPTURE_DIRECTORY)) });
@@ -410,15 +420,15 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 }
 
 /**
- * The shadow run sends no request, and a report on the log alone only
- * reads, so neither takes the lock that keeps the representatives' pace
- * across the tools that do.
+ * The shadow run sends no request, a report on the log alone only reads,
+ * and a triage appends one line to it, so none takes the lock that keeps
+ * the representatives' pace across the tools that do.
  */
 async function lockFor(command: ParityCommand, directory: string): Promise<() => Promise<void>> {
 	if (command.kind === 'shadow') {
 		return(await lockParity(directory, process.pid, SHADOW_LOCK_FILE));
 	}
-	if (command.kind === 'report' && command.logOnly) {
+	if ((command.kind === 'report' && command.logOnly) || command.kind === 'explain') {
 		return(function(): Promise<void> {
 			return(Promise.resolve());
 		});

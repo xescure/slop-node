@@ -6,7 +6,7 @@ import { startFakeAPI } from '../testing/fake-api.js';
 import { httpSource } from './api-source.js';
 import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-store.js';
 import { ParityLog } from './log.js';
-import type { APIDiffOutcome, APIDiffPlanRecord, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, ShadowRunRecord, ShadowWindowTally, SweepBatchRecord, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
+import type { APIDiffExplainedRecord, APIDiffOutcome, APIDiffPlanRecord, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, ShadowRunRecord, ShadowWindowTally, SweepBatchRecord, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
 import { answerDigest } from './api-diff.js';
 import { parityReportOf, runParity, neverComparedCandidatesOf } from './report.js';
 import type { SweepPosition } from './report.js';
@@ -196,7 +196,7 @@ describe('the parity report', function() {
 		});
 		expect(signal.strata.find(function(stratum) {
 			return(stratum.stratum === 'token');
-		})).toEqual({ stratum: 'token', requestsCompared: 2, diverged: 0, representativeLocal: 0, census: null, covered: false, confidence: { kind: 'rule-of-three', samples: 2, level: 0.95, divergenceRateBelow: 1.5 } });
+		})).toEqual({ stratum: 'token', requestsCompared: 2, diverged: 0, representativeLocal: 0, census: null, skippedByRoute: {}, routesNeverCompared: [], covered: false, confidence: { kind: 'rule-of-three', samples: 2, level: 0.95, divergenceRateBelow: 1.5 } });
 		expect(signal.strata.find(function(stratum) {
 			return(stratum.stratum === 'storage');
 		})).toMatchObject({ requestsCompared: 0, confidence: { kind: 'none' } });
@@ -226,6 +226,25 @@ describe('the parity report', function() {
 		const signal = report([divergence, later]).signals.apiDiff;
 		expect(signal).toMatchObject({ verdict: 'fail', counts: { diverged: 1, superseded: 0 }, superseded: [], retestedOnAnotherState: [{ divergence, by: later }], firstDivergence: { at: divergence.at, path } });
 		expect(report([divergence, apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'match', digest: null })]).signals.apiDiff.verdict).toBe('fail');
+	});
+
+	test('lists apart a divergence a triage record explains, which then fails nothing', function() {
+		const path = `/node/ledger/account/${ACCOUNT}`;
+		const divergence = apiDiff('2026-10-09T08:40:25.000Z', 'token', path, DIVERGED_INFO);
+		const explanation: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: '2026-10-11T17:00:00.000Z', stratum: 'token', path, divergenceAt: divergence.at, divergence: 'our-bug', reference: 'fixed by 0000000' };
+		const signal = report([divergence, apiDiff('2026-10-11T15:00:00.000Z', 'token', path, MATCHED), explanation]).signals.apiDiff;
+		expect(signal).toMatchObject({ verdict: 'pass', counts: { diverged: 0, explained: 1, superseded: 0 }, explained: [{ divergence, explanation }], retestedOnAnotherState: [], firstDivergence: null });
+	});
+
+	test('leaves a stratum uncovered while a route of it was attempted and never compared, counting its requests skipped by route', function() {
+		const compared = Array.from({ length: 300 }, function(_, index) {
+			return(apiDiff('2026-10-11T14:01:00.000Z', 'token', `/node/ledger/account/${ACCOUNT}/history/start/${index.toString(16).padStart(64, '0')}`, MATCHED));
+		});
+		const skipped: APIDiffRecord = { ...apiDiff('2026-10-11T14:02:00.000Z', 'token', `/node/ledger/account/${ACCOUNT}/pending`, { kind: 'skipped', reason: 'unanswered', detail: 'fetch failed' }), route: '/api/node/ledger/account/{account}/pending' };
+		const stratum = report([...compared, skipped]).signals.apiDiff.strata.find(function(entry) {
+			return(entry.stratum === 'token');
+		});
+		expect(stratum).toMatchObject({ requestsCompared: 300, skippedByRoute: { '/api/node/ledger/account/{account}/pending': { moving: 0, unanswered: 1 } }, routesNeverCompared: ['/api/node/ledger/account/{account}/pending'], covered: false });
 	});
 
 	test('fails the API diff on an unresolved request, but counts one representative\'s own difference apart without failing', function() {

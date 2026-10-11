@@ -8,13 +8,13 @@ import type { TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js'
 import { loadMainnetFixture } from '../conformance/mainnet/fixture.js';
 import { feeBlock, multisigSendBlock, sendBlock, setRepresentativeBlock } from '../testing/blocks.js';
 import { startFakeAPI } from '../testing/fake-api.js';
-import type { FakeAPI } from '../testing/fake-api.js';
-import { accountRequests, answerDigest, API_DIFF_SAMPLES_TARGET, behaviorsOf, blockRequests, capturedBehaviors, GET_ROUTES, getRoutesOf, operationsOf, recheckAPIDivergences, routeOf, sampleAPI, shuffled } from './api-diff.js';
+import type { FakeAnswer, FakeAPI } from '../testing/fake-api.js';
+import { accountRequests, answerDigest, API_DIFF_SAMPLES_TARGET, explainDivergence, requestStandings, standingCensuses, behaviorsOf, blockRequests, capturedBehaviors, GET_ROUTES, getRoutesOf, operationsOf, recheckAPIDivergences, routeOf, sampleAPI, shuffled } from './api-diff.js';
 import type { APIDiffStore } from './api-diff.js';
 import { httpSource } from './api-source.js';
 import type { AccountCandidate, AccountKind, FollowerProgress, HeldBlock } from './follower-store.js';
 import { ParityLog } from './log.js';
-import type { APIDiffOutcome, APIDiffPlanRecord, APIDiffRecord } from './log.js';
+import type { APIDiffExplainedRecord, APIDiffOutcome, APIDiffPlanRecord, APIDiffRecord } from './log.js';
 import { recordsOf } from './report.js';
 import { OPERATION_NAMES } from './strata.js';
 
@@ -232,11 +232,11 @@ describe('sampling the API', function() {
 		const { summary, records } = await sample(setup, memoryStore({ candidates: { token: [CANDIDATE] } }), 100);
 
 		expect(byPath(records, `/node/ledger/account/${TOKEN}`)?.outcome).toMatchObject({ kind: 'match' });
-		expect(byPath(records, `/node/ledger/account/${TOKEN}/head`)?.outcome).toMatchObject({ kind: 'match' });
+		expect(byPath(records, `/node/ledger/account/${TOKEN}/head`)?.outcome).toMatchObject({ kind: 'skipped', reason: 'unanswered' });
 		expect(byPath(records, `/node/ledger/account/${TOKEN}/balance`)?.outcome).toMatchObject({ kind: 'diverged', field: 'body.balances[0].balance', follower: { status: 200 }, representative: { status: 200 } });
 		expect(summary.strata.find(function(stratum) {
 			return(stratum.stratum === 'token');
-		})).toMatchObject({ compared: records.length, diverged: 1 });
+		})).toMatchObject({ compared: records.length - 1, diverged: 1, skipped: 1 });
 		// Only GETs, and the representative is asked about the account's history once for the whole run.
 		expect(setup.representative.requests.filter(function(request) {
 			return(request.endsWith('/history?limit=1'));
@@ -278,7 +278,7 @@ describe('sampling the API', function() {
 		expect(byPath(records, `/node/ledger/account/${TOKEN}/acl`)?.outcome).toMatchObject({ kind: 'skipped', reason: 'moving', side: 'representative' });
 	});
 
-	test('compares an internal failure the follower answers twice with a different error ID as one answer, which a node serves anew for each request', async function() {
+	test('compares an internal failure the follower answers twice with a different error ID as one answer, which a node serves anew for each request, but counts one both answer as no answer', async function() {
 		const setup = await running();
 		setup.representative.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, QUIET_HISTORY);
 		const failure = function(id: string) {
@@ -291,7 +291,8 @@ describe('sampling the API', function() {
 
 		const { records } = await sample(setup, memoryStore({ candidates: { token: [CANDIDATE] } }), 100);
 
-		expect(byPath(records, `/node/ledger/account/${TOKEN}/head`)?.outcome).toMatchObject({ kind: 'match' });
+		// Two internal failures that name no code of the API may have any two causes, so they show nothing alike.
+		expect(byPath(records, `/node/ledger/account/${TOKEN}/head`)?.outcome).toMatchObject({ kind: 'skipped', reason: 'unanswered' });
 		expect(byPath(records, `/node/ledger/account/${TOKEN}`)?.outcome).toMatchObject({ kind: 'diverged', field: 'body.account' });
 	});
 
@@ -455,6 +456,26 @@ describe('a divergence of the API', function() {
 		expect(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({}) })).toEqual({ unresolved: 1 });
 	});
 
+	test('of a page of history the representative failed to serve is sent again later, unless most representatives fail alike', async function() {
+		const path = `/node/ledger/account/${TOKEN}/history/start/${'AB'.repeat(32)}?limit=1`;
+		const page = { status: 200, body: { history: [{ $id: 'CD'.repeat(32), voteStaple: { votes: [{ validityFrom: '2025-01-01T00:00:00.000Z' }] } }], nextKey: 'CD'.repeat(32) } };
+		const failure = { status: 500, body: { error: true, message: 'Internal error occurred (error ID: 00000000-0000-0000-0000-000000000001)' } };
+		const recheckWith = async function(others: readonly FakeAnswer[]) {
+			const setup = await runningWith(3);
+			setup.follower.answer(path, page);
+			setup.representatives.forEach(function(representative, index) {
+				representative.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, QUIET_HISTORY);
+				representative.answer(path, others[index - 1] ?? failure);
+			});
+			const first = setup.representatives[0]?.endpoint ?? '';
+			await setup.log.append([{ kind: 'api-diff', at: '2026-10-11T14:00:00.000Z', representative: first, stratum: 'token', route: '/api/node/ledger/account/{account}/history/start/{block}', path, behaviors: [], outcome: { ...RECORDED_DIVERGENCE, field: 'body.error' } }]);
+			return(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({}) }));
+		};
+
+		expect(await recheckWith([page, page])).toEqual({ skipped: 1 });
+		expect(await recheckWith([failure, failure])).toEqual({ diverged: 1 });
+	});
+
 	test('of a follower that fails is never one representative\'s own, even when others fail alike', async function() {
 		const setup = await runningWith(3);
 		const failure = { status: 500, body: { error: true, message: 'Internal error occurred (error ID: 00000000-0000-0000-0000-000000000001)' } };
@@ -523,7 +544,70 @@ describe('a divergence of the API', function() {
 	});
 });
 
+describe('where a request stands', function() {
+	const record = function(at: string, outcome: APIDiffOutcome): APIDiffRecord {
+		return({ kind: 'api-diff', at, representative: 'https://rep1.example/api', stratum: 'token', route: '/api/node/ledger/account/{account}/balance', path: BALANCE, behaviors: [], outcome });
+	};
+	const divergence = function(at: string, amount: string): APIDiffRecord {
+		return(record(at, { ...RECORDED_DIVERGENCE, representative: { status: 200, body: balanceOf(amount) } }));
+	};
+	const matching = function(at: string, amount: string): APIDiffRecord {
+		return(record(at, { kind: 'match', digest: answerDigest(BALANCE, { status: 200, body: balanceOf(amount) }) ?? null }));
+	};
+
+	test('keeps every divergence open that no comparison of its own state settled, though a later one of the request was settled', function() {
+		const first = divergence('2026-10-09T00:00:00.000Z', '0x2');
+		const second = divergence('2026-10-10T00:00:00.000Z', '0x3');
+		const settling = matching('2026-10-11T00:00:00.000Z', '0x3');
+
+		const standing = requestStandings([first, second, settling], []).get(`token ${BALANCE}`);
+
+		expect(standing?.open.map(function({ divergence: open }) {
+			return(open.at);
+		})).toEqual([first.at]);
+		expect(standing?.open[0]?.retestedBy).toEqual(settling);
+		expect(standing?.superseded).toEqual([{ divergence: second, by: settling }]);
+	});
+
+	test('closes a divergence a triage record explains, listing it apart', function() {
+		const open = divergence('2026-10-09T00:00:00.000Z', '0x2');
+		const explanation: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: '2026-10-11T00:00:00.000Z', stratum: 'token', path: BALANCE, divergenceAt: open.at, divergence: 'our-bug', reference: 'fixed by 0000000' };
+		const elsewhere: APIDiffExplainedRecord = { ...explanation, divergenceAt: '2026-10-08T00:00:00.000Z' };
+
+		const standing = requestStandings([open, matching('2026-10-10T00:00:00.000Z', '0x9')], [explanation, elsewhere]).get(`token ${BALANCE}`);
+
+		expect(standing?.open).toEqual([]);
+		expect(standing?.explained).toEqual([{ divergence: open, explanation }]);
+	});
+});
+
+describe('a triage of an API divergence', function() {
+	test('is recorded only for a divergence that is open, and closes it', async function() {
+		const setup = await runningWith(1);
+		const divergence: APIDiffRecord = { kind: 'api-diff', at: '2026-10-09T08:40:00.000Z', representative: 'https://rep1.example/api', stratum: 'token', route: '/api/node/ledger/account/{account}/balance', path: BALANCE, behaviors: [], outcome: RECORDED_DIVERGENCE };
+		await setup.log.append([divergence]);
+		const triage = { stratum: 'token', path: BALANCE, divergence: 'our-bug', reference: 'fixed by 0000000' } as const;
+
+		await expect(explainDivergence(setup.log, { ...triage, divergenceAt: '2026-10-08T00:00:00.000Z' })).rejects.toThrow('no open divergence');
+		const explained = await explainDivergence(setup.log, { ...triage, divergenceAt: divergence.at });
+		expect(explained).toMatchObject({ kind: 'api-diff-explained', ...triage, divergenceAt: divergence.at });
+		await expect(explainDivergence(setup.log, { ...triage, divergenceAt: divergence.at })).rejects.toThrow('no open divergence');
+		expect(recordsOf((await setup.log.read()).records, 'api-diff-explained')).toEqual([explained]);
+	});
+});
+
 describe('a census', function() {
+	test('stands on the latest plan that made one, whose grown population an older complete census does not cover', function() {
+		const plan = function(at: string, requests: readonly string[]): APIDiffPlanRecord {
+			return({ kind: 'api-diff-plan', at, quietBefore: at, samplesPerStratum: 300, strata: [{ stratum: 'multisig', population: { kind: 'census', requests } }] });
+		};
+		const older = plan('2026-10-11T14:00:00.000Z', ['/a']);
+		const grown = plan('2026-10-12T14:00:00.000Z', ['/a', '/b']);
+		const sampled: APIDiffPlanRecord = { ...grown, at: '2026-10-13T14:00:00.000Z', strata: [{ stratum: 'multisig', population: { kind: 'sample', drawn: 2, whole: false } }] };
+
+		expect(standingCensuses([older, grown, sampled]).get('multisig')).toEqual({ plan: grown, requests: ['/a', '/b'] });
+	});
+
 	test('is completed on recheck, each request of the latest plan\'s census not compared yet sent to the representative last tried, or the first', async function() {
 		const setup = await runningWith(2);
 		servingBalances(setup, '0x1', ['0x1', '0x1']);

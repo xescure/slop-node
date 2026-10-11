@@ -6,10 +6,10 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { normalizedAll } from '../conformance/api/normalize.js';
 import type { Normalization } from '../conformance/api/normalize.js';
 import { assertNever } from '../util/assert-never.js';
-import { answeredByAPI } from './api-source.js';
+import { answeredByAPI, isAnonymousFailure } from './api-source.js';
 import type { APIAnswer, APISource } from './api-source.js';
 import type { AccountCandidate, FollowerStore, HeldBlock } from './follower-store.js';
-import type { APIDiffOutcome, APIDiffPlanRecord, APIDiffReading, APIDiffRecord, ParityLog, ParityRecord, RepresentativeReading, StratumPopulation } from './log.js';
+import type { APIDiffExplainedRecord, APIDiffOutcome, APIDiffPlanRecord, APIDiffReading, APIDiffRecord, ParityLog, ParityRecord, RepresentativeReading, StratumPopulation } from './log.js';
 import { ACCOUNT_KINDS, OPERATION_NAMES, operationStratum, STRATA } from './strata.js';
 import type { OperationName, Stratum } from './strata.js';
 import { disputedKindOf, firstDifference, newestStapleOf, QUIET_MARGIN_MILLISECONDS } from './sweep.js';
@@ -606,19 +606,23 @@ const HISTORY_ROUTES: ReadonlySet<RoutePath> = new Set<RoutePath>(['/api/node/le
 
 const LAST_SUCCESS_STATUS = 299;
 
+function succeeded(answer: APIAnswer): boolean {
+	return(answer.status <= LAST_SUCCESS_STATUS);
+}
+
 /**
  * The difference in the terms of the sweep's rule (src/parity/sweep.ts),
  * which never counts one representative's own a follower that failed to
- * answer ("status"), nor a staple the follower may lack ("history"): a page
- * of history that differs may be one, which other representatives can hide
- * by listing a staple of their own first, ordering an account's history by
- * their own votes (conformance/API.md, Differences).
+ * answer ("status"), nor a staple the follower may lack ("history"): two
+ * pages of history that differ may show one, which other representatives
+ * can hide by listing a staple of their own first, ordering an account's
+ * history by their own votes (conformance/API.md, Differences).
  */
-function judgedField(route: RoutePath, followerAnswer: APIAnswer, field: string): string {
-	if (followerAnswer.status > LAST_SUCCESS_STATUS) {
+function judgedField(route: RoutePath, followerAnswer: APIAnswer, representativeAnswer: APIAnswer, field: string): string {
+	if (!succeeded(followerAnswer)) {
 		return('status');
 	}
-	if (HISTORY_ROUTES.has(route)) {
+	if (HISTORY_ROUTES.has(route) && succeeded(representativeAnswer)) {
 		return('history');
 	}
 	return(field);
@@ -676,6 +680,9 @@ async function compareRequest(request: SampledRequest, follower: APISource, repr
 		if (!isDeepStrictEqual(normalizedAnswer(request.route, followerBefore), normalizedAnswer(request.route, followerAfter))) {
 			return({ outcome: { kind: 'skipped', reason: 'moving', side: 'follower', detail: 'the follower changed its answer while it was compared' }, representativeAnswer });
 		}
+		if (isAnonymousFailure(followerAfter) && isAnonymousFailure(representativeAnswer)) {
+			return({ outcome: { kind: 'skipped', reason: 'unanswered', detail: 'both failed internally, naming no code of the API, which shows nothing alike' }, representativeAnswer: undefined });
+		}
 		field = firstDifference(normalizedAnswer(request.route, followerAfter), normalizedAnswer(request.route, representativeAnswer));
 		if (field === undefined) {
 			return({ outcome: { kind: 'match', digest: digestOf(request.route, followerAfter) }, representativeAnswer });
@@ -688,11 +695,20 @@ async function compareRequest(request: SampledRequest, follower: APISource, repr
 		return({ outcome: { kind: 'skipped', reason: 'unanswered', detail: messageOf(error) }, representativeAnswer: undefined });
 	}
 	const answered = followerAfter;
-	const judged = judgedField(request.route, answered, field);
+	const judged = judgedField(request.route, answered, representativeAnswer, field);
 	const readings = await Promise.all(others.map(function(other) {
 		return(readingOf(request, other, answered, judged, quiet));
 	}));
 	const kind = disputedKindOf(readings.map(judgedAsTheSweepDoes), judged);
+	/*
+	 * A representative failing to serve a page of history, which most others
+	 * serve as the follower does, is asked again later rather than counted
+	 * its own: the failure names no cause, and a page it does serve may show
+	 * a staple the follower lacks.
+	 */
+	if (HISTORY_ROUTES.has(request.route) && isAnonymousFailure(representativeAnswer) && kind !== 'diverged') {
+		return({ outcome: { kind: 'skipped', reason: 'unanswered', detail: `${representative.endpoint} failed internally, as most representatives did not` }, representativeAnswer: undefined });
+	}
 	return({ outcome: { kind, field, follower: followerAfter, representative: representativeAnswer, readings }, representativeAnswer });
 }
 
@@ -1012,13 +1028,19 @@ function followerDivergesOn(record: APIDiffRecord): boolean {
  * Whether a later comparison of the identical request settles the
  * divergence: the follower now answers, once normalized, what the
  * representative answered then. A later comparison of a state either side
- * reached since settles nothing about the state the divergence was about.
+ * reached since settles nothing about the state the divergence was about,
+ * nor does any later answer settle an internal failure that names no code
+ * of the API, which another such failure would equal whatever its cause.
  */
 export function supersedes(divergence: APIDiffRecord, later: APIDiffRecord): boolean {
 	if (divergence.outcome.kind !== 'diverged' && divergence.outcome.kind !== 'unresolved') {
 		return(false);
 	}
-	const then = answerDigest(divergence.path, divergence.outcome.representative);
+	const { representative } = divergence.outcome;
+	if (isAnswer(representative) && isAnonymousFailure(representative)) {
+		return(false);
+	}
+	const then = answerDigest(divergence.path, representative);
 	if (then === undefined) {
 		return(false);
 	}
@@ -1039,62 +1061,88 @@ export function supersedes(divergence: APIDiffRecord, later: APIDiffRecord): boo
 /** A divergence a later comparison of the identical request settled, and that comparison. */
 export type SupersededDivergence = { readonly divergence: APIDiffRecord; readonly by: APIDiffRecord };
 
+/** A divergence nothing settled or explained, which fails, with the latest comparison after it that was of another state. */
+export type OpenDivergence = { readonly divergence: APIDiffRecord; readonly retestedBy: APIDiffRecord | undefined };
+
+/** A divergence a triage record explains, and that record. */
+export type ExplainedDivergence = { readonly divergence: APIDiffRecord; readonly explanation: APIDiffExplainedRecord };
+
 /** Where a request stands after its comparisons. */
 export type RequestStanding = {
 	/** Its latest comparison. */
 	readonly latest: APIDiffRecord;
-	/** Its latest divergence that no later comparison settled, which fails until one does. */
-	readonly open: APIDiffRecord | undefined;
-	/** A comparison after the open divergence that settled nothing, as it was of another state. */
-	readonly retested: APIDiffRecord | undefined;
+	/** Every divergence of it that no comparison of its own state settled, and no triage explains. */
+	readonly open: readonly OpenDivergence[];
 	readonly superseded: readonly SupersededDivergence[];
+	readonly explained: readonly ExplainedDivergence[];
 };
 
-/** How each request compared stands, by its stratum and path, in the order requests were first compared. */
-export function requestStandings(records: readonly APIDiffRecord[]): ReadonlyMap<string, RequestStanding> {
-	const standings = new Map<string, RequestStanding>();
+/**
+ * How each request compared stands, by its stratum and path, in the order
+ * requests were first compared. Each divergence is settled only by a later
+ * comparison of its own state, so a divergence of a state that moved on
+ * stays open until a triage record explains it.
+ */
+export function requestStandings(records: readonly APIDiffRecord[], explanations: readonly APIDiffExplainedRecord[]): ReadonlyMap<string, RequestStanding> {
+	const standings = new Map<string, { latest: APIDiffRecord; open: OpenDivergence[]; superseded: SupersededDivergence[] }>();
 	for (const record of records) {
 		if (record.outcome.kind === 'skipped') {
 			continue;
 		}
 		const key = keyOf(record.stratum, record.path);
-		const before = standings.get(key);
-		let open = before?.open;
-		let retested = before?.retested;
-		let superseded = before?.superseded ?? [];
+		const standing = standings.get(key) ?? { latest: record, open: [], superseded: [] };
+		standing.latest = record;
 		if (followerDivergesOn(record)) {
-			open = record;
-			retested = undefined;
-		} else if (open !== undefined && supersedes(open, record)) {
-			superseded = [...superseded, { divergence: open, by: record }];
-			open = undefined;
-			retested = undefined;
-		} else if (open !== undefined) {
-			retested = record;
+			standing.open.push({ divergence: record, retestedBy: undefined });
+		} else {
+			standing.superseded.push(...standing.open.filter(function({ divergence }): boolean {
+				return(supersedes(divergence, record));
+			}).map(function({ divergence }): SupersededDivergence {
+				return({ divergence, by: record });
+			}));
+			standing.open = standing.open.filter(function({ divergence }): boolean {
+				return(!supersedes(divergence, record));
+			}).map(function({ divergence }): OpenDivergence {
+				return({ divergence, retestedBy: record });
+			});
 		}
-		standings.set(key, { latest: record, open, retested, superseded });
+		standings.set(key, standing);
 	}
-	return(standings);
+	const explanationOf = function(divergence: APIDiffRecord): APIDiffExplainedRecord | undefined {
+		return(explanations.find(function(explanation): boolean {
+			return(explanation.stratum === divergence.stratum && explanation.path === divergence.path && explanation.divergenceAt === divergence.at);
+		}));
+	};
+	return(new Map([...standings].map(function([key, { latest, open, superseded }]): [string, RequestStanding] {
+		const explained = open.flatMap(function({ divergence }): ExplainedDivergence[] {
+			const explanation = explanationOf(divergence);
+			if (explanation === undefined) {
+				return([]);
+			}
+			return([{ divergence, explanation }]);
+		});
+		return([key, {
+			latest,
+			open: open.filter(function({ divergence }): boolean {
+				return(explanationOf(divergence) === undefined);
+			}),
+			superseded,
+			explained
+		}]);
+	})));
 }
 
 /**
- * The census each stratum stands on: of the plans that made a census of it,
- * the latest whose every request has a comparison, or else the latest; a
- * plan that drew a sample of it does not end it.
+ * The census each stratum stands on: the latest plan that made one of it,
+ * whose population, which may have grown since an older census, is the
+ * one to cover; a plan that drew a sample of it does not end it.
  */
-export function standingCensuses(plans: readonly APIDiffPlanRecord[], compared: ReadonlySet<string>): ReadonlyMap<Stratum, { readonly plan: APIDiffPlanRecord; readonly requests: readonly string[] }> {
-	const censuses = new Map<Stratum, { readonly plan: APIDiffPlanRecord; readonly requests: readonly string[]; readonly complete: boolean }>();
+export function standingCensuses(plans: readonly APIDiffPlanRecord[]): ReadonlyMap<Stratum, { readonly plan: APIDiffPlanRecord; readonly requests: readonly string[] }> {
+	const censuses = new Map<Stratum, { readonly plan: APIDiffPlanRecord; readonly requests: readonly string[] }>();
 	for (const plan of plans) {
 		for (const { stratum, population } of plan.strata) {
-			if (population.kind !== 'census') {
-				continue;
-			}
-			const complete = population.requests.every(function(path): boolean {
-				return(compared.has(keyOf(stratum, path)));
-			});
-			const standing = censuses.get(stratum);
-			if (standing === undefined || complete || !standing.complete) {
-				censuses.set(stratum, { plan, requests: population.requests, complete });
+			if (population.kind === 'census') {
+				censuses.set(stratum, { plan, requests: population.requests });
 			}
 		}
 	}
@@ -1116,14 +1164,18 @@ function pendingOf(records: readonly ParityRecord[]): readonly Pending[] {
 	const attempted = new Map(comparisons.map(function(record) {
 		return([keyOf(record.stratum, record.path), record]);
 	}));
-	const standings = requestStandings(comparisons);
-	const open = [...standings.values()].flatMap(function({ open: divergence }): Pending[] {
-		if (divergence === undefined) {
+	const explanations = records.filter(function(record): record is APIDiffExplainedRecord {
+		return(record.kind === 'api-diff-explained');
+	});
+	const standings = requestStandings(comparisons, explanations);
+	const open = [...standings.values()].flatMap(function({ open: divergences }): Pending[] {
+		const latest = divergences.at(-1)?.divergence;
+		if (latest === undefined) {
 			return([]);
 		}
-		return([{ stratum: divergence.stratum, path: divergence.path, representative: divergence.representative }]);
+		return([{ stratum: latest.stratum, path: latest.path, representative: latest.representative }]);
 	});
-	const uncounted = [...standingCensuses(plans, new Set(standings.keys()))].flatMap(function([stratum, { requests }]): Pending[] {
+	const uncounted = [...standingCensuses(plans)].flatMap(function([stratum, { requests }]): Pending[] {
 		return(requests.filter(function(path): boolean {
 			return(!standings.has(keyOf(stratum, path)));
 		}).map(function(path): Pending {
@@ -1168,4 +1220,31 @@ export async function recheckAPIDivergences(setup: APIRecheckSetup): Promise<API
 		summary[compared.outcome.kind] = (summary[compared.outcome.kind] ?? 0) + 1;
 	}
 	return(summary);
+}
+
+/** A triage of an API divergence, as the explain command names it. */
+export type DivergenceTriage = Pick<APIDiffExplainedRecord, 'stratum' | 'path' | 'divergenceAt' | 'divergence' | 'reference'>;
+
+/**
+ * Records the triage of an open divergence of the request, named by the
+ * moment it was recorded, which closes it; a divergence that is not open,
+ * settled or explained already or never recorded, is refused.
+ */
+export async function explainDivergence(log: ParityLog, triage: DivergenceTriage): Promise<APIDiffExplainedRecord> {
+	const { records } = await log.read();
+	const comparisons = records.filter(function(record): record is APIDiffRecord {
+		return(record.kind === 'api-diff');
+	});
+	const explanations = records.filter(function(record): record is APIDiffExplainedRecord {
+		return(record.kind === 'api-diff-explained');
+	});
+	const open = requestStandings(comparisons, explanations).get(keyOf(triage.stratum, triage.path))?.open ?? [];
+	if (!open.some(function({ divergence }): boolean {
+		return(divergence.at === triage.divergenceAt);
+	})) {
+		throw(new Error(`no open divergence of ${triage.stratum} ${triage.path} was recorded at ${triage.divergenceAt}`));
+	}
+	const explained: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: new Date().toISOString(), ...triage };
+	await log.append([explained]);
+	return(explained);
 }

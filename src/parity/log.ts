@@ -285,6 +285,34 @@ export type APIDiffPlanRecord = {
 	readonly strata: readonly { readonly stratum: Stratum; readonly population: StratumPopulation }[];
 };
 
+/** How a divergence is explained, as the triage of every divergence classifies it. */
+export type DivergenceClass =
+	/** A defect of this node, fixed by the change the reference names, with a regression test. */
+	| 'our-bug'
+	/** A rule the main network's release and 0.18.7 differ in, which conformance/MAINNET.md records. */
+	| 'upstream-version'
+	/** An artifact of how a node runs or answers rather than of the ledger, which conformance/API.md records. */
+	| 'operational-artifact';
+
+export const DIVERGENCE_CLASSES: readonly DivergenceClass[] = ['our-bug', 'upstream-version', 'operational-artifact'];
+
+/**
+ * The triage of an API divergence no later comparison can settle, as the
+ * state it was about has moved on: what it was and where that is fixed or
+ * recorded. It closes the divergence it names by its request and moment.
+ */
+export type APIDiffExplainedRecord = {
+	readonly kind: 'api-diff-explained';
+	readonly at: string;
+	readonly stratum: Stratum;
+	readonly path: string;
+	/** When the divergence explained was recorded. */
+	readonly divergenceAt: string;
+	readonly divergence: DivergenceClass;
+	/** The change that fixed it, or the section of the conformance documents that records it. */
+	readonly reference: string;
+};
+
 /** A staple of the window the offline ledger refused to vote on, and the classified difference that explains it. */
 export type ShadowRefusal = {
 	readonly blocksHash: string;
@@ -436,7 +464,7 @@ export type ShadowRunRecord = ShadowRunState & {
 	readonly cost: ShadowRunCost;
 };
 
-export type ParityRecord = ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | SweepBatchRecord | APIDiffRecord | APIDiffPlanRecord | ShadowLiveRecord | ShadowRunRecord;
+export type ParityRecord = ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | SweepBatchRecord | APIDiffRecord | APIDiffPlanRecord | APIDiffExplainedRecord | ShadowLiveRecord | ShadowRunRecord;
 
 /** The records a log holds, and how many of its lines were not records, as the end of a line cut short by a crash. */
 export type ParityLogContents = {
@@ -852,6 +880,18 @@ function apiDiffPlanRecordOf(value: Fields): APIDiffPlanRecord | undefined {
 	return({ kind: 'api-diff-plan', at, quietBefore, samplesPerStratum, strata });
 }
 
+function apiDiffExplainedRecordOf(value: Fields): APIDiffExplainedRecord | undefined {
+	const { at, path, divergenceAt, reference } = value;
+	const stratum = stratumOf(value['stratum']);
+	const divergence = DIVERGENCE_CLASSES.find(function(known): boolean {
+		return(known === value['divergence']);
+	});
+	if (!isString(at) || !isString(path) || !isString(divergenceAt) || !isString(reference) || stratum === undefined || divergence === undefined) {
+		return(undefined);
+	}
+	return({ kind: 'api-diff-explained', at, stratum, path, divergenceAt, divergence, reference });
+}
+
 function apiDiffOutcomeOf(value: unknown): APIDiffOutcome | undefined {
 	if (!isFields(value)) {
 		return(undefined);
@@ -1160,6 +1200,8 @@ export function parityRecordOf(line: string): ParityRecord | undefined {
 			return(apiDiffRecordOf(value));
 		case 'api-diff-plan':
 			return(apiDiffPlanRecordOf(value));
+		case 'api-diff-explained':
+			return(apiDiffExplainedRecordOf(value));
 		case 'shadow-live':
 			return(shadowLiveRecordOf(value));
 		case 'shadow-run':

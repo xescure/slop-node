@@ -1,4 +1,4 @@
-import { answeredByAPI, isErrorEnvelope } from './api-source.js';
+import { answeredByAPI, isAnonymousFailure } from './api-source.js';
 import type { APIAnswer } from './api-source.js';
 
 /** How hard the parity tools read from each representative. */
@@ -45,18 +45,11 @@ const MILLISECONDS_PER_SECOND = 1000;
  */
 const ANONYMOUS_FAILURES_TO_STRAIN = 3;
 
-const INTERNAL_ERROR = 500;
-
 function messageOf(error: unknown): string {
 	if (error instanceof Error) {
 		return(error.message);
 	}
 	return(String(error));
-}
-
-/** An internal failure of the API that names no error code of its own. */
-function anonymousFailure(answer: APIAnswer): boolean {
-	return(answer.status >= INTERNAL_ERROR && isErrorEnvelope(answer.body) && answer.body['code'] === undefined);
 }
 
 /** The wait a Retry-After header asks for: a number of seconds, or a date. */
@@ -195,7 +188,7 @@ export class RepresentativePacer {
 		} finally {
 			this.#leave(lane);
 		}
-		if (anonymousFailure(served.answer)) {
+		if (isAnonymousFailure(served.answer)) {
 			lane.anonymousFailuresInARow++;
 		} else {
 			lane.anonymousFailuresInARow = 0;
@@ -205,6 +198,9 @@ export class RepresentativePacer {
 		} else if (lane.anonymousFailuresInARow >= ANONYMOUS_FAILURES_TO_STRAIN) {
 			lane.anonymousFailuresInARow = 0;
 			this.#strained(endpoint, lane, served.retryAfter, `answered ${String(ANONYMOUS_FAILURES_TO_STRAIN)} internal failures in a row`);
+		} else if (lane.anonymousFailuresInARow > 0) {
+			// Too few to count as strain, and no sign the representative bears more either.
+			lane.successesInARow = 0;
 		} else {
 			this.#succeeded(lane);
 		}

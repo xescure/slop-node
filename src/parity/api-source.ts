@@ -67,6 +67,16 @@ export function isErrorEnvelope(body: unknown): body is Readonly<Record<string, 
 }
 
 /**
+ * Whether the answer is an internal failure that names no error code of
+ * the API: the envelope with nothing but an error ID, which a node answers
+ * for a request it cannot serve and for one it fails at alike, so that two
+ * such answers show nothing alike.
+ */
+export function isAnonymousFailure(answer: APIAnswer): boolean {
+	return(answer.status >= FIRST_SERVER_ERROR && isErrorEnvelope(answer.body) && answer.body['code'] === undefined);
+}
+
+/**
  * Whether the API itself answered: not a rate limit, nor a server error
  * without the API's error envelope, which a gateway or proxy in front of a
  * representative answers in its place.
