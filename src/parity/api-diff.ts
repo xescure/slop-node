@@ -8,7 +8,7 @@ import type { Normalization } from '../conformance/api/normalize.js';
 import { assertNever } from '../util/assert-never.js';
 import type { APIAnswer, APISource } from './api-source.js';
 import type { AccountCandidate, FollowerStore, HeldBlock } from './follower-store.js';
-import type { APIDiffOutcome, APIDiffPlanRecord, APIDiffReading, APIDiffRecord, ParityLog, RepresentativeReading, StratumPopulation } from './log.js';
+import type { APIDiffOutcome, APIDiffPlanRecord, APIDiffReading, APIDiffRecord, ParityLog, ParityRecord, RepresentativeReading, StratumPopulation } from './log.js';
 import { ACCOUNT_KINDS, OPERATION_NAMES, operationStratum, STRATA } from './strata.js';
 import type { OperationName, Stratum } from './strata.js';
 import { disputedKindOf, firstDifference, newestStapleOf, QUIET_MARGIN_MILLISECONDS } from './sweep.js';
@@ -524,25 +524,22 @@ async function quietFor(request: SampledRequest, answers: readonly APIAnswer[], 
 /**
  * Sends the request to another representative, as it was to the one
  * compared with, and tells whether its answer is the follower's once both
- * are normalized.
+ * are normalized; an answer apart counts only when every account it reads
+ * is quiet on that representative.
  */
 async function readingOf(request: SampledRequest, other: APISource, followerAnswer: APIAnswer, quiet: QuietAccounts): Promise<APIDiffReading> {
 	const representative = other.endpoint;
 	try {
-		const before = await quiet.of(request.quiet, other);
-		if (!before.quiet) {
-			return({ representative, kind: 'moving', detail: before.detail });
-		}
 		const answer = await other.get(request.path);
 		if (GATEWAY_STATUSES.has(answer.status)) {
 			return({ representative, kind: 'unanswered', detail: `${representative} answered ${String(answer.status)}` });
 		}
-		const listed = await quietFor({ ...request, quiet: [] }, [followerAnswer, answer], other, quiet);
-		if (!listed.quiet) {
-			return({ representative, kind: 'moving', detail: listed.detail });
-		}
 		if (firstDifference(normalizedAnswer(request.route, followerAnswer), normalizedAnswer(request.route, answer)) === undefined) {
 			return({ representative, kind: 'agrees', answer });
+		}
+		const quietness = await quietFor(request, [followerAnswer, answer], other, quiet);
+		if (!quietness.quiet) {
+			return({ representative, kind: 'moving', detail: quietness.detail });
 		}
 		return({ representative, kind: 'disagrees', answer });
 	} catch (error: unknown) {
@@ -553,21 +550,20 @@ async function readingOf(request: SampledRequest, other: APISource, followerAnsw
 /**
  * Sends the request to the follower before and after the representative,
  * so that an account the follower changes in between shows as a change,
- * and compares the two answers once normalized, when every account the
- * answer reads is quiet on both sides. Answers that differ are read again
- * from every other representative, and judged by the sweep's rule: the
- * follower's when most disagree with it, the one representative's own when
- * most agree with the follower and at least two do, and unresolved
- * otherwise.
+ * and compares the two answers once normalized. Answers alike match, as no
+ * lag of either side makes unequal states equal. Answers apart count only
+ * when every account the answer reads is quiet on both sides, the
+ * representative's newest staples read after its answer, so that one it
+ * added since shows; they are then read again from every other
+ * representative, and judged by the sweep's rule: the follower's when most
+ * disagree with it, the one representative's own when most agree with the
+ * follower and at least two do, and unresolved otherwise.
  */
 async function compareRequest(request: SampledRequest, follower: APISource, representative: APISource, others: readonly APISource[], quiet: QuietAccounts): Promise<Compared> {
 	let followerAfter: APIAnswer;
 	let representativeAnswer: APIAnswer;
+	let field: string | undefined;
 	try {
-		const before = await quiet.of(request.quiet, representative);
-		if (!before.quiet) {
-			return({ outcome: { kind: 'skipped', reason: 'moving', side: before.side, detail: before.detail }, representativeAnswer: undefined });
-		}
 		const followerBefore = await follower.get(request.path);
 		representativeAnswer = await representative.get(request.path);
 		followerAfter = await follower.get(request.path);
@@ -578,16 +574,16 @@ async function compareRequest(request: SampledRequest, follower: APISource, repr
 		if (!isDeepStrictEqual(normalizedAnswer(request.route, followerBefore), normalizedAnswer(request.route, followerAfter))) {
 			return({ outcome: { kind: 'skipped', reason: 'moving', side: 'follower', detail: 'the follower changed its answer while it was compared' }, representativeAnswer });
 		}
-		const listed = await quietFor({ ...request, quiet: [] }, [followerAfter, representativeAnswer], representative, quiet);
-		if (!listed.quiet) {
-			return({ outcome: { kind: 'skipped', reason: 'moving', side: listed.side, detail: listed.detail }, representativeAnswer });
+		field = firstDifference(normalizedAnswer(request.route, followerAfter), normalizedAnswer(request.route, representativeAnswer));
+		if (field === undefined) {
+			return({ outcome: { kind: 'match' }, representativeAnswer });
+		}
+		const quietness = await quietFor(request, [followerAfter, representativeAnswer], representative, quiet);
+		if (!quietness.quiet) {
+			return({ outcome: { kind: 'skipped', reason: 'moving', side: quietness.side, detail: quietness.detail }, representativeAnswer });
 		}
 	} catch (error: unknown) {
 		return({ outcome: { kind: 'skipped', reason: 'unanswered', detail: messageOf(error) }, representativeAnswer: undefined });
-	}
-	const field = firstDifference(normalizedAnswer(request.route, followerAfter), normalizedAnswer(request.route, representativeAnswer));
-	if (field === undefined) {
-		return({ outcome: { kind: 'match' }, representativeAnswer });
 	}
 	const answered = followerAfter;
 	const readings = await Promise.all(others.map(function(other) {
@@ -856,14 +852,14 @@ function accountsNamed(parameters: Readonly<Record<string, string>>): string[] {
 const LISTING_ENTITIES: ReadonlySet<RoutePath> = new Set<RoutePath>(['/api/node/ledger/account/{account}/acl', '/api/node/ledger/account/{account}/acl/additional']);
 
 /**
- * The request a record compared, with the accounts that must be quiet for
- * it: every account its path names, which is as many as the sampler asked
- * for or more, and for a block's successor the block's account, which the
- * follower holds within its reach. Nothing when the follower no longer
- * holds that block there.
+ * A request of a stratum as a record names it, with the accounts that must
+ * be quiet for answers apart to count: every account its path names, which
+ * is as many as the sampler asked for or more, and for a block's successor
+ * the block's account, which the follower holds within its reach. Nothing
+ * when the follower no longer holds that block there.
  */
-async function recordedRequestOf(record: APIDiffRecord, store: APIDiffStore, quietBefore: Date): Promise<SampledRequest | undefined> {
-	const matched = routeOf(record.path);
+async function requestOf(stratum: Stratum, path: string, store: APIDiffStore, quietBefore: Date): Promise<SampledRequest | undefined> {
+	const matched = routeOf(path);
 	if (matched === undefined) {
 		return(undefined);
 	}
@@ -877,7 +873,7 @@ async function recordedRequestOf(record: APIDiffRecord, store: APIDiffStore, qui
 		}
 		quiet.push(block.account);
 	}
-	return({ stratum: record.stratum, route, path: record.path, quiet, listsEntities: LISTING_ENTITIES.has(route) });
+	return({ stratum, route, path, quiet, listsEntities: LISTING_ENTITIES.has(route) });
 }
 
 export type APIRecheckSetup = Pick<APIDiffSetup, 'follower' | 'representatives' | 'store' | 'log' | 'stopped'>;
@@ -885,23 +881,63 @@ export type APIRecheckSetup = Pick<APIDiffSetup, 'follower' | 'representatives' 
 /** How many requests were compared again, by the outcome each had. */
 export type APIRecheckSummary = Readonly<Partial<Record<APIDiffOutcome['kind'], number>>>;
 
-/** The latest comparison of each request of a stratum, in the order the requests were first compared. */
-function latestComparisons(records: readonly APIDiffRecord[]): readonly APIDiffRecord[] {
-	const latest = new Map<string, APIDiffRecord>();
+/** A request to send again, and the representative to send it to, or none to send it to the first. */
+type Pending = { readonly stratum: Stratum; readonly path: string; readonly representative: string | undefined };
+
+function keyOf(stratum: Stratum, path: string): string {
+	return(`${stratum} ${path}`);
+}
+
+/**
+ * The requests to send again: each whose latest comparison diverged or was
+ * unresolved, to the representative it was compared with, and each request
+ * of a census of the latest plan that has no comparison, to the
+ * representative last tried with it.
+ */
+function pendingOf(records: readonly ParityRecord[]): readonly Pending[] {
+	const compared = new Map<string, APIDiffRecord>();
+	const attempted = new Map<string, APIDiffRecord>();
+	let plan: APIDiffPlanRecord | undefined;
 	for (const record of records) {
-		if (record.outcome.kind !== 'skipped') {
-			latest.set(`${record.stratum} ${record.path}`, record);
+		switch (record.kind) {
+			case 'api-diff':
+				attempted.set(keyOf(record.stratum, record.path), record);
+				if (record.outcome.kind !== 'skipped') {
+					compared.set(keyOf(record.stratum, record.path), record);
+				}
+				break;
+			case 'api-diff-plan':
+				plan = record;
+				break;
+			default:
+				break;
 		}
 	}
-	return([...latest.values()]);
+	const disputed = [...compared.values()].filter(function(record): boolean {
+		return(record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved');
+	}).map(function(record): Pending {
+		return({ stratum: record.stratum, path: record.path, representative: record.representative });
+	});
+	const uncounted = (plan?.strata ?? []).flatMap(function({ stratum, population }): Pending[] {
+		if (population.kind !== 'census') {
+			return([]);
+		}
+		return(population.requests.filter(function(path): boolean {
+			return(!compared.has(keyOf(stratum, path)));
+		}).map(function(path): Pending {
+			return({ stratum, path, representative: attempted.get(keyOf(stratum, path))?.representative });
+		}));
+	});
+	return([...disputed, ...uncounted]);
 }
 
 /**
  * Sends again each request whose latest comparison diverged or was
  * unresolved, the identical request to the representative it was compared
- * with, read again from every other, and records the outcome, which stands
- * as the request's latest. A representative the run does not reach leaves
- * its requests as they stand.
+ * with, read again from every other, and each request of the latest plan's
+ * census not compared yet, and records the outcome, which stands as the
+ * request's latest. A representative the run does not reach leaves its
+ * requests as they stand.
  */
 export async function recheckAPIDivergences(setup: APIRecheckSetup): Promise<APIRecheckSummary> {
 	const { heldBefore } = await setup.store.progress();
@@ -910,17 +946,15 @@ export async function recheckAPIDivergences(setup: APIRecheckSetup): Promise<API
 	}
 	const quietBefore = new Date(heldBefore.getTime() - QUIET_MARGIN_MILLISECONDS);
 	const quiet = new QuietAccounts(setup.store, quietBefore);
-	const disputed = latestComparisons((await setup.log.read()).records.filter(function(record): record is APIDiffRecord {
-		return(record.kind === 'api-diff');
-	})).filter(function(record): boolean {
-		return(record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved');
-	});
 	const summary: Partial<Record<APIDiffOutcome['kind'], number>> = {};
-	for (const record of disputed) {
-		const representative = setup.representatives.find(function(source): boolean {
-			return(source.endpoint === record.representative);
-		});
-		const request = await recordedRequestOf(record, setup.store, quietBefore);
+	for (const pending of pendingOf((await setup.log.read()).records)) {
+		let representative = setup.representatives[0];
+		if (pending.representative !== undefined) {
+			representative = setup.representatives.find(function(source): boolean {
+				return(source.endpoint === pending.representative);
+			});
+		}
+		const request = await requestOf(pending.stratum, pending.path, setup.store, quietBefore);
 		if (representative === undefined || request === undefined) {
 			continue;
 		}

@@ -246,27 +246,33 @@ describe('sampling the API', function() {
 		})).toBe(true);
 	});
 
-	test('skips an account the representative holds a recent staple of, or the follower does, without asking about it', async function() {
+	test('counts answers alike as a match however the accounts they read move, and skips answers apart about an account the representative holds a recent staple of, or the follower does', async function() {
 		const setup = await running();
 		setup.representative.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, recentHistory(TOKEN));
+		setup.follower.serve(BALANCE, balanceOf('0x1'));
+		setup.representative.serve(BALANCE, balanceOf('0x2'));
 
-		const { records } = await sample(setup, memoryStore({ candidates: { token: [CANDIDATE] } }), 5);
-		expect(records[0]?.outcome).toMatchObject({ kind: 'skipped', reason: 'moving', side: 'representative' });
-		expect(setup.representative.requests).toEqual([`GET /node/ledger/account/${TOKEN}/history?limit=1`]);
+		const { records } = await sample(setup, memoryStore({ candidates: { token: [CANDIDATE] } }), 100);
+		expect(byPath(records, BALANCE)?.outcome).toMatchObject({ kind: 'skipped', reason: 'moving', side: 'representative' });
+		expect(byPath(records, `/node/ledger/account/${TOKEN}/head`)?.outcome).toEqual({ kind: 'match' });
 
 		const onFollower = await running();
-		const followerMoving = await sample(onFollower, memoryStore({ candidates: { token: [CANDIDATE] }, newest: new Map([[TOKEN, new Date('2026-01-01T00:00:00.000Z')]]) }), 5);
-		expect(followerMoving.records[0]?.outcome).toMatchObject({ kind: 'skipped', reason: 'moving', side: 'follower' });
-		expect(onFollower.representative.requests).toEqual([]);
+		onFollower.follower.serve(BALANCE, balanceOf('0x1'));
+		onFollower.representative.serve(BALANCE, balanceOf('0x2'));
+		const followerMoving = await sample(onFollower, memoryStore({ candidates: { token: [CANDIDATE] }, newest: new Map([[TOKEN, new Date('2026-01-01T00:00:00.000Z')]]) }), 100);
+		expect(byPath(followerMoving.records, BALANCE)?.outcome).toMatchObject({ kind: 'skipped', reason: 'moving', side: 'follower' });
+		// Only the sampled requests: the follower's own staple decides before the representative is asked about its history.
+		expect(onFollower.representative.requests.filter(function(request) {
+			return(request.endsWith('/history?limit=1'));
+		})).toHaveLength(1);
 	});
 
-	test('skips a principal\'s listing that names an entity which is not quiet', async function() {
+	test('skips a principal\'s listing answered apart that names an entity which is not quiet', async function() {
 		const setup = await running();
 		setup.representative.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, QUIET_HISTORY);
 		setup.representative.serve(`/node/ledger/account/${OTHER}/history?limit=1`, recentHistory(OTHER));
-		for (const api of [setup.follower, setup.representative]) {
-			api.serve(`/node/ledger/account/${TOKEN}/acl`, { permissions: [{ entity: OTHER, principal: TOKEN, target: OTHER, permissions: ['0x1', '0x0'], principalType: 'ACCOUNT' }] });
-		}
+		setup.follower.serve(`/node/ledger/account/${TOKEN}/acl`, { permissions: [{ entity: OTHER, principal: TOKEN, target: OTHER, permissions: ['0x1', '0x0'], principalType: 'ACCOUNT' }] });
+		setup.representative.serve(`/node/ledger/account/${TOKEN}/acl`, { permissions: [{ entity: OTHER, principal: TOKEN, target: OTHER, permissions: ['0x3', '0x0'], principalType: 'ACCOUNT' }] });
 
 		const { records } = await sample(setup, memoryStore({ candidates: { token: [CANDIDATE] } }), 100);
 		expect(byPath(records, `/node/ledger/account/${TOKEN}/acl`)?.outcome).toMatchObject({ kind: 'skipped', reason: 'moving', side: 'representative' });
@@ -405,7 +411,8 @@ describe('a divergence of the API', function() {
 			{ representative: setup.representatives[1]?.endpoint, kind: 'agrees', answer: { status: 200, body: balanceOf('0x1') } },
 			{ representative: setup.representatives[2]?.endpoint, kind: 'agrees', answer: { status: 200, body: balanceOf('0x1') } }
 		]);
-		expect(setup.representatives[0]?.requests).toEqual([`GET /node/ledger/account/${TOKEN}/history?limit=1`, `GET ${BALANCE}`]);
+		// Asked about the account's history only once its answer differs, so that a staple added meanwhile shows as newest.
+		expect(setup.representatives[0]?.requests).toEqual([`GET ${BALANCE}`, `GET /node/ledger/account/${TOKEN}/history?limit=1`]);
 	});
 
 	test('is unresolved when no side has most of the representatives that answered', async function() {
@@ -420,15 +427,15 @@ describe('a divergence of the API', function() {
 		})).toEqual(['agrees', 'unanswered']);
 	});
 
-	test('counts no reading from a representative on which an account the answer reads is not quiet', async function() {
+	test('counts no reading from a representative that answers apart while an account the answer reads is not quiet on it', async function() {
 		const setup = await runningWith(3);
-		servingBalances(setup, '0x1', ['0x2', '0x1', '0x1']);
+		servingBalances(setup, '0x1', ['0x2', '0x1', '0x3']);
 		setup.representatives[2]?.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, recentHistory(TOKEN));
 
 		const { latest } = await recheck(setup);
 
 		expect(latest?.outcome).toMatchObject({ kind: 'unresolved', readings: [{ kind: 'agrees' }, { kind: 'moving' }] });
-		expect(setup.representatives[2]?.requests).toEqual([`GET /node/ledger/account/${TOKEN}/history?limit=1`]);
+		expect(setup.representatives[2]?.requests).toEqual([`GET ${BALANCE}`, `GET /node/ledger/account/${TOKEN}/history?limit=1`]);
 	});
 
 	test('is superseded by a match when the follower answers as the representative now', async function() {
@@ -447,13 +454,38 @@ describe('a divergence of the API', function() {
 		const block = await heldSend();
 		const path = `/node/ledger/block/${block.hash}/successor`;
 		setup.follower.serve(path, { block: null });
-		setup.representatives[0]?.serve(path, { block: null });
+		setup.representatives[0]?.serve(path, { block: 'AB'.repeat(32) });
 		setup.representatives[0]?.serve(`/node/ledger/account/${OWNER}/history?limit=1`, QUIET_HISTORY);
 		const recorded: APIDiffRecord = { kind: 'api-diff', at: '2026-10-09T08:40:00.000Z', representative: setup.representatives[0]?.endpoint ?? '', stratum: 'operation:SEND', route: '/api/node/ledger/block/{blockhash}/successor', path, behaviors: [], outcome: { ...RECORDED_DIVERGENCE, field: 'body.block' } };
 		await setup.log.append([recorded]);
 
-		expect(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({ blocks: [block] }) })).toEqual({ match: 1 });
-		expect(setup.representatives[0]?.requests).toEqual([`GET /node/ledger/account/${OWNER}/history?limit=1`, `GET ${path}`]);
+		expect(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({ blocks: [block] }) })).toEqual({ diverged: 1 });
+		expect(setup.representatives[0]?.requests).toEqual([`GET ${path}`, `GET /node/ledger/account/${OWNER}/history?limit=1`]);
+	});
+});
+
+describe('a census', function() {
+	test('is completed on recheck, each request of the latest plan\'s census not compared yet sent to the representative last tried, or the first', async function() {
+		const setup = await runningWith(2);
+		servingBalances(setup, '0x1', ['0x1', '0x1']);
+		const state = `/node/ledger/account/${TOKEN}`;
+		setup.follower.serve(state, STATE);
+		setup.representatives.forEach(function(representative) {
+			representative.serve(state, STATE);
+		});
+		const second = setup.representatives[1]?.endpoint ?? '';
+		const plan: APIDiffPlanRecord = { kind: 'api-diff-plan', at: '2026-10-11T14:00:00.000Z', quietBefore: '2026-10-11T13:00:00.000Z', samplesPerStratum: 300, strata: [{ stratum: 'multisig', population: { kind: 'census', requests: [BALANCE, state] } }] };
+		const skipped: APIDiffRecord = { kind: 'api-diff', at: '2026-10-11T14:01:00.000Z', representative: second, stratum: 'multisig', route: '/api/node/ledger/account/{account}/balance', path: BALANCE, behaviors: [], outcome: { kind: 'skipped', reason: 'moving', side: 'follower', detail: 'recent' } };
+		await setup.log.append([plan, skipped]);
+
+		expect(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({}) })).toEqual({ match: 2 });
+
+		expect(setup.representatives[1]?.requests).toEqual([`GET ${BALANCE}`]);
+		expect(setup.representatives[0]?.requests).toEqual([`GET ${state}`]);
+		const records = recordsOf((await setup.log.read()).records, 'api-diff').slice(1);
+		expect(records.map(function(record) {
+			return([record.stratum, record.path, record.outcome.kind]);
+		})).toEqual([['multisig', BALANCE, 'match'], ['multisig', state, 'match']]);
 	});
 });
 
