@@ -1064,33 +1064,48 @@ async function newestStapleServed(source: APISource, account: string): Promise<s
 	return(newestStapleOf(await getOK(source, `/node/ledger/account/${account}/history?limit=1`))?.staple ?? null);
 }
 
+/** A node's state of an account at a point of its history: the newest staple it held both before and after serving the state. */
+type PinnedState = { readonly state: unknown; readonly newest: string | null };
+
+/** The node's state of the account pinned to its newest staple, or nothing when the node added a staple of it while serving the state. */
+async function pinnedStateOf(source: APISource, account: string): Promise<PinnedState | undefined> {
+	const before = await newestStapleServed(source, account);
+	const state = await getOK(source, `/node/ledger/account/${account}`);
+	const after = await newestStapleServed(source, account);
+	if (before !== after) {
+		return(undefined);
+	}
+	return({ state, newest: after });
+}
+
 /**
  * Compares a passive account by itself as its walk compares one in a batch,
- * at the same point of its history: the follower is read again until it
- * holds, as its newest staple of the account, the newest the
- * representative held when it served its state, and the state then matches
- * when it is the representative's. A value alone may come round again,
- * as when an account is credited the same amount time after time, so only
- * the same newest staple places both at one point. An account a staple
- * touches every few seconds needs those reads; states apart are compared
- * by themselves.
+ * at the same point of its history: the representative's state is pinned
+ * to its newest staple of the account, read before and after it and the
+ * same, and the follower is read again until its own state, pinned so,
+ * stands at that staple and is the representative's. A value alone may
+ * come round again, as when an account is credited the same amount time
+ * after time, so only the same newest staple places both at one point. An
+ * account a staple touches every few seconds needs those reads; states
+ * apart are compared by themselves.
  */
 async function comparePassiveAlone(setup: Comparing & Pick<SweepSetup, 'stopped'>, representative: APISource, account: string, quietBefore: Date, wait: Wait): Promise<SweepOutcome> {
-	const path = `/node/ledger/account/${account}`;
 	try {
-		const representativeState = await getOK(representative, path);
-		const representativeNewest = await newestStapleServed(representative, account);
-		if (stateErrorOf(representativeState) === undefined) {
-			for (let read = 0; read < FOLLOWER_CATCH_UP_READS && !isStopped(setup.stopped); read++) {
-				if (read > 0) {
-					await wait(FOLLOWER_CATCH_UP_INTERVAL_MILLISECONDS);
-				}
-				const newestBefore = await newestStapleServed(setup.follower, account);
-				const followerState = await getOK(setup.follower, path);
-				const newestAfter = await newestStapleServed(setup.follower, account);
-				if (newestBefore === representativeNewest && newestAfter === representativeNewest && firstDifference(followerState, representativeState) === undefined) {
-					return({ kind: 'match', head: headOf(representativeState), staple: representativeNewest });
-				}
+		let pinned: PinnedState | undefined;
+		for (let read = 0; read < FOLLOWER_CATCH_UP_READS && !isStopped(setup.stopped); read++) {
+			if (read > 0) {
+				await wait(FOLLOWER_CATCH_UP_INTERVAL_MILLISECONDS);
+			}
+			pinned ??= await pinnedStateOf(representative, account);
+			if (pinned === undefined) {
+				continue;
+			}
+			if (stateErrorOf(pinned.state) !== undefined) {
+				break;
+			}
+			const followerAt = await pinnedStateOf(setup.follower, account);
+			if (followerAt !== undefined && followerAt.newest === pinned.newest && firstDifference(followerAt.state, pinned.state) === undefined) {
+				return({ kind: 'match', head: headOf(pinned.state), staple: pinned.newest });
 			}
 		}
 	} catch {
