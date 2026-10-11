@@ -173,9 +173,9 @@ export function heldBeforeOf(layout: RangeLayout | undefined, peers: readonly Pe
 const FOLLOWER_POOL_CONNECTIONS = 4;
 
 /*
- * Every account with a chain is read a thousand at a time, a page a
- * statement; beside the shadow votes' replay, a page ran past the pool's
- * 30 s, so the pages get minutes of their own.
+ * The accounts with a chain are read a page a statement, a thousand when
+ * every one is read; beside the shadow votes' replay, such a page ran past
+ * the pool's 30 s, so the pages get minutes of their own.
  */
 const CHAIN_ACCOUNTS_STATEMENT_MILLISECONDS = 300_000;
 
@@ -216,6 +216,18 @@ export const CHAIN_ACCOUNTS_AFTER = `
 
 /** Chain accounts read by one statement of a walk over all of them, so that each statement ends in seconds however busy the disk. */
 const CHAIN_ACCOUNTS_PAGE = 1000;
+
+/** Every account with a chain, in row order, read page after page from the rows after the last page's. */
+export async function everyChainAccount(after: (rowID: string, count: number) => Promise<readonly KnownAccount[]>): Promise<readonly KnownAccount[]> {
+	const accounts: KnownAccount[] = [];
+	for (;;) {
+		const page = await after(accounts.at(-1)?.rowID ?? '0', CHAIN_ACCOUNTS_PAGE);
+		accounts.push(...page);
+		if (page.length < CHAIN_ACCOUNTS_PAGE) {
+			return(accounts);
+		}
+	}
+}
 
 const PASSIVE_ACCOUNTS_AFTER = `
 	SELECT a.id, a.public_key, (SELECT max(h.staple_time) FROM history h WHERE h.account_id = a.id) AS newest_staple
@@ -530,7 +542,7 @@ export function openFollowerStore(connectionString: string): FollowerStore {
 			return({ completedPass, heldBefore: heldBeforeOf(layoutOf(layout.rows[0]?.value), peers), staged: Number(staged.rows[0]?.count ?? 0) });
 		},
 		chainAccountsAfter(rowID: string, count: number): Promise<readonly KnownAccount[]> {
-			return(knownAccounts(pool, CHAIN_ACCOUNTS_AFTER, rowID, count));
+			return(knownAccountsWithin(pool, CHAIN_ACCOUNTS_STATEMENT_MILLISECONDS, CHAIN_ACCOUNTS_AFTER, rowID, count));
 		},
 		passiveAccountsAfter(rowID: string, count: number): Promise<readonly KnownAccount[]> {
 			return(knownAccounts(pool, PASSIVE_ACCOUNTS_AFTER, rowID, count));
@@ -539,15 +551,10 @@ export function openFollowerStore(connectionString: string): FollowerStore {
 			const result = await pool.query<{ count: string }>('SELECT count(*) AS count FROM accounts');
 			return(Number(result.rows[0]?.count ?? 0));
 		},
-		async chainAccounts(): Promise<readonly KnownAccount[]> {
-			const accounts: KnownAccount[] = [];
-			for (;;) {
-				const page = await knownAccountsWithin(pool, CHAIN_ACCOUNTS_STATEMENT_MILLISECONDS, CHAIN_ACCOUNTS_AFTER, accounts.at(-1)?.rowID ?? '0', CHAIN_ACCOUNTS_PAGE);
-				accounts.push(...page);
-				if (page.length < CHAIN_ACCOUNTS_PAGE) {
-					return(accounts);
-				}
-			}
+		chainAccounts(): Promise<readonly KnownAccount[]> {
+			return(everyChainAccount(function(rowID, count): Promise<readonly KnownAccount[]> {
+				return(knownAccountsWithin(pool, CHAIN_ACCOUNTS_STATEMENT_MILLISECONDS, CHAIN_ACCOUNTS_AFTER, rowID, count));
+			}));
 		},
 		async rowIDsOf(accounts: readonly string[]): Promise<ReadonlyMap<string, string>> {
 			const result = await pool.query<{ id: string; public_key: string }>('SELECT id, public_key FROM accounts WHERE public_key = ANY($1::text[])', [accounts]);

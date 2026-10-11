@@ -1183,7 +1183,8 @@ const PERCENT = 100;
 /**
  * Each route's requests of each stratum, by their latest attempt: a request
  * compared counts once it stands on no explained divergence, and one never
- * compared is listed by its latest attempt, which skipped it.
+ * compared, or standing on an explained divergence, is listed by its latest
+ * attempt.
  */
 export function routeAttemptsOf(records: readonly APIDiffRecord[], standings: ReadonlyMap<string, RequestStanding>): readonly RouteAttempts[] {
 	const latestAttempts = new Map<string, APIDiffRecord>();
@@ -1204,7 +1205,8 @@ export function routeAttemptsOf(records: readonly APIDiffRecord[], standings: Re
 	}
 	for (const [key, attempt] of latestAttempts) {
 		const standing = standings.get(key);
-		if (attempt.outcome.kind === 'skipped' && (standing === undefined || standsOnExplanation(standing))) {
+		// One standing on an explained divergence found no answer alike, whatever its latest attempt was.
+		if ((standing === undefined && attempt.outcome.kind === 'skipped') || (standing !== undefined && standsOnExplanation(standing))) {
 			routeOf(attempt).neverCompared.push(attempt);
 		}
 	}

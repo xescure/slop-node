@@ -199,13 +199,13 @@ describe('the parity log', function() {
 		expect(await log.read()).toEqual({ records: [SHADOW_RUN], unreadableLines: 0 });
 	});
 
-	test('reads a triage recorded before a triage stated why no later comparison retested its divergence as one that needed none', async function() {
+	test('reads a triage recorded before a triage stated why no later comparison retested its divergence as one whose retest is unrecorded', async function() {
 		const log = await scratchLog();
 		const { untestedBecause, ...older } = API_DIFF_EXPLAINED;
 		expect(untestedBecause).not.toBeNull();
 		await appendFile(log.path, `${JSON.stringify(older)}\n`);
 
-		expect(await log.read()).toEqual({ records: [{ ...older, untestedBecause: null }], unreadableLines: 0 });
+		expect(await log.read()).toEqual({ records: [{ ...older, untestedBecause: 'unrecorded' }], unreadableLines: 0 });
 	});
 
 	test('counts a line cut short, or one it does not know, apart from the records', async function() {

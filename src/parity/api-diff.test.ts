@@ -267,6 +267,25 @@ describe('sampling the API', function() {
 		})).toHaveLength(1);
 	});
 
+	test('records nothing of a request a stop cut short while it read the follower\'s database', async function() {
+		const setup = await running();
+		setup.follower.serve(BALANCE, balanceOf('0x1'));
+		setup.representative.serve(BALANCE, balanceOf('0x2'));
+		const stopping = new AbortController();
+		const store: APIDiffStore = {
+			...memoryStore({ candidates: { token: [CANDIDATE] } }),
+			newestStaples(): Promise<ReadonlyMap<string, Date>> {
+				stopping.abort();
+				return(Promise.reject(Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' })));
+			}
+		};
+
+		await sampleAPI({ follower: httpSource(setup.follower.endpoint), representatives: [httpSource(setup.representative.endpoint)], store, log: setup.log, samplesPerStratum: 100, seed: 'test', edgeCaseStaples: [], knownBehaviors: new Set(), stopped: stopping.signal });
+
+		expect(stopping.signal.aborted).toBe(true);
+		expect(byPath(recordsOf((await setup.log.read()).records, 'api-diff'), BALANCE)).toBeUndefined();
+	});
+
 	test('skips a principal\'s listing answered apart that names an entity which is not quiet', async function() {
 		const setup = await running();
 		setup.representative.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, QUIET_HISTORY);

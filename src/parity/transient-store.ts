@@ -1,4 +1,5 @@
-import type { FollowerStore } from './follower-store.js';
+import { everyChainAccount } from './follower-store.js';
+import type { FollowerStore, KnownAccount } from './follower-store.js';
 import type { PacerClock } from './representative-pacer.js';
 
 /**
@@ -6,14 +7,18 @@ import type { PacerClock } from './representative-pacer.js';
  * connection timeout: the pool's sessions all busy, or the cluster slow to
  * hand out another.
  */
-const CONNECT_TIMEOUT_MESSAGES: ReadonlySet<string> = new Set(['timeout exceeded when trying to connect', 'Connection terminated due to connection timeout']);
+const CONNECT_TIMEOUT_MESSAGES: ReadonlySet<string> = new Set(['timeout exceeded when trying to connect', 'Connection terminated due to connection timeout', 'Connection terminated unexpectedly']);
 
 /**
- * SQLSTATEs of a read the cluster's load, not the read, failed: a statement
- * canceled by its timeout (57014), a cluster with no connection left
- * (53300), and one starting up (57P03).
+ * Codes of a read the cluster's load or a restart of the follower, not the
+ * read, failed: SQLSTATEs of a statement canceled by its timeout (57014), a
+ * cluster with no connection left (53300), one starting up (57P03) and one
+ * shutting down (57P01), and the system's codes of a socket with no server
+ * behind it (ECONNREFUSED) or none at all (ENOENT), as while the follower's
+ * cluster restarts; pg then reports a session the restart ended without a
+ * code.
  */
-const TRANSIENT_SQLSTATES: ReadonlySet<string> = new Set(['57014', '53300', '57P03']);
+const TRANSIENT_CODES: ReadonlySet<string> = new Set(['57014', '53300', '57P03', '57P01', 'ECONNREFUSED', 'ENOENT']);
 
 const FIRST_WAIT_MILLISECONDS = 1000;
 
@@ -28,15 +33,22 @@ export function isTransientStoreError(error: unknown): boolean {
 		return(true);
 	}
 	const code: unknown = Reflect.get(error, 'code');
-	return(typeof code === 'string' && TRANSIENT_SQLSTATES.has(code));
+	return(typeof code === 'string' && TRANSIENT_CODES.has(code));
 }
 
+/** A failure waited out: which attempt at the read it ended, how long since the read began, and how long the wait is. */
+export type TransientFailure = {
+	readonly attempt: number;
+	readonly elapsedMilliseconds: number;
+	readonly waitMilliseconds: number;
+};
+
 export type TransientRetry = {
-	readonly clock: Pick<PacerClock, 'pause'>;
+	readonly clock: PacerClock;
 	/** Ends the waiting: the read's error is then thrown. */
 	readonly stopped: AbortSignal;
-	/** Told of each failure waited out, and how long the wait is. */
-	readonly retrying?: (error: unknown, waitMilliseconds: number) => void;
+	/** Told of each failure waited out, so that a read failing on and on shows. */
+	readonly retrying?: (error: unknown, failure: TransientFailure) => void;
 };
 
 /**
@@ -47,15 +59,16 @@ export type TransientRetry = {
  * would lose its batch. Any other failure, or one once stopped, is thrown.
  */
 export async function retryingTransient<Result>(read: () => Promise<Result>, retry: TransientRetry): Promise<Result> {
+	const began = retry.clock.now();
 	let waitMilliseconds = FIRST_WAIT_MILLISECONDS;
-	for (;;) {
+	for (let attempt = 1; ; attempt++) {
 		try {
 			return(await read());
 		} catch (error: unknown) {
 			if (!isTransientStoreError(error) || retry.stopped.aborted) {
 				throw(error);
 			}
-			retry.retrying?.(error, waitMilliseconds);
+			retry.retrying?.(error, { attempt, elapsedMilliseconds: retry.clock.now() - began, waitMilliseconds });
 			try {
 				await retry.clock.pause(waitMilliseconds, retry.stopped);
 			} catch {
@@ -66,7 +79,12 @@ export async function retryingTransient<Result>(read: () => Promise<Result>, ret
 	}
 }
 
-/** The store, each of its reads run until it succeeds through the cluster's load (retryingTransient). */
+/**
+ * The store, each of its reads run until it succeeds through the cluster's
+ * load (retryingTransient). Every account with a chain is read page by page,
+ * as the store reads it, each page waited out alone, so that a busy moment
+ * reads again from the page it cut, not from the first.
+ */
 export function retryingStore(store: FollowerStore, retry: TransientRetry): FollowerStore {
 	function retrying<Args extends readonly unknown[], Result>(read: (...args: Args) => Promise<Result>): (...args: Args) => Promise<Result> {
 		return(function(...args: Args): Promise<Result> {
@@ -75,12 +93,15 @@ export function retryingStore(store: FollowerStore, retry: TransientRetry): Foll
 			}, retry));
 		});
 	}
+	const chainAccountsAfter = retrying(store.chainAccountsAfter.bind(store));
 	return({
 		progress: retrying(store.progress.bind(store)),
-		chainAccountsAfter: retrying(store.chainAccountsAfter.bind(store)),
+		chainAccountsAfter,
 		passiveAccountsAfter: retrying(store.passiveAccountsAfter.bind(store)),
 		accountCount: retrying(store.accountCount.bind(store)),
-		chainAccounts: retrying(store.chainAccounts.bind(store)),
+		chainAccounts(): Promise<readonly KnownAccount[]> {
+			return(everyChainAccount(chainAccountsAfter));
+		},
 		rowIDsOf: retrying(store.rowIDsOf.bind(store)),
 		historyHolds: retrying(store.historyHolds.bind(store)),
 		checksumSnapshot: retrying(store.checksumSnapshot.bind(store)),

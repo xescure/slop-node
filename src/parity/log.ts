@@ -296,6 +296,9 @@ export type DivergenceClass =
 
 export const DIVERGENCE_CLASSES: readonly DivergenceClass[] = ['our-bug', 'upstream-version', 'operational-artifact'];
 
+/** Why a triage was not preceded by a retest, for one recorded before triages stated it. */
+export const UNTESTED_UNRECORDED = 'unrecorded';
+
 /**
  * The triage of an API divergence no later comparison can settle, as the
  * state it was about has moved on: what it was and where that is fixed or
@@ -312,8 +315,10 @@ export type APIDiffExplainedRecord = {
 	/** The change that fixed it, or the section of the conformance documents that records it. */
 	readonly reference: string;
 	/**
-	 * Why it was explained though no later comparison of its request had
-	 * retested it, as the operator stated it; null when one had.
+	 * Why it was explained though no later attempt at its request had
+	 * retested it, as the operator stated it; null when one had, which the
+	 * explain command checked; UNTESTED_UNRECORDED for a triage recorded
+	 * before it did, whose evidence only its reference states.
 	 */
 	readonly untestedBecause: string | null;
 };
@@ -888,10 +893,13 @@ function apiDiffPlanRecordOf(value: Fields): APIDiffPlanRecord | undefined {
 	return({ kind: 'api-diff-plan', at, quietBefore, samplesPerStratum, strata });
 }
 
-/** A triage recorded before triages stated why none retested their divergence was of a retested one. */
+/** A triage recorded before triages stated whether a retest preceded them claims none. */
 function apiDiffExplainedRecordOf(value: Fields): APIDiffExplainedRecord | undefined {
 	const { at, path, divergenceAt, reference } = value;
-	const untestedBecause = value['untestedBecause'] ?? null;
+	let untestedBecause: unknown = UNTESTED_UNRECORDED;
+	if ('untestedBecause' in value) {
+		untestedBecause = value['untestedBecause'];
+	}
 	const stratum = stratumOf(value['stratum']);
 	const divergence = DIVERGENCE_CLASSES.find(function(known): boolean {
 		return(known === value['divergence']);

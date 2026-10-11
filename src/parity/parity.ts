@@ -27,6 +27,7 @@ import { freshShadowRun, runShadowVotes, SHADOW_SCOPE, shadowRunComplete } from 
 import { fileShadowState, shadowDirectory } from './shadow-state.js';
 import { recheckDivergences, sweepAccounts, sweepCursorPaths } from './sweep.js';
 import { retryingStore } from './transient-store.js';
+import type { TransientFailure } from './transient-store.js';
 import type { SweepCursorPaths } from './sweep.js';
 
 /** The pacer reads the wall clock, which a Retry-After date is in. */
@@ -462,8 +463,8 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
 		const store = retryingStore(openFollowerStore(followerDatabaseURL(directory)), {
 			clock: WALL_CLOCK,
 			stopped: stopping.signal,
-			retrying(error: unknown, waitMilliseconds: number): void {
-				process.stderr.write(`${new Date().toISOString()} the follower's database is under load (${messageOf(error)}); reading again in ${String(waitMilliseconds)} ms\n`);
+			retrying(error: unknown, { attempt, elapsedMilliseconds, waitMilliseconds }: TransientFailure): void {
+				process.stderr.write(`${new Date().toISOString()} the follower's database failed read attempt ${String(attempt)}, ${String(Math.round(elapsedMilliseconds / 1000))} s into the read (${messageOf(error)}); reading again in ${String(waitMilliseconds)} ms\n`);
 			}
 		});
 		try {

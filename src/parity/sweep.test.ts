@@ -206,6 +206,9 @@ describe('a follower database under load', function() {
 		});
 		const waits: number[] = [];
 		const clock = {
+			now(): number {
+				return(0);
+			},
 			pause(milliseconds: number): Promise<void> {
 				waits.push(milliseconds);
 				return(Promise.resolve());

@@ -52,9 +52,11 @@ export type ShadowRun = {
 	/** Told after each batch where the run stands. */
 	readonly progress?: (state: ShadowRunState) => void;
 	/**
-	 * Ends the run after the batch it is in, saved; but a stop that comes
-	 * while a staple of the batch applies the staples it released cuts the
-	 * batch short there, unsaved, and the run resumes from its last save.
+	 * Ends the run after the batch it is in, saved; but once it has come, the
+	 * first staple of the batch that applies while staples wait deferred cuts
+	 * the batch short there, before the collections that would apply what it
+	 * released, unsaved, as does a stop between two slices of those
+	 * collections; the run resumes from its last save.
 	 */
 	readonly stopped?: AbortSignal;
 };

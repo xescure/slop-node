@@ -258,6 +258,20 @@ describe('the parity report', function() {
 		expect(stratum).toMatchObject({ requestsCompared: 300, skippedByRoute: { '/api/node/ledger/account/{account}/pending': { moving: 0, unanswered: 1 } }, routesUncovered: [{ route: '/api/node/ledger/account/{account}/pending', compared: 0, neverCompared: 1 }], covered: false });
 	});
 
+	test('counts a request whose latest comparison is the divergence a triage explains as never compared in its route\'s share', function() {
+		const route = '/api/node/ledger/account/{account}/balance';
+		const compared = Array.from({ length: 300 }, function(_, index): APIDiffRecord {
+			return({ ...apiDiff('2026-10-11T14:01:00.000Z', 'token', `/node/ledger/account/${ACCOUNT}/history/start/${index.toString(16).padStart(64, '0')}`, MATCHED), route: '/api/node/ledger/account/{account}/history/start/{block}' });
+		});
+		const clean: APIDiffRecord = { ...apiDiff('2026-10-11T14:02:00.000Z', 'token', `/node/ledger/account/${ACCOUNT}/balance`, MATCHED), route };
+		const divergence: APIDiffRecord = { ...apiDiff('2026-10-11T14:03:00.000Z', 'token', `/node/ledger/account/${OTHER_ACCOUNT}/balance`, DIVERGED_INFO), route };
+		const explanation: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: '2026-10-11T17:00:00.000Z', stratum: 'token', path: divergence.path, divergenceAt: divergence.at, divergence: 'our-bug', reference: 'fixed by 0000000', untestedBecause: null };
+		const token = report([...compared, clean, divergence, explanation]).signals.apiDiff.strata.find(function(entry) {
+			return(entry.stratum === 'token');
+		});
+		expect(token).toMatchObject({ requestsCompared: 301, standingOnExplanation: 1, routesUncovered: [{ route, compared: 1, neverCompared: 1 }], covered: false });
+	});
+
 	test('leaves a stratum uncovered while more than a tenth of the requests of a route of it were never compared, listing the worst routes first', function() {
 		const onRoute = function(route: APIDiffRecord['route'], compared: number, skipped: number): APIDiffRecord[] {
 			return(Array.from({ length: compared + skipped }, function(_, index): APIDiffRecord {
