@@ -120,7 +120,7 @@ const API_DIFF_EXPLAINED: APIDiffExplainedRecord = {
 	divergenceAt: '2026-10-09T08:40:27.413Z',
 	divergence: 'our-bug',
 	reference: 'fixed by e27cc4e, with the history reindexed by 8ccbb10 (schema/CONTRACT.md, D18)',
-	untestedBecause: 'the follower and every representative refuse the page now'
+	retest: { kind: 'forced', why: 'the follower and every representative refuse the page now' }
 };
 
 const directories: string[] = [];
@@ -199,13 +199,13 @@ describe('the parity log', function() {
 		expect(await log.read()).toEqual({ records: [SHADOW_RUN], unreadableLines: 0 });
 	});
 
-	test('reads a triage recorded before a triage stated why no later comparison retested its divergence as one whose retest is unrecorded', async function() {
+	test('reads a triage recorded before triages were checked for a retest as one whose retest is unrecorded, which no reason given to a forced triage can read as', async function() {
 		const log = await scratchLog();
-		const { untestedBecause, ...older } = API_DIFF_EXPLAINED;
-		expect(untestedBecause).not.toBeNull();
-		await appendFile(log.path, `${JSON.stringify(older)}\n`);
+		const { retest, ...older } = API_DIFF_EXPLAINED;
+		expect(retest.kind).toBe('forced');
+		await appendFile(log.path, `${JSON.stringify(older)}\n${JSON.stringify({ ...older, retest: { kind: 'forced', why: 'unrecorded' } })}\n`);
 
-		expect(await log.read()).toEqual({ records: [{ ...older, untestedBecause: 'unrecorded' }], unreadableLines: 0 });
+		expect(await log.read()).toEqual({ records: [{ ...older, retest: { kind: 'unrecorded' } }, { ...older, retest: { kind: 'forced', why: 'unrecorded' } }], unreadableLines: 0 });
 	});
 
 	test('counts a line cut short, or one it does not know, apart from the records', async function() {

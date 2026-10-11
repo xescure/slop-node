@@ -9,7 +9,7 @@ import { assertNever } from '../util/assert-never.js';
 import { answeredByAPI, isAnonymousFailure } from './api-source.js';
 import type { APIAnswer, APISource } from './api-source.js';
 import type { AccountCandidate, FollowerStore, HeldBlock } from './follower-store.js';
-import type { APIDiffExplainedRecord, APIDiffOutcome, APIDiffPlanRecord, APIDiffReading, APIDiffRecord, ParityLog, ParityRecord, RepresentativeReading, StratumPopulation } from './log.js';
+import type { APIDiffExplainedRecord, APIDiffOutcome, APIDiffPlanRecord, APIDiffReading, APIDiffRecord, ParityLog, ParityRecord, RepresentativeReading, StratumPopulation, TriageRetest } from './log.js';
 import { ACCOUNT_KINDS, OPERATION_NAMES, operationStratum, STRATA } from './strata.js';
 import type { OperationName, Stratum } from './strata.js';
 import { disputedKindOf, firstDifference, newestStapleOf, QUIET_MARGIN_MILLISECONDS } from './sweep.js';
@@ -1337,7 +1337,10 @@ export async function recheckAPIDivergences(setup: APIRecheckSetup): Promise<API
 }
 
 /** A triage of an API divergence, as the explain command names it. */
-export type DivergenceTriage = Pick<APIDiffExplainedRecord, 'stratum' | 'path' | 'divergenceAt' | 'divergence' | 'reference' | 'untestedBecause'>;
+export type DivergenceTriage = Pick<APIDiffExplainedRecord, 'stratum' | 'path' | 'divergenceAt' | 'divergence' | 'reference'> & {
+	/** Why no retest needs to precede the triage, from --force, or null. */
+	readonly untestedBecause: string | null;
+};
 
 /**
  * Whether a later attempt at the request retested the divergence: compared
@@ -1377,10 +1380,16 @@ export async function explainDivergence(log: ParityLog, triage: DivergenceTriage
 	const retested = comparisons.slice(comparisons.indexOf(named) + 1).some(function(later): boolean {
 		return(later.stratum === named.stratum && later.path === named.path && retests(later));
 	});
-	if (!retested && (triage.untestedBecause ?? '').trim() === '') {
-		throw(new Error(`no later attempt at ${triage.stratum} ${triage.path} retested the divergence recorded at ${triage.divergenceAt}: send it again with recheck, or force the triage with why no retest is needed`));
+	let retest: TriageRetest = { kind: 'retested' };
+	if (!retested) {
+		const why = triage.untestedBecause ?? '';
+		if (why.trim() === '') {
+			throw(new Error(`no later attempt at ${triage.stratum} ${triage.path} retested the divergence recorded at ${triage.divergenceAt}: send it again with recheck, or force the triage with why no retest is needed`));
+		}
+		retest = { kind: 'forced', why };
 	}
-	const explained: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: new Date().toISOString(), ...triage };
+	const { stratum, path, divergenceAt, divergence, reference } = triage;
+	const explained: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: new Date().toISOString(), stratum, path, divergenceAt, divergence, reference, retest };
 	await log.append([explained]);
 	return(explained);
 }
