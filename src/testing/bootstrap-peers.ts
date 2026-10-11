@@ -6,8 +6,16 @@ import type { BloomFilter } from '@keetanetwork/keetanet-client/lib/utils/bloom.
 import { MAX_PAGE_BYTES } from '../node/bootstrap-page.js';
 import { assertNever } from '../util/assert-never.js';
 
-/** Whether a recording peer passes the filter a request carries on, or drops it, as a representative that ignores it would. */
-export type FilterHandling = 'passed-on' | 'dropped';
+/**
+ * Whether a recording peer passes the filter a request carries on, drops it,
+ * as a representative that ignores it would, or gives up on a request that
+ * carries one, as a gateway in front of a representative that reads too long
+ * past the staples a filter names does.
+ */
+export type FilterHandling = 'passed-on' | 'dropped' | 'gives-up';
+
+/** What a gateway answers when what stands behind it took too long. */
+const GATEWAY_TIMEOUT_STATUS = 504;
 
 /** A request for a page of staples, as a peer received it, and how many staples it answered with. */
 export type RecordedPage = {
@@ -76,7 +84,12 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 
 /** The bytes of each staple of a page, which a representative writes beside each staple's JSON. */
 function servedStaples(body: string): string[] {
-	const parsed: unknown = JSON.parse(body);
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(body);
+	} catch {
+		return([]);
+	}
 	if (!isRecord(parsed) || !Array.isArray(parsed['voteStaples'])) {
 		return([]);
 	}
@@ -104,6 +117,11 @@ function forward(target: URL, request: http.IncomingMessage, filter: FilterHandl
 			break;
 		case 'dropped':
 			url.searchParams.delete('bloomFilter');
+			break;
+		case 'gives-up':
+			if (url.searchParams.has('bloomFilter')) {
+				return(Promise.resolve({ status: GATEWAY_TIMEOUT_STATUS, contentType: 'text/html', body: '<html>504 Gateway Time-out</html>' }));
+			}
 			break;
 		default:
 			assertNever(filter);
@@ -168,6 +186,15 @@ export async function startFailingPeer(): Promise<TestPeer & { readonly requests
 	return({ apiURL: await listenUntilTestEnds(server), requests: function(): number {
 		return(requests);
 	} });
+}
+
+/** A peer that answers every request with the status and body given. */
+export async function startAnsweringPeer(status: number, body: string): Promise<TestPeer> {
+	const server = http.createServer(function(_ignoredRequest, response): void {
+		response.writeHead(status, { 'content-type': 'application/json' });
+		response.end(body);
+	});
+	return({ apiURL: await listenUntilTestEnds(server) });
 }
 
 /** A representative that accepts each request and never answers it. */

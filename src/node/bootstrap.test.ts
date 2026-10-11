@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, onTestFinished, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account } from '@keetanetwork/keetanet-client/lib/account.js';
@@ -9,7 +10,7 @@ import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerStorageDriverBase } from '../ledger/storage/base.js';
 import { GENESIS_MOMENT, ChainCursor, requireAt } from '../ledger/storage/suite/support.js';
 import { confirmedStaple, sendBlock } from '../testing/blocks.js';
-import { VOTES_PER_READ, listedByVotes, pageFrom, startFailingPeer, startRecordingPeer, startServingPeer, startSilentAPIPeer, unreachableEndpoint } from '../testing/bootstrap-peers.js';
+import { VOTES_PER_READ, listedByVotes, pageFrom, startAnsweringPeer, startFailingPeer, startRecordingPeer, startServingPeer, startSilentAPIPeer, unreachableEndpoint } from '../testing/bootstrap-peers.js';
 import type { RecordedPage } from '../testing/bootstrap-peers.js';
 import { request, useLocalNodes } from '../testing/local-node.js';
 import type { CreatedLocalNode, LocalNodeOptions, RunningLocalNode } from '../testing/local-node.js';
@@ -18,14 +19,16 @@ import type { TestNetwork } from '../testing/network.js';
 import { watchOpenHandles } from '../testing/open-handles.js';
 import { STORAGES_UNDER_TEST, useSDKNodes } from '../testing/sdk.js';
 import { KVInternals } from '../upstream/internals.js';
+import { assertNever } from '../util/assert-never.js';
 import { eachStapleOnce } from '../util/each-staple-once.js';
 import type { ServingNode, StorageUnderTest } from '../testing/sdk.js';
 import { BootstrapClient } from './bootstrap.js';
-import { BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RETRY_ARENA, BootstrapCursors } from './bootstrap-cursors.js';
-import { bootstrapFrom, bootstrapSources } from './bootstrap-peers.js';
-import { MAX_PASS_MILLISECONDS } from './bootstrap-pass.js';
+import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RETRY_ARENA, BootstrapCursors } from './bootstrap-cursors.js';
+import { bootstrapEndpointsOf, bootstrapFrom, bootstrapSources } from './bootstrap-peers.js';
+import { DEEP_SCAN_PERIOD_MILLISECONDS, MAX_PASS_MILLISECONDS } from './bootstrap-pass.js';
 import { REPORT_REFUSED_AFTER_MILLISECONDS } from './bootstrap-retry.js';
 import { stagedOf } from './bootstrap-stage.js';
+import { awaitedOf } from './retry-signals.js';
 import { BOOTSTRAP_MARGIN_MILLISECONDS } from './bootstrap-window.js';
 import type { LocalNode } from './local.js';
 
@@ -122,6 +125,16 @@ function warningsOf(node: Node): () => string[] {
 	const warn = vi.spyOn(node.log, 'warn');
 	return(function(): string[] {
 		return(warn.mock.calls.map(function(call): string {
+			return(call.map(String).join(' '));
+		}));
+	});
+}
+
+/** The lines the node logs at that level from now on, each as one line. */
+function linesOf(node: Node, level: 'info' | 'debug' | 'error'): () => string[] {
+	const logged = vi.spyOn(node.log, level);
+	return(function(): string[] {
+		return(logged.mock.calls.map(function(call): string {
 			return(call.map(String).join(' '));
 		}));
 	});
@@ -414,6 +427,17 @@ describe('a bootstrap client', function() {
 			expect.stringContaining(`the history from ${new Date(reached).toISOString()} to ${new Date(end).toISOString()}, which its 2 peers now read in as many ranges`),
 			expect.stringContaining(`the ranges from ${new Date(reached).toISOString()} to ${new Date(end).toISOString()} are read`)
 		]);
+		const middle = Math.floor(reached + (end - reached) / 2);
+		expect(logged.filter(function(line): boolean {
+			return(line.includes('Bootstrap pass over'));
+		})).toEqual([`BOOTSTRAP Bootstrap pass over ${first.apiURL}: read the range from ${new Date(reached - 61_000).toISOString()} to ${new Date(middle).toISOString()} after 2 requests, 0 staples added, 0 held already, 0 queued for retry, 6 staged (0 in the queue)`]);
+		const splits = logged.filter(function(line): boolean {
+			return(line.includes('takes on the range'));
+		});
+		expect(splits.length).toBeGreaterThan(0);
+		for (const split of splits) {
+			expect(split).toMatch(/^BOOTSTRAP Bootstrap from http:\/\/127\.0\.0\.1:\d+\/api: takes on the range from \S+Z to \S+Z, the later part of the one http:\/\/127\.0\.0\.1:\d+\/api reads, which reached \S+Z and now ends at \S+Z$/u);
+		}
 		expect(await client.update()).toEqual({ complete: true });
 
 		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
@@ -505,6 +529,8 @@ describe('a bootstrap client', function() {
 				return(warning.includes(`Bootstrapping from ${endpoint} failed`));
 			})).toBe(true);
 		}
+		// A request that fails other than as a page is passed on as it failed.
+		expect(warnings()).toContainEqual(expect.stringContaining('connect ECONNREFUSED'));
 		expect(warnings().some(function(warning): boolean {
 			return(warning.includes(peer.apiURL));
 		})).toBe(false);
@@ -558,6 +584,8 @@ describe('a bootstrap client', function() {
 		const reads = vi.spyOn(late.node.ledger, 'getVoteStaplesAfter');
 		const adds = vi.spyOn(late.node.ledger, 'add');
 		const requested = serving.pages.length;
+		const warnings = warningsOf(late.node);
+		const debug = linesOf(late.node, 'debug');
 
 		const updating = client.update();
 		await silent.requested;
@@ -569,6 +597,10 @@ describe('a bootstrap client', function() {
 		expect(await updating).toEqual({ complete: false });
 		expect({ reads: reads.mock.calls.length, adds: adds.mock.calls.length, requests: serving.pages.length - requested }).toEqual({ ...before, requests: 0 });
 		expect(stoppedIn).toBeLessThan(STOP_BOUND_MILLISECONDS);
+		// The pass over the next peer was not begun, so it recorded no progress on it.
+		expect(await kv.list(BOOTSTRAP_CURSOR_ARENA)).toEqual([silent.apiURL]);
+		expect(warnings()).toEqual([]);
+		expect(debug()).toContain(`BOOTSTRAP Stopped bootstrapping from ${silent.apiURL}`);
 		// A read of what the node holds, which a stop cannot end, ends of itself in time.
 		expect(reads.mock.calls.map(function([, , options]): number | undefined {
 			return(options?.timeout);
@@ -801,6 +833,624 @@ describe('a bootstrap client', function() {
 	});
 });
 
+describe('a bootstrap client at the edges of what it accepts and meets', function() {
+	test('refuses a timeout or a period that is no positive number of milliseconds, and a page of no whole number of staples from 1 to 1000', async function() {
+		const late = await joiner();
+		for (const timeout of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+			expect(function() {
+				return(new BootstrapClient(late.node, { timeout }));
+			}).toThrow(new RangeError(`the bootstrap timeout must be a positive number of milliseconds (it is ${String(timeout)})`));
+		}
+		expect(function() {
+			return(new BootstrapClient(late.node, { period: 0 }));
+		}).toThrow(new RangeError('the bootstrap period must be a positive number of milliseconds (it is 0)'));
+		const client = clientOf(late.node);
+		for (const limit of [0, 1.5, 1001]) {
+			await expect(client.update(limit)).rejects.toThrow(new RangeError(`a bootstrap page holds from 1 to 1000 staples (${String(limit)} were asked for)`));
+		}
+
+		expect(await client.update(1)).toEqual({ complete: true });
+		expect(clientOf(late.node, { timeout: 1 }).timeout).toBe(1);
+	});
+
+	test('staggers the first deep re-scan of each peer by the share of a period its endpoint names', async function() {
+		const peer = await representative();
+		const late = await joiner({ bootstrapFrom: [peer.apiURL] });
+		const kv = new KVInternals.KVStorageProviderMemory();
+		const began = Date.now();
+
+		await clientOf(late.node, { kv }).update();
+
+		const stagger = createHash('sha256').update(peer.apiURL).digest().readUInt32BE(0) % DEEP_SCAN_PERIOD_MILLISECONDS;
+		expect((await new BootstrapCursors(kv).read(peer.apiURL))?.nextDeepScan).toEqual(new Date(began + DEEP_SCAN_PERIOD_MILLISECONDS + stagger));
+	});
+
+	test('keeps the horizon of the latest pass that completed, from which it reads a peer it has no progress on', async function() {
+		const peer = await representative();
+		const recording = await startRecordingPeer(peer.apiURL);
+		const late = await joiner({ bootstrapFrom: [peer.apiURL] });
+		const kv = new KVInternals.KVStorageProviderMemory();
+		await clientOf(late.node, { kv }).update();
+		const horizon = Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS;
+		expect(await kv.get(BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY)).toBe(horizon);
+		advanceClock(1000);
+
+		bootstrapFrom(late.node.config, [peer.apiURL, recording.apiURL]);
+		await clientOf(late.node, { kv }).update();
+
+		expect(recording.pages[0]?.start).toBe(new Date(horizon).toISOString());
+	});
+
+	test('fails no update, but logs it and records it incomplete, when it cannot find the peers to bootstrap from', async function() {
+		const running = await representative();
+		const client = clientOf(running.node);
+		expect(await client.update()).toEqual({ complete: true });
+		const warnings = warningsOf(running.node);
+		vi.spyOn(running.node.switch, 'peers').mockRejectedValue(new Error('the switch is gone'));
+
+		expect(await client.update()).toEqual({ complete: false });
+
+		expect(warnings()).toEqual(['BOOTSTRAP Finding the peers to bootstrap from failed; they are looked for again on the next update: Error: the switch is gone']);
+		expect(await client.stats()).toEqual({ lastUpdate: new Date(), completeCount: 0 });
+	});
+
+	test('records no update and asks no peer once stopped', async function() {
+		const peer = await representative();
+		const recording = await startRecordingPeer(peer.apiURL);
+		const late = await joiner({ bootstrapFrom: [recording.apiURL] });
+		const client = clientOf(late.node);
+
+		await client.stop();
+
+		expect(await client.update()).toEqual({ complete: false });
+		expect(await client.stats()).toEqual({ lastUpdate: undefined, completeCount: 0 });
+		expect(recording.pages).toEqual([]);
+	});
+
+	test('queues a staple the ledger refuses under the code of the refusal, or else what the error says, at most 200 characters of it', async function() {
+		const peer = await representative();
+		const sends = await sendsFrom(peer.network, 0, 5);
+		const serving = await startServingPeer();
+		serving.apply([...sends, peer.network.genesis]);
+		const late = await joiner({ bootstrapFrom: [serving.apiURL] });
+		const kv = new KVInternals.KVStorageProviderMemory();
+		const set = vi.spyOn(kv, 'set');
+		const named = new Error('n'.repeat(300));
+		named.name = 'Unnamed';
+		const silent = new Error('');
+		silent.name = 'Silent';
+		const numbered = Object.assign(new Error('numbered'), { code: 5 });
+		vi.spyOn(late.node.ledger, 'add').mockRejectedValueOnce(named).mockRejectedValueOnce('t'.repeat(300)).mockRejectedValueOnce(silent).mockRejectedValueOnce(numbered).mockRejectedValueOnce({ code: 'NOT_AN_ERROR' });
+		const info = linesOf(late.node, 'info');
+
+		expect(await clientOf(late.node, { kv }).update(1)).toEqual({ complete: true });
+
+		// A pass that queued staples is logged though it completed.
+		expect(info()).toContainEqual(expect.stringMatching(/ staples added, 0 held already, [1-9]\d* queued for retry, 0 staged \(0 in the queue\)$/u));
+
+		expect(set.mock.calls.filter(function([arena, , value]): boolean {
+			return(arena === BOOTSTRAP_RETRY_ARENA && value !== undefined);
+		}).map(function([, , value]): unknown {
+			return(Reflect.get(Object(value), 'code'));
+		})).toEqual([`Unnamed: ${'n'.repeat(191)}`, 't'.repeat(200), 'Silent: ', 'Error: numbered', '[object Object]']);
+		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([peer.network.genesis, ...sends]));
+	});
+
+	test('fails a pass over a peer that answers with no page, or is no HTTP endpoint, naming why', async function() {
+		const failing = await startFailingPeer();
+		const malformed = await startAnsweringPeer(200, 'not JSON');
+		const late = await joiner({ bootstrapFrom: [failing.apiURL, malformed.apiURL, 'ftp://127.0.0.1/api'] });
+		const warnings = warningsOf(late.node);
+
+		expect(await clientOf(late.node).update()).toEqual({ complete: false });
+
+		const failed = 'failed; it is tried again on the next update: PageError:';
+		expect(warnings()).toEqual([
+			`BOOTSTRAP Bootstrapping from ${failing.apiURL} ${failed} ${failing.apiURL} answered 500: An internal error occurred`,
+			`BOOTSTRAP Bootstrapping from ${malformed.apiURL} ${failed} ${malformed.apiURL} answered with no page of staples: the body is no JSON`,
+			`BOOTSTRAP Bootstrapping from ftp://127.0.0.1/api ${failed} ftp://127.0.0.1/api is no http:// or https:// URL`
+		]);
+	});
+
+	test('names fewer of the staples it holds in each pass after a peer gives up on a request that carried them, across updates', async function() {
+		const peer = await representative();
+		await addAll(peer.node, await sendsFrom(peer.network, 0, 2));
+		const gateway = await startRecordingPeer(peer.apiURL, { filter: 'gives-up' });
+		const late = await joiner({ bootstrapFrom: [gateway.apiURL] });
+		const warnings = warningsOf(late.node);
+		const client = clientOf(late.node);
+
+		for (let update = 0; update < 3; update++) {
+			expect(await client.update()).toEqual({ complete: false });
+		}
+
+		expect(warnings()).toEqual([64, 32, 16].map(function(size): string {
+			return(`BOOTSTRAP Bootstrapping from ${gateway.apiURL} failed; it is tried again on the next update: Error: PageError: ${gateway.apiURL} answered 504; the next pass names at most ${String(size)} staples the node holds ahead of its start`);
+		}));
+	});
+
+	test('warns, once, of a peer it has seen key votes both by when they were made and later than that', async function() {
+		const peer = await representative();
+		const genesis = Buffer.from(peer.network.genesis.toBytes()).toString('base64');
+		const late = await startAnsweringPeer(200, JSON.stringify({ voteStaples: [{ $binary: genesis }] }));
+		const joining = await joiner({ bootstrapFrom: [late.apiURL] });
+		const kv = new KVInternals.KVStorageProviderMemory();
+		// Long after genesis was voted on.
+		advanceClock(60 * 60_000);
+		const start = new Date(Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS);
+		await new BootstrapCursors(kv).write(late.apiURL, { reached: start, caughtUp: true, deepScanFrom: start, nextDeepScan: new Date(Date.now() + DEEP_SCAN_PERIOD_MILLISECONDS), deepScan: undefined, keying: 'votes' });
+		const warnings = warningsOf(joining.node);
+
+		expect(await clientOf(joining.node, { kv }).update()).toEqual({ complete: false });
+
+		expect(warnings()[0]).toBe(`BOOTSTRAP Bootstrap from ${late.apiURL}: the peer lists staples twice, as one keyed by votes does, and listed from ${start.toISOString()} staple ${peer.network.genesis.blocksHash.toString()}, none of whose votes was made within 1000 ms before it or later: it keys votes later than they were made, and passes over it now move on only by what holds whatever later moment it keys them at`);
+		expect(warnings()).toHaveLength(2);
+		expect((await new BootstrapCursors(kv).read(late.apiURL))?.keying).toBe('late-votes');
+	});
+
+	test('resumes the ranges its store keeps rather than lay them out again', async function() {
+		const peer = await representative();
+		await addAll(peer.node, await sendsFrom(peer.network, 0, 2));
+		const recording = await startRecordingPeer(peer.apiURL);
+		const other = await startRecordingPeer(peer.apiURL);
+		const late = await joiner({ bootstrapFrom: [recording.apiURL, other.apiURL] });
+		const kv = new KVInternals.KVStorageProviderMemory();
+		advanceClock(2 * 24 * 60 * 60_000);
+		const end = new Date(Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS);
+		const reached = new Date(GENESIS_MOMENT.getTime() - 60_000);
+		await new BootstrapCursors(kv).writeLayout({ from: GENESIS_MOMENT, end, deepScanPeer: recording.apiURL, ranges: [{ id: 0, reached, end, peer: recording.apiURL, pace: { spent: 0, advanced: 0 } }], standings: {}, fullQueueUpdates: 0, nextID: 1 });
+		const info = linesOf(late.node, 'info');
+
+		expect(await clientOf(late.node, { kv }).update()).toEqual({ complete: false });
+
+		expect(recording.pages[0]?.start).toBe(reached.toISOString());
+		expect(info().filter(function(line): boolean {
+			return(line.includes('in as many ranges'));
+		})).toEqual([]);
+		expect(await new BootstrapCursors(kv).readLayout()).toBeUndefined();
+		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
+	});
+
+	test('logs a pass over a range that fails, naming the range, and one stopped only at debug level', async function() {
+		const failing = await startFailingPeer();
+		const silent = await startSilentAPIPeer();
+		const late = await joiner({ bootstrapFrom: [failing.apiURL, silent.apiURL] });
+		const kv = new KVInternals.KVStorageProviderMemory();
+		advanceClock(2 * 24 * 60 * 60_000);
+		const end = new Date(Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS);
+		const middle = new Date(GENESIS_MOMENT.getTime() + 24 * 60 * 60_000);
+		await new BootstrapCursors(kv).writeLayout({ from: GENESIS_MOMENT, end, deepScanPeer: failing.apiURL, ranges: [
+			{ id: 0, reached: GENESIS_MOMENT, end: middle, peer: failing.apiURL, pace: { spent: 0, advanced: 0 } },
+			{ id: 1, reached: middle, end, peer: silent.apiURL, pace: { spent: 0, advanced: 0 } }
+		], standings: { [failing.apiURL]: { failures: 2, benchedUntil: undefined } }, fullQueueUpdates: 0, nextID: 2 });
+		const warnings: string[] = [];
+		const warned = new Promise<void>(function(resolve) {
+			vi.spyOn(late.node.log, 'warn').mockImplementation(function(...line: unknown[]): void {
+				warnings.push(line.map(String).join(' '));
+				resolve();
+			});
+		});
+		const debug = linesOf(late.node, 'debug');
+		const client = clientOf(late.node, { kv });
+
+		const updating = client.update();
+		await Promise.all([silent.requested, warned]);
+		await client.stop();
+
+		expect(await updating).toEqual({ complete: false });
+		const benchedUntil = new Date(Date.now() + 30 * 60_000);
+		expect(warnings).toEqual([
+			`BOOTSTRAP Bootstrapping from ${failing.apiURL} in the range from ${GENESIS_MOMENT.toISOString()} to ${middle.toISOString()} failed; it is tried again on the next update: PageError: ${failing.apiURL} answered 500: An internal error occurred`,
+			`BOOTSTRAP Bootstrap from ${failing.apiURL}: its passes over a range failed too often in a row, so another peer reads the range, and it reads none until ${benchedUntil.toISOString()}`
+		]);
+		expect(debug()).toContain(`BOOTSTRAP Stopped bootstrapping from ${silent.apiURL}`);
+		// A stopped pass counts neither for its peer nor against it.
+		expect((await new BootstrapCursors(kv).readLayout())?.standings).toEqual({ [failing.apiURL]: { failures: 0, benchedUntil }, [silent.apiURL]: { failures: 0, benchedUntil: undefined } });
+	});
+
+	test('logs a pass that finds the node has reached the moment it began as caught up, at debug level, and logs no staged staples it did not add', async function() {
+		const peer = await representative();
+		const late = await joiner({ bootstrapFrom: [peer.apiURL] });
+		const kv = new KVInternals.KVStorageProviderMemory();
+		const ahead = new Date(Date.now() + 1000);
+		await new BootstrapCursors(kv).write(peer.apiURL, { reached: ahead, caughtUp: true, deepScanFrom: ahead, nextDeepScan: new Date(Date.now() + DEEP_SCAN_PERIOD_MILLISECONDS), deepScan: undefined, keying: 'votes' });
+		const debug = linesOf(late.node, 'debug');
+		const info = linesOf(late.node, 'info');
+
+		expect(await clientOf(late.node, { kv }).update()).toEqual({ complete: true });
+
+		expect(debug()).toContain(`BOOTSTRAP Bootstrap pass over ${peer.apiURL}: caught up after 0 requests, 0 staples added, 0 held already, 0 queued for retry, 0 staged (0 in the queue)`);
+		expect(info()).toEqual([]);
+	});
+
+	test('logs a pass over a peer that reached its bound with where it reached, as it does one over a range', async function() {
+		const peer = await representative();
+		await addAll(peer.node, await sendsFrom(peer.network, 0, 2));
+		let answered = 0;
+		const slow = await startRecordingPeer(peer.apiURL, { beforeAnswer: function(): void {
+			answered++;
+			// The first page takes all the time a pass has.
+			if (answered === 1) {
+				advanceClock(MAX_PASS_MILLISECONDS);
+			}
+		} });
+		const late = await joiner({ bootstrapFrom: [slow.apiURL] });
+		const info = linesOf(late.node, 'info');
+
+		expect(await clientOf(late.node).update(1)).toEqual({ complete: false });
+
+		expect(info()).toContainEqual(`BOOTSTRAP Bootstrap pass over ${slow.apiURL}: reached ${EPOCH} within this update's bound (it continues on the next update) after 1 requests, 1 staples added, 0 held already, 0 queued for retry, 0 staged (0 in the queue)`);
+
+		const ranged = await joiner({ bootstrapFrom: [slow.apiURL] });
+		const kv = new KVInternals.KVStorageProviderMemory();
+		advanceClock(2 * 24 * 60 * 60_000);
+		const end = new Date(Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS);
+		await new BootstrapCursors(kv).writeLayout({ from: GENESIS_MOMENT, end, deepScanPeer: slow.apiURL, ranges: [{ id: 0, reached: GENESIS_MOMENT, end, peer: slow.apiURL, pace: { spent: 0, advanced: 0 } }], standings: {}, fullQueueUpdates: 0, nextID: 1 });
+		const rangedInfo = linesOf(ranged.node, 'info');
+		answered = 0;
+
+		expect(await clientOf(ranged.node, { kv }).update(1)).toEqual({ complete: false });
+
+		expect(rangedInfo()).toContainEqual(expect.stringMatching(new RegExp(`^BOOTSTRAP Bootstrap pass over ${slow.apiURL}: reached \\S+ within this update's bound \\(it continues on the next update\\), in the range from ${GENESIS_MOMENT.toISOString()} to ${end.toISOString()} after 1 requests, 0 staples added, 0 held already, 0 queued for retry, 1 staged \\(0 in the queue\\)$`, 'u')));
+	});
+
+	test('stages a staple on blocks the ledger holds with other votes as held, while it adds what it staged', async function() {
+		const peer = await representative();
+		const recording = await startRecordingPeer(peer.apiURL);
+		const holder = await joiner({ genesis: 'held', bootstrapFrom: [recording.apiURL] });
+		const [first, second] = await sendsFrom(peer.network, 0, 2);
+		if (first === undefined || second === undefined) {
+			throw(new Error('no staples were made'));
+		}
+		await addAll(peer.node, [first, second]);
+		await holder.node.ledger.add(await confirmedStaple(first.blocks, peer.network.representatives, { voteDelays: [1, 1] }));
+		const storage = holder.node.config.ledger.storageDriver;
+		if (!(storage instanceof LedgerStorageDriverBase)) {
+			throw(new Error('the node\'s ledger is not on a driver of this node'));
+		}
+		// What a restage leaves, so that the pass stages what it is sent.
+		await storage.bootstrapStage().put([stagedOf(second)]);
+		const debug = linesOf(holder.node, 'debug');
+
+		expect(await clientOf(holder.node).update()).toEqual({ complete: true });
+
+		expect(debug()).toContainEqual(expect.stringMatching(new RegExp(`^BOOTSTRAP Bootstrap pass over ${recording.apiURL}: drained after \\d+ requests, 0 staples added, 1 held already, 0 queued for retry, 0 staged \\(0 in the queue\\)$`, 'u')));
+		expect(await heldBlocksHashes(holder.node)).toEqual(await heldBlocksHashes(peer.node));
+	});
+
+	test('keeps what it stages in memory on a ledger whose driver is not of this node', async function() {
+		const late = await joiner();
+		const { log, config, ledger } = late.node;
+		// The driver as seen through a proxy that is no instance of this node's drivers.
+		const foreign = new Proxy(config.ledger.storageDriver, {
+			getPrototypeOf(): object | null {
+				return(Object.prototype);
+			}
+		});
+		expect(foreign instanceof LedgerStorageDriverBase).toBe(false);
+
+		const client = new BootstrapClient({ log, config: { ...config, ledger: { ...config.ledger, storageDriver: foreign } }, ledger });
+
+		expect(await client.update()).toEqual({ complete: true });
+		await client.stop();
+	});
+
+	describe('adding what it staged', function() {
+		/** A node joining late whose stage holds what a restage leaves of the peer's genesis and sends, and the peer, which holds them. */
+		async function stagedJoiner(sends: number): Promise<{ readonly late: CreatedLocalNode; readonly stage: ReturnType<LedgerStorageDriverBase['bootstrapStage']>; readonly staples: number }> {
+			const peer = await representative();
+			const late = await joiner({ bootstrapFrom: [peer.apiURL] });
+			const staples = [peer.network.genesis, ...await sendsFrom(peer.network, 0, sends)];
+			await addAll(peer.node, staples.slice(1));
+			const storage = late.node.config.ledger.storageDriver;
+			if (!(storage instanceof LedgerStorageDriverBase)) {
+				throw(new Error('the node\'s ledger is not on a driver of this node'));
+			}
+			const stage = storage.bootstrapStage();
+			await stage.put(staples.map(stagedOf));
+			return({ late, stage, staples: staples.length });
+		}
+
+		test('adds every staple staged before the frontier in the update, batch after batch, after the passes ended', async function() {
+			const { late, stage, staples } = await stagedJoiner(70);
+			// With no peer to read, the passes end at once, and only the adding is left.
+			bootstrapFrom(late.node.config, []);
+
+			expect(await clientOf(late.node).update()).toEqual({ complete: true });
+
+			expect(await stage.counts()).toEqual({ staples: 0, bytes: 0 });
+			expect(await heldBlocksHashes(late.node)).toHaveLength(staples);
+		});
+
+		test('leaves what it staged for the next update once the update\'s time is up, and says so', async function() {
+			const { late, stage, staples } = await stagedJoiner(70);
+			const add = late.node.ledger.add.bind(late.node.ledger);
+			let first = true;
+			vi.spyOn(late.node.ledger, 'add').mockImplementation(function(...args: Parameters<typeof add>): Promise<VoteStaple[]> {
+				if (first) {
+					first = false;
+					advanceClock(MAX_PASS_MILLISECONDS);
+				}
+				return(add(...args));
+			});
+			const info = linesOf(late.node, 'info');
+
+			expect(await clientOf(late.node).update()).toEqual({ complete: false });
+
+			const left = await stage.counts();
+			expect(left.staples).toBe(staples - 64);
+			expect(info()).toContainEqual(`BOOTSTRAP Bootstrap: added 64 staged staples, by their votes, of every staple; more of those are left to add; ${String(left.staples)} staples (0 MiB) remain staged`);
+		});
+
+		test('says up to where it added what it staged while ranges are left to read', async function() {
+			const peer = await representative();
+			const recording = await startRecordingPeer(peer.apiURL);
+			const failing = await startFailingPeer();
+			const late = await joiner({ genesis: 'held', bootstrapFrom: [recording.apiURL, failing.apiURL] });
+			await addAll(peer.node, await sendsFrom(peer.network, 0, 3));
+			const kv = new KVInternals.KVStorageProviderMemory();
+			advanceClock(2 * 24 * 60 * 60_000);
+			const end = new Date(Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS);
+			const later = new Date(GENESIS_MOMENT.getTime() + 60 * 60_000);
+			await new BootstrapCursors(kv).writeLayout({ from: GENESIS_MOMENT, end, deepScanPeer: recording.apiURL, ranges: [
+				{ id: 0, reached: new Date(GENESIS_MOMENT.getTime() - 61_000), end: later, peer: recording.apiURL, pace: { spent: 0, advanced: 0 } },
+				{ id: 1, reached: later, end, peer: failing.apiURL, pace: { spent: 0, advanced: 0 } }
+			], standings: {}, fullQueueUpdates: 0, nextID: 2 });
+			const info = linesOf(late.node, 'info');
+
+			expect(await clientOf(late.node, { kv }).update()).toEqual({ complete: false });
+
+			expect(info()).toContainEqual(`BOOTSTRAP Bootstrap: added 3 staged staples, by their votes, of those whose earliest vote was made before ${new Date(later.getTime() - 61_000).toISOString()}; 0 staples (0 MiB) remain staged`);
+		});
+
+		test('logs a pass over a range it has read to its end as read', async function() {
+			const peer = await representative();
+			const late = await joiner({ bootstrapFrom: [peer.apiURL] });
+			const kv = new KVInternals.KVStorageProviderMemory();
+			advanceClock(2 * 24 * 60 * 60_000);
+			const end = new Date(Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS);
+			await new BootstrapCursors(kv).writeLayout({ from: GENESIS_MOMENT, end, deepScanPeer: peer.apiURL, ranges: [{ id: 0, reached: end, end, peer: peer.apiURL, pace: { spent: 0, advanced: 0 } }], standings: {}, fullQueueUpdates: 0, nextID: 1 });
+			const debug = linesOf(late.node, 'debug');
+
+			await clientOf(late.node, { kv }).update();
+
+			expect(debug()).toContain(`BOOTSTRAP Bootstrap pass over ${peer.apiURL}: read the range from ${end.toISOString()} to ${end.toISOString()} after 0 requests, 0 staples added, 0 held already, 0 queued for retry, 0 staged (0 in the queue)`);
+		});
+
+		test('stops adding what it staged once stopped, and leaves the rest staged', async function() {
+			const { late, stage, staples } = await stagedJoiner(5);
+			const client = clientOf(late.node);
+			const add = late.node.ledger.add.bind(late.node.ledger);
+			let stopped: Promise<void> | undefined;
+			vi.spyOn(late.node.ledger, 'add').mockImplementation(function(...args: Parameters<typeof add>): Promise<VoteStaple[]> {
+				stopped ??= client.stop();
+				return(add(...args));
+			});
+
+			expect(await client.update()).toEqual({ complete: false });
+			await stopped;
+
+			expect(await stage.counts()).toMatchObject({ staples: staples - 1 });
+		});
+	});
+
+	test('offers the ledger no staple once stopped, though the stop came while it read whether it held it, and queues none it refused as it stopped', async function() {
+		const peer = await representative();
+		await addAll(peer.node, await sendsFrom(peer.network, 0, 2));
+		const late = await joiner({ bootstrapFrom: [peer.apiURL] });
+		const client = clientOf(late.node);
+		const read = late.node.ledger.getVoteStaple.bind(late.node.ledger);
+		let stopped: Promise<void> | undefined;
+		vi.spyOn(late.node.ledger, 'getVoteStaple').mockImplementation(function(...args: Parameters<typeof read>): ReturnType<typeof read> {
+			stopped ??= client.stop();
+			return(read(...args));
+		});
+		const adds = vi.spyOn(late.node.ledger, 'add');
+
+		expect(await client.update()).toEqual({ complete: false });
+		await stopped;
+		expect(adds).not.toHaveBeenCalled();
+
+		const refusing = await joiner({ bootstrapFrom: [peer.apiURL] });
+		const kv = new KVInternals.KVStorageProviderMemory();
+		const refusingClient = clientOf(refusing.node, { kv });
+		let stoppedAgain: Promise<void> | undefined;
+		vi.spyOn(refusing.node.ledger, 'add').mockImplementation(function(): Promise<VoteStaple[]> {
+			stoppedAgain ??= refusingClient.stop();
+			return(Promise.reject(new Error('refused as the node stops')));
+		});
+
+		expect(await refusingClient.update()).toEqual({ complete: false });
+		await stoppedAgain;
+		expect(await kv.list(BOOTSTRAP_RETRY_ARENA)).toEqual([]);
+	});
+
+	test('stages nothing more of a page once stopped', async function() {
+		const peer = await representative();
+		const late = await joiner({ bootstrapFrom: [peer.apiURL] });
+		await addAll(peer.node, await sendsFrom(peer.network, 0, 3));
+		const storage = late.node.config.ledger.storageDriver;
+		if (!(storage instanceof LedgerStorageDriverBase)) {
+			throw(new Error('the node\'s ledger is not on a driver of this node'));
+		}
+		const stage = storage.bootstrapStage();
+		// What a restage leaves, so that the pass stages what it is sent.
+		await stage.put([stagedOf(peer.network.genesis)]);
+		const client = clientOf(late.node);
+		const put = stage.put.bind(stage);
+		let stopped: Promise<void> | undefined;
+		const puts = vi.spyOn(stage, 'put').mockImplementation(function(...args: Parameters<typeof put>): ReturnType<typeof put> {
+			stopped ??= client.stop();
+			return(put(...args));
+		});
+
+		expect(await client.update()).toEqual({ complete: false });
+		await stopped;
+
+		expect(puts).toHaveBeenCalledTimes(1);
+	});
+
+	test('logs a pass that queued what it was sent and added nothing, though it completed', async function() {
+		const peer = await representative();
+		const serving = await startServingPeer();
+		serving.apply(await sendsFrom(peer.network, 0, 2));
+		const late = await joiner({ bootstrapFrom: [serving.apiURL] });
+		const info = linesOf(late.node, 'info');
+
+		expect(await clientOf(late.node).update()).toEqual({ complete: true });
+
+		expect(info()).toEqual([expect.stringMatching(new RegExp(`^BOOTSTRAP Bootstrap pass over ${serving.apiURL}: drained after \\d+ requests, 0 staples added, 0 held already, 2 queued for retry, 0 staged \\(2 in the queue\\)$`, 'u'))]);
+	});
+
+	test('once a full queue stops a pass from where the last reached, stages what it is sent while ranges are laid out, begins a deep re-scan at once, and yields every fifth update to the peers', async function() {
+		const peer = await representative();
+		const serving = await startServingPeer();
+		// Without genesis, which gives their voters weight, the ledger refuses them.
+		serving.apply(await sendsFrom(peer.network, 0, 2));
+		const late = await joiner({ bootstrapFrom: [serving.apiURL] });
+		const kv = new KVInternals.KVStorageProviderMemory();
+		// As many as a pass from where the last reached may fill, a tenth of the queue's bound being the deep re-scans' share.
+		for (let index = 0; index < 900; index++) {
+			await kv.set(BOOTSTRAP_RETRY_ARENA, `queued-${String(index)}`, { staple: 'AA==', queuedAt: Date.now(), code: 'LEDGER_OTHER', reported: false });
+		}
+		const client = clientOf(late.node, { kv });
+		expect(await client.update()).toEqual({ complete: false });
+		const cursors = new BootstrapCursors(kv);
+		expect((await cursors.read(serving.apiURL))?.deepScan).toBeUndefined();
+		advanceClock(2 * 24 * 60 * 60_000);
+		const end = new Date(Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS);
+		const range = { id: 0, reached: GENESIS_MOMENT, end, peer: serving.apiURL, pace: { spent: 0, advanced: 0 } };
+		await cursors.writeLayout({ from: GENESIS_MOMENT, end, deepScanPeer: serving.apiURL, ranges: [range], standings: {}, fullQueueUpdates: 4, nextID: 1 });
+		const logged = [linesOf(late.node, 'info'), linesOf(late.node, 'debug')];
+
+		expect(await client.update()).toEqual({ complete: false });
+
+		expect(await cursors.readLayout()).toMatchObject({ ranges: [range], fullQueueUpdates: 0 });
+		// The deep re-scan began with the update, and ran alongside it.
+		expect((await cursors.read(serving.apiURL))?.nextDeepScan).toEqual(new Date(Date.now() + DEEP_SCAN_PERIOD_MILLISECONDS));
+		const passes = logged.flatMap(function(lines): string[] {
+			return(lines());
+		}).filter(function(line): boolean {
+			return(line.includes('Bootstrap pass over'));
+		});
+		expect(passes).toHaveLength(1);
+		expect(passes[0]).toMatch(/, 0 staples added, \d+ held already, 0 queued for retry, 2 staged \(900 in the queue\)$/u);
+	});
+
+	test('offers the ledger no queued staple while it reads ranges, though the staple\'s voters have the weight, until it adds what it staged before', async function() {
+		const peer = await representative();
+		const recording = await startRecordingPeer(peer.apiURL);
+		const failing = await startFailingPeer();
+		const late = await joiner({ genesis: 'held', bootstrapFrom: [recording.apiURL, failing.apiURL] });
+		const sends = await sendsFrom(peer.network, 0, 3);
+		await addAll(peer.node, sends);
+		const [queued] = sends;
+		if (queued === undefined) {
+			throw(new Error('no staples were made'));
+		}
+		const kv = new KVInternals.KVStorageProviderMemory();
+		const awaited = awaitedOf(queued, 'LEDGER_INSUFFICIENT_VOTING_WEIGHT');
+		if (awaited.kind !== 'weight') {
+			throw(new Error('the staple awaits no weight'));
+		}
+		await kv.set(BOOTSTRAP_RETRY_ARENA, queued.blocksHash.toString(), { staple: Buffer.from(queued.toBytes()).toString('base64'), queuedAt: Date.now(), code: 'LEDGER_INSUFFICIENT_VOTING_WEIGHT', reported: false, awaited: { kind: awaited.kind, voters: [...awaited.voters] } });
+		advanceClock(2 * 24 * 60 * 60_000);
+		const end = new Date(Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS);
+		const before = new Date(GENESIS_MOMENT.getTime() - 61_000);
+		// The range of the failing peer stays unread, so nothing staged is added in this update.
+		await new BootstrapCursors(kv).writeLayout({ from: GENESIS_MOMENT, end, deepScanPeer: recording.apiURL, ranges: [
+			{ id: 0, reached: before, end: new Date(GENESIS_MOMENT.getTime() + 60 * 60_000), peer: failing.apiURL, pace: { spent: 0, advanced: 0 } },
+			{ id: 1, reached: before, end, peer: recording.apiURL, pace: { spent: 0, advanced: 0 } }
+		], standings: {}, fullQueueUpdates: 0, nextID: 2 });
+
+		expect(await clientOf(late.node, { kv }).update()).toEqual({ complete: false });
+
+		expect(await kv.list(BOOTSTRAP_RETRY_ARENA)).toEqual([queued.blocksHash.toString()]);
+		expect(await late.node.ledger.getVoteStaple(queued.blocksHash, 'main')).toBeNull();
+	});
+
+	test('names in its first filter of a pass as many staples as the window allows: those queued first, then those staged, then those the ledger holds', async function() {
+		const peer = await representative();
+		const sends = await sendsFrom(peer.network, 0, 31);
+		await addAll(peer.node, sends);
+		const window = 128;
+
+		/** How many of the junk queued and of the staples given the first request's filter names. */
+		async function firstNamed(queuedCount: number, holding: 'ledger' | 'stage'): Promise<{ readonly queued: number; readonly held: number }> {
+			const recording = await startRecordingPeer(peer.apiURL);
+			const late = await joiner({ genesis: 'held', bootstrapFrom: [recording.apiURL] });
+			const storage = late.node.config.ledger.storageDriver;
+			if (!(storage instanceof LedgerStorageDriverBase)) {
+				throw(new Error('the node\'s ledger is not on a driver of this node'));
+			}
+			switch (holding) {
+				case 'ledger':
+					await addAll(late.node, sends);
+					break;
+				case 'stage':
+					await storage.bootstrapStage().put(sends.map(stagedOf));
+					break;
+				default:
+					assertNever(holding);
+			}
+			const kv = new KVInternals.KVStorageProviderMemory();
+			const junk = Array.from({ length: queuedCount }, function(_ignored, index): Buffer {
+				return(Buffer.from(`queued ${String(index)}`));
+			});
+			for (const [index, bytes] of junk.entries()) {
+				await kv.set(BOOTSTRAP_RETRY_ARENA, `queued-${String(index)}`, { staple: bytes.toString('base64'), queuedAt: Date.now(), code: 'LEDGER_OTHER', reported: false });
+			}
+			await clientOf(late.node, { kv }).update();
+			const filter = recording.pages[0]?.bloomFilter;
+			if (filter === undefined) {
+				throw(new Error('the first request carried no filter'));
+			}
+			const named = function(bytes: ArrayBuffer): boolean {
+				return(filter.has(bytes));
+			};
+			return({
+				queued: junk.map(function(bytes): ArrayBuffer {
+					return(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+				}).filter(named).length,
+				held: [peer.network.genesis, ...sends].map(function(staple): ArrayBuffer {
+					return(staple.toBytes());
+				}).filter(named).length
+			});
+		}
+
+		expect(await firstNamed(window + 2, 'ledger')).toEqual({ queued: window, held: 0 });
+		expect(await firstNamed(window - 28, 'ledger')).toEqual({ queued: window - 28, held: 28 });
+		expect(await firstNamed(window - 28, 'stage')).toEqual({ queued: window - 28, held: 28 });
+	});
+
+	test('logs a callback that fails, and goes on, and calls none when it was given none', async function() {
+		const peer = await representative();
+		const late = await joiner({ bootstrapFrom: [peer.apiURL] });
+		const errors = linesOf(late.node, 'error');
+
+		expect(await clientOf(late.node, { callback: function(): Promise<void> {
+			return(Promise.reject(new Error('the callback failed')));
+		} }).update()).toEqual({ complete: true });
+
+		expect(errors()).toEqual([`BOOTSTRAP The bootstrap callback failed for staple ${peer.network.genesis.blocksHash.toString()}: Error: the callback failed`]);
+		const other = await joiner({ bootstrapFrom: [peer.apiURL] });
+		const otherErrors = linesOf(other.node, 'error');
+		expect(await clientOf(other.node).update()).toEqual({ complete: true });
+		expect(otherErrors()).toEqual([]);
+	});
+
+	test('logs the ledger\'s garbage collection when it fails, and completes the update all the same', async function() {
+		const peer = await representative();
+		const late = await joiner({ bootstrapFrom: [peer.apiURL] });
+		const warnings = warningsOf(late.node);
+		vi.spyOn(late.node.ledger, 'gc').mockRejectedValue(new Error('the collection failed'));
+
+		expect(await clientOf(late.node).update()).toEqual({ complete: true });
+
+		expect(warnings()).toEqual(['BOOTSTRAP The ledger\'s garbage collection after a bootstrap update failed; it runs again after the next: Error: the collection failed']);
+	});
+});
+
 /** How long after its first vote a straddling staple's second is made (straddlingHistory). */
 const STRADDLE_MILLISECONDS = 200_000;
 
@@ -929,6 +1579,58 @@ describe('a node that bootstraps', function() {
 		}));
 
 		expect(await bootstrapSources(running.node)).toEqual([apiOf(1), apiOf(2)]);
+	});
+
+	test('bootstraps from each endpoint once, but its own, and from no manual peer that is no representative', async function() {
+		const running = await nodes.start({ representativeWeights: WEIGHTS });
+		const own = running.node.config.endpoints?.api;
+		if (own === undefined) {
+			throw(new Error('the node serves no API'));
+		}
+		const [first] = running.network.representatives;
+		if (first === undefined) {
+			throw(new Error('the network has no representative'));
+		}
+		const participant: P2PPeer = { kind: lib.Node.Kind.PARTICIPANT, id: 'listener' };
+		running.node.config.manualPeers = [verifiedPeer(first, 8), participant];
+		bootstrapFrom(running.node.config, [apiOf(7), apiOf(7), own]);
+		const peers = vi.spyOn(running.node.switch, 'peers').mockResolvedValue([participant]);
+
+		expect(await bootstrapSources(running.node)).toEqual([apiOf(7), apiOf(8)]);
+		// A representative it has not heard from lately is the one that has most to catch it up on.
+		expect(peers).toHaveBeenCalledWith({ includeStale: true });
+	});
+
+	test('asks its switch for no peers while it represents with an endpoint missing, and only for those holding weight while the ledger holds none', async function() {
+		const running = await nodes.start({ representativeWeights: WEIGHTS });
+		const [, second] = running.network.representatives;
+		if (second === undefined) {
+			throw(new Error('the network has two representatives'));
+		}
+		const peers = vi.spyOn(running.node.switch, 'peers').mockResolvedValue([verifiedPeer(second, 1)]);
+		const api = running.node.config.endpoints?.api;
+		if (api === undefined) {
+			throw(new Error('the node serves no API'));
+		}
+		running.node.config.endpoints = { api };
+
+		expect(await bootstrapSources(running.node)).toEqual([]);
+		expect(peers).not.toHaveBeenCalled();
+
+		running.node.config.kind = lib.Node.Kind.PARTICIPANT;
+		expect(await bootstrapSources(running.node)).toEqual([apiOf(1)]);
+		vi.spyOn(running.node.ledger, 'votingPower').mockResolvedValue(0n);
+		expect(await bootstrapSources(running.node)).toEqual([]);
+	});
+
+	test('bootstraps, as a node with no switch, from the endpoints it was given alone, and from none when it was given none', async function() {
+		const running = await nodes.start({ representativeWeights: WEIGHTS });
+		bootstrapFrom(running.node.config, [apiOf(7)]);
+		const { log, config, ledger } = running.node;
+
+		expect(await bootstrapSources({ log, config, ledger })).toEqual([apiOf(7)]);
+		// A configuration bootstrapFrom was never given.
+		expect(bootstrapEndpointsOf({ ...config })).toEqual([]);
 	});
 
 	test('catches up from a manual peer that holds no voting weight, when it has no genesis and no other source', async function() {

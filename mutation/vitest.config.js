@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config';
 import suite from '../.vitest.config.js';
 import { selectedModule } from './modules.js';
+import { SmallestFirst } from './sequencer.js';
 
 /*
  * The runner runs one test file at a time to stay within the memory cap. The
@@ -13,6 +14,7 @@ export default defineConfig({
 		testTimeout: suite.test.testTimeout,
 		globalSetup: suite.test.globalSetup,
 		maxWorkers: 1,
-		include: [...selectedModule().tests]
+		include: [...selectedModule().tests],
+		sequence: { sequencer: SmallestFirst }
 	}
 });

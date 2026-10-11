@@ -150,4 +150,74 @@ describe('an update over every peer', function() {
 		// No pass ran: the peers could not be found, or the update failed.
 		expect(nextUpdateDelay([], period)).toBe(period);
 	});
+
+	test('keeps the latest horizon a pass completed at, and none of a pass that did not complete or recorded no progress', async function() {
+		const at = function(minutes: number): Date {
+			return(new Date(HORIZON.getTime() + minutes * 60_000));
+		};
+		const ends: Readonly<Record<string, readonly [PeerResult, Date | undefined]>> = {
+			latest: ['completed', at(3)],
+			earlier: ['completed', at(2)],
+			same: ['completed', at(3)],
+			unrecorded: ['completed', undefined],
+			bounded: ['bounded', at(5)],
+			failed: ['failed', at(6)]
+		};
+		const progress = new Map<string, PeerProgress>();
+		const written: Date[] = [];
+		const io: UpdateIO = {
+			readProgress: function(peer) {
+				return(Promise.resolve(progress.get(peer)));
+			},
+			writeProgress: function(peer, value) {
+				progress.set(peer, value);
+				return(Promise.resolve());
+			},
+			readCaughtUp: function() {
+				return(Promise.resolve(at(1)));
+			},
+			writeCaughtUp: function(horizon) {
+				written.push(horizon);
+				return(Promise.resolve());
+			}
+		};
+
+		await updatePeers(Object.keys(ends), io, 1, function(peer) {
+			const [result, reached] = ends[peer] ?? ['failed', undefined];
+			if (reached !== undefined) {
+				progress.set(peer, progressAt(reached));
+			}
+			return(Promise.resolve(result));
+		});
+
+		expect(written).toEqual([at(3)]);
+	});
+
+	test('reads first, until a pass completes, a peer it has reached the beginning of time on before one it has no progress on', async function() {
+		const harness = new Harness({ fresh: 'bounded', started: 'bounded' });
+		harness.progress.set('started', progressAt(EPOCH));
+
+		await harness.update(['fresh', 'started']);
+
+		expect(harness.peersRun()).toEqual(['started']);
+	});
+
+	test('moves on to the first horizon a pass completes at only the peers it has reached less far on', async function() {
+		const harness = new Harness({ ahead: 'failed', at: 'failed', behind: 'failed', first: 'completed' });
+		const ahead = progressAt(new Date(HORIZON.getTime() + 5000));
+		harness.progress.set('ahead', ahead);
+		harness.progress.set('at', progressAt(HORIZON));
+		harness.progress.set('behind', progressAt(new Date(1000)));
+		const writeProgress = harness.writeProgress.bind(harness);
+		const movedOn: string[] = [];
+		harness.writeProgress = function(peer, progress): Promise<void> {
+			movedOn.push(peer);
+			return(writeProgress(peer, progress));
+		};
+
+		await harness.update(['ahead', 'at', 'behind', 'first']);
+
+		expect(movedOn).toEqual(['behind']);
+		expect(harness.progress.get('ahead')).toEqual(ahead);
+	});
 });

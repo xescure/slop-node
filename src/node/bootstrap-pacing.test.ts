@@ -1,3 +1,4 @@
+import { getEventListeners } from 'node:events';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { PeerPacer } from './bootstrap-pacing.js';
 
@@ -141,5 +142,99 @@ describe('a peer pacer', function() {
 		expect(next.startedAt).toBeDefined();
 		next.end('next');
 		await nextAnswer;
+	});
+
+	test('gives up the wait under way once stopped, with the reason it was stopped for, as an error', async function() {
+		useFakeClock();
+		const pacer = new PeerPacer(INTERVAL);
+		const first = new HeldRequest();
+		first.end('first');
+		await pacer.paced(PEER, new AbortController().signal, first.run);
+		const stopping = new AbortController();
+		const waiting = new HeldRequest();
+		const answer = pacer.paced(PEER, stopping.signal, waiting.run);
+		const rejected = answer.then(function(): never {
+			throw(new Error('expected the request to be given up'));
+		}, function(error: unknown): unknown {
+			return(error);
+		});
+		await vi.advanceTimersByTimeAsync(INTERVAL / 2);
+
+		stopping.abort('shutting down');
+		const error = await rejected;
+
+		expect(error).toBeInstanceOf(Error);
+		expect(error).toMatchObject({ message: 'stopped while waiting to request a page', cause: 'shutting down' });
+		// The wait's timer goes with it.
+		expect(vi.getTimerCount()).toBe(0);
+		await vi.advanceTimersByTimeAsync(INTERVAL);
+		expect(waiting.startedAt).toBeUndefined();
+
+		const done = new HeldRequest();
+		done.end('done');
+		await pacer.paced(PEER, new AbortController().signal, done.run);
+		const reason = new Error('stopped mid-wait');
+		const stoppingAgain = new AbortController();
+		const next = pacer.paced(PEER, stoppingAgain.signal, new HeldRequest().run);
+		const rejectedAgain = expect(next).rejects.toBe(reason);
+		await vi.advanceTimersByTimeAsync(0);
+		stoppingAgain.abort(reason);
+		await rejectedAgain;
+	});
+
+	test('sends no request once stopped, though it need not wait', async function() {
+		useFakeClock();
+		const pacer = new PeerPacer(INTERVAL);
+		const stopping = new AbortController();
+		const reason = new Error('stopped before');
+		stopping.abort(reason);
+		const unsent = new HeldRequest();
+
+		await expect(pacer.paced(PEER, stopping.signal, unsent.run)).rejects.toBe(reason);
+
+		expect(unsent.startedAt).toBeUndefined();
+	});
+
+	test('leaves no listener on the signal once each wait is over', async function() {
+		useFakeClock();
+		const pacer = new PeerPacer(INTERVAL);
+		const signal = new AbortController().signal;
+		const first = new HeldRequest();
+		first.end('first');
+		await pacer.paced(PEER, signal, first.run);
+		for (const value of ['second', 'third']) {
+			const request = new HeldRequest();
+			request.end(value);
+			// Each follows the one before at once, so it waits the interval.
+			const answer = pacer.paced(PEER, signal, request.run);
+			await vi.advanceTimersByTimeAsync(INTERVAL);
+			await expect(answer).resolves.toBe(value);
+		}
+
+		expect(getEventListeners(signal, 'abort')).toEqual([]);
+	});
+
+	test('keeps a request made while others wait their turns behind the last of them', async function() {
+		useFakeClock();
+		const pacer = new PeerPacer(INTERVAL);
+		const [first, second, third, fourth] = [new HeldRequest(), new HeldRequest(), new HeldRequest(), new HeldRequest()];
+		const answers = [pacer.paced(PEER, new AbortController().signal, first.run), pacer.paced(PEER, new AbortController().signal, second.run), pacer.paced(PEER, new AbortController().signal, third.run)];
+		await vi.advanceTimersByTimeAsync(0);
+		first.end('first');
+		await vi.advanceTimersByTimeAsync(INTERVAL);
+		expect(second.startedAt).toBeDefined();
+
+		answers.push(pacer.paced(PEER, new AbortController().signal, fourth.run));
+		await vi.advanceTimersByTimeAsync(10 * INTERVAL);
+		expect([third.startedAt, fourth.startedAt]).toEqual([undefined, undefined]);
+		second.end('second');
+		await vi.advanceTimersByTimeAsync(INTERVAL);
+		expect(third.startedAt).toBeDefined();
+		expect(fourth.startedAt).toBeUndefined();
+		third.end('third');
+		await vi.advanceTimersByTimeAsync(INTERVAL);
+		expect(fourth.startedAt).toBeDefined();
+		fourth.end('fourth');
+		expect(await Promise.all(answers)).toEqual(['first', 'second', 'third', 'fourth']);
 	});
 });

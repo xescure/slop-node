@@ -11,9 +11,11 @@ An equivalent mutant behaves as the original does for every input the code can
 receive, so no test can kill it. A mutant that only skips or adds a statement
 which changes and answers nothing, such as one an early return for an empty
 list saves, is equivalent: no answer and no stored row differs. A harmless
-mutant changes behavior that no caller can observe through the storage
-contract. Equivalent mutants leave the module's score after triage; harmless
-ones count against it.
+mutant changes behavior that no caller can observe through the module's
+contract: the storage contract for the storage modules, and for the
+bootstrap modules which staples the node ends up holding, queuing or
+staging, as each section says. Equivalent mutants leave the module's score
+after triage; harmless ones count against it.
 
 Two kinds of mutant need no entry:
 
@@ -287,3 +289,91 @@ Two kinds of mutant need no entry:
 - src/ledger/storage/postgres/stage.ts:104:78-104:80 ArrayDeclaration "[\"Stryker was here\"]" equivalent: the string decodes as hex to no bytes, which no staged key equals.
 - src/ledger/storage/postgres/stage.ts:113:7-113:24 ConditionalExpression "false" equivalent: removing nothing runs a statement over no staples, which removes and counts nothing, the counts NO_STAGED holds.
 - src/ledger/storage/postgres/stage.ts:113:26-115:4 BlockStatement "{}" equivalent: removing nothing runs a statement over no staples, which removes and counts nothing, the counts NO_STAGED holds.
+
+## bootstrap-client
+
+Harmless here means the node ends up holding, queuing and staging the same
+staples: what changes is when, how many requests it takes, how much memory it
+keeps, or the text of a line it logs.
+
+- src/node/bootstrap-cursors.ts:39:9-39:34 ConditionalExpression "true" equivalent: Number.isSafeInteger is false for every value that is no number, so the conjunction answers the same without the typeof test.
+- src/node/bootstrap-cursors.ts:287:3-288:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of Awaited is unreachable.
+- src/node/bootstrap-pacing.ts:25:43-25:57 ObjectLiteral "{}" equivalent: the listener is removed once the wait ends, and a signal is aborted at most once, so it runs at most once either way.
+- src/node/bootstrap-pacing.ts:25:51-25:55 BooleanLiteral "false" equivalent: the listener is removed once the wait ends, and a signal is aborted at most once, so it runs at most once either way.
+- src/node/bootstrap-pacing.ts:66:8-66:16 EqualityOperator "wait >= 0" harmless: a wait of exactly 0 ms takes one timer tick before the same request is sent; a stop in that tick is reported as a stop while waiting, as the error the signal's reason wraps, rather than as the reason itself.
+- src/node/bootstrap-pacing.ts:77:8-77:42 ConditionalExpression "false" equivalent: a peer's last turn left in place is settled, so the next request to the peer waits on a settled promise, as on none; the map keeps one turn per peer the node bootstraps from.
+- src/node/bootstrap-pacing.ts:77:44-79:5 BlockStatement "{}" equivalent: a peer's last turn left in place is settled, so the next request to the peer waits on a settled promise, as on none; the map keeps one turn per peer the node bootstraps from.
+- src/node/bootstrap-pacing.ts:78:5-78:34 CallExpression ";" equivalent: a peer's last turn left in place is settled, so the next request to the peer waits on a settled promise, as on none; the map keeps one turn per peer the node bootstraps from.
+- src/node/bootstrap-page.ts:72:3-73:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of PageProblem is unreachable.
+- src/node/bootstrap-page.ts:88:9-88:34 ConditionalExpression "true" equivalent: the callers read only the properties message, voteStaples and $binary, which no JSON value but an object has: a number, string, boolean or array answers undefined for each, as a value that is no record.
+- src/node/bootstrap-page.ts:117:7-117:64 ConditionalExpression "true" equivalent: a value with no string message throws as its message is sliced, inside the try whose catch answers undefined, as the guard does.
+- src/node/bootstrap-page.ts:117:7-117:64 LogicalOperator "isRecord(parsed) || typeof parsed['message'] === 'string'" equivalent: a value with no string message throws as its message is sliced, inside the try whose catch answers undefined, as the guard does.
+- src/node/bootstrap-page.ts:117:27-117:64 ConditionalExpression "true" equivalent: a record with no string message throws as its message is sliced, inside the try whose catch answers undefined, as the guard does.
+- src/node/bootstrap-page.ts:171:41-171:60 ObjectLiteral "{}" harmless: an https peer's pages then each open a connection of their own instead of reusing one; the pages read are the same.
+- src/node/bootstrap-page.ts:171:54-171:58 BooleanLiteral "false" harmless: an https peer's pages then each open a connection of their own instead of reusing one; the pages read are the same.
+- src/node/bootstrap-page.ts:217:17-217:24 StringLiteral "\"\"" equivalent: the error a response is destroyed with, too large or ended early, also fails its request, whose 'error' listener rejects the page with that error (Node's http client; bootstrap-page.test.ts runs both).
+- src/node/bootstrap-page.ts:218:5-222:8 CallExpression ";" equivalent: Node's http client destroys a response that closes before it is complete with an 'aborted' error first, which rejects the page, so this rejection never decides it (bootstrap-page.test.ts, an answer that ends before its length).
+- src/node/bootstrap-page.ts:218:17-218:24 StringLiteral "\"\"" equivalent: Node's http client destroys a response that closes before it is complete with an 'aborted' error first, which rejects the page, so this rejection never decides it.
+- src/node/bootstrap-page.ts:218:43-222:6 BlockStatement "{}" equivalent: Node's http client destroys a response that closes before it is complete with an 'aborted' error first, which rejects the page, so this rejection never decides it.
+- src/node/bootstrap-page.ts:219:10-219:28 BooleanLiteral "response.complete" equivalent: a complete response has resolved the page at its end, which a later rejection cannot change, and an incomplete one has been rejected by its 'aborted' error first.
+- src/node/bootstrap-page.ts:219:10-219:28 ConditionalExpression "true" equivalent: a complete response has resolved the page at its end, which a later rejection cannot change, and an incomplete one has been rejected by its 'aborted' error first.
+- src/node/bootstrap-page.ts:219:10-219:28 ConditionalExpression "false" equivalent: Node's http client destroys a response that closes before it is complete with an 'aborted' error first, which rejects the page, so this rejection never decides it.
+- src/node/bootstrap-page.ts:219:30-221:7 BlockStatement "{}" equivalent: Node's http client destroys a response that closes before it is complete with an 'aborted' error first, which rejects the page, so this rejection never decides it.
+- src/node/bootstrap-page.ts:220:67-220:91 StringLiteral "\"\"" equivalent: Node's http client destroys a response that closes before it is complete with an 'aborted' error first, which rejects the page, so this rejection never decides it.
+- src/node/bootstrap-peers.ts:79:30-79:32 ArrayDeclaration "[\"Stryker was here\"]" equivalent: apiEndpointsOf takes only representatives, and a string has no kind.
+- src/node/bootstrap-peers.ts:81:7-81:49 ConditionalExpression "false" equivalent: a peer that is no representative, weighed or not, is left out by apiEndpointsOf.
+- src/node/bootstrap-peers.ts:81:51-83:4 BlockStatement "{}" equivalent: a peer that is no representative, weighed or not, is left out by apiEndpointsOf.
+- src/node/bootstrap-peers.ts:102:25-102:27 ArrayDeclaration "[\"Stryker was here\"]" equivalent: apiEndpointsOf takes only representatives, and a string has no kind.
+- src/node/bootstrap-peers.ts:108:48-108:50 ArrayDeclaration "[\"Stryker was here\"]" equivalent: apiEndpointsOf takes only representatives, and a string has no kind.
+- src/node/bootstrap-update.ts:55:33-55:35 UnaryOperator "+1" equivalent: every peer sorted was set in the map just before, so the default is never taken.
+- src/node/bootstrap-update.ts:55:61-55:63 UnaryOperator "+1" equivalent: every peer sorted was set in the map just before, so the default is never taken.
+- src/node/bootstrap-update.ts:114:28-116:5 MethodExpression "peers" equivalent: the peer whose pass completed has reached the horizon, read from its own progress, so moveOnTo, which moves only a peer reached less far, leaves it as it is.
+- src/node/bootstrap-update.ts:115:11-115:44 ConditionalExpression "true" equivalent: the peer whose pass completed has reached the horizon, read from its own progress, so moveOnTo, which moves only a peer reached less far, leaves it as it is.
+- src/node/bootstrap-update.ts:115:33-115:44 StringLiteral "\"\"" equivalent: the peer whose pass completed has reached the horizon, read from its own progress, so moveOnTo, which moves only a peer reached less far, leaves it as it is.
+- src/node/bootstrap.ts:95:3-96:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of PassOutcome is unreachable.
+- src/node/bootstrap.ts:108:3-109:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of PassOutcome is unreachable.
+- src/node/bootstrap.ts:154:8-154:17 StringLiteral "\"\"" equivalent: a stopped request then fails its pass through the unreachable default instead of with the PageError, and a pass that fails once the client is stopped is logged only as stopped, without its error.
+- src/node/bootstrap.ts:156:3-157:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of PageProblem is unreachable.
+- src/node/bootstrap.ts:247:40-247:42 ArrayDeclaration "[\"Stryker was here\"]" equivalent: nextUpdateDelay looks only for 'bounded', which the placeholder is not.
+- src/node/bootstrap.ts:354:23-354:25 ArrayDeclaration "[\"Stryker was here\"]" equivalent: nextUpdateDelay looks only for 'bounded', which the placeholder is not.
+- src/node/bootstrap.ts:392:5-392:21 CallExpression ";" harmless: the node adding what it staged then sees a moved frontier only at the next staple staged or once the passes end, when it adds the rest; it adds the same staples in the same order, later.
+- src/node/bootstrap.ts:424:8-424:23 ConditionalExpression "false" harmless: an update that left staged staples after passes that all completed is then followed after the period rather than at once; the next update adds them.
+- src/node/bootstrap.ts:424:25-427:5 BlockStatement "{}" harmless: an update that left staged staples after passes that all completed is then followed after the period rather than at once; the next update adds them.
+- src/node/bootstrap.ts:426:25-426:58 ArrayDeclaration "[]" harmless: an update that left staged staples after passes that all completed is then followed after the period rather than at once; the next update adds them.
+- src/node/bootstrap.ts:426:48-426:57 StringLiteral "\"\"" harmless: an update that left staged staples after passes that all completed is then followed after the period rather than at once; the next update adds them.
+- src/node/bootstrap.ts:447:31-447:55 ConditionalExpression "true" equivalent: the layout an update logs against never has no ranges: once the last range is read the peers are moved on from it and it is cleared, before the update logs what it added.
+- src/node/bootstrap.ts:447:31-447:55 EqualityOperator "layout.ranges.length >= 0" equivalent: the layout an update logs against never has no ranges: once the last range is read the peers are moved on from it and it is cleared, before the update logs what it added.
+- src/node/bootstrap.ts:499:11-499:19 StringLiteral "\"\"" equivalent: a pass's result is read only as 'completed' or 'bounded', neither of which an empty one is, as 'failed' is not.
+- src/node/bootstrap.ts:509:11-509:19 StringLiteral "\"\"" equivalent: a pass's result is read only as 'completed' or 'bounded', neither of which an empty one is, as 'failed' is not.
+- src/node/bootstrap.ts:524:7-524:22 ConditionalExpression "false" harmless: a pass over a range begun after the stop fails at its first request, which the pacer refuses once stopped, and is logged as stopped all the same, having written the peer's first progress if it had none.
+- src/node/bootstrap.ts:524:24-526:4 BlockStatement "{}" harmless: a pass over a range begun after the stop fails at its first request, which the pacer refuses once stopped, and is logged as stopped all the same, having written the peer's first progress if it had none.
+- src/node/bootstrap.ts:525:11-525:20 StringLiteral "\"\"" harmless: a pass over a range begun after the stop fails at its first request, which the pacer refuses once stopped, and is logged as stopped all the same, having written the peer's first progress if it had none.
+- src/node/bootstrap.ts:537:8-537:69 ConditionalExpression "false" harmless: only a stage at its 4 GiB bound throws here, since a pass over a range stages and never queues; its peer is then counted as failing instead of waiting for room.
+- src/node/bootstrap.ts:537:8-537:69 LogicalOperator "error instanceof RetryQueueFull && error instanceof StageFull" harmless: only a stage at its 4 GiB bound throws here, since a pass over a range stages and never queues; its peer is then counted as failing instead of waiting for room.
+- src/node/bootstrap.ts:537:71-540:5 BlockStatement "{}" harmless: only a stage at its 4 GiB bound throws here, since a pass over a range stages and never queues; its peer is then counted as failing instead of waiting for room.
+- src/node/bootstrap.ts:538:37-538:183 StringLiteral "``" harmless: only a stage at its 4 GiB bound throws here; the text of its log line changes.
+- src/node/bootstrap.ts:539:12-539:23 StringLiteral "\"\"" harmless: only a stage at its 4 GiB bound throws here, since a pass over a range stages and never queues; its peer is then counted as failing instead of waiting for room.
+- src/node/bootstrap.ts:570:5-570:44 CallExpression ";" harmless: a pass that asks what the node holds after the stop reads the ledger once more, bounded by HELD_READ_MILLISECONDS, before its next request fails.
+- src/node/bootstrap.ts:574:9-574:30 ConditionalExpression "false" equivalent: with as many named as the window allows, the read of the ledger is for none more, which it answers with none, so the names are the same.
+- src/node/bootstrap.ts:574:9-574:30 EqualityOperator "named.length > count" equivalent: with as many named as the window allows, the read of the ledger is for none more, which it answers with none, so the names are the same.
+- src/node/bootstrap.ts:574:32-576:6 BlockStatement "{}" equivalent: with as many named as the window allows, the read of the ledger is for none more, which it answers with none, so the names are the same.
+- src/node/bootstrap.ts:592:6-593:26 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of Added is unreachable.
+- src/node/bootstrap.ts:593:7-593:26 CallExpression ";" equivalent: the default of a switch that has handled every kind of Added is unreachable.
+- src/node/bootstrap.ts:599:5-599:44 CallExpression ";" harmless: the retry the pass ends with after the stop reads which queued staples are due, and the ledger refuses to be offered any of them once stopped (#offer).
+- src/node/bootstrap.ts:626:4-627:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both ways of taking is unreachable.
+- src/node/bootstrap.ts:633:4-634:16 ConditionalExpression "case 'add':" equivalent: an update adds only when it found the stage empty and no ranges, and adding stages nothing, so the stage names none either way.
+- src/node/bootstrap.ts:637:4-638:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both ways of taking is unreachable.
+- src/node/bootstrap.ts:708:4-715:5 ConditionalExpression "case 'crowded':" harmless: only the warning of a pass that ended naming MAX_NAMED staples from one start changes; 20,000 staples at one moment are more than a test of the client can serve.
+- src/node/bootstrap.ts:708:9-708:18 StringLiteral "\"\"" harmless: only the warning of a pass that ended naming MAX_NAMED staples from one start changes; 20,000 staples at one moment are more than a test of the client can serve.
+- src/node/bootstrap.ts:708:20-715:5 BlockStatement "{}" harmless: only the warning of a pass that ended naming MAX_NAMED staples from one start changes; 20,000 staples at one moment are more than a test of the client can serve.
+- src/node/bootstrap.ts:710:9-710:48 ConditionalExpression "true" harmless: only the warning of a pass that ended naming MAX_NAMED staples from one start changes; 20,000 staples at one moment are more than a test of the client can serve.
+- src/node/bootstrap.ts:710:9-710:48 ConditionalExpression "false" harmless: only the warning of a pass that ended naming MAX_NAMED staples from one start changes; 20,000 staples at one moment are more than a test of the client can serve.
+- src/node/bootstrap.ts:710:9-710:48 EqualityOperator "this.#crowdedAt.get(endpoint) !== start" harmless: only the warning of a pass that ended naming MAX_NAMED staples from one start changes; 20,000 staples at one moment are more than a test of the client can serve.
+- src/node/bootstrap.ts:710:50-712:6 BlockStatement "{}" harmless: only the warning of a pass that ended naming MAX_NAMED staples from one start changes; 20,000 staples at one moment are more than a test of the client can serve.
+- src/node/bootstrap.ts:711:38-711:229 StringLiteral "``" harmless: only the warning of a pass that ended naming MAX_NAMED staples from one start changes; 20,000 staples at one moment are more than a test of the client can serve.
+- src/node/bootstrap.ts:713:5-713:42 CallExpression ";" harmless: only the warning of a pass that ended naming MAX_NAMED staples from one start changes; 20,000 staples at one moment are more than a test of the client can serve.
+- src/node/bootstrap.ts:716:4-717:24 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of PassEvent is unreachable.
+- src/node/bootstrap.ts:717:5-717:24 CallExpression ";" equivalent: the default of a switch that has handled every kind of PassEvent is unreachable.
+- src/node/bootstrap.ts:728:213-728:222 StringLiteral "\"\"" harmless: only the text of the log line of a split off a range no peer read changes.
+- src/node/bootstrap.ts:736:4-737:24 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of RangeEvent is unreachable.
+- src/node/bootstrap.ts:737:5-737:24 CallExpression ";" equivalent: the default of a switch that has handled every kind of RangeEvent is unreachable.

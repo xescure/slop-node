@@ -24,6 +24,32 @@ const MODULES = {
 		tests: ['src/ledger/storage/drivers.test.ts', 'src/ledger/storage/postgres/*.test.ts'],
 		// The SQL is measured by the suite and the corpus, not by mutating its text.
 		ignorers: ['postgres-sql']
+	},
+	/*
+	 * The bootstrap is mutated in three modules, so that a mutant runs only
+	 * the tests of its part: the client and how it reaches its peers and
+	 * stores its progress, tested against nodes over HTTP; one pass over a
+	 * peer, tested against simulated peers; and the ranges, the stage and
+	 * the retry queue that carry what the passes read into the ledger.
+	 */
+	'bootstrap-client': {
+		mutate: [
+			'src/node/bootstrap.ts',
+			'src/node/bootstrap-cursors.ts',
+			'src/node/bootstrap-pacing.ts',
+			'src/node/bootstrap-page.ts',
+			'src/node/bootstrap-peers.ts',
+			'src/node/bootstrap-update.ts'
+		],
+		tests: [
+			'src/node/bootstrap.test.ts',
+			'src/node/bootstrap-mainnet.test.ts',
+			'src/node/bootstrap-page.test.ts',
+			'src/node/bootstrap-cursors.test.ts',
+			'src/node/bootstrap-pacing.test.ts',
+			'src/node/bootstrap-update.test.ts'
+		],
+		ignorers: []
 	}
 };
 
