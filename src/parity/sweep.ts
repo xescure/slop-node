@@ -974,7 +974,7 @@ export async function sweepAccounts(setup: SweepSetup): Promise<SweepSummary> {
 
 /** A chain divergence is compared again by the chain, which its account was compared by for moving on every attempt. */
 function compareAgain(setup: Comparing, representative: APISource, record: SweepRecord, quietBefore: Date): Promise<SweepOutcome> {
-	if ((record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved') && record.outcome.divergence.field === 'chain') {
+	if ((record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved' || record.outcome.kind === 'representative-local') && record.outcome.divergence.field === 'chain') {
 		return(compareByChain(setup, representative, record.account, quietBefore));
 	}
 	return(compareAdjudicated(setup, representative, record.account, quietBefore));
@@ -998,9 +998,9 @@ function latestReadings(records: readonly SweepRecord[]): readonly SweepRecord[]
 
 /**
  * Compares again each account whose latest comparison diverged or was
- * unresolved, or found one representative's own difference without a check
- * of the follower's balances, recorded before such checks were made, or
- * whose latest reading both sides answered with the same error, with the representative it was compared with and read again
+ * unresolved, or left the difference to the representatives apart without
+ * a consistent check of the follower's balances, or whose latest reading
+ * both sides answered with the same error, with the representative it was compared with and read again
  * from every other, and records the outcome in that comparison's walk and
  * lap, where it stands as the account's latest. A representative the run
  * does not reach leaves its accounts as they stand.
@@ -1013,7 +1013,7 @@ export async function recheckDivergences(setup: RecheckSetup): Promise<RecheckSu
 	const disputed = latestReadings((await setup.log.read()).records.filter(function(record): record is SweepRecord {
 		return(record.kind === 'sweep');
 	})).filter(function(record): boolean {
-		return(record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved' || record.outcome.kind === 'error-both' || (record.outcome.kind === 'representative-local' && record.outcome.selfCheck === null));
+		return(record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved' || record.outcome.kind === 'error-both' || (record.outcome.kind === 'representative-local' && record.outcome.selfCheck?.kind !== 'consistent'));
 	});
 	const summary: Partial<Record<SweepOutcome['kind'], number>> = {};
 	for (const record of disputed) {
@@ -1047,24 +1047,37 @@ const FOLLOWER_CATCH_UP_INTERVAL_MILLISECONDS = 1000;
 /** Waits that long, as the caller's clock runs. */
 export type Wait = (milliseconds: number) => Promise<void>;
 
+/** The newest staple of the account a node serves, by the hash of its blocks, or null for an account with no history. */
+async function newestStapleServed(source: APISource, account: string): Promise<string | null> {
+	return(newestStapleOf(await getOK(source, `/node/ledger/account/${account}/history?limit=1`))?.staple ?? null);
+}
+
 /**
- * Compares a passive account by itself as its walk compares one in a batch:
- * states alike match, as no lag of either side makes unequal states equal,
- * the follower read again until it reaches the state the representative
- * served, which an account a staple touches every few seconds needs; states
- * apart are compared by themselves.
+ * Compares a passive account by itself as its walk compares one in a batch,
+ * at the same point of its history: the follower is read again until it
+ * holds, as its newest staple of the account, the newest the
+ * representative held when it served its state, and the state then matches
+ * when it is the representative's. A value alone may come round again,
+ * as when an account is credited the same amount time after time, so only
+ * the same newest staple places both at one point. An account a staple
+ * touches every few seconds needs those reads; states apart are compared
+ * by themselves.
  */
 async function comparePassiveAlone(setup: Comparing & Pick<SweepSetup, 'stopped'>, representative: APISource, account: string, quietBefore: Date, wait: Wait): Promise<SweepOutcome> {
 	const path = `/node/ledger/account/${account}`;
 	try {
 		const representativeState = await getOK(representative, path);
+		const representativeNewest = await newestStapleServed(representative, account);
 		if (stateErrorOf(representativeState) === undefined) {
 			for (let read = 0; read < FOLLOWER_CATCH_UP_READS && !isStopped(setup.stopped); read++) {
 				if (read > 0) {
 					await wait(FOLLOWER_CATCH_UP_INTERVAL_MILLISECONDS);
 				}
-				if (firstDifference(await getOK(setup.follower, path), representativeState) === undefined) {
-					return({ kind: 'match', head: headOf(representativeState), staple: null });
+				const newestBefore = await newestStapleServed(setup.follower, account);
+				const followerState = await getOK(setup.follower, path);
+				const newestAfter = await newestStapleServed(setup.follower, account);
+				if (newestBefore === representativeNewest && newestAfter === representativeNewest && firstDifference(followerState, representativeState) === undefined) {
+					return({ kind: 'match', head: headOf(representativeState), staple: representativeNewest });
 				}
 			}
 		}
@@ -1077,47 +1090,68 @@ async function comparePassiveAlone(setup: Comparing & Pick<SweepSetup, 'stopped'
 /** The accounts no lap compared, by the walk that missed them: those with a chain as the follower knows them. */
 export type NeverCompared = { readonly chain: readonly KnownAccount[]; readonly passive: readonly string[] };
 
+/** An account a complete lap never compared, in the walk and lap that missed it. */
+type Missed =
+	| { readonly walk: 'chain'; readonly lap: number; readonly known: KnownAccount }
+	| { readonly walk: 'passive'; readonly lap: number; readonly account: string };
+
+function accountOf(missed: Missed): string {
+	switch (missed.walk) {
+		case 'chain':
+			return(missed.known.account);
+		case 'passive':
+			return(missed.account);
+		default:
+			return(assertNever(missed));
+	}
+}
+
 /**
  * Compares by itself each account a complete lap never compared, one at a
  * time for each representative in turn, as its walk would, and records it
  * in that walk and lap, so that the lap's coverage completes without a
- * whole new lap.
+ * whole new lap. A walk that has completed no lap, its lap given as
+ * undefined, has missed none of the accounts it has not walked yet.
  */
-export async function compareNeverCompared(setup: RecheckSetup, accounts: NeverCompared, laps: Readonly<Record<SweepWalk, number>>, wait: Wait): Promise<RecheckSummary> {
+export async function compareNeverCompared(setup: RecheckSetup, accounts: NeverCompared, laps: Readonly<Record<SweepWalk, number | undefined>>, wait: Wait): Promise<RecheckSummary> {
 	const quietBefore = await quietBeforeOf(setup.store);
 	if (quietBefore === undefined) {
 		throw(new Error('the follower has read from no representative yet'));
 	}
-	const pending: readonly { readonly walk: SweepWalk; readonly known: KnownAccount }[] = [
-		...accounts.chain.map(function(known) {
-			return({ walk: 'chain', known } as const);
-		}),
-		...accounts.passive.map(function(account) {
-			return({ walk: 'passive', known: { rowID: '0', account, newestStaple: undefined } } as const);
-		})
-	];
+	const { chain: chainLap, passive: passiveLap } = laps;
+	const pending: Missed[] = [];
+	if (chainLap !== undefined) {
+		pending.push(...accounts.chain.map(function(known): Missed {
+			return({ walk: 'chain', lap: chainLap, known });
+		}));
+	}
+	if (passiveLap !== undefined) {
+		pending.push(...accounts.passive.map(function(account): Missed {
+			return({ walk: 'passive', lap: passiveLap, account });
+		}));
+	}
 	const summary: Partial<Record<SweepOutcome['kind'], number>> = {};
 	await Promise.all(setup.representatives.map(async function(representative, worker) {
 		for (let index = worker; index < pending.length && !isStopped(setup.stopped); index += setup.representatives.length) {
-			const entry = pending[index];
-			if (entry === undefined) {
+			const missed = pending[index];
+			if (missed === undefined) {
 				continue;
 			}
 			let outcome: SweepOutcome;
-			switch (entry.walk) {
+			switch (missed.walk) {
 				case 'chain':
-					outcome = await compareChainKnown(setup, representative, entry.known, quietBefore);
+					outcome = await compareChainKnown(setup, representative, missed.known, quietBefore);
 					break;
 				case 'passive':
-					outcome = await comparePassiveAlone(setup, representative, entry.known.account, quietBefore, wait);
+					outcome = await comparePassiveAlone(setup, representative, missed.account, quietBefore, wait);
 					break;
 				default:
-					outcome = assertNever(entry.walk);
+					outcome = assertNever(missed);
 			}
 			if (isStopped(setup.stopped)) {
 				return;
 			}
-			await setup.log.append([recordOf(representative, entry.known.account, laps[entry.walk], entry.walk, outcome)]);
+			await setup.log.append([recordOf(representative, accountOf(missed), missed.lap, missed.walk, outcome)]);
 			summary[outcome.kind] = (summary[outcome.kind] ?? 0) + 1;
 		}
 	}));

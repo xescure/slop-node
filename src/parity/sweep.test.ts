@@ -761,6 +761,33 @@ describe('a divergence from one representative', function() {
 });
 
 describe('a difference of one representative\'s own recorded before', function() {
+	test('is compared again on recheck while its check of the follower\'s balances could not be made', async function() {
+		const running = await setup(3);
+		const account = ACCOUNTS[0];
+		serveSplit(running, account, '0x10', ['0x11', '0x10', '0x10']);
+		const older: SweepRecord = { kind: 'sweep', at: '2026-10-11T12:34:11.610Z', representative: running.representatives[0]?.endpoint ?? '', account, lap: 0, walk: 'passive', outcome: { kind: 'representative-local', divergence: { account, field: 'balances[0].balance', staple: STAPLE }, follower: {}, representative: {}, readings: [], selfCheck: { kind: 'unchecked', why: 'the follower failed' } } };
+		await running.log.append([older]);
+
+		expect(await recheckDivergences({ follower: httpSource(running.follower.endpoint), representatives: running.representatives.map(function(api) {
+			return(httpSource(api.endpoint));
+		}), store: memoryStore({ [account]: [STAPLE] }), log: running.log, stopped: new AbortController().signal })).toEqual({ 'representative-local': 1 });
+		expect(recordsOf((await running.log.read()).records, 'sweep').at(-1)?.outcome).toMatchObject({ selfCheck: { kind: 'consistent' } });
+	});
+
+	test('found by its chain is compared again by its chain', async function() {
+		const running = await setup(3);
+		const account = ACCOUNTS[0];
+		const holding = [chainBlock(FOLLOWER_HEAD, STAPLE, QUIET_VOTE)];
+		await serveMovingChain(running, account, [[chainBlock(OLDER_BLOCK, STAPLE, QUIET_VOTE)], holding, holding]);
+		const older: SweepRecord = { kind: 'sweep', at: '2026-10-11T12:34:11.610Z', representative: running.representatives[0]?.endpoint ?? '', account, lap: 0, walk: 'chain', outcome: { kind: 'representative-local', divergence: { account, field: 'chain', staple: null }, follower: { head: FOLLOWER_HEAD }, representative: { head: OLDER_BLOCK }, readings: [], selfCheck: null } };
+		await running.log.append([older]);
+
+		expect(await recheckDivergences({ follower: httpSource(running.follower.endpoint), representatives: running.representatives.map(function(api) {
+			return(httpSource(api.endpoint));
+		}), store: memoryStore({ [account]: [STAPLE] }, undefined, {}, [], [], HISTORY_BALANCE, [OLDER_BLOCK]), log: running.log, stopped: new AbortController().signal })).toEqual({ 'representative-local': 1 });
+		expect(recordsOf((await running.log.read()).records, 'sweep').at(-1)?.outcome).toMatchObject({ divergence: { field: 'chain' }, selfCheck: { kind: 'consistent' } });
+	});
+
 	test('is compared again on recheck while it records no check of the follower\'s balances, and not once it does', async function() {
 		const running = await setup(3);
 		const account = ACCOUNTS[0];
@@ -1061,6 +1088,7 @@ describe('the accounts a lap never compared', function() {
 		const passive = ACCOUNTS[1];
 		serveSplit(running, passive, '0x10', ['0x10']);
 		running.representatives[0]?.serve(`/node/ledger/account/${passive}/history?limit=1`, history(STAPLE, [RECENT_VOTE]));
+		running.follower.serve(`/node/ledger/account/${passive}/history?limit=1`, history(STAPLE, [RECENT_VOTE]));
 		const store = memoryStore({ [passive]: [STAPLE] }, undefined, {}, [passive]);
 
 		const summary = await compareNeverCompared({ follower: httpSource(running.follower.endpoint), representatives: running.representatives.map(function(api) {
@@ -1075,6 +1103,8 @@ describe('the accounts a lap never compared', function() {
 		const passive = ACCOUNTS[1];
 		serveSplit(running, passive, '0x10', ['0x12']);
 		running.follower.serve(`/node/ledger/account/${passive}`, state(passive, '0x10'), state(passive, '0x11'), state(passive, '0x12'));
+		const behind = history(OTHER_STAPLE, [RECENT_VOTE]);
+		running.follower.serve(`/node/ledger/account/${passive}/history?limit=1`, behind, behind, behind, behind, history(STAPLE, [RECENT_VOTE]));
 		running.representatives[0]?.serve(`/node/ledger/account/${passive}/history?limit=1`, history(STAPLE, [RECENT_VOTE]));
 		const store = memoryStore({ [passive]: [STAPLE] }, undefined, {}, [passive]);
 
@@ -1083,6 +1113,38 @@ describe('the accounts a lap never compared', function() {
 		}), store, log: running.log, stopped: new AbortController().signal }, { chain: [], passive: [passive] }, { chain: 0, passive: 0 }, noWait);
 
 		expect(summary).toEqual({ match: 1 });
-		expect(running.representatives[0]?.requests).toEqual([`GET /node/ledger/account/${passive}`]);
+		expect(running.representatives[0]?.requests).toEqual([`GET /node/ledger/account/${passive}`, `GET /node/ledger/account/${passive}/history?limit=1`]);
+	});
+
+	test('counts no passive account as compared whose state the follower answers alike at another newest staple, as a value may come round again', async function() {
+		const running = await setup(1);
+		const passive = ACCOUNTS[1];
+		serveSplit(running, passive, '0x10', ['0x10']);
+		running.representatives[0]?.serve(`/node/ledger/account/${passive}/history?limit=1`, history(STAPLE, [RECENT_VOTE]));
+		running.follower.serve(`/node/ledger/account/${passive}/history?limit=1`, history(OTHER_STAPLE, [RECENT_VOTE]));
+		const store = memoryStore({ [passive]: [STAPLE] }, undefined, {}, [passive]);
+
+		const summary = await compareNeverCompared({ follower: httpSource(running.follower.endpoint), representatives: running.representatives.map(function(api) {
+			return(httpSource(api.endpoint));
+		}), store, log: running.log, stopped: new AbortController().signal }, { chain: [], passive: [passive] }, { chain: 0, passive: 0 }, noWait);
+
+		expect(summary).toEqual({ skipped: 1 });
+	});
+
+	test('are none of a walk that has completed no lap, as its accounts not walked yet are not missed', async function() {
+		const running = await setup(1);
+		const [chain, passive] = ACCOUNTS;
+		const store = memoryStore({ [chain]: [STAPLE], [passive]: [STAPLE] }, undefined, {}, [passive]);
+		const known = (await store.chainAccounts())[0];
+		if (known === undefined) {
+			throw(new Error('no chain account'));
+		}
+
+		const summary = await compareNeverCompared({ follower: httpSource(running.follower.endpoint), representatives: running.representatives.map(function(api) {
+			return(httpSource(api.endpoint));
+		}), store, log: running.log, stopped: new AbortController().signal }, { chain: [known], passive: [passive] }, { chain: undefined, passive: undefined }, noWait);
+
+		expect(summary).toEqual({});
+		expect([...running.follower.requests, ...(running.representatives[0]?.requests ?? [])]).toEqual([]);
 	});
 });

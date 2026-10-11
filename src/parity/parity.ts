@@ -16,7 +16,7 @@ import { FOLLOWER_DATABASE, FOLLOWER_LISTEN_IP, followerDatabaseURL, followerDat
 import { caughtUp, openFollowerStore } from './follower-store.js';
 import type { FollowerStore } from './follower-store.js';
 import { ParityLog, parityLogPath } from './log.js';
-import type { ShadowBase, ShadowRunRecord, ShadowRunState, ShadowTarget } from './log.js';
+import type { ShadowBase, ShadowRunRecord, ShadowRunState, ShadowTarget, SweepCursor, SweepWalk } from './log.js';
 import { lockParity, PARITY_LOCK_FILE, parseParityCommand, SHADOW_LOCK_FILE } from './parity-command.js';
 import type { ParityCommand } from './parity-command.js';
 import { neverComparedAccountsOf, reportOnLog, runParity, sweepPointerOf, sweepPositionOf } from './report.js';
@@ -345,6 +345,15 @@ function anyFails(report: ParityReport): boolean {
 	}));
 }
 
+/** The latest lap of a walk it has completed, or undefined, with why on the standard error, when it has completed none. */
+function latestCompleteLap(walk: SweepWalk, cursor: SweepCursor): number | undefined {
+	if (cursor.lap === 0) {
+		process.stderr.write(`the ${walk} walk has completed no lap, so no account of it is compared as never compared\n`);
+		return(undefined);
+	}
+	return(cursor.lap - 1);
+}
+
 async function wait(milliseconds: number): Promise<void> {
 	await delay(milliseconds);
 }
@@ -379,8 +388,8 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 			const { records } = await tools.log.read();
 			const position = await sweepPositionOf(tools, records);
 			const neverCompared = await compareNeverCompared(tools, neverComparedAccountsOf(records, position), {
-				chain: Math.max(0, position.cursors.chain.lap - 1),
-				passive: Math.max(0, position.cursors.passive.lap - 1)
+				chain: latestCompleteLap('chain', position.cursors.chain),
+				passive: latestCompleteLap('passive', position.cursors.passive)
 			}, wait);
 			const summary = { sweep, apiDiff, neverCompared };
 			process.stdout.write(`${JSON.stringify(summary, null, '\t')}\n`);

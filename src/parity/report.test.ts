@@ -6,7 +6,7 @@ import { startFakeAPI } from '../testing/fake-api.js';
 import { httpSource } from './api-source.js';
 import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-store.js';
 import { ParityLog } from './log.js';
-import type { APIDiffExplainedRecord, APIDiffOutcome, APIDiffPlanRecord, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, ShadowRunRecord, ShadowWindowTally, SweepBatchRecord, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
+import type { APIDiffExplainedRecord, APIDiffOutcome, APIDiffPlanRecord, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, SelfCheck, ShadowRunRecord, ShadowWindowTally, SweepBatchRecord, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
 import { answerDigest } from './api-diff.js';
 import { neverComparedAccountsOf, parityReportOf, runParity, neverComparedCandidatesOf } from './report.js';
 import type { SweepPosition } from './report.js';
@@ -60,8 +60,13 @@ const MATCH: SweepOutcome = { kind: 'match', head: null, staple: STAPLE };
 const MOVING: SweepOutcome = { kind: 'skipped', reason: 'moving', side: 'representative', detail: 'recent' };
 const UNANSWERED: SweepOutcome = { kind: 'skipped', reason: 'unanswered', detail: '500' };
 
+/** A divergence of the kind given; one left to a representative apart with the follower's balances found consistent with its history. */
 function diverged(account: string, field: string, kind: 'diverged' | 'representative-local' | 'unresolved' = 'diverged'): SweepOutcome {
-	return({ kind, divergence: { account, field, staple: STAPLE }, follower: {}, representative: {}, readings: [], selfCheck: null });
+	let selfCheck: SelfCheck | null = null;
+	if (kind === 'representative-local') {
+		selfCheck = { kind: 'consistent', tokens: 1 };
+	}
+	return({ kind, divergence: { account, field, staple: STAPLE }, follower: {}, representative: {}, readings: [], selfCheck });
 }
 
 const KNOWN_BEHAVIOR = '/api/node/ledger/account/{account} 200 error=-';
@@ -578,6 +583,16 @@ describe('the parity report', function() {
 		const missed = [batch('2026-10-09T01:00:00.000Z', 0, ['0', '20'], 4, [OTHER_ACCOUNT])];
 		expect(neverComparedAccountsOf(missed, position)).toEqual({ chain: [chainAccount(ACCOUNT)], passive: [OTHER_ACCOUNT] });
 		expect(neverComparedAccountsOf([...missed, swept('2026-10-09T02:00:00.000Z', ACCOUNT, MATCH, 0, 'chain'), swept('2026-10-09T02:00:01.000Z', OTHER_ACCOUNT, MATCH, 0, 'passive')], position)).toEqual({ chain: [], passive: [] });
+	});
+
+	test('counts a difference left to the representatives apart as unresolved until a check of the follower\'s balances bears it out', function() {
+		const local = function(selfCheck: SelfCheck | null): SweepOutcome {
+			return({ kind: 'representative-local', divergence: { account: ACCOUNT, field: 'balances[0].balance', staple: STAPLE }, follower: {}, representative: {}, readings: [], selfCheck });
+		};
+		for (const selfCheck of [null, { kind: 'unchecked', why: 'the follower failed' } as const]) {
+			expect(report([swept('2026-10-09T01:00:00.000Z', ACCOUNT, local(selfCheck))]).signals.sweep).toMatchObject({ verdict: 'fail', counts: { diverged: 1, unresolved: 1 }, representativeLocal: { accounts: 0 }, firstDivergence: { account: ACCOUNT } });
+		}
+		expect(report([swept('2026-10-09T01:00:00.000Z', ACCOUNT, local({ kind: 'consistent', tokens: 1 }))]).signals.sweep).toMatchObject({ verdict: 'pass', counts: { diverged: 0 }, representativeLocal: { accounts: 1 } });
 	});
 
 	test('fails the sweep on an account the representatives split on', function() {

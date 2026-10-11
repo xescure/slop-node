@@ -424,6 +424,17 @@ export function followerDiverged(outcome: SweepOutcome): boolean {
 	return(outcome.kind === 'diverged' || outcome.kind === 'unresolved');
 }
 
+/**
+ * Whether an account's latest comparison leaves it diverging: a divergence
+ * of the follower's or one the representatives split on, and one left to
+ * the representatives apart that the follower's balances were not found to
+ * bear out, as nothing but their votes then rests on it; it stands
+ * unresolved until a check of the follower's balances is consistent.
+ */
+function standsDiverging(outcome: SweepOutcome): boolean {
+	return(followerDiverged(outcome) || (outcome.kind === 'representative-local' && outcome.selfCheck?.kind !== 'consistent'));
+}
+
 /** Whether the account was compared: an outcome other than a skip or an error both sides answered. */
 export function wasCompared(outcome: SweepOutcome): boolean {
 	return(outcome.kind !== 'skipped' && outcome.kind !== 'error-both');
@@ -727,10 +738,10 @@ function sweepSignalOf(allRecords: readonly ParityRecord[], position: SweepPosit
 	const { compared, attempted, everDiverged } = latestByAccount(records);
 	const latest = [...compared.values()];
 	const divergedNow = latest.filter(function(record): boolean {
-		return(followerDiverged(record.outcome));
+		return(standsDiverging(record.outcome));
 	});
 	const localNow = latest.filter(function(record): boolean {
-		return(record.outcome.kind === 'representative-local');
+		return(record.outcome.kind === 'representative-local' && !standsDiverging(record.outcome));
 	});
 	const chainLaps = chainLapRecordsOf(records);
 	const neverCompared = neverComparedOf(records, batches, position, chainLaps, neverComparedCandidatesOf(allRecords));
@@ -771,13 +782,15 @@ function sweepSignalOf(allRecords: readonly ParityRecord[], position: SweepPosit
 		matched: latest.length - divergedNow.length - localNow.length - byChain,
 		diverged: divergedNow.length,
 		unresolved: divergedNow.filter(function(record): boolean {
-			return(record.outcome.kind === 'unresolved');
+			return(record.outcome.kind === 'unresolved' || record.outcome.kind === 'representative-local');
 		}).length,
 		comparedByChain: byChain,
 		skippedMoving,
 		unanswered,
 		errorBoth,
-		resolvedDivergences: everDiverged.size - divergedNow.length,
+		resolvedDivergences: everDiverged.size - divergedNow.filter(function(record): boolean {
+			return(followerDiverged(record.outcome));
+		}).length,
 		divergenceRecords
 	};
 	const coverage = sweepCoverageOf(records, batches, position, neverCompared, chainLaps);
@@ -795,9 +808,9 @@ function sweepSignalOf(allRecords: readonly ParityRecord[], position: SweepPosit
 		return(record.account);
 	}));
 	const first = records.find(function(record): boolean {
-		return(followerDiverged(record.outcome) && stillDiverging.has(record.account));
+		return(standsDiverging(record.outcome) && stillDiverging.has(record.account));
 	});
-	if (first === undefined || (first.outcome.kind !== 'diverged' && first.outcome.kind !== 'unresolved')) {
+	if (first === undefined || (first.outcome.kind !== 'diverged' && first.outcome.kind !== 'unresolved' && first.outcome.kind !== 'representative-local')) {
 		return({ verdict: 'pass', counts, coverage, representativeLocal, confidence, firstDivergence: null });
 	}
 	return({ verdict: 'fail', counts, coverage, representativeLocal, confidence, firstDivergence: { ...first.outcome.divergence, at: first.at, representative: first.representative } });
