@@ -7,7 +7,6 @@ import { gunzipSync } from 'node:zlib';
 import pg from 'pg';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
-import { PeerPacer } from '../node/bootstrap-pacing.js';
 import { assertNever } from '../util/assert-never.js';
 import { capturedBehaviors, recheckAPIDivergences, sampleAPI } from './api-diff.js';
 import { httpSource, pacedSource } from './api-source.js';
@@ -21,18 +20,31 @@ import type { ShadowBase, ShadowRunRecord, ShadowRunState, ShadowTarget } from '
 import { lockParity, PARITY_LOCK_FILE, parseParityCommand, SHADOW_LOCK_FILE } from './parity-command.js';
 import type { ParityCommand } from './parity-command.js';
 import { reportOnLog, runParity, sweepPointerOf } from './report.js';
+import { DEFAULT_REPRESENTATIVE_PACING, RepresentativePacer } from './representative-pacer.js';
+import type { PacerClock, RepresentativePacing } from './representative-pacer.js';
 import type { ParityReport } from './report.js';
 import { freshShadowRun, runShadowVotes, SHADOW_SCOPE, shadowRunComplete } from './shadow-live.js';
 import { fileShadowState, shadowDirectory } from './shadow-state.js';
 import { recheckDivergences, sweepAccounts, sweepCursorPaths } from './sweep.js';
 import type { SweepCursorPaths } from './sweep.js';
 
-/**
- * Every parity tool leaves each representative at least this long without a
- * request between two of its own, so that together they send at most one a
- * second to each; the follower's bootstrap paces its own.
- */
-const REPRESENTATIVE_INTERVAL_MILLISECONDS = 1000;
+/** The pacer reads the wall clock, which a Retry-After date is in. */
+const WALL_CLOCK: PacerClock = {
+	now(): number {
+		return(Date.now());
+	},
+	async pause(milliseconds: number, stopped: AbortSignal): Promise<void> {
+		await delay(milliseconds, undefined, { signal: stopped });
+	}
+};
+
+/** The shadow votes send no request, so they take the pacing they never use. */
+function pacingOf(command: ParityCommand): RepresentativePacing {
+	if (command.kind === 'shadow') {
+		return(DEFAULT_REPRESENTATIVE_PACING);
+	}
+	return(command.pacing);
+}
 
 type ExitCode = 0 | 1 | 2;
 
@@ -82,6 +94,12 @@ const USAGE = [
 	'            --log-only         compare nothing afresh: report on the log as it stands, beside a running sweep',
 	'            --api-samples <n>  how many requests of each stratum the API diff sample compares (2)',
 	'            --gap-ms <ms>      as for checksum',
+	'',
+	'Every command but shadow takes --rep-concurrency <n>, the most requests in flight to each representative (4),',
+	'and --rep-gap-ms <ms>, how long after one request to a representative starts the next may start (0); a',
+	'representative answering 429, or a server error other than the API\'s own internal failure, has that halved',
+	'(down to 1) and is left alone for 1 s, doubling to 30 s with each such answer in a row, or for its Retry-After;',
+	'each run of 10 other answers allows one more in flight again.',
 	'',
 	'The directory is the follower\'s (~/.local/share/slop-node-follower); the follower must be up.',
 	''
@@ -430,18 +448,24 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
 		process.once('SIGTERM', stop);
 		const store = openFollowerStore(followerDatabaseURL(directory));
 		try {
-			const pacer = new PeerPacer(REPRESENTATIVE_INTERVAL_MILLISECONDS);
-			return(await run(command, {
-				directory,
-				follower: httpSource(`http://${FOLLOWER_LISTEN_IP}:${String(settings.port)}/api`),
-				representatives: MAINNET_REPRESENTATIVE_APIS.map(function(endpoint): APISource {
-					return(pacedSource(httpSource(endpoint), pacer, stopping.signal));
-				}),
-				store,
-				log: new ParityLog(parityLogPath(directory)),
-				cursorPaths: sweepCursorPaths(directory),
-				stopped: stopping.signal
-			}));
+			const pacer = new RepresentativePacer(pacingOf(command), WALL_CLOCK, function(endpoint, standing, waitMilliseconds, why) {
+				process.stderr.write(`${new Date().toISOString()} ${endpoint} ${why}: ${String(standing.concurrency)} in flight at most, next in ${String(waitMilliseconds)} ms, backed off ${String(standing.backedOff)} times\n`);
+			});
+			try {
+				return(await run(command, {
+					directory,
+					follower: httpSource(`http://${FOLLOWER_LISTEN_IP}:${String(settings.port)}/api`),
+					representatives: MAINNET_REPRESENTATIVE_APIS.map(function(endpoint): APISource {
+						return(pacedSource(endpoint, pacer, stopping.signal));
+					}),
+					store,
+					log: new ParityLog(parityLogPath(directory)),
+					cursorPaths: sweepCursorPaths(directory),
+					stopped: stopping.signal
+				}));
+			} finally {
+				process.stderr.write(`representatives: ${JSON.stringify(pacer.standing())}\n`);
+			}
 		} finally {
 			await store.close();
 			await release();

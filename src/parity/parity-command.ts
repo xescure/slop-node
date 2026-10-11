@@ -3,12 +3,14 @@ import { join } from 'node:path';
 import { assertNever } from '../util/assert-never.js';
 import { DEFAULT_CHECKSUM_GAP_MILLISECONDS } from './checksum.js';
 import { defaultFollowerDirectory, optionsOf, setting } from './follower-config.js';
+import { DEFAULT_REPRESENTATIVE_PACING } from './representative-pacer.js';
+import type { RepresentativePacing } from './representative-pacer.js';
 
 export type ParityCommand =
-	| { readonly kind: 'checksum'; readonly directory: string; readonly gapMilliseconds: number }
-	| { readonly kind: 'sweep'; readonly directory: string; readonly accounts: number; readonly toLapEnd: boolean }
-	| { readonly kind: 'recheck'; readonly directory: string }
-	| { readonly kind: 'api-diff'; readonly directory: string; readonly samplesPerStratum: number; readonly seed: string | undefined }
+	| { readonly kind: 'checksum'; readonly directory: string; readonly gapMilliseconds: number; readonly pacing: RepresentativePacing }
+	| { readonly kind: 'sweep'; readonly directory: string; readonly accounts: number; readonly toLapEnd: boolean; readonly pacing: RepresentativePacing }
+	| { readonly kind: 'recheck'; readonly directory: string; readonly pacing: RepresentativePacing }
+	| { readonly kind: 'api-diff'; readonly directory: string; readonly samplesPerStratum: number; readonly seed: string | undefined; readonly pacing: RepresentativePacing }
 	| { readonly kind: 'shadow'; readonly directory: string; readonly base: string | undefined; readonly informationalEvery: number; readonly batchStaples: number; readonly restart: boolean }
 	| {
 		readonly kind: 'report';
@@ -19,6 +21,7 @@ export type ParityCommand =
 		readonly gapMilliseconds: number;
 		/** Reports on the log as it stands, comparing nothing afresh, so that it runs beside a sweep. */
 		readonly logOnly: boolean;
+		readonly pacing: RepresentativePacing;
 	};
 
 export const DEFAULT_SWEEP_ACCOUNTS = 100;
@@ -51,6 +54,26 @@ export const DEFAULT_REPORT_API_SAMPLES = 2;
 
 const MAX_GAP_MILLISECONDS = 600_000;
 
+/** The most requests the tools keep in flight to one representative. */
+const MAX_REPRESENTATIVE_CONCURRENCY = 64;
+
+/** Options of the commands that read from the representatives. */
+const PACING_OPTIONS: readonly string[] = ['--rep-concurrency', '--rep-gap-ms'];
+
+/** How hard the options ask the representatives to be read, or undefined for a value out of range. */
+function pacingOf(options: ReadonlyMap<string, string>): RepresentativePacing | undefined {
+	const concurrency = setting(options, '--rep-concurrency', MAX_REPRESENTATIVE_CONCURRENCY, DEFAULT_REPRESENTATIVE_PACING.concurrency);
+	let gapMilliseconds = setting(options, '--rep-gap-ms', MAX_GAP_MILLISECONDS, DEFAULT_REPRESENTATIVE_PACING.gapMilliseconds);
+	// A gap of none is a whole number the settings, which start from one, do not read.
+	if (options.get('--rep-gap-ms') === '0') {
+		gapMilliseconds = 0;
+	}
+	if (concurrency === undefined || gapMilliseconds === undefined) {
+		return(undefined);
+	}
+	return({ concurrency, gapMilliseconds });
+}
+
 /**
  * The command the arguments name, or undefined for a command line it does
  * not understand. The directory is taken as written; followerDirectory
@@ -62,24 +85,24 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 	let flags: readonly string[] = [];
 	switch (name) {
 		case 'checksum':
-			valued = ['--directory', '--gap-ms'];
+			valued = ['--directory', '--gap-ms', ...PACING_OPTIONS];
 			break;
 		case 'sweep':
-			valued = ['--directory', '--accounts'];
+			valued = ['--directory', '--accounts', ...PACING_OPTIONS];
 			flags = ['--lap'];
 			break;
 		case 'recheck':
-			valued = ['--directory'];
+			valued = ['--directory', ...PACING_OPTIONS];
 			break;
 		case 'api-diff':
-			valued = ['--directory', '--samples', '--seed'];
+			valued = ['--directory', '--samples', '--seed', ...PACING_OPTIONS];
 			break;
 		case 'shadow':
 			valued = ['--directory', '--base', '--informational-every', '--batch'];
 			flags = ['--restart'];
 			break;
 		case 'report':
-			valued = ['--directory', '--sample', '--passive-sample', '--api-samples', '--gap-ms'];
+			valued = ['--directory', '--sample', '--passive-sample', '--api-samples', '--gap-ms', ...PACING_OPTIONS];
 			flags = ['--log-only'];
 			break;
 		default:
@@ -91,12 +114,16 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 	}
 	const directory = options.get('--directory') ?? defaultFollowerDirectory(home);
 	const gapMilliseconds = setting(options, '--gap-ms', MAX_GAP_MILLISECONDS, DEFAULT_CHECKSUM_GAP_MILLISECONDS);
+	const pacing = pacingOf(options);
+	if (pacing === undefined) {
+		return(undefined);
+	}
 	switch (name) {
 		case 'checksum':
 			if (gapMilliseconds === undefined) {
 				return(undefined);
 			}
-			return({ kind: name, directory, gapMilliseconds });
+			return({ kind: name, directory, gapMilliseconds, pacing });
 		case 'sweep': {
 			const toLapEnd = options.has('--lap');
 			let fallback = DEFAULT_SWEEP_ACCOUNTS;
@@ -107,16 +134,16 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 			if (accounts === undefined) {
 				return(undefined);
 			}
-			return({ kind: name, directory, accounts, toLapEnd });
+			return({ kind: name, directory, accounts, toLapEnd, pacing });
 		}
 		case 'recheck':
-			return({ kind: name, directory });
+			return({ kind: name, directory, pacing });
 		case 'api-diff': {
 			const samplesPerStratum = setting(options, '--samples', Number.MAX_SAFE_INTEGER, DEFAULT_API_SAMPLES);
 			if (samplesPerStratum === undefined) {
 				return(undefined);
 			}
-			return({ kind: name, directory, samplesPerStratum, seed: options.get('--seed') });
+			return({ kind: name, directory, samplesPerStratum, seed: options.get('--seed'), pacing });
 		}
 		case 'shadow': {
 			const informationalEvery = setting(options, '--informational-every', Number.MAX_SAFE_INTEGER, DEFAULT_INFORMATIONAL_EVERY);
@@ -134,7 +161,7 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 			if (sampleAccounts === undefined || passiveSampleAccounts === undefined || apiSamples === undefined || gapMilliseconds === undefined) {
 				return(undefined);
 			}
-			return({ kind: name, directory, sampleAccounts, passiveSampleAccounts, apiSamples, gapMilliseconds, logOnly: options.has('--log-only') });
+			return({ kind: name, directory, sampleAccounts, passiveSampleAccounts, apiSamples, gapMilliseconds, logOnly: options.has('--log-only'), pacing });
 		}
 		default:
 			return(assertNever(name));

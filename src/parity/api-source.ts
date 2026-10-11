@@ -1,4 +1,4 @@
-import type { PeerPacer } from '../node/bootstrap-pacing.js';
+import type { RepresentativePacer, ServedAnswer } from './representative-pacer.js';
 
 /** An answer of a node's HTTP API: its status, and its body parsed as JSON, or as text when it is not JSON. */
 export type APIAnswer = { readonly status: number; readonly body: unknown };
@@ -16,31 +16,36 @@ export type APISource = {
 /** A representative may take seconds over a large account; this bounds a request that hangs. */
 const REQUEST_TIMEOUT_MILLISECONDS = 30_000;
 
+/** Sends a GET request below the API's root, and reads its answer with the wait a Retry-After header asks for. */
+async function servedOverHTTP(endpoint: string, path: string, timeoutMilliseconds: number): Promise<ServedAnswer> {
+	const response = await fetch(`${endpoint}${path}`, { method: 'GET', signal: AbortSignal.timeout(timeoutMilliseconds) });
+	const text = await response.text();
+	let body: unknown = text;
+	try {
+		body = JSON.parse(text);
+	} catch {
+		// Kept as text, as a representative's HTML page for a path that names no route.
+	}
+	return({ answer: { status: response.status, body }, retryAfter: response.headers.get('retry-after') });
+}
+
 /** A source that reads the API at its root over HTTP. */
 export function httpSource(endpoint: string, timeoutMilliseconds: number = REQUEST_TIMEOUT_MILLISECONDS): APISource {
 	return({
 		endpoint,
 		async get(path: string): Promise<APIAnswer> {
-			const response = await fetch(`${endpoint}${path}`, { method: 'GET', signal: AbortSignal.timeout(timeoutMilliseconds) });
-			const text = await response.text();
-			let body: unknown = text;
-			try {
-				body = JSON.parse(text);
-			} catch {
-				// Kept as text, as a representative's HTML page for a path that names no route.
-			}
-			return({ status: response.status, body });
+			return((await servedOverHTTP(endpoint, path, timeoutMilliseconds)).answer);
 		}
 	});
 }
 
-/** The source with its requests kept apart by the pacer, which every parity tool in the process shares. */
-export function pacedSource(source: APISource, pacer: PeerPacer, stopped: AbortSignal): APISource {
+/** A representative's API read over HTTP, its requests paced by the pacer, which every parity tool in the process shares. */
+export function pacedSource(endpoint: string, pacer: RepresentativePacer, stopped: AbortSignal, timeoutMilliseconds: number = REQUEST_TIMEOUT_MILLISECONDS): APISource {
 	return({
-		endpoint: source.endpoint,
+		endpoint,
 		get(path: string): Promise<APIAnswer> {
-			return(pacer.paced(source.endpoint, stopped, function() {
-				return(source.get(path));
+			return(pacer.paced(endpoint, stopped, function() {
+				return(servedOverHTTP(endpoint, path, timeoutMilliseconds));
 			}));
 		}
 	});
