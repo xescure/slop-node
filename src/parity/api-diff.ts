@@ -440,9 +440,6 @@ export function populationOf(stratum: PlannedStratum, samplesPerStratum: number)
 /** Whether an account is quiet on one side, and why not. */
 type Quietness = { readonly quiet: true } | { readonly quiet: false; readonly side: 'representative' | 'follower'; readonly detail: string };
 
-/** Whether an account is quiet on a representative, with the newest staple of it the representative then held, if any. */
-type RepresentativeQuietness = { readonly quiet: true; readonly newest: string | null } | Extract<Quietness, { readonly quiet: false }>;
-
 /**
  * Decides whether accounts are quiet: the follower holds no staple of
  * theirs from the margin before its reach on, and a representative's
@@ -454,7 +451,7 @@ type RepresentativeQuietness = { readonly quiet: true; readonly newest: string |
 class QuietAccounts {
 	readonly #store: APIDiffStore;
 	readonly #quietBefore: Date;
-	readonly #representativeSide = new Map<string, Promise<RepresentativeQuietness>>();
+	readonly #representativeSide = new Map<string, Promise<Quietness>>();
 
 	constructor(store: APIDiffStore, quietBefore: Date) {
 		this.#store = store;
@@ -484,24 +481,29 @@ class QuietAccounts {
 
 	/**
 	 * Whether the follower holds the newest staple of each account the
-	 * representative holds, as it was read when the account was found quiet
-	 * on it; a representative with no history of an account holds none the
-	 * follower could lack, and one on which an account moves is no evidence.
+	 * representative holds, read now rather than as the account was found
+	 * quiet, which may have been half an hour before; a representative with
+	 * no history of an account holds none the follower could lack, and one
+	 * on which an account moved since is no evidence.
 	 */
 	async followerHoldsNewest(accounts: readonly string[], representative: APISource): Promise<boolean> {
 		for (const account of new Set(accounts)) {
-			const answer = await this.#onRepresentative(account, representative);
-			if (!answer.quiet) {
+			const answer = await representative.get(`/node/ledger/account/${segment(account)}/history?limit=1`);
+			if (answer.status !== 200) {
 				return(false);
 			}
-			if (answer.newest !== null && !await this.#store.historyHolds(account, answer.newest)) {
+			const newest = newestStapleOf(answer.body);
+			if (newest === undefined) {
+				continue;
+			}
+			if (newest.latestVote.getTime() >= this.#quietBefore.getTime() || !await this.#store.historyHolds(account, newest.staple)) {
 				return(false);
 			}
 		}
 		return(true);
 	}
 
-	#onRepresentative(account: string, representative: APISource): Promise<RepresentativeQuietness> {
+	#onRepresentative(account: string, representative: APISource): Promise<Quietness> {
 		const key = `${representative.endpoint} ${account}`;
 		const known = this.#representativeSide.get(key);
 		if (known !== undefined) {
@@ -509,7 +511,7 @@ class QuietAccounts {
 		}
 		const quietBefore = this.#quietBefore;
 		const answers = this.#representativeSide;
-		const asked = (async function(): Promise<RepresentativeQuietness> {
+		const asked = (async function(): Promise<Quietness> {
 			const answer = await representative.get(`/node/ledger/account/${segment(account)}/history?limit=1`);
 			if (answer.status !== 200) {
 				throw(new Error(`${representative.endpoint} answered ${String(answer.status)} for the history of ${account}`));
@@ -518,7 +520,7 @@ class QuietAccounts {
 			if (newest !== undefined && newest.latestVote.getTime() >= quietBefore.getTime()) {
 				return({ quiet: false, side: 'representative', detail: `its newest staple of ${account}, ${newest.staple}, has a vote from ${newest.latestVote.toISOString()}` });
 			}
-			return({ quiet: true, newest: newest?.staple ?? null });
+			return({ quiet: true });
 		})();
 		answers.set(key, asked);
 		// A failed question is asked again for the next request.
@@ -692,14 +694,27 @@ async function readingOf(request: SampledRequest, other: APISource, followerAnsw
  * difference to them: a staple the follower lacks may change the answer of
  * those that hold it while others that lack it answer as the follower.
  */
-async function dissentHeld(request: SampledRequest, representative: APISource, readings: readonly APIDiffReading[], others: readonly APISource[], quiet: QuietAccounts): Promise<boolean> {
+async function dissentHeld(request: SampledRequest, answers: { readonly follower: APIAnswer; readonly representative: APIAnswer }, representative: APISource, readings: readonly APIDiffReading[], others: readonly APISource[], quiet: QuietAccounts): Promise<boolean> {
+	const disagreeing = readings.flatMap(function(reading): APIAnswer[] {
+		if (reading.kind !== 'disagrees' || !isAnswer(reading.answer)) {
+			return([]);
+		}
+		return([reading.answer]);
+	});
+	// The accounts the answer reads, as their quiet is decided, the entities a principal's permissions list included.
+	const accounts = [...request.quiet];
+	if (request.listsEntities) {
+		for (const answer of [answers.follower, answers.representative, ...disagreeing]) {
+			accounts.push(...entitiesListed(answer.body));
+		}
+	}
 	const dissenting = [representative, ...others.filter(function(other): boolean {
 		return(readings.some(function(reading): boolean {
 			return(reading.representative === other.endpoint && reading.kind === 'disagrees');
 		}));
 	})];
 	for (const source of dissenting) {
-		if (!await quiet.followerHoldsNewest(request.quiet, source)) {
+		if (!await quiet.followerHoldsNewest(accounts, source)) {
 			return(false);
 		}
 	}
@@ -754,7 +769,7 @@ async function compareRequest(request: SampledRequest, follower: APISource, repr
 		return(judgedAsTheSweepDoes(request.route, reading));
 	}), judged, {
 		compared: normalizedAnswer(request.route, representativeAnswer),
-		followerHoldsDissent: await dissentHeld(request, representative, readings, others, quiet)
+		followerHoldsDissent: await dissentHeld(request, { follower: answered, representative: representativeAnswer }, representative, readings, others, quiet)
 	});
 	/*
 	 * A representative failing internally to serve a page of history is

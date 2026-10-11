@@ -240,10 +240,10 @@ describe('sampling the API', function() {
 		expect(summary.strata.find(function(stratum) {
 			return(stratum.stratum === 'token');
 		})).toMatchObject({ compared: records.length - 1, diverged: 1, skipped: 1 });
-		// Only GETs, and the representative is asked about the account's history once for the whole run.
+		// Only GETs; the representative is asked about the account's history once for the whole run, and again after the divergence.
 		expect(setup.representative.requests.filter(function(request) {
 			return(request.endsWith('/history?limit=1'));
-		})).toHaveLength(2);
+		})).toHaveLength(3);
 		expect([...setup.follower.requests, ...setup.representative.requests].every(function(request) {
 			return(request.startsWith('GET '));
 		})).toBe(true);
@@ -434,8 +434,8 @@ describe('a divergence of the API', function() {
 			{ representative: setup.representatives[1]?.endpoint, kind: 'agrees', answer: { status: 200, body: balanceOf('0x1') } },
 			{ representative: setup.representatives[2]?.endpoint, kind: 'agrees', answer: { status: 200, body: balanceOf('0x1') } }
 		]);
-		// Asked about the account's history only once its answer differs, so that a staple added meanwhile shows as newest.
-		expect(setup.representatives[0]?.requests).toEqual([`GET ${BALANCE}`, `GET /node/ledger/account/${TOKEN}/history?limit=1`]);
+		// Asked about the account's history once its answer differs, so that a staple added meanwhile shows as newest, and again for the newest it holds as the difference is judged.
+		expect(setup.representatives[0]?.requests).toEqual([`GET ${BALANCE}`, `GET /node/ledger/account/${TOKEN}/history?limit=1`, `GET /node/ledger/account/${TOKEN}/history?limit=1`]);
 	});
 
 	test('is the own of the representatives answering apart when two answer as the follower and each other answers a value of its own', async function() {
@@ -454,6 +454,43 @@ describe('a divergence of the API', function() {
 		setup.representatives[0]?.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, { history: [{ $id: lacked, voteStaple: { votes: [{ validityFrom: '2025-01-01T00:00:00.000Z' }] } }], nextKey: lacked });
 
 		const { summary } = await recheck(setup);
+
+		expect(summary).toEqual({ unresolved: 1 });
+	});
+
+	test('of a principal\'s permissions is never the own of the representatives answering apart when the follower lacks the newest staple one of them holds of an entity listed', async function() {
+		const setup = await runningWith(4);
+		const path = `/node/ledger/account/${TOKEN}/acl`;
+		const listing = function(permission: string): unknown {
+			return({ permissions: [{ entity: OTHER, principal: TOKEN, target: OTHER, permissions: [permission, '0x0'], principalType: 'ACCOUNT' }] });
+		};
+		const quietPage = function(staple: string): unknown {
+			return({ history: [{ $id: staple, voteStaple: { votes: [{ validityFrom: '2025-01-01T00:00:00.000Z' }] } }], nextKey: staple });
+		};
+		setup.follower.serve(path, listing('0x1'));
+		const answers = ['0x2', '0x1', '0x1', '0x3'];
+		setup.representatives.forEach(function(representative, index) {
+			representative.serve(path, listing(answers[index] ?? '0x1'));
+			representative.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, QUIET_HISTORY);
+			representative.serve(`/node/ledger/account/${OTHER}/history?limit=1`, QUIET_HISTORY);
+		});
+		setup.representatives[0]?.serve(`/node/ledger/account/${OTHER}/history?limit=1`, quietPage('EF'.repeat(32)));
+		const first = setup.representatives[0]?.endpoint ?? '';
+		await setup.log.append([{ kind: 'api-diff', at: '2026-10-11T14:00:00.000Z', representative: first, stratum: 'permissions', route: '/api/node/ledger/account/{account}/acl', path, behaviors: [], outcome: { ...RECORDED_DIVERGENCE, field: 'body.permissions[0].permissions[0]' } }]);
+
+		expect(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({}) })).toEqual({ unresolved: 1 });
+	});
+
+	test('reads again, after their answers, the newest staple each representative answering apart holds, as one it added since its account was found quiet', async function() {
+		const setup = await runningWith(4);
+		servingBalances(setup, '0x1', ['0x2', '0x1', '0x1', '0x3']);
+		const quietPage = function(staple: string): unknown {
+			return({ history: [{ $id: staple, voteStaple: { votes: [{ validityFrom: '2025-01-01T00:00:00.000Z' }] } }], nextKey: staple });
+		};
+		const held = 'CD'.repeat(32);
+		setup.representatives[0]?.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, quietPage(held), quietPage('EF'.repeat(32)));
+
+		const { summary } = await recheck(setup, memoryStore({ held: [held] }));
 
 		expect(summary).toEqual({ unresolved: 1 });
 	});
@@ -598,7 +635,7 @@ describe('a divergence of the API', function() {
 		await setup.log.append([recorded]);
 
 		expect(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({ blocks: [block] }) })).toEqual({ diverged: 1 });
-		expect(setup.representatives[0]?.requests).toEqual([`GET ${path}`, `GET /node/ledger/account/${OWNER}/history?limit=1`]);
+		expect(setup.representatives[0]?.requests).toEqual([`GET ${path}`, `GET /node/ledger/account/${OWNER}/history?limit=1`, `GET /node/ledger/account/${OWNER}/history?limit=1`]);
 	});
 });
 
