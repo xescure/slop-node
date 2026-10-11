@@ -1,6 +1,6 @@
 import { assertNever } from '../util/assert-never.js';
-import { API_DIFF_SAMPLES_TARGET, keyOf, requestStandings, sampleAPI, standingCensuses, standsOnExplanation } from './api-diff.js';
-import type { ExplainedDivergence, RequestStanding, SupersededDivergence } from './api-diff.js';
+import { API_DIFF_SAMPLES_TARGET, keyOf, requestStandings, routeAttemptsOf, routeUncovered, sampleAPI, standingCensuses, standsOnExplanation } from './api-diff.js';
+import type { ExplainedDivergence, RequestStanding, RouteAttempts, SupersededDivergence } from './api-diff.js';
 import type { APIDiffSetup } from './api-diff.js';
 import type { APISource } from './api-source.js';
 import { checksumsEqual, compareChecksums, crossCheckChecksum } from './checksum.js';
@@ -811,33 +811,17 @@ function confidenceOf(compared: number, diverged: number, unit: string): Confide
 
 type RouteSkips = Record<string, { moving: number; unanswered: number }>;
 
-/*
- * The share of a route's requests attempted that may go never compared while it
- * counts as covered. The requests skipped are those whose accounts were
- * moving or that went unanswered, so a route most of whose requests are
- * skipped is covered only by the quiet few: a selection, not a sample.
- */
-const ROUTE_NEVER_COMPARED_PERCENT = 10;
-
-const PERCENT = 100;
-
 /** The routes more than the tolerated share of whose requests were never compared, the largest share first. */
-function routesUncoveredOf(own: readonly RequestStanding[], skippedByRoute: RouteSkips): APIDiffRouteCoverage[] {
-	const comparedByRoute = new Map<string, number>();
-	for (const { latest } of own) {
-		comparedByRoute.set(latest.route, (comparedByRoute.get(latest.route) ?? 0) + 1);
-	}
-	return(Object.entries(skippedByRoute).map(function([route, { moving, unanswered }]): APIDiffRouteCoverage {
-		return({ route, compared: comparedByRoute.get(route) ?? 0, neverCompared: moving + unanswered });
-	}).filter(function({ compared, neverCompared }): boolean {
-		return(neverCompared * PERCENT > ROUTE_NEVER_COMPARED_PERCENT * (compared + neverCompared));
+function routesUncoveredOf(routes: readonly RouteAttempts[]): APIDiffRouteCoverage[] {
+	return(routes.filter(routeUncovered).map(function({ route, compared, neverCompared }): APIDiffRouteCoverage {
+		return({ route, compared, neverCompared: neverCompared.length });
 	}).sort(function(left, right): number {
 		// Compares the shares never compared, left's against right's, without dividing.
 		return((right.neverCompared * (left.compared + left.neverCompared)) - (left.neverCompared * (right.compared + right.neverCompared)) || left.route.localeCompare(right.route));
 	}));
 }
 
-function apiDiffStratumOf(stratum: Stratum, standings: readonly RequestStanding[], onExplanation: readonly RequestStanding[], attempts: readonly APIDiffRecord[], census: { readonly plan: APIDiffPlanRecord; readonly requests: readonly string[] } | undefined, compared: ReadonlySet<string>): APIDiffStratum {
+function apiDiffStratumOf(stratum: Stratum, standings: readonly RequestStanding[], onExplanation: readonly RequestStanding[], routeAttempts: readonly RouteAttempts[], census: { readonly plan: APIDiffPlanRecord; readonly requests: readonly string[] } | undefined, compared: ReadonlySet<string>): APIDiffStratum {
 	const own = standings.filter(function({ latest }): boolean {
 		return(latest.stratum === stratum);
 	});
@@ -850,16 +834,21 @@ function apiDiffStratumOf(stratum: Stratum, standings: readonly RequestStanding[
 	const representativeLocal = own.filter(function({ latest, open }): boolean {
 		return(open.length === 0 && latest.outcome.kind === 'representative-local');
 	}).length;
+	const routes = routeAttempts.filter(function(entry): boolean {
+		return(entry.stratum === stratum);
+	});
 	const skippedByRoute: RouteSkips = {};
-	for (const attempt of attempts) {
-		if (attempt.stratum !== stratum || compared.has(keyOf(attempt.stratum, attempt.path)) || attempt.outcome.kind !== 'skipped') {
-			continue;
+	for (const { route, neverCompared } of routes) {
+		for (const { outcome } of neverCompared) {
+			if (outcome.kind !== 'skipped') {
+				continue;
+			}
+			const skips = skippedByRoute[route] ?? { moving: 0, unanswered: 0 };
+			skips[outcome.reason]++;
+			skippedByRoute[route] = skips;
 		}
-		const skips = skippedByRoute[attempt.route] ?? { moving: 0, unanswered: 0 };
-		skips[attempt.outcome.reason]++;
-		skippedByRoute[attempt.route] = skips;
 	}
-	const routesUncovered = routesUncoveredOf(own, skippedByRoute);
+	const routesUncovered = routesUncoveredOf(routes);
 	let standingCensus: APIDiffCensus | null = null;
 	if (census !== undefined) {
 		standingCensus = {
@@ -962,10 +951,10 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], plans: readonly APID
 				assertNever(record.outcome);
 		}
 	}
-	const latestAttempts = [...attempted.values()];
+	const routeAttempts = routeAttemptsOf(records, standingsByKey);
 	const censuses = standingCensuses(plans);
 	const strata = STRATA.map(function(stratum): APIDiffStratum {
-		return(apiDiffStratumOf(stratum, standings, onExplanation, latestAttempts, censuses.get(stratum), compared));
+		return(apiDiffStratumOf(stratum, standings, onExplanation, routeAttempts, censuses.get(stratum), compared));
 	});
 	const counts = {
 		requestsCompared: standings.length,

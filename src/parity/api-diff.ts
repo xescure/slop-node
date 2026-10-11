@@ -1158,6 +1158,60 @@ export function standsOnExplanation(standing: RequestStanding): boolean {
 	return(standing.open.length === 0 && followerDivergesOn(standing.latest));
 }
 
+/** A route's requests in a stratum: how many were compared, and the latest attempt at each never compared. */
+export type RouteAttempts = {
+	readonly stratum: Stratum;
+	readonly route: APIDiffRecord['route'];
+	readonly compared: number;
+	readonly neverCompared: readonly APIDiffRecord[];
+};
+
+/*
+ * The share of a route's requests attempted that may go never compared
+ * while it counts as covered. The requests skipped are those whose accounts
+ * were moving or that went unanswered, so a route most of whose requests
+ * are skipped is covered only by the quiet few: a selection, not a sample.
+ */
+const ROUTE_NEVER_COMPARED_PERCENT = 10;
+
+const PERCENT = 100;
+
+/**
+ * Each route's requests of each stratum, by their latest attempt: a request
+ * compared counts once it stands on no explained divergence, and one never
+ * compared is listed by its latest attempt, which skipped it.
+ */
+export function routeAttemptsOf(records: readonly APIDiffRecord[], standings: ReadonlyMap<string, RequestStanding>): readonly RouteAttempts[] {
+	const latestAttempts = new Map<string, APIDiffRecord>();
+	for (const record of records) {
+		latestAttempts.set(keyOf(record.stratum, record.path), record);
+	}
+	const routes = new Map<string, { stratum: Stratum; route: APIDiffRecord['route']; compared: number; neverCompared: APIDiffRecord[] }>();
+	const routeOf = function(record: APIDiffRecord) {
+		const key = `${record.stratum} ${record.route}`;
+		const entry = routes.get(key) ?? { stratum: record.stratum, route: record.route, compared: 0, neverCompared: [] };
+		routes.set(key, entry);
+		return(entry);
+	};
+	for (const standing of standings.values()) {
+		if (!standsOnExplanation(standing)) {
+			routeOf(standing.latest).compared++;
+		}
+	}
+	for (const [key, attempt] of latestAttempts) {
+		const standing = standings.get(key);
+		if (attempt.outcome.kind === 'skipped' && (standing === undefined || standsOnExplanation(standing))) {
+			routeOf(attempt).neverCompared.push(attempt);
+		}
+	}
+	return([...routes.values()]);
+}
+
+/** Whether more than the tolerated share of the route's requests attempted were never compared. */
+export function routeUncovered({ compared, neverCompared }: RouteAttempts): boolean {
+	return(neverCompared.length * PERCENT > ROUTE_NEVER_COMPARED_PERCENT * (compared + neverCompared.length));
+}
+
 /**
  * The census each stratum stands on: the latest plan that made one of it,
  * whose population, which may have grown since an older census, is the
@@ -1187,8 +1241,11 @@ export function standingCensuses(plans: readonly APIDiffPlanRecord[]): ReadonlyM
 /**
  * The requests to send again: each with an open divergence, or whose
  * latest comparison is a divergence a triage explains, to the
- * representative it diverged with, and each request of a standing census
- * that has no comparison, to the representative last tried with it.
+ * representative it diverged with; each request of a standing census that
+ * has no comparison; and each request never compared of a route left
+ * uncovered by them, oldest first, as one skipped as moving can be
+ * compared once what it reads is quiet: these to the representative last
+ * tried with them.
  */
 function pendingOf(records: readonly ParityRecord[]): readonly Pending[] {
 	const comparisons = records.filter(function(record): record is APIDiffRecord {
@@ -1221,7 +1278,19 @@ function pendingOf(records: readonly ParityRecord[]): readonly Pending[] {
 			return({ stratum, path, representative: attempted.get(keyOf(stratum, path))?.representative });
 		}));
 	});
-	return([...open, ...uncounted]);
+	const sending = new Set([...open, ...uncounted].map(function({ stratum, path }): string {
+		return(keyOf(stratum, path));
+	}));
+	const uncovered = routeAttemptsOf(comparisons, standings).filter(routeUncovered).flatMap(function({ neverCompared }): readonly APIDiffRecord[] {
+		return(neverCompared);
+	}).filter(function(attempt): boolean {
+		return(!sending.has(keyOf(attempt.stratum, attempt.path)));
+	}).sort(function(left, right): number {
+		return(left.at.localeCompare(right.at));
+	}).map(function(attempt): Pending {
+		return({ stratum: attempt.stratum, path: attempt.path, representative: attempt.representative });
+	});
+	return([...open, ...uncounted, ...uncovered]);
 }
 
 /**

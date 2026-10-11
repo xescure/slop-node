@@ -9,7 +9,7 @@ import { loadMainnetFixture } from '../conformance/mainnet/fixture.js';
 import { feeBlock, multisigSendBlock, sendBlock, setRepresentativeBlock } from '../testing/blocks.js';
 import { startFakeAPI } from '../testing/fake-api.js';
 import type { FakeAnswer, FakeAPI } from '../testing/fake-api.js';
-import { accountRequests, answerDigest, API_DIFF_SAMPLES_TARGET, explainDivergence, requestStandings, standingCensuses, behaviorsOf, blockRequests, capturedBehaviors, GET_ROUTES, getRoutesOf, operationsOf, recheckAPIDivergences, routeOf, sampleAPI, shuffled } from './api-diff.js';
+import { accountRequests, answerDigest, API_DIFF_SAMPLES_TARGET, explainDivergence, requestStandings, standingCensuses, behaviorsOf, blockRequests, capturedBehaviors, GET_ROUTES, getRoutesOf, operationsOf, recheckAPIDivergences, routeAttemptsOf, routeOf, routeUncovered, sampleAPI, shuffled } from './api-diff.js';
 import type { APIDiffStore } from './api-diff.js';
 import { httpSource } from './api-source.js';
 import type { AccountCandidate, AccountKind, FollowerProgress, HeldBlock } from './follower-store.js';
@@ -674,6 +674,48 @@ describe('a census', function() {
 		expect(records.map(function(record) {
 			return([record.stratum, record.path, record.outcome.kind]);
 		})).toEqual([['multisig', BALANCE, 'match'], ['multisig', state, 'match']]);
+	});
+});
+
+describe('a route left uncovered', function() {
+	test('has its requests never compared sent again on recheck, oldest first, so that it is covered once they compare, while a covered route\'s are not', async function() {
+		const setup = await runningWith(1);
+		servingBalances(setup, '0x1', ['0x1']);
+		const state = `/node/ledger/account/${TOKEN}`;
+		setup.follower.serve(state, STATE);
+		setup.representatives[0]?.serve(state, STATE);
+		const first = setup.representatives[0]?.endpoint ?? '';
+		const attempt = function(at: string, route: APIDiffRecord['route'], path: string, outcome: APIDiffOutcome): APIDiffRecord {
+			return({ kind: 'api-diff', at, representative: first, stratum: 'token', route, path, behaviors: [], outcome });
+		};
+		const moving: APIDiffOutcome = { kind: 'skipped', reason: 'moving', side: 'follower', detail: 'recent' };
+		const unanswered: APIDiffOutcome = { kind: 'skipped', reason: 'unanswered', detail: 'answered 502' };
+		// Nine compared and one never compared of the chain route: a tenth, which leaves it covered.
+		const covered = Array.from({ length: 9 }, function(_, index): APIDiffRecord {
+			return(attempt('2026-10-11T14:00:00.000Z', '/api/node/ledger/account/{account}/chain', `/node/ledger/account/${TOKEN}/chain?limit=${String(index + 1)}`, { kind: 'match', digest: 'EF'.repeat(32) }));
+		});
+		await setup.log.append([
+			...covered,
+			attempt('2026-10-11T14:00:01.000Z', '/api/node/ledger/account/{account}/chain', `/node/ledger/account/${TOKEN}/chain?limit=10`, unanswered),
+			attempt('2026-10-11T14:00:03.000Z', '/api/node/ledger/account/{account}/balance', BALANCE, moving),
+			attempt('2026-10-11T14:00:02.000Z', '/api/node/ledger/account/{account}', state, unanswered)
+		]);
+		const uncovered = async function(): Promise<readonly string[]> {
+			const { records } = await setup.log.read();
+			const comparisons = recordsOf(records, 'api-diff');
+			return(routeAttemptsOf(comparisons, requestStandings(comparisons, [])).filter(routeUncovered).map(function({ route }): string {
+				return(route);
+			}).sort());
+		};
+		expect(await uncovered()).toEqual(['/api/node/ledger/account/{account}', '/api/node/ledger/account/{account}/balance']);
+
+		expect(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({}) })).toEqual({ match: 2 });
+
+		expect(setup.representatives[0]?.requests.filter(function(request): boolean {
+			return(!request.includes('/history'));
+		})).toEqual([`GET ${state}`, `GET ${BALANCE}`]);
+		expect(await uncovered()).toEqual([]);
+		expect(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({}) })).toEqual({});
 	});
 });
 
