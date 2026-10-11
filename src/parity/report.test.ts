@@ -195,7 +195,7 @@ describe('the parity report', function() {
 		});
 		expect(signal.strata.find(function(stratum) {
 			return(stratum.stratum === 'token');
-		})).toEqual({ stratum: 'token', requestsCompared: 2, standingOnExplanation: 0, diverged: 0, representativeLocal: 0, census: null, skippedByRoute: {}, routesNeverCompared: [], covered: false, confidence: { kind: 'rule-of-three', samples: 2, level: 0.95, divergenceRateBelow: 1.5 } });
+		})).toEqual({ stratum: 'token', requestsCompared: 2, standingOnExplanation: 0, diverged: 0, representativeLocal: 0, census: null, skippedByRoute: {}, routesUncovered: [], covered: false, confidence: { kind: 'rule-of-three', samples: 2, level: 0.95, divergenceRateBelow: 1.5 } });
 		expect(signal.strata.find(function(stratum) {
 			return(stratum.stratum === 'storage');
 		})).toMatchObject({ requestsCompared: 0, confidence: { kind: 'none' } });
@@ -255,7 +255,37 @@ describe('the parity report', function() {
 		const stratum = report([...compared, skipped]).signals.apiDiff.strata.find(function(entry) {
 			return(entry.stratum === 'token');
 		});
-		expect(stratum).toMatchObject({ requestsCompared: 300, skippedByRoute: { '/api/node/ledger/account/{account}/pending': { moving: 0, unanswered: 1 } }, routesNeverCompared: ['/api/node/ledger/account/{account}/pending'], covered: false });
+		expect(stratum).toMatchObject({ requestsCompared: 300, skippedByRoute: { '/api/node/ledger/account/{account}/pending': { moving: 0, unanswered: 1 } }, routesUncovered: [{ route: '/api/node/ledger/account/{account}/pending', compared: 0, neverCompared: 1 }], covered: false });
+	});
+
+	test('leaves a stratum uncovered while more than a tenth of the requests of a route of it were never compared, listing the worst routes first', function() {
+		const onRoute = function(route: APIDiffRecord['route'], compared: number, skipped: number): APIDiffRecord[] {
+			return(Array.from({ length: compared + skipped }, function(_, index): APIDiffRecord {
+				let outcome: APIDiffOutcome = MATCHED;
+				if (index >= compared) {
+					outcome = { kind: 'skipped', reason: 'moving', side: 'representative', detail: 'recent' };
+				}
+				return({ ...apiDiff('2026-10-11T14:01:00.000Z', 'token', `${route}/${String(index)}`, outcome), route });
+			}));
+		};
+		const history = onRoute('/api/node/ledger/account/{account}/history/start/{block}', 300, 0);
+		const tenth = onRoute('/api/node/ledger/account/{account}/pending', 9, 1);
+		const fifth = onRoute('/api/node/ledger/account/{account}/balance', 8, 2);
+		const most = onRoute('/api/node/ledger/block/{blockhash}/successor', 1, 3);
+		const of = function(records: readonly APIDiffRecord[]) {
+			return(report(records).signals.apiDiff.strata.find(function(entry) {
+				return(entry.stratum === 'token');
+			}));
+		};
+
+		expect(of([...history, ...tenth])).toMatchObject({ routesUncovered: [], covered: true });
+		expect(of([...history, ...tenth, ...fifth, ...most])).toMatchObject({
+			routesUncovered: [
+				{ route: '/api/node/ledger/block/{blockhash}/successor', compared: 1, neverCompared: 3 },
+				{ route: '/api/node/ledger/account/{account}/balance', compared: 8, neverCompared: 2 }
+			],
+			covered: false
+		});
 	});
 
 	test('fails the API diff on an unresolved request, but counts one representative\'s own difference apart without failing', function() {
