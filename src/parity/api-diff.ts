@@ -1058,6 +1058,20 @@ export function supersedes(divergence: APIDiffRecord, later: APIDiffRecord): boo
 	}
 }
 
+/** The behavior of an internal failure naming no code of the API, of a route and a server error status. */
+const ANONYMOUS_FAILURE_BEHAVIOR = /^\/api\/\S* 5\d\d error=internal$/;
+
+/**
+ * Whether a match was recorded of two internal failures that name no code
+ * of the API, by the behavior of the representative's answer, before such
+ * answers were counted as no answer: it shows nothing alike.
+ */
+function matchedOnAnonymousFailures(record: APIDiffRecord): boolean {
+	return(record.outcome.kind === 'match' && record.behaviors.some(function(behavior): boolean {
+		return(ANONYMOUS_FAILURE_BEHAVIOR.test(behavior));
+	}));
+}
+
 /** A divergence a later comparison of the identical request settled, and that comparison. */
 export type SupersededDivergence = { readonly divergence: APIDiffRecord; readonly by: APIDiffRecord };
 
@@ -1086,7 +1100,7 @@ export type RequestStanding = {
 export function requestStandings(records: readonly APIDiffRecord[], explanations: readonly APIDiffExplainedRecord[]): ReadonlyMap<string, RequestStanding> {
 	const standings = new Map<string, { latest: APIDiffRecord; open: OpenDivergence[]; superseded: SupersededDivergence[] }>();
 	for (const record of records) {
-		if (record.outcome.kind === 'skipped') {
+		if (record.outcome.kind === 'skipped' || matchedOnAnonymousFailures(record)) {
 			continue;
 		}
 		const key = keyOf(record.stratum, record.path);

@@ -569,6 +569,14 @@ describe('where a request stands', function() {
 		expect(standing?.superseded).toEqual([{ divergence: second, by: settling }]);
 	});
 
+	test('counts no match recorded of two internal failures naming no code of the API, before such failures were counted as no answer', function() {
+		const failed: APIDiffRecord = { ...matching('2026-10-11T00:00:00.000Z', '0x2'), behaviors: ['/api/node/ledger/account/{account}/balance 500 error=internal', 'account=TOKEN'] };
+		const refused: APIDiffRecord = { ...failed, behaviors: ['/api/node/ledger/account/{account}/balance 500 error=API_INVALID_SIDE'] };
+
+		expect(requestStandings([failed], []).size).toBe(0);
+		expect(requestStandings([refused], []).size).toBe(1);
+	});
+
 	test('closes a divergence a triage record explains, listing it apart', function() {
 		const open = divergence('2026-10-09T00:00:00.000Z', '0x2');
 		const explanation: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: '2026-10-11T00:00:00.000Z', stratum: 'token', path: BALANCE, divergenceAt: open.at, divergence: 'our-bug', reference: 'fixed by 0000000' };
