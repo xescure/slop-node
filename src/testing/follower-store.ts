@@ -16,6 +16,7 @@ export function followerStoreOf(reads: Partial<FollowerStore>): FollowerStore {
 		chainAccounts: unread('chainAccounts'),
 		rowIDsOf: unread('rowIDsOf'),
 		historyHolds: unread('historyHolds'),
+		holdsBlock: unread('holdsBlock'),
 		balancesFromHistory: unread('balancesFromHistory'),
 		checksumSnapshot: unread('checksumSnapshot'),
 		quietAccounts: unread('quietAccounts'),

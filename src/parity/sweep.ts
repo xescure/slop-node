@@ -162,6 +162,14 @@ function headOf(state: unknown): string | null {
 	return(null);
 }
 
+/** The head a reading of a chain names, or null. */
+function chainHeadOf(reading: unknown): string | null {
+	if (isFields(reading) && typeof reading['head'] === 'string') {
+		return(reading['head']);
+	}
+	return(null);
+}
+
 /** The hash of the head block an account's head answers with, the block whole (api/node.d.ts, getAccountsHead), or null for an account without one. */
 function headBlockOf(answer: unknown): string | null {
 	if (!isFields(answer) || answer['block'] === null) {
@@ -252,7 +260,7 @@ export async function compareAccount(comparison: AccountComparison): Promise<Swe
 }
 
 /** What the sweep reads of the follower's storage. */
-export type SweepStore = Pick<FollowerStore, 'progress' | 'chainAccountsAfter' | 'passiveAccountsAfter' | 'chainAccounts' | 'historyHolds' | 'balancesFromHistory'>;
+export type SweepStore = Pick<FollowerStore, 'progress' | 'chainAccountsAfter' | 'passiveAccountsAfter' | 'chainAccounts' | 'historyHolds' | 'holdsBlock' | 'balancesFromHistory'>;
 
 export type SweepSetup = {
 	readonly follower: APISource;
@@ -384,18 +392,32 @@ function tallies(values: readonly unknown[]): readonly number[] {
 	}));
 }
 
+/** What the representatives that answered apart answered, as their difference is judged. */
+export type Dissent = {
+	/** The value the representative compared with answered. */
+	readonly compared: unknown;
+	/**
+	 * Whether the follower holds what each representative apart holds newest
+	 * of the account, the one compared with included: the staple of its
+	 * newest history entry, or the block at the head of its chain.
+	 */
+	readonly followerHoldsDissent: boolean;
+};
+
 /**
  * Whose a divergence is, by the representatives that gave a reading, the one
- * compared with among them, which answered the value given: the
- * representatives' own that answer apart when at least two answer as the
- * follower and every other value is answered by fewer, so that one other
- * representative alone never outweighs the one compared with, nor do as many
- * answering one value; the follower's when most disagree with it. A staple
- * the follower lacks is never one representative's own: another
- * representative may list a different staple first, ordering its history by
- * its own votes, and agree on a state the lacked staple left unchanged.
+ * compared with among them: the representatives' own that answer apart when
+ * at least two answer as the follower, every other value is answered by
+ * fewer, so that one other representative alone never outweighs the one
+ * compared with, nor do as many answering one value, and the follower holds
+ * what each of them holds newest; the follower's when most disagree with
+ * it. A staple the follower lacks is never one representative's own:
+ * another representative may list a different staple first, ordering its
+ * history by its own votes, and agree on a state the lacked staple left
+ * unchanged.
  */
-export function disputedKindOf(readings: readonly RepresentativeReading[], field: string, compared: unknown): DisputedKind {
+export function disputedKindOf(readings: readonly RepresentativeReading[], field: string, dissent: Dissent): DisputedKind {
+	const { compared, followerHoldsDissent } = dissent;
 	const agreeing = readings.filter(function(reading): boolean {
 		return(reading.kind === 'agrees');
 	}).length;
@@ -407,7 +429,7 @@ export function disputedKindOf(readings: readonly RepresentativeReading[], field
 	})];
 	const disagreeing = dissenting.length;
 	const read = agreeing + disagreeing;
-	if (agreeing >= 2 && Math.max(...tallies(dissenting)) < agreeing && field !== 'history') {
+	if (agreeing >= 2 && Math.max(...tallies(dissenting)) < agreeing && followerHoldsDissent && field !== 'history') {
 		return('representative-local');
 	}
 	if (disagreeing * 2 > read) {
@@ -434,7 +456,21 @@ async function compareAdjudicated(setup: Comparing, representative: APISource, a
 	const readings = await Promise.all(others.map(function(other) {
 		return(readingOf(setup.store, other, account, outcome, quietBefore));
 	}));
-	return(await withSelfCheck(setup, { ...outcome, kind: disputedKindOf(readings, outcome.divergence.field, outcome.representative), readings }));
+	const dissentingStaples = [outcome.divergence.staple, ...readings.map(function(reading): string | null {
+		if (reading.kind !== 'disagrees') {
+			return(null);
+		}
+		return(reading.staple);
+	})];
+	const followerHoldsDissent = (await Promise.all(dissentingStaples.map(function(staple): Promise<boolean> {
+		if (staple === null) {
+			return(Promise.resolve(true));
+		}
+		return(setup.store.historyHolds(account, staple));
+	}))).every(function(held): boolean {
+		return(held);
+	});
+	return(await withSelfCheck(setup, { ...outcome, kind: disputedKindOf(readings, outcome.divergence.field, { compared: outcome.representative, followerHoldsDissent }), readings }));
 }
 
 /** Whether the follower's balances of the account are those its own history leaves it with, read from its state now. */
@@ -582,7 +618,33 @@ async function compareByChain(setup: Comparing, representative: APISource, accou
 	}));
 	const divergence = { account, field: 'chain', staple: null };
 	const representativeChain = { head: check.representativeHead, detail: check.detail };
-	return(await withSelfCheck(setup, { kind: disputedKindOf(readings, divergence.field, representativeChain), divergence, follower: { head: check.head }, representative: representativeChain, readings, selfCheck: null }));
+	const dissentingHeads = [check.representativeHead, ...readings.map(function(reading): string | null {
+		if (reading.kind !== 'disagrees') {
+			return(null);
+		}
+		return(chainHeadOf(reading.state));
+	})];
+	const followerHoldsDissent = (await Promise.all(dissentingHeads.map(function(head): Promise<boolean> {
+		if (head === null) {
+			return(Promise.resolve(true));
+		}
+		return(setup.store.holdsBlock(head));
+	}))).every(function(held): boolean {
+		return(held);
+	});
+	let kind = disputedKindOf(readings, divergence.field, { compared: representativeChain, followerHoldsDissent });
+	/*
+	 * A representative whose chain runs on past the follower's head agrees
+	 * with the follower's chain, but holds the account at another point, so
+	 * it does not count toward the two that must hold it at the follower's.
+	 */
+	const atFollowersHead = readings.filter(function(reading): boolean {
+		return(reading.kind === 'agrees' && chainHeadOf(reading.state) === check.head);
+	}).length;
+	if (kind === 'representative-local' && atFollowersHead < 2) {
+		kind = 'unresolved';
+	}
+	return(await withSelfCheck(setup, { kind, divergence, follower: { head: check.head }, representative: representativeChain, readings, selfCheck: null }));
 }
 
 function isMoving(outcome: SweepOutcome): boolean {

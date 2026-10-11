@@ -709,7 +709,11 @@ async function compareRequest(request: SampledRequest, follower: APISource, repr
 	}));
 	const kind = disputedKindOf(readings.map(function(reading): RepresentativeReading {
 		return(judgedAsTheSweepDoes(request.route, reading));
-	}), judged, normalizedAnswer(request.route, representativeAnswer));
+	}), judged, {
+		compared: normalizedAnswer(request.route, representativeAnswer),
+		// An answer apart shows no staple; one the follower lacks shows on a page of history, which is never one representative's own.
+		followerHoldsDissent: true
+	});
 	/*
 	 * A representative failing internally to serve a page of history is
 	 * asked again later rather than counted its own, or split on: the

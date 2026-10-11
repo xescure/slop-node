@@ -637,6 +637,7 @@ describe('a parity run', function() {
 			chainAccounts: () => Promise.resolve(known),
 			rowIDsOf: () => Promise.resolve(new Map()),
 			historyHolds: () => Promise.resolve(false),
+			holdsBlock: () => Promise.resolve(false),
 			balancesFromHistory: () => Promise.resolve(new Map()),
 			checksumSnapshot: () => Promise.resolve({ stored: 0n, folded: 0n, mainBlocks: 0, mismatched: [] }),
 			quietAccounts: () => Promise.resolve([]),

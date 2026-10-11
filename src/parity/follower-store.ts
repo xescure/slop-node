@@ -117,7 +117,9 @@ export type FollowerStore = {
 	rowIDsOf(accounts: readonly string[]): Promise<ReadonlyMap<string, string>>;
 	/** Whether the staple, by the hash of its blocks, is in the account's history on the follower's main ledger. */
 	historyHolds(account: string, blocksHash: string): Promise<boolean>;
-	/** The balance of each token the staples of the account's history leave it with, oldest first. */
+	/** Whether the block, by its hash, is on the follower's main ledger. */
+	holdsBlock(hash: string): Promise<boolean>;
+	/** The balance of each token the staples of the account's history leave it with, read oldest first. */
 	balancesFromHistory(account: string): Promise<ReadonlyMap<string, bigint>>;
 	checksumSnapshot(): Promise<ChecksumSnapshot>;
 	/**
@@ -235,6 +237,8 @@ export async function everyChainAccount(after: (rowID: string, count: number) =>
 const PASSIVE_ACCOUNTS_AFTER = `
 	SELECT a.id, a.public_key, (SELECT max(h.staple_time) FROM history h WHERE h.account_id = a.id) AS newest_staple
 	FROM accounts a WHERE a.id > $1::bigint AND NOT EXISTS (SELECT 1 FROM heads c WHERE c.account_id = a.id) ORDER BY a.id LIMIT $2`;
+
+const HOLDS_BLOCK = 'SELECT EXISTS (SELECT 1 FROM blocks WHERE hash = $1 AND ledger = \'main\') AS holds';
 
 /** An account's history, oldest first, in the order of its key. */
 const HISTORY_STAPLES = `
@@ -597,6 +601,9 @@ export function openFollowerStore(connectionString: string): FollowerStore {
 		},
 		async heldBlocks(fromHash: string, before: Date, count: number): Promise<readonly HeldBlock[]> {
 			return((await pool.query<HeldBlockRow>(HELD_BLOCKS, [Buffer.from(fromHash, 'hex'), before, count])).rows.map(heldBlockOf));
+		},
+		async holdsBlock(hash: string): Promise<boolean> {
+			return((await pool.query<{ holds: boolean }>(HOLDS_BLOCK, [Buffer.from(hash, 'hex')])).rows[0]?.holds ?? false);
 		},
 		async balancesFromHistory(account: string): Promise<ReadonlyMap<string, bigint>> {
 			const rows = (await pool.query<{ blocks_hash: Buffer; staple_time: Date; bytes: Buffer | null }>(HISTORY_STAPLES, [account])).rows;

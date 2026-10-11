@@ -153,6 +153,7 @@ export function retryingStore(store: FollowerStore, retry: TransientRetry): Foll
 		},
 		rowIDsOf: retrying(store.rowIDsOf.bind(store)),
 		historyHolds: retrying(store.historyHolds.bind(store)),
+		holdsBlock: retrying(store.holdsBlock.bind(store)),
 		balancesFromHistory: retrying(store.balancesFromHistory.bind(store)),
 		checksumSnapshot: retrying(store.checksumSnapshot.bind(store)),
 		quietAccounts: retrying(store.quietAccounts.bind(store)),
