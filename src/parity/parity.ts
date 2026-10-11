@@ -360,7 +360,7 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 			return(0);
 		}
 		case 'sweep': {
-			const summary = await sweepAccounts({ ...tools, accounts: { chain: command.accounts, passive: command.accounts }, toLapEnd: command.toLapEnd });
+			const summary = await sweepAccounts({ ...tools, accounts: { chain: command.accounts, passive: command.accounts }, toLapEnd: command.toLapEnd, passiveRequestsInFlight: command.pacing.concurrency });
 			process.stdout.write(`${JSON.stringify(summary, null, '\t')}\n`);
 			return(0);
 		}

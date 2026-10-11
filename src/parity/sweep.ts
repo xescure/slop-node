@@ -264,6 +264,8 @@ export type SweepSetup = {
 	readonly accounts: Readonly<Record<SweepWalk, number>>;
 	/** Stops each walk at the end of the lap it is on. */
 	readonly toLapEnd: boolean;
+	/** Requests of the passive walk in flight to each representative at once, each for a hundred accounts of the batch. */
+	readonly passiveRequestsInFlight: number;
 	/** Stops the sweep after the batch under way; what that batch compared is not recorded. */
 	readonly stopped: AbortSignal;
 };
@@ -708,15 +710,25 @@ async function comparePassiveBatch(setup: SweepSetup, representative: APISource,
 	});
 }
 
-/** Compares a batch of passive accounts, consecutive in their rows, a request's worth for each representative, and records each part as it is compared. */
+/**
+ * Compares a batch of passive accounts, consecutive in their rows, a
+ * request's worth for each representative in turn, so many for each, and
+ * records each part as it is compared. The cursor moves past the batch only
+ * once every part is compared, so a stop compares the whole batch again.
+ */
 async function comparePassiveAccounts(setup: SweepSetup, batch: readonly KnownAccount[], cursor: SweepCursor, quietBefore: Date): Promise<Tally> {
 	const tally = emptyTally();
-	const parts = setup.representatives.map(function(representative, index) {
+	const slots = setup.representatives.length * setup.passiveRequestsInFlight;
+	const parts = Array.from({ length: slots }, function(_, index) {
+		return(index);
+	}).flatMap(function(index) {
+		const representative = setup.representatives[index % setup.representatives.length];
 		const part = batch.slice(index * ACCOUNTS_PER_STATES_REQUEST, (index + 1) * ACCOUNTS_PER_STATES_REQUEST);
 		const afterRowID = batch[index * ACCOUNTS_PER_STATES_REQUEST - 1]?.rowID ?? cursor.afterRowID;
-		return({ representative, part, afterRowID });
-	}).filter(function(entry): boolean {
-		return(entry.part.length > 0);
+		if (representative === undefined || part.length === 0) {
+			return([]);
+		}
+		return([{ representative, part, afterRowID }]);
 	});
 	await Promise.all(parts.map(async function({ representative, part, afterRowID }) {
 		const compared = await comparePassiveBatch(setup, representative, part, afterRowID, cursor.lap, quietBefore);
@@ -830,7 +842,7 @@ export async function sweepAccounts(setup: SweepSetup): Promise<SweepSummary> {
 		}),
 		walk(setup, {
 			name: 'passive',
-			batchSize: setup.representatives.length * ACCOUNTS_PER_STATES_REQUEST,
+			batchSize: setup.representatives.length * setup.passiveRequestsInFlight * ACCOUNTS_PER_STATES_REQUEST,
 			accountsAfter(rowID, size) {
 				return(setup.store.passiveAccountsAfter(rowID, size));
 			},

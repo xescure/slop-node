@@ -1129,6 +1129,7 @@ export async function runParity(run: ParityRun): Promise<ParityReport> {
 		cursorPaths: run.cursorPaths,
 		accounts: { chain: run.sampleAccounts, passive: run.passiveSampleAccounts },
 		toLapEnd: false,
+		passiveRequestsInFlight: 1,
 		stopped: run.stopped
 	});
 	await sampleAPI({ ...run.apiDiff, follower: run.follower, representatives: run.representatives, store: run.store, log: run.log, stopped: run.stopped });

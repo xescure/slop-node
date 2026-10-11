@@ -151,7 +151,7 @@ function serveStates(running: Running, accounts: readonly string[], follower: re
 	}
 }
 
-async function sweepWalks(running: Running, store: SweepStore, accounts: Partial<Record<SweepWalk, number>>, toLapEnd = false): Promise<SweepSummary> {
+async function sweepWalks(running: Running, store: SweepStore, accounts: Partial<Record<SweepWalk, number>>, toLapEnd = false, passiveRequestsInFlight = 1): Promise<SweepSummary> {
 	return(await sweepAccounts({
 		follower: httpSource(running.follower.endpoint),
 		representatives: running.representatives.map(function(api) {
@@ -162,6 +162,7 @@ async function sweepWalks(running: Running, store: SweepStore, accounts: Partial
 		cursorPaths: running.cursorPaths,
 		accounts: { chain: accounts.chain ?? 0, passive: accounts.passive ?? 0 },
 		toLapEnd,
+		passiveRequestsInFlight,
 		stopped: new AbortController().signal
 	}));
 }
@@ -490,6 +491,40 @@ describe('the sweep over the follower\'s passive accounts', function() {
 		expect(summary.passive).toMatchObject({ compared: 2, matched: 2 });
 		expect(await outcomes(running)).toMatchObject([{ kind: 'match' }, { kind: 'match' }]);
 		expect(await batches(running)).toMatchObject([{ matched: 0, skipped: [] }]);
+	});
+
+	test('keeps so many requests of a batch in flight to each representative, each with a hundred consecutive rows, taken in turn', async function() {
+		const running = await setup(2);
+		const accounts = Array.from({ length: 350 }, function(_, index): string {
+			return(`keeta_passive${String(index).padStart(3, '0')}`);
+		});
+		const parts = [accounts.slice(0, 100), accounts.slice(100, 200), accounts.slice(200, 300), accounts.slice(300)];
+		for (const part of parts) {
+			serveStates(running, part, states(part, '0x10'), states(part, '0x10'));
+		}
+
+		const store = passiveStore(accounts);
+		const asked: number[] = [];
+		const summary = await sweepWalks(running, { ...store, passiveAccountsAfter(rowID, count) {
+			asked.push(count);
+			return(store.passiveAccountsAfter(rowID, count));
+		} }, { passive: 350 }, false, 2);
+
+		// One batch, every part of it in flight together.
+		expect(asked).toEqual([350]);
+
+		expect(summary.passive).toMatchObject({ walked: 350, matched: 350, cursor: { lap: 0, afterRowID: '350' } });
+		expect(new Set((await batches(running)).map(function(batch) {
+			return(JSON.stringify([batch.representative, batch.afterRowID, batch.throughRowID]));
+		}))).toEqual(new Set([
+			[running.representatives[0]?.endpoint, '0', '100'],
+			[running.representatives[1]?.endpoint, '100', '200'],
+			[running.representatives[0]?.endpoint, '200', '300'],
+			[running.representatives[1]?.endpoint, '300', '350']
+		].map(function(batch) {
+			return(JSON.stringify(batch));
+		})));
+		expect(running.representatives[0]?.requests).toEqual([`GET ${statesPath(parts[0] ?? [])}`, `GET ${statesPath(parts[2] ?? [])}`]);
 	});
 
 	test('asks each representative for at most a hundred accounts at a time, in batches of consecutive rows', async function() {

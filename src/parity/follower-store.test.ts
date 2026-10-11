@@ -7,7 +7,7 @@ import type { RangeLayout } from '../node/bootstrap-ranges.js';
 import { confirmedStaple, setRepresentativeBlock } from '../testing/blocks.js';
 import { createDatabase } from '../testing/postgres.js';
 import type { TestDatabase } from '../testing/postgres.js';
-import { heldBeforeOf, openFollowerStore, readOnlyPool } from './follower-store.js';
+import { CHAIN_ACCOUNTS_AFTER, heldBeforeOf, openFollowerStore, readOnlyPool } from './follower-store.js';
 import type { FollowerStore, KnownAccount } from './follower-store.js';
 
 const lib = KeetaNet.lib;
@@ -143,6 +143,25 @@ describe('the follower\'s store, read from its database', function() {
 		expect(await store.accountCount()).toBe(3);
 		expect(await store.chainAccounts()).toEqual(chains);
 		expect(await store.rowIDsOf([third, first, 'keeta_unknown'])).toEqual(new Map([[first, passive[0]?.rowID], [third, rest[0]?.rowID]]));
+	});
+
+	test('reads the accounts with a chain from the heads, each account and its newest staple by its key, so that no account outside them is read', async function() {
+		const database = await followerDatabase({});
+		const pool = database.pool();
+		type PlanNode = { readonly 'Relation Name'?: string; readonly 'Parent Relationship'?: string; readonly Plans?: readonly PlanNode[] };
+		const explained = await pool.query<{ 'QUERY PLAN': readonly { readonly Plan: PlanNode }[] }>(`EXPLAIN (FORMAT JSON) ${CHAIN_ACCOUNTS_AFTER}`, ['0', 1000]);
+		await database.endPools();
+		const outer = function(node: PlanNode): readonly string[] {
+			const own: string[] = [];
+			if (node['Relation Name'] !== undefined) {
+				own.push(node['Relation Name']);
+			}
+			return([...own, ...(node.Plans ?? []).filter(function(child) {
+				return(child['Parent Relationship'] !== 'SubPlan' && child['Parent Relationship'] !== 'InitPlan');
+			}).flatMap(outer)]);
+		};
+		const plan = explained.rows[0]?.['QUERY PLAN'][0]?.Plan;
+		expect(plan && outer(plan)).toEqual(['heads']);
 	});
 
 	test('tells whether a staple is in an account\'s history', async function() {

@@ -189,15 +189,18 @@ const KV_VALUES = 'SELECT value FROM kv_entries WHERE arena = $1 AND (expires_at
 /*
  * The history key leads with the account and the staple time, so its newest
  * staple is the last of its keys; an account has a chain when it has a
- * head, one row each.
+ * head, one row each. Each head's account is read by its key, so that the
+ * planner does not join the heads to a scan of every account, which took
+ * minutes on a busy disk.
  */
-const CHAIN_ACCOUNTS_AFTER = `
-	SELECT a.id, a.public_key, (SELECT max(h.staple_time) FROM history h WHERE h.account_id = a.id) AS newest_staple
-	FROM heads c JOIN accounts a ON a.id = c.account_id WHERE c.account_id > $1::bigint ORDER BY c.account_id LIMIT $2`;
+export const CHAIN_ACCOUNTS_AFTER = `
+	SELECT c.account_id::text AS id,
+		(SELECT a.public_key FROM accounts a WHERE a.id = c.account_id) AS public_key,
+		(SELECT max(h.staple_time) FROM history h WHERE h.account_id = c.account_id) AS newest_staple
+	FROM heads c WHERE c.account_id > $1::bigint ORDER BY c.account_id LIMIT $2`;
 
-const CHAIN_ACCOUNTS = `
-	SELECT a.id, a.public_key, (SELECT max(h.staple_time) FROM history h WHERE h.account_id = a.id) AS newest_staple
-	FROM heads c JOIN accounts a ON a.id = c.account_id ORDER BY c.account_id`;
+/** Chain accounts read by one statement of a walk over all of them, so that each statement ends in seconds however busy the disk. */
+const CHAIN_ACCOUNTS_PAGE = 1000;
 
 const PASSIVE_ACCOUNTS_AFTER = `
 	SELECT a.id, a.public_key, (SELECT max(h.staple_time) FROM history h WHERE h.account_id = a.id) AS newest_staple
@@ -499,8 +502,14 @@ export function openFollowerStore(connectionString: string): FollowerStore {
 			return(Number(result.rows[0]?.count ?? 0));
 		},
 		async chainAccounts(): Promise<readonly KnownAccount[]> {
-			const result = await pool.query<{ id: string; public_key: string; newest_staple: Date | null }>(CHAIN_ACCOUNTS);
-			return(result.rows.map(knownAccountOf));
+			const accounts: KnownAccount[] = [];
+			for (;;) {
+				const page = await knownAccounts(pool, CHAIN_ACCOUNTS_AFTER, accounts.at(-1)?.rowID ?? '0', CHAIN_ACCOUNTS_PAGE);
+				accounts.push(...page);
+				if (page.length < CHAIN_ACCOUNTS_PAGE) {
+					return(accounts);
+				}
+			}
 		},
 		async rowIDsOf(accounts: readonly string[]): Promise<ReadonlyMap<string, string>> {
 			const result = await pool.query<{ id: string; public_key: string }>('SELECT id, public_key FROM accounts WHERE public_key = ANY($1::text[])', [accounts]);
