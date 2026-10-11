@@ -295,12 +295,12 @@ function keptFirst(drawn: readonly DrawnBlock[], wanted: number): DrawnBlock[] {
  * few blocks in hundreds of thousands, so a type with fewer blocks than
  * wanted has drawn every block it has.
  */
-async function blocksByOperation(store: APIDiffStore, before: Date, wanted: number, seed: string): Promise<ReadonlyMap<OperationName, readonly HeldBlock[]>> {
+async function blocksByOperation(store: APIDiffStore, before: Date, wanted: number, seed: string, stopped: AbortSignal): Promise<ReadonlyMap<OperationName, readonly HeldBlock[]>> {
 	const byOperation = new Map<OperationName, DrawnBlock[]>(OPERATION_NAMES.map(function(name) {
 		return([name, []]);
 	}));
 	const pages = await store.blockPages();
-	for (let fromPage = 0; fromPage < pages; fromPage += TABLE_PAGES_PER_READ) {
+	for (let fromPage = 0; fromPage < pages && !isStopped(stopped); fromPage += TABLE_PAGES_PER_READ) {
 		for (const block of await store.heldBlocksInPages(fromPage, fromPage + TABLE_PAGES_PER_READ, before)) {
 			for (const name of operationsOf(block)) {
 				const drawn = byOperation.get(name) ?? [];
@@ -347,7 +347,7 @@ function planned(requests: readonly SampledRequest[], whole: boolean, seed: stri
  * fewer accounts or blocks than that are all it has: then its requests are
  * every request the sampler forms from the follower's data.
  */
-export async function samplingPlan(store: APIDiffStore, quietBefore: Date, perStratum: number, seed: string, edgeCaseStaples: readonly string[]): Promise<ReadonlyMap<Stratum, PlannedStratum>> {
+export async function samplingPlan(store: APIDiffStore, quietBefore: Date, perStratum: number, seed: string, edgeCaseStaples: readonly string[], stopped: AbortSignal): Promise<ReadonlyMap<Stratum, PlannedStratum>> {
 	const plan = new Map<Stratum, PlannedStratum>();
 	for (const kind of ACCOUNT_KINDS) {
 		const candidates = await store.quietAccounts(kind, quietBefore, perStratum, seed);
@@ -355,7 +355,7 @@ export async function samplingPlan(store: APIDiffStore, quietBefore: Date, perSt
 			return(accountRequests(kind, candidate, candidates[index + 1]?.account));
 		}), candidates.length < perStratum, seed));
 	}
-	for (const [name, blocks] of await blocksByOperation(store, quietBefore, perStratum, seed)) {
+	for (const [name, blocks] of await blocksByOperation(store, quietBefore, perStratum, seed, stopped)) {
 		const stratum = operationStratum(name);
 		plan.set(stratum, planned(blocks.flatMap(function(block): SampledRequest[] {
 			return(blockRequests(stratum, block));
@@ -574,7 +574,8 @@ async function compareRequest(request: SampledRequest, follower: APISource, repr
 		if (GATEWAY_STATUSES.has(representativeAnswer.status)) {
 			return({ outcome: { kind: 'skipped', reason: 'unanswered', detail: `${representative.endpoint} answered ${String(representativeAnswer.status)}` }, representativeAnswer: undefined });
 		}
-		if (!isDeepStrictEqual(followerBefore, followerAfter)) {
+		// An internal failure names an error ID of its own each time it is served.
+		if (!isDeepStrictEqual(normalizedAnswer(request.route, followerBefore), normalizedAnswer(request.route, followerAfter))) {
 			return({ outcome: { kind: 'skipped', reason: 'moving', side: 'follower', detail: 'the follower changed its answer while it was compared' }, representativeAnswer });
 		}
 		const listed = await quietFor({ ...request, quiet: [] }, [followerAfter, representativeAnswer], representative, quiet);
@@ -771,7 +772,14 @@ export async function sampleAPI(setup: APIDiffSetup): Promise<APIDiffSummary> {
 		return({ quietBefore: null, strata, newBehaviors: [] });
 	}
 	const quietBefore = new Date(heldBefore.getTime() - QUIET_MARGIN_MILLISECONDS);
-	const plan = await samplingPlan(setup.store, quietBefore, setup.samplesPerStratum, setup.seed, setup.edgeCaseStaples);
+	if (isStopped(setup.stopped)) {
+		return({ quietBefore: quietBefore.toISOString(), strata, newBehaviors: [] });
+	}
+	const plan = await samplingPlan(setup.store, quietBefore, setup.samplesPerStratum, setup.seed, setup.edgeCaseStaples, setup.stopped);
+	// A plan cut short by a stop holds only some of the blocks, so it is no census of any stratum.
+	if (isStopped(setup.stopped)) {
+		return({ quietBefore: quietBefore.toISOString(), strata, newBehaviors: [] });
+	}
 	const planRecord: APIDiffPlanRecord = {
 		kind: 'api-diff-plan',
 		at: new Date().toISOString(),

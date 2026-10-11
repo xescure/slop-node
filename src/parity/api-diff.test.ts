@@ -272,6 +272,23 @@ describe('sampling the API', function() {
 		expect(byPath(records, `/node/ledger/account/${TOKEN}/acl`)?.outcome).toMatchObject({ kind: 'skipped', reason: 'moving', side: 'representative' });
 	});
 
+	test('compares an internal failure the follower answers twice with a different error ID as one answer, which a node serves anew for each request', async function() {
+		const setup = await running();
+		setup.representative.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, QUIET_HISTORY);
+		const failure = function(id: string) {
+			return({ status: 500, body: { error: true, message: `Internal error occurred (error ID: 00000000-0000-0000-0000-00000000000${id})` } });
+		};
+		setup.follower.answer(`/node/ledger/account/${TOKEN}/head`, failure('1'), failure('2'));
+		setup.representative.answer(`/node/ledger/account/${TOKEN}/head`, failure('3'));
+		setup.follower.answer(`/node/ledger/account/${TOKEN}`, failure('4'), failure('5'));
+		setup.representative.serve(`/node/ledger/account/${TOKEN}`, STATE);
+
+		const { records } = await sample(setup, memoryStore({ candidates: { token: [CANDIDATE] } }), 100);
+
+		expect(byPath(records, `/node/ledger/account/${TOKEN}/head`)?.outcome).toEqual({ kind: 'match' });
+		expect(byPath(records, `/node/ledger/account/${TOKEN}`)?.outcome).toMatchObject({ kind: 'diverged', field: 'body.account' });
+	});
+
 	test('counts a gateway\'s answer in place of the representative\'s as unanswered', async function() {
 		const setup = await running();
 		setup.representative.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, QUIET_HISTORY);
@@ -492,6 +509,23 @@ describe('the plan of a run', function() {
 			})));
 		};
 		expect(await requested([...blocks].reverse())).toEqual(await requested(blocks));
+	});
+
+	test('is not made, nor any block read, by a run stopped before it', async function() {
+		const setup = await runningWith(1);
+		const stopping = new AbortController();
+		stopping.abort();
+		let pagesRead = 0;
+		const store = memoryStore({ blocks: [await heldSend()] });
+
+		const summary = await sampleAPI({ ...sources(setup), stopped: stopping.signal, store: { ...store, heldBlocksInPages: (...pages) => {
+			pagesRead++;
+			return(store.heldBlocksInPages(...pages));
+		} }, samplesPerStratum: 100, seed: 'test', edgeCaseStaples: [], knownBehaviors: new Set() });
+
+		expect(pagesRead).toBe(0);
+		expect(summary.strata).toEqual([]);
+		expect((await setup.log.read()).records).toEqual([]);
 	});
 
 	test('is a sample of a stratum with as many accounts as it asked for, which more may follow', async function() {
