@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'vitest';
-import { atMoment } from './frozen-clock.js';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import { atMoment, fromMoment } from './frozen-clock.js';
 
 describe('a frozen clock', function() {
 	test('reads the moment wherever the time is read, and gives the real clock back', async function() {
@@ -17,5 +17,24 @@ describe('a frozen clock', function() {
 		})).rejects.toThrow('refused');
 		expect(Date.now()).toBeGreaterThan(0);
 		expect(new Date().getFullYear()).toBeGreaterThan(1970);
+	});
+});
+
+describe('a clock set to a moment', function() {
+	afterEach(function() {
+		vi.restoreAllMocks();
+	});
+
+	test('runs on from the moment as the monotonic clock does, so that what the ledger times by it ends', async function() {
+		const moment = new Date('2025-12-30T12:34:56.789Z');
+		const ticks = [1000, 1000, 3500];
+		vi.spyOn(performance, 'now').mockImplementation(function(): number {
+			return(ticks.shift() ?? 3500);
+		});
+		const seen = await fromMoment(moment, function() {
+			return(Promise.resolve([Date.now(), new Date().getTime()]));
+		});
+		expect(seen).toEqual([moment.getTime(), moment.getTime() + 2500]);
+		expect(Math.abs(Date.now() - moment.getTime())).toBeGreaterThan(1000);
 	});
 });

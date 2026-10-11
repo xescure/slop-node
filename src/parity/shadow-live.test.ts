@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { afterEach, describe, expect, inject, test } from 'vitest';
+import { afterEach, describe, expect, inject, test, vi } from 'vitest';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { loadMainnetFixture } from '../conformance/mainnet/fixture.js';
 import { REPLAY_TIMEOUT_MILLISECONDS } from '../conformance/mainnet/head-replay.js';
@@ -10,7 +10,7 @@ import { createDatabase } from '../testing/postgres.js';
 import type { TestDatabase } from '../testing/postgres.js';
 import type { SequencedStaple } from './follower-store.js';
 import type { ShadowBase, ShadowRunState, ShadowTarget, ShadowVoteEntry } from './log.js';
-import { freshShadowRun, runShadowVotes, sampledForInformation, shadowRunComplete, shadowWindowOf, votedFrom } from './shadow-live.js';
+import { SHADOW_GC_SLICE_MILLISECONDS, freshShadowRun, runShadowVotes, sampledForInformation, shadowRunComplete, shadowWindowOf, votedFrom } from './shadow-live.js';
 import type { ShadowScope, ShadowSource, ShadowState } from './shadow-live.js';
 
 const GENESIS_BASE: ShadowBase = { database: null, sequence: '0', blocksHash: null, scopedStaples: 0 };
@@ -71,6 +71,7 @@ function memoryState(failSave: (saves: number) => boolean = () => false): Memory
 const databases: TestDatabase[] = [];
 
 afterEach(async function() {
+	vi.restoreAllMocks();
 	await Promise.all(databases.splice(0).map(function(database) {
 		return(database.drop());
 	}));
@@ -282,6 +283,38 @@ describe('shadow votes on the follower\'s history', function() {
 		expect(reached).toMatchObject({ reached: { sequence: '200' }, unapplied: [] });
 		expect(reached.scoped.replayed + reached.informational.replayed).toBe(200);
 	}, REPLAY_TIMEOUT_MILLISECONDS);
+
+	/*
+	 * The offline ledger lives in the follower's cluster, where a
+	 * serializable transaction left open holds back what every other one may
+	 * forget, and the follower's transactions then fail as conflicts. A
+	 * stopped clock never lets the ledger's time limits end a collection or
+	 * a replay: releasing a long deferred chain held one transaction open
+	 * for most of an hour.
+	 */
+	test('add and collect on a clock that runs on from each staple\'s moment, collecting in slices of bounded time', async function() {
+		const head = replayOrder(await loadMainnetFixture('head')).slice(0, 40);
+		const storage = new MemoryLedgerStorage();
+		let ticks = 0;
+		vi.spyOn(performance, 'now').mockImplementation(function(): number {
+			ticks += 1000;
+			return(ticks);
+		});
+		const collected: { readonly limit: number | undefined; readonly at: number }[] = [];
+		const collect = storage.gc.bind(storage);
+		vi.spyOn(storage, 'gc').mockImplementation(function(transaction: unknown, limit?: number): Promise<boolean> {
+			collected.push({ limit, at: Date.now() });
+			return(collect(transaction, limit));
+		});
+		await runShadowVotes({ source: sourceOf(head), state: memoryState(), storage, start: freshShadowRun(scopeFrom(head, 39), 1000, GENESIS_BASE, targetOf(head)), batchStaples: 20 });
+
+		expect(collected.map(function({ limit }): number | undefined {
+			return(limit);
+		})).toEqual([SHADOW_GC_SLICE_MILLISECONDS, SHADOW_GC_SLICE_MILLISECONDS]);
+		expect(collected.map(function({ at }, batch): boolean {
+			return(at > (head[batch * 20 + 19]?.timestamp().getTime() ?? Number.POSITIVE_INFINITY));
+		})).toEqual([true, true]);
+	});
 
 	test('replay nothing past a target they have reached', async function() {
 		const head = replayOrder(await loadMainnetFixture('head')).slice(0, 3);

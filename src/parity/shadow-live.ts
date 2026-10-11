@@ -7,7 +7,7 @@ import type { ShadowVote } from '../conformance/mainnet/shadow.js';
 import { recordNoTiming } from '../node/timing.js';
 import { assertNever } from '../util/assert-never.js';
 import type { FollowerStore, SequencedStaple } from './follower-store.js';
-import { atMoment } from './frozen-clock.js';
+import { atMoment, fromMoment } from './frozen-clock.js';
 import { UNEXPLAINED_LISTED } from './log.js';
 import type { ShadowBase, ShadowRunState, ShadowTarget, ShadowVoteEntry, ShadowVoteOutcome, ShadowWindow, ShadowWindowTally, UnappliedStaple } from './log.js';
 
@@ -108,9 +108,19 @@ export function sampledForInformation(blocksHash: string, every: number): boolea
 	return(BigInt(`0x${blocksHash.slice(0, 12)}`) % BigInt(every) === 0n);
 }
 
+/**
+ * How long one garbage collection of the offline ledger runs at most, in a
+ * transaction of its own, as the follower's does (src/node/bootstrap.ts).
+ * The offline ledger lives in the follower's cluster, where a serializable
+ * transaction left open holds back what Postgres may forget of every
+ * other, so that the follower's own transactions fail as conflicts; upstream's
+ * default runs one for minutes [Keeta TS] index.js:67852-67861.
+ */
+export const SHADOW_GC_SLICE_MILLISECONDS = 2000;
+
 /** gc reports whether more work remains once its time budget is spent. */
 async function drainDeferral(ledger: Ledger): Promise<void> {
-	while (await ledger.gc()) {
+	while (await ledger.gc(SHADOW_GC_SLICE_MILLISECONDS)) {
 		// Each pass retries the staples that the earlier passes released.
 	}
 }
@@ -161,7 +171,7 @@ class WeightedAdds {
 		for (;;) {
 			const before = this.#waiting.size;
 			for (const held of [...this.#waiting.values()]) {
-				await atMoment(held.staple.timestamp(), () => {
+				await fromMoment(held.staple.timestamp(), () => {
 					return(this.add(held));
 				});
 			}
@@ -349,14 +359,15 @@ export async function runShadowVotes(run: ShadowRun): Promise<ShadowRunState> {
 						return(votedIn(tally, counted));
 					});
 				}
+				// The clock runs on from the moment, as the ledger ends a replay of the staples an add releases by it.
 				if (!held.has(blocksHash)) {
-					await atMoment(staple.timestamp(), function() {
+					await fromMoment(staple.timestamp(), function() {
 						return(adds.add(entry));
 					});
 				}
 			}
 			// The follower runs gc as it adds, which applies the staples deferred until the blocks they build on came.
-			await atMoment(last.staple.timestamp(), function() {
+			await fromMoment(last.staple.timestamp(), function() {
 				return(drainDeferral(ledger));
 			});
 			await adds.retry();
