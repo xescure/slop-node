@@ -389,8 +389,6 @@ the same code.
 - src/node/bootstrap-pass.ts:291:3-292:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of PassOutcome is unreachable.
 - src/node/bootstrap-pass.ts:302:3-303:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled both statuses of a settled promise is unreachable.
 - src/node/bootstrap-pass.ts:565:11-567:5 BlockStatement "{}" harmless: a full page then does not start the count of short pages again, which only moves when the horizon is probed; each probe concludes only what it shows.
-- src/node/bootstrap-pass.ts:574:45-574:69 ConditionalExpression "true" harmless: a short page then calls for a move before the peer sent anything from the start, which only changes when the pass asks for one; a move is made only as a page shows it.
-- src/node/bootstrap-pass.ts:574:45-574:69 EqualityOperator "this.#named.received >= 0" harmless: a short page then calls for a move before the peer sent anything from the start, which only changes when the pass asks for one; a move is made only as a page shows it.
 - src/node/bootstrap-pass.ts:593:8-593:12 ConditionalExpression "false" equivalent: a page that fits then goes on to the bound on names, which it is under, and is named as the block does; a filter that fitted it named fewer than BLOOM_CAPACITY, so its rate is at most the one the pass accepts and no further filter checks a move.
 - src/node/bootstrap-pass.ts:593:14-596:5 BlockStatement "{}" equivalent: a page that fits then goes on to the bound on names, which it is under, and is named as the block does; a filter that fitted it named fewer than BLOOM_CAPACITY, so its rate is at most the one the pass accepts and no further filter checks a move.
 - src/node/bootstrap-pass.ts:598:8-598:42 ArithmeticOperator "this.#named.received - page.length" harmless: the pass then ends at its start only once it names up to two pages more than MAX_NAMED, each at a higher rate, which the further filters check before any move as they do below it.
@@ -467,8 +465,8 @@ the same code.
 - src/node/bootstrap-evidence.ts:180:7-180:28 ConditionalExpression "false" equivalent: with fewer votes than asked for, the index past them answers undefined, as the guard does.
 - src/node/bootstrap-evidence.ts:180:30-182:4 BlockStatement "{}" equivalent: with fewer votes than asked for, the index past them answers undefined, as the guard does.
 - src/node/bootstrap-evidence.ts:260:3-261:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled every PeerKeying is unreachable.
-- src/node/bootstrap-window.ts:92:6-92:23 ConditionalExpression "true" equivalent: the key is a function of the staple's bytes, which a staple never changes; the cache only saves hashing them again.
-- src/node/bootstrap-window.ts:94:3-94:25 CallExpression ";" equivalent: the key is a function of the staple's bytes, which a staple never changes; the cache only saves hashing them again.
+- src/node/bootstrap-window.ts:105:6-105:23 ConditionalExpression "true" equivalent: the key is a function of the staple's bytes, which a staple never changes; the cache only saves hashing them again.
+- src/node/bootstrap-window.ts:107:3-107:25 CallExpression ";" equivalent: the key is a function of the staple's bytes, which a staple never changes; the cache only saves hashing them again.
 
 ## bootstrap-pipeline
 
