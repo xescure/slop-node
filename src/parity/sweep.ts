@@ -972,11 +972,12 @@ export async function recheckDivergences(setup: RecheckSetup): Promise<RecheckSu
 
 /**
  * Reads of the follower's state of a passive account after the
- * representative's, for the follower to reach the state the representative
- * served: some seconds of local reads, as long as the follower takes to add
- * a staple the representative added.
+ * representative's, one after another, for the follower to reach the state
+ * the representative served: a few minutes of local reads, as the follower
+ * may add a staple a representative added a minute or more later, and each
+ * state of a busy account stands only until its next staple.
  */
-const FOLLOWER_CATCH_UP_READS = 200;
+const FOLLOWER_CATCH_UP_READS = 20_000;
 
 /**
  * Compares a passive account by itself as its walk compares one in a batch:
