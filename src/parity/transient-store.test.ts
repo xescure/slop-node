@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { followerStoreOf } from '../testing/follower-store.js';
 import type { KnownAccount } from './follower-store.js';
-import { isTransientStoreError, retryingStore } from './transient-store.js';
+import { retryingStore, transientCauseOf, UNREACHABLE_LIMIT_MILLISECONDS } from './transient-store.js';
 import type { TransientFailure, TransientRetry } from './transient-store.js';
 
 function statementTimeout(): Error {
@@ -39,14 +39,16 @@ function recordedRetry(stopAfter = Number.POSITIVE_INFINITY): TransientRetry & {
 
 describe('a read of the follower\'s database under load', function() {
 	test('tells the cluster\'s load from a failure of the read', function() {
-		expect(isTransientStoreError(new Error('timeout exceeded when trying to connect'))).toBe(true);
-		expect(isTransientStoreError(statementTimeout())).toBe(true);
-		expect(isTransientStoreError(Object.assign(new Error('sorry, too many clients already'), { code: '53300' }))).toBe(true);
-		expect(isTransientStoreError(Object.assign(new Error('terminating connection due to administrator command'), { code: '57P01' }))).toBe(true);
-		expect(isTransientStoreError(Object.assign(new Error('connect ECONNREFUSED /run/.s.PGSQL.5432'), { code: 'ECONNREFUSED' }))).toBe(true);
-		expect(isTransientStoreError(new Error('Connection terminated unexpectedly'))).toBe(true);
-		expect(isTransientStoreError(Object.assign(new Error('relation "heads" does not exist'), { code: '42P01' }))).toBe(false);
-		expect(isTransientStoreError('timeout exceeded when trying to connect')).toBe(false);
+		expect(transientCauseOf(new Error('timeout exceeded when trying to connect'))).toBe('load');
+		expect(transientCauseOf(statementTimeout())).toBe('load');
+		expect(transientCauseOf(Object.assign(new Error('sorry, too many clients already'), { code: '53300' }))).toBe('load');
+		expect(transientCauseOf(Object.assign(new Error('terminating connection due to administrator command'), { code: '57P01' }))).toBe('unreachable');
+		expect(transientCauseOf(Object.assign(new Error('the database system is starting up'), { code: '57P03' }))).toBe('unreachable');
+		expect(transientCauseOf(Object.assign(new Error('connect ECONNREFUSED /run/.s.PGSQL.5432'), { code: 'ECONNREFUSED' }))).toBe('unreachable');
+		expect(transientCauseOf(Object.assign(new Error('connect ENOENT /run/.s.PGSQL.5432'), { code: 'ENOENT' }))).toBe('unreachable');
+		expect(transientCauseOf(new Error('Connection terminated unexpectedly'))).toBe('unreachable');
+		expect(transientCauseOf(Object.assign(new Error('relation "heads" does not exist'), { code: '42P01' }))).toBeUndefined();
+		expect(transientCauseOf('timeout exceeded when trying to connect')).toBeUndefined();
 	});
 
 	test('is run again after waits doubling from 1 s up to 30 s until it succeeds', async function() {
@@ -65,6 +67,44 @@ describe('a read of the follower\'s database under load', function() {
 		expect(await store.accountCount()).toBe(42);
 		expect(retry.waits).toEqual([1000, 2000, 4000, 8000, 16_000, 30_000, 30_000]);
 		expect(retry.failures.slice(-2)).toEqual([{ attempt: 6, elapsedMilliseconds: 31_000, waitMilliseconds: 30_000 }, { attempt: 7, elapsedMilliseconds: 61_000, waitMilliseconds: 30_000 }]);
+	});
+
+	test('fails at once when the follower\'s database cannot be reached before any read of the command succeeded', async function() {
+		for (const code of ['ENOENT', 'ECONNREFUSED']) {
+			const retry = recordedRetry();
+			const unreachable = Object.assign(new Error(`connect ${code} /home/follower/run/.s.PGSQL.54329`), { code });
+			await expect(retryingStore(followerStoreOf({ accountCount: () => Promise.reject(unreachable) }), retry).accountCount()).rejects.toThrow('is the follower running');
+			expect(retry.waits).toEqual([]);
+		}
+	});
+
+	test('waits for a follower that stops serving after a read succeeded, as through its restart, and gives the read up after 15 minutes', async function() {
+		const refused = Object.assign(new Error('connect ECONNREFUSED /home/follower/run/.s.PGSQL.54329'), { code: 'ECONNREFUSED' });
+		let refusals = 3;
+		const restarting = recordedRetry();
+		const restarted = retryingStore(followerStoreOf({
+			accountCount: () => Promise.resolve(1),
+			lastSequence(): Promise<bigint> {
+				refusals--;
+				if (refusals >= 0) {
+					return(Promise.reject(refused));
+				}
+				return(Promise.resolve(7n));
+			}
+		}), restarting);
+		expect(await restarted.accountCount()).toBe(1);
+		expect(await restarted.lastSequence()).toBe(7n);
+		expect(restarting.waits).toEqual([1000, 2000, 4000]);
+
+		const gone = recordedRetry();
+		const store = retryingStore(followerStoreOf({ accountCount: () => Promise.resolve(1), lastSequence: () => Promise.reject(refused) }), gone);
+		expect(await store.accountCount()).toBe(1);
+		await expect(store.lastSequence()).rejects.toThrow('has not been reachable for 15 min');
+		const waited = gone.waits.reduce(function(sum, wait): number {
+			return(sum + wait);
+		}, 0);
+		expect(waited).toBeGreaterThanOrEqual(UNREACHABLE_LIMIT_MILLISECONDS - 30_000);
+		expect(waited).toBeLessThan(UNREACHABLE_LIMIT_MILLISECONDS + 30_000);
 	});
 
 	test('reads every account with a chain again from the page a failure cut, not from the first', async function() {
