@@ -1150,6 +1150,15 @@ export function requestStandings(records: readonly APIDiffRecord[], explanations
 }
 
 /**
+ * Whether the request's latest comparison is a divergence a triage
+ * explains: it then shows no answer alike, so it is no clean sample, until
+ * a later comparison of the request matches or diverges again.
+ */
+export function standsOnExplanation(standing: RequestStanding): boolean {
+	return(standing.open.length === 0 && followerDivergesOn(standing.latest));
+}
+
+/**
  * The census each stratum stands on: the latest plan that made one of it,
  * whose population, which may have grown since an older census, is the
  * one to cover. A later plan that drew a sample of the stratum ends it: a
@@ -1176,7 +1185,8 @@ export function standingCensuses(plans: readonly APIDiffPlanRecord[]): ReadonlyM
 }
 
 /**
- * The requests to send again: each with an open divergence, to the
+ * The requests to send again: each with an open divergence, or whose
+ * latest comparison is a divergence a triage explains, to the
  * representative it diverged with, and each request of a standing census
  * that has no comparison, to the representative last tried with it.
  */
@@ -1194,8 +1204,11 @@ function pendingOf(records: readonly ParityRecord[]): readonly Pending[] {
 		return(record.kind === 'api-diff-explained');
 	});
 	const standings = requestStandings(comparisons, explanations);
-	const open = [...standings.values()].flatMap(function({ open: divergences }): Pending[] {
-		const latest = divergences.at(-1)?.divergence;
+	const open = [...standings.values()].flatMap(function(standing): Pending[] {
+		let latest = standing.open.at(-1)?.divergence;
+		if (standsOnExplanation(standing)) {
+			latest = standing.latest;
+		}
 		if (latest === undefined) {
 			return([]);
 		}

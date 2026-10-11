@@ -592,6 +592,17 @@ describe('where a request stands', function() {
 });
 
 describe('a triage of an API divergence', function() {
+	test('leaves the request sent again on recheck while its latest comparison is the divergence explained, so that a later comparison shows whether it still diverges', async function() {
+		const setup = await runningWith(1);
+		servingBalances(setup, '0x3', ['0x3']);
+		const divergence: APIDiffRecord = { kind: 'api-diff', at: '2026-10-09T08:40:00.000Z', representative: setup.representatives[0]?.endpoint ?? '', stratum: 'token', route: '/api/node/ledger/account/{account}/balance', path: BALANCE, behaviors: [], outcome: RECORDED_DIVERGENCE };
+		const explanation: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: '2026-10-11T00:00:00.000Z', stratum: 'token', path: BALANCE, divergenceAt: divergence.at, divergence: 'our-bug', reference: 'fixed by 0000000' };
+		await setup.log.append([divergence, explanation]);
+
+		expect(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({}) })).toEqual({ match: 1 });
+		expect(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({}) })).toEqual({});
+	});
+
 	test('is recorded only for a divergence that is open, and closes it', async function() {
 		const setup = await runningWith(1);
 		const divergence: APIDiffRecord = { kind: 'api-diff', at: '2026-10-09T08:40:00.000Z', representative: 'https://rep1.example/api', stratum: 'token', route: '/api/node/ledger/account/{account}/balance', path: BALANCE, behaviors: [], outcome: RECORDED_DIVERGENCE };

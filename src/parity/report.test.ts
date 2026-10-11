@@ -195,7 +195,7 @@ describe('the parity report', function() {
 		});
 		expect(signal.strata.find(function(stratum) {
 			return(stratum.stratum === 'token');
-		})).toEqual({ stratum: 'token', requestsCompared: 2, diverged: 0, representativeLocal: 0, census: null, skippedByRoute: {}, routesNeverCompared: [], covered: false, confidence: { kind: 'rule-of-three', samples: 2, level: 0.95, divergenceRateBelow: 1.5 } });
+		})).toEqual({ stratum: 'token', requestsCompared: 2, standingOnExplanation: 0, diverged: 0, representativeLocal: 0, census: null, skippedByRoute: {}, routesNeverCompared: [], covered: false, confidence: { kind: 'rule-of-three', samples: 2, level: 0.95, divergenceRateBelow: 1.5 } });
 		expect(signal.strata.find(function(stratum) {
 			return(stratum.stratum === 'storage');
 		})).toMatchObject({ requestsCompared: 0, confidence: { kind: 'none' } });
@@ -233,6 +233,18 @@ describe('the parity report', function() {
 		const explanation: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: '2026-10-11T17:00:00.000Z', stratum: 'token', path, divergenceAt: divergence.at, divergence: 'our-bug', reference: 'fixed by 0000000' };
 		const signal = report([divergence, apiDiff('2026-10-11T15:00:00.000Z', 'token', path, MATCHED), explanation]).signals.apiDiff;
 		expect(signal).toMatchObject({ verdict: 'pass', counts: { diverged: 0, explained: 1, superseded: 0 }, explained: [{ divergence, explanation }], retestedOnAnotherState: [], firstDivergence: null });
+	});
+
+	test('counts a request whose latest comparison is the divergence a triage explains apart, neither as matched nor as a sample, nor toward its census', function() {
+		const path = `/node/ledger/account/${ACCOUNT}`;
+		const plan: APIDiffPlanRecord = { kind: 'api-diff-plan', at: '2026-10-11T14:00:00.000Z', quietBefore: '2026-10-11T13:00:00.000Z', samplesPerStratum: 300, strata: [{ stratum: 'multisig', population: { kind: 'census', requests: [path] } }] };
+		const divergence = apiDiff('2026-10-11T14:01:00.000Z', 'multisig', path, DIVERGED_INFO);
+		const explanation: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: '2026-10-11T17:00:00.000Z', stratum: 'multisig', path, divergenceAt: divergence.at, divergence: 'our-bug', reference: 'fixed by 0000000' };
+		const signal = report([plan, divergence, explanation]).signals.apiDiff;
+		expect(signal).toMatchObject({ verdict: 'not-comparable-yet', counts: { requestsCompared: 0, matched: 0, diverged: 0, explained: 1, standingOnExplanation: 1 } });
+		expect(signal.strata.find(function(entry) {
+			return(entry.stratum === 'multisig');
+		})).toMatchObject({ requestsCompared: 0, standingOnExplanation: 1, census: { requests: 1, compared: 0 }, covered: false, confidence: { kind: 'none' } });
 	});
 
 	test('leaves a stratum uncovered while a route of it was attempted and never compared, counting its requests skipped by route', function() {
