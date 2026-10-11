@@ -581,7 +581,7 @@ describe('where a request stands', function() {
 
 	test('closes a divergence a triage record explains, listing it apart', function() {
 		const open = divergence('2026-10-09T00:00:00.000Z', '0x2');
-		const explanation: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: '2026-10-11T00:00:00.000Z', stratum: 'token', path: BALANCE, divergenceAt: open.at, divergence: 'our-bug', reference: 'fixed by 0000000' };
+		const explanation: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: '2026-10-11T00:00:00.000Z', stratum: 'token', path: BALANCE, divergenceAt: open.at, divergence: 'our-bug', reference: 'fixed by 0000000', untestedBecause: null };
 		const elsewhere: APIDiffExplainedRecord = { ...explanation, divergenceAt: '2026-10-08T00:00:00.000Z' };
 
 		const standing = requestStandings([open, matching('2026-10-10T00:00:00.000Z', '0x9')], [explanation, elsewhere]).get(`token ${BALANCE}`);
@@ -596,7 +596,7 @@ describe('a triage of an API divergence', function() {
 		const setup = await runningWith(1);
 		servingBalances(setup, '0x3', ['0x3']);
 		const divergence: APIDiffRecord = { kind: 'api-diff', at: '2026-10-09T08:40:00.000Z', representative: setup.representatives[0]?.endpoint ?? '', stratum: 'token', route: '/api/node/ledger/account/{account}/balance', path: BALANCE, behaviors: [], outcome: RECORDED_DIVERGENCE };
-		const explanation: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: '2026-10-11T00:00:00.000Z', stratum: 'token', path: BALANCE, divergenceAt: divergence.at, divergence: 'our-bug', reference: 'fixed by 0000000' };
+		const explanation: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: '2026-10-11T00:00:00.000Z', stratum: 'token', path: BALANCE, divergenceAt: divergence.at, divergence: 'our-bug', reference: 'fixed by 0000000', untestedBecause: null };
 		await setup.log.append([divergence, explanation]);
 
 		expect(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({}) })).toEqual({ match: 1 });
@@ -606,14 +606,37 @@ describe('a triage of an API divergence', function() {
 	test('is recorded only for a divergence that is open, and closes it', async function() {
 		const setup = await runningWith(1);
 		const divergence: APIDiffRecord = { kind: 'api-diff', at: '2026-10-09T08:40:00.000Z', representative: 'https://rep1.example/api', stratum: 'token', route: '/api/node/ledger/account/{account}/balance', path: BALANCE, behaviors: [], outcome: RECORDED_DIVERGENCE };
-		await setup.log.append([divergence]);
-		const triage = { stratum: 'token', path: BALANCE, divergence: 'our-bug', reference: 'fixed by 0000000' } as const;
+		await setup.log.append([divergence, { ...divergence, at: '2026-10-10T08:40:00.000Z', outcome: { kind: 'match', digest: 'EF'.repeat(32) } }]);
+		const triage = { stratum: 'token', path: BALANCE, divergence: 'our-bug', reference: 'fixed by 0000000', untestedBecause: null } as const;
 
 		await expect(explainDivergence(setup.log, { ...triage, divergenceAt: '2026-10-08T00:00:00.000Z' })).rejects.toThrow('no open divergence');
 		const explained = await explainDivergence(setup.log, { ...triage, divergenceAt: divergence.at });
 		expect(explained).toMatchObject({ kind: 'api-diff-explained', ...triage, divergenceAt: divergence.at });
 		await expect(explainDivergence(setup.log, { ...triage, divergenceAt: divergence.at })).rejects.toThrow('no open divergence');
 		expect(recordsOf((await setup.log.read()).records, 'api-diff-explained')).toEqual([explained]);
+	});
+
+	test('is refused with no reference, or for a divergence no later comparison of its request retested unless forced with the reason, which it records', async function() {
+		const setup = await runningWith(1);
+		const divergence: APIDiffRecord = { kind: 'api-diff', at: '2026-10-09T08:40:00.000Z', representative: 'https://rep1.example/api', stratum: 'token', route: '/api/node/ledger/account/{account}/balance', path: BALANCE, behaviors: [], outcome: RECORDED_DIVERGENCE };
+		const unanswered: APIDiffRecord = { ...divergence, at: '2026-10-10T08:40:00.000Z', outcome: { kind: 'skipped', reason: 'unanswered', detail: 'fetch failed' } };
+		await setup.log.append([divergence, unanswered]);
+		const triage = { stratum: 'token', path: BALANCE, divergenceAt: divergence.at, divergence: 'our-bug', reference: 'fixed by 0000000', untestedBecause: null } as const;
+
+		await expect(explainDivergence(setup.log, { ...triage, reference: ' ' })).rejects.toThrow('no reference');
+		await expect(explainDivergence(setup.log, triage)).rejects.toThrow('retested');
+		await expect(explainDivergence(setup.log, { ...triage, untestedBecause: ' ' })).rejects.toThrow('retested');
+		const forced = await explainDivergence(setup.log, { ...triage, untestedBecause: 'every node answers the request alike now' });
+		expect(forced).toMatchObject({ untestedBecause: 'every node answers the request alike now' });
+		expect(recordsOf((await setup.log.read()).records, 'api-diff-explained')).toEqual([forced]);
+	});
+
+	test('is recorded for a divergence a later attempt found moving, as its state has moved on', async function() {
+		const setup = await runningWith(1);
+		const divergence: APIDiffRecord = { kind: 'api-diff', at: '2026-10-09T08:40:00.000Z', representative: 'https://rep1.example/api', stratum: 'token', route: '/api/node/ledger/account/{account}/balance', path: BALANCE, behaviors: [], outcome: RECORDED_DIVERGENCE };
+		await setup.log.append([divergence, { ...divergence, at: '2026-10-10T08:40:00.000Z', outcome: { kind: 'skipped', reason: 'moving', side: 'representative', detail: 'recent' } }]);
+
+		expect(await explainDivergence(setup.log, { stratum: 'token', path: BALANCE, divergenceAt: divergence.at, divergence: 'our-bug', reference: 'fixed by 0000000', untestedBecause: null })).toMatchObject({ untestedBecause: null });
 	});
 });
 

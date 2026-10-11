@@ -119,7 +119,8 @@ const API_DIFF_EXPLAINED: APIDiffExplainedRecord = {
 	path: `/node/ledger/account/${ACCOUNT}`,
 	divergenceAt: '2026-10-09T08:40:27.413Z',
 	divergence: 'our-bug',
-	reference: 'fixed by e27cc4e, with the history reindexed by 8ccbb10 (schema/CONTRACT.md, D18)'
+	reference: 'fixed by e27cc4e, with the history reindexed by 8ccbb10 (schema/CONTRACT.md, D18)',
+	untestedBecause: 'the follower and every representative refuse the page now'
 };
 
 const directories: string[] = [];
@@ -196,6 +197,15 @@ describe('the parity log', function() {
 		await appendFile(log.path, `${JSON.stringify({ ...SHADOW_RUN, refusedForWeight: 2 })}\n`);
 
 		expect(await log.read()).toEqual({ records: [SHADOW_RUN], unreadableLines: 0 });
+	});
+
+	test('reads a triage recorded before a triage stated why no later comparison retested its divergence as one that needed none', async function() {
+		const log = await scratchLog();
+		const { untestedBecause, ...older } = API_DIFF_EXPLAINED;
+		expect(untestedBecause).not.toBeNull();
+		await appendFile(log.path, `${JSON.stringify(older)}\n`);
+
+		expect(await log.read()).toEqual({ records: [{ ...older, untestedBecause: null }], unreadableLines: 0 });
 	});
 
 	test('counts a line cut short, or one it does not know, apart from the records', async function() {

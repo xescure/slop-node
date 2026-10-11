@@ -15,8 +15,8 @@ export type ParityCommand =
 	| { readonly kind: 'sweep'; readonly directory: string; readonly accounts: number; readonly toLapEnd: boolean; readonly pacing: RepresentativePacing }
 	| { readonly kind: 'recheck'; readonly directory: string; readonly pacing: RepresentativePacing }
 	| { readonly kind: 'api-diff'; readonly directory: string; readonly samplesPerStratum: number; readonly seed: string | undefined; readonly pacing: RepresentativePacing }
-	/** Records the triage of an API divergence of a state that moved on, which closes it. */
-	| { readonly kind: 'explain'; readonly directory: string; readonly stratum: Stratum; readonly path: string; readonly divergenceAt: string; readonly divergence: DivergenceClass; readonly reference: string }
+	/** Records the triage of an API divergence of a state that moved on, which closes it; untestedBecause, from --force, states why no later comparison needs to have retested it. */
+	| { readonly kind: 'explain'; readonly directory: string; readonly stratum: Stratum; readonly path: string; readonly divergenceAt: string; readonly divergence: DivergenceClass; readonly reference: string; readonly untestedBecause: string | null }
 	| { readonly kind: 'shadow'; readonly directory: string; readonly base: string | undefined; readonly informationalEvery: number; readonly batchStaples: number; readonly restart: boolean }
 	| {
 		readonly kind: 'report';
@@ -108,7 +108,7 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 			flags = ['--restart'];
 			break;
 		case 'explain':
-			valued = ['--directory', '--stratum', '--path', '--at', '--class', '--reference'];
+			valued = ['--directory', '--stratum', '--path', '--at', '--class', '--reference', '--force'];
 			break;
 		case 'report':
 			valued = ['--directory', '--sample', '--passive-sample', '--api-samples', '--gap-ms', ...PACING_OPTIONS];
@@ -155,10 +155,11 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 			const path = options.get('--path');
 			const divergenceAt = options.get('--at');
 			const reference = options.get('--reference');
-			if (stratum === undefined || divergence === undefined || path === undefined || divergenceAt === undefined || reference === undefined) {
+			const untestedBecause = options.get('--force') ?? null;
+			if (stratum === undefined || divergence === undefined || path === undefined || divergenceAt === undefined || reference === undefined || reference.trim() === '' || untestedBecause?.trim() === '') {
 				return(undefined);
 			}
-			return({ kind: name, directory, stratum, path, divergenceAt, divergence, reference });
+			return({ kind: name, directory, stratum, path, divergenceAt, divergence, reference, untestedBecause });
 		}
 		case 'api-diff': {
 			const samplesPerStratum = setting(options, '--samples', Number.MAX_SAFE_INTEGER, DEFAULT_API_SAMPLES);

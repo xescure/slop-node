@@ -311,6 +311,11 @@ export type APIDiffExplainedRecord = {
 	readonly divergence: DivergenceClass;
 	/** The change that fixed it, or the section of the conformance documents that records it. */
 	readonly reference: string;
+	/**
+	 * Why it was explained though no later comparison of its request had
+	 * retested it, as the operator stated it; null when one had.
+	 */
+	readonly untestedBecause: string | null;
 };
 
 /** A staple of the window the offline ledger refused to vote on, and the classified difference that explains it. */
@@ -883,16 +888,18 @@ function apiDiffPlanRecordOf(value: Fields): APIDiffPlanRecord | undefined {
 	return({ kind: 'api-diff-plan', at, quietBefore, samplesPerStratum, strata });
 }
 
+/** A triage recorded before triages stated why none retested their divergence was of a retested one. */
 function apiDiffExplainedRecordOf(value: Fields): APIDiffExplainedRecord | undefined {
 	const { at, path, divergenceAt, reference } = value;
+	const untestedBecause = value['untestedBecause'] ?? null;
 	const stratum = stratumOf(value['stratum']);
 	const divergence = DIVERGENCE_CLASSES.find(function(known): boolean {
 		return(known === value['divergence']);
 	});
-	if (!isString(at) || !isString(path) || !isString(divergenceAt) || !isString(reference) || stratum === undefined || divergence === undefined) {
+	if (!isString(at) || !isString(path) || !isString(divergenceAt) || !isString(reference) || !isStringOrNull(untestedBecause) || stratum === undefined || divergence === undefined) {
 		return(undefined);
 	}
-	return({ kind: 'api-diff-explained', at, stratum, path, divergenceAt, divergence, reference });
+	return({ kind: 'api-diff-explained', at, stratum, path, divergenceAt, divergence, reference, untestedBecause });
 }
 
 function apiDiffOutcomeOf(value: unknown): APIDiffOutcome | undefined {

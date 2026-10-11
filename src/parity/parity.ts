@@ -91,6 +91,8 @@ const USAGE = [
 	'  explain   record the triage of an open API divergence of a state that has moved on, which closes it:',
 	'            --stratum <stratum> --path <path> --at <moment the divergence was recorded>',
 	'            --class our-bug|upstream-version|operational-artifact --reference <fixing change or document section>',
+	'            refused unless a later comparison of the request retested the divergence, or found it moving:',
+	'            --force <why>      record it all the same, with why no retest is needed',
 	'  report    check the checksum and compare a sweep sample and an API diff sample, then print the',
 	'            parity report as JSON, with the latest shadow-vote run from the log; exits 1 when a signal fails',
 	'            --sample <n>       how many chain accounts the sweep sample compares (16)',
@@ -387,8 +389,8 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 		case 'shadow':
 			return(await shadow(command, tools.directory, tools));
 		case 'explain': {
-			const { stratum, path, divergenceAt, divergence, reference } = command;
-			const explained = await explainDivergence(tools.log, { stratum, path, divergenceAt, divergence, reference });
+			const { stratum, path, divergenceAt, divergence, reference, untestedBecause } = command;
+			const explained = await explainDivergence(tools.log, { stratum, path, divergenceAt, divergence, reference, untestedBecause });
 			process.stdout.write(`${JSON.stringify(explained, null, '\t')}\n`);
 			return(0);
 		}

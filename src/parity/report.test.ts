@@ -230,7 +230,7 @@ describe('the parity report', function() {
 	test('lists apart a divergence a triage record explains, which then fails nothing', function() {
 		const path = `/node/ledger/account/${ACCOUNT}`;
 		const divergence = apiDiff('2026-10-09T08:40:25.000Z', 'token', path, DIVERGED_INFO);
-		const explanation: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: '2026-10-11T17:00:00.000Z', stratum: 'token', path, divergenceAt: divergence.at, divergence: 'our-bug', reference: 'fixed by 0000000' };
+		const explanation: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: '2026-10-11T17:00:00.000Z', stratum: 'token', path, divergenceAt: divergence.at, divergence: 'our-bug', reference: 'fixed by 0000000', untestedBecause: null };
 		const signal = report([divergence, apiDiff('2026-10-11T15:00:00.000Z', 'token', path, MATCHED), explanation]).signals.apiDiff;
 		expect(signal).toMatchObject({ verdict: 'pass', counts: { diverged: 0, explained: 1, superseded: 0 }, explained: [{ divergence, explanation }], retestedOnAnotherState: [], firstDivergence: null });
 	});
@@ -239,7 +239,7 @@ describe('the parity report', function() {
 		const path = `/node/ledger/account/${ACCOUNT}`;
 		const plan: APIDiffPlanRecord = { kind: 'api-diff-plan', at: '2026-10-11T14:00:00.000Z', quietBefore: '2026-10-11T13:00:00.000Z', samplesPerStratum: 300, strata: [{ stratum: 'multisig', population: { kind: 'census', requests: [path] } }] };
 		const divergence = apiDiff('2026-10-11T14:01:00.000Z', 'multisig', path, DIVERGED_INFO);
-		const explanation: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: '2026-10-11T17:00:00.000Z', stratum: 'multisig', path, divergenceAt: divergence.at, divergence: 'our-bug', reference: 'fixed by 0000000' };
+		const explanation: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: '2026-10-11T17:00:00.000Z', stratum: 'multisig', path, divergenceAt: divergence.at, divergence: 'our-bug', reference: 'fixed by 0000000', untestedBecause: null };
 		const signal = report([plan, divergence, explanation]).signals.apiDiff;
 		expect(signal).toMatchObject({ verdict: 'not-comparable-yet', counts: { requestsCompared: 0, matched: 0, diverged: 0, explained: 1, standingOnExplanation: 1 } });
 		expect(signal.strata.find(function(entry) {

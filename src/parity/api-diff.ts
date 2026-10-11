@@ -1262,12 +1262,24 @@ export async function recheckAPIDivergences(setup: APIRecheckSetup): Promise<API
 }
 
 /** A triage of an API divergence, as the explain command names it. */
-export type DivergenceTriage = Pick<APIDiffExplainedRecord, 'stratum' | 'path' | 'divergenceAt' | 'divergence' | 'reference'>;
+export type DivergenceTriage = Pick<APIDiffExplainedRecord, 'stratum' | 'path' | 'divergenceAt' | 'divergence' | 'reference' | 'untestedBecause'>;
+
+/**
+ * Whether a later attempt at the request retested the divergence: compared
+ * it again, or found it moving, which shows the state it was about has moved
+ * on. One left unanswered shows nothing.
+ */
+function retests(later: APIDiffRecord): boolean {
+	return(later.outcome.kind !== 'skipped' || later.outcome.reason === 'moving');
+}
 
 /**
  * Records the triage of an open divergence of the request, named by the
- * moment it was recorded, which closes it; a divergence that is not open,
- * settled or explained already or never recorded, is refused.
+ * moment it was recorded, which closes it. A triage names its evidence,
+ * and closes only a divergence a later attempt at the request retested,
+ * unless it states why none needs to: a divergence of a state still
+ * standing is to be compared again, not explained. A divergence that is
+ * not open, settled or explained already or never recorded, is refused.
  */
 export async function explainDivergence(log: ParityLog, triage: DivergenceTriage): Promise<APIDiffExplainedRecord> {
 	const { records } = await log.read();
@@ -1277,11 +1289,21 @@ export async function explainDivergence(log: ParityLog, triage: DivergenceTriage
 	const explanations = records.filter(function(record): record is APIDiffExplainedRecord {
 		return(record.kind === 'api-diff-explained');
 	});
+	if (triage.reference.trim() === '') {
+		throw(new Error('a triage with no reference names no change or document that explains the divergence'));
+	}
 	const open = requestStandings(comparisons, explanations).get(keyOf(triage.stratum, triage.path))?.open ?? [];
-	if (!open.some(function({ divergence }): boolean {
+	const named = open.find(function({ divergence }): boolean {
 		return(divergence.at === triage.divergenceAt);
-	})) {
+	})?.divergence;
+	if (named === undefined) {
 		throw(new Error(`no open divergence of ${triage.stratum} ${triage.path} was recorded at ${triage.divergenceAt}`));
+	}
+	const retested = comparisons.slice(comparisons.indexOf(named) + 1).some(function(later): boolean {
+		return(later.stratum === named.stratum && later.path === named.path && retests(later));
+	});
+	if (!retested && (triage.untestedBecause ?? '').trim() === '') {
+		throw(new Error(`no later attempt at ${triage.stratum} ${triage.path} retested the divergence recorded at ${triage.divergenceAt}: send it again with recheck, or force the triage with why no retest is needed`));
 	}
 	const explained: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: new Date().toISOString(), ...triage };
 	await log.append([explained]);

@@ -35,7 +35,10 @@ describe('the parity command line', function() {
 
 	test('names a triage of an API divergence with every part of it', function() {
 		const path = '/node/ledger/account/keeta_x/history?limit=1';
-		expect(parseParityCommand(['explain', '--stratum', 'token', '--path', path, '--at', '2026-10-09T08:40:27.413Z', '--class', 'our-bug', '--reference', 'fixed by e27cc4e'], HOME)).toEqual({ kind: 'explain', directory: DIRECTORY, stratum: 'token', path, divergenceAt: '2026-10-09T08:40:27.413Z', divergence: 'our-bug', reference: 'fixed by e27cc4e' });
+		expect(parseParityCommand(['explain', '--stratum', 'token', '--path', path, '--at', '2026-10-09T08:40:27.413Z', '--class', 'our-bug', '--reference', 'fixed by e27cc4e'], HOME)).toEqual({ kind: 'explain', directory: DIRECTORY, stratum: 'token', path, divergenceAt: '2026-10-09T08:40:27.413Z', divergence: 'our-bug', reference: 'fixed by e27cc4e', untestedBecause: null });
+		expect(parseParityCommand(['explain', '--stratum', 'token', '--path', path, '--at', '2026-10-09T08:40:27.413Z', '--class', 'our-bug', '--reference', 'fixed by e27cc4e', '--force', 'every node refuses it now'], HOME)).toMatchObject({ untestedBecause: 'every node refuses it now' });
+		expect(parseParityCommand(['explain', '--stratum', 'token', '--path', path, '--at', '2026-10-09T08:40:27.413Z', '--class', 'our-bug', '--reference', 'fixed by e27cc4e', '--force', ' '], HOME)).toBeUndefined();
+		expect(parseParityCommand(['explain', '--stratum', 'token', '--path', path, '--at', '2026-10-09T08:40:27.413Z', '--class', 'our-bug', '--reference', ' '], HOME)).toBeUndefined();
 		expect(parseParityCommand(['explain', '--stratum', 'token', '--path', path, '--at', '2026-10-09T08:40:27.413Z', '--class', 'our-bug'], HOME)).toBeUndefined();
 		expect(parseParityCommand(['explain', '--stratum', 'tokens', '--path', path, '--at', '2026-10-09T08:40:27.413Z', '--class', 'our-bug', '--reference', 'x'], HOME)).toBeUndefined();
 		expect(parseParityCommand(['explain', '--stratum', 'token', '--path', path, '--at', '2026-10-09T08:40:27.413Z', '--class', 'a-guess', '--reference', 'x'], HOME)).toBeUndefined();
