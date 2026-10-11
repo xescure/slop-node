@@ -688,7 +688,6 @@ function chainBlock(hash: string, previous: string, date: Date): unknown {
 	return({ block: { $hash: hash, previous, date: date.toISOString() } });
 }
 
-/** Serves a chain account moving on the representatives on every attempt, with the follower's head and each representative's chain above it. */
 /** The head of an account as the API answers it, the block whole, from the capture of a representative's answer, with the hash given. */
 async function capturedHead(account: string, hash: string): Promise<unknown> {
 	const capture: unknown = JSON.parse(await readFile(new URL('../../conformance/api/mainnet/ledger-account-head.json', import.meta.url), 'utf8'));
@@ -702,6 +701,7 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 	return(typeof value === 'object' && value !== null && !Array.isArray(value));
 }
 
+/** Serves a chain account moving on the representatives on every attempt, with the follower's head and each representative's chain above it. */
 async function serveMovingChain(running: Running, account: string, chains: readonly (readonly unknown[])[]): Promise<void> {
 	serveAccount(running, account, [state(account, '0x10')], state(account, '0x11'), history(STAPLE, [RECENT_VOTE]));
 	running.follower.serve(`/node/ledger/account/${account}/head`, await capturedHead(account, FOLLOWER_HEAD));
@@ -785,6 +785,24 @@ describe('the chain walk at the end of a lap', function() {
 			return([record.account, record.lap, record.walk]);
 		})).toEqual([[walked, 0, 'chain'], [late, 0, 'chain']]);
 	});
+
+	test('compares no more accounts than the walk has left, and ends the lap only once it has compared them all', async function() {
+		const running = await setup();
+		const [walked, late, later] = ACCOUNTS;
+		for (const account of ACCOUNTS) {
+			serveAccount(running, account, [state(account, '0x10')], state(account, '0x10'), history(STAPLE, [QUIET_VOTE]));
+		}
+		const quiet = new Date('2025-06-01T00:00:00.000Z');
+		const store = memoryStore({ [walked]: [STAPLE], [late]: [STAPLE], [later]: [STAPLE] }, undefined, {}, [], [{ rowID: '8', account: late, newestStaple: quiet }, { rowID: '9', account: later, newestStaple: quiet }]);
+
+		const first = await sweepWalks(running, store, { chain: 2 }, true);
+		expect(first.chain).toMatchObject({ walked: 2, cursor: { lap: 0, afterRowID: '1' } });
+		const second = await sweepWalks(running, store, { chain: 2 }, true);
+		expect(second.chain).toMatchObject({ walked: 1, cursor: { lap: 1, afterRowID: '0' } });
+		expect(recordsOf((await running.log.read()).records, 'sweep').map(function(record) {
+			return(record.account);
+		})).toEqual([walked, late, later]);
+	});
 });
 
 describe('a batch of passive accounts', function() {
@@ -834,8 +852,8 @@ describe('a divergence in the history', function() {
 	});
 });
 
-describe('fix round 3', function() {
-	test('a chain divergence recorded before is compared again by the chain', async function() {
+describe('a chain divergence recorded before', function() {
+	test('is compared again by the chain', async function() {
 		const running = await setup();
 		const account = ACCOUNTS[0];
 		await serveMovingChain(running, account, [[chainBlock(FOLLOWER_HEAD, STAPLE, QUIET_VOTE)]]);
@@ -851,24 +869,6 @@ describe('fix round 3', function() {
 		});
 
 		expect(summary).toEqual({ 'compared-chain': 1 });
-	});
-
-	test('the end of a lap compares no more accounts than the walk has left, and the lap ends only once it has compared them all', async function() {
-		const running = await setup();
-		const [walked, late, later] = ACCOUNTS;
-		for (const account of ACCOUNTS) {
-			serveAccount(running, account, [state(account, '0x10')], state(account, '0x10'), history(STAPLE, [QUIET_VOTE]));
-		}
-		const quiet = new Date('2025-06-01T00:00:00.000Z');
-		const store = memoryStore({ [walked]: [STAPLE], [late]: [STAPLE], [later]: [STAPLE] }, undefined, {}, [], [{ rowID: '8', account: late, newestStaple: quiet }, { rowID: '9', account: later, newestStaple: quiet }]);
-
-		const first = await sweepWalks(running, store, { chain: 2 }, true);
-		expect(first.chain).toMatchObject({ walked: 2, cursor: { lap: 0, afterRowID: '1' } });
-		const second = await sweepWalks(running, store, { chain: 2 }, true);
-		expect(second.chain).toMatchObject({ walked: 1, cursor: { lap: 1, afterRowID: '0' } });
-		expect(recordsOf((await running.log.read()).records, 'sweep').map(function(record) {
-			return(record.account);
-		})).toEqual([walked, late, later]);
 	});
 });
 
