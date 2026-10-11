@@ -964,6 +964,11 @@ describe('an account both sides answer with the same error', function() {
 	});
 });
 
+/** Lets a case's clock run on at once, as no test sleeps. */
+function noWait(): Promise<void> {
+	return(Promise.resolve());
+}
+
 describe('the accounts a lap never compared', function() {
 	test('are compared one at a time, each representative in turn, and recorded in the walk and lap they were missed in', async function() {
 		const running = await setup(2);
@@ -978,7 +983,7 @@ describe('the accounts a lap never compared', function() {
 
 		const summary = await compareNeverCompared({ follower: httpSource(running.follower.endpoint), representatives: running.representatives.map(function(api) {
 			return(httpSource(api.endpoint));
-		}), store, log: running.log, stopped: new AbortController().signal }, { chain: [known], passive: [passive] }, { chain: 0, passive: 2 });
+		}), store, log: running.log, stopped: new AbortController().signal }, { chain: [known], passive: [passive] }, { chain: 0, passive: 2 }, noWait);
 
 		expect(summary).toEqual({ match: 2 });
 		expect(new Set(recordsOf((await running.log.read()).records, 'sweep').map(function(record) {
@@ -1000,7 +1005,7 @@ describe('the accounts a lap never compared', function() {
 
 		const summary = await compareNeverCompared({ follower: httpSource(running.follower.endpoint), representatives: running.representatives.map(function(api) {
 			return(httpSource(api.endpoint));
-		}), store, log: running.log, stopped: new AbortController().signal }, { chain: [], passive: [passive] }, { chain: 0, passive: 0 });
+		}), store, log: running.log, stopped: new AbortController().signal }, { chain: [], passive: [passive] }, { chain: 0, passive: 0 }, noWait);
 
 		expect(summary).toEqual({ match: 1 });
 	});
@@ -1015,7 +1020,7 @@ describe('the accounts a lap never compared', function() {
 
 		const summary = await compareNeverCompared({ follower: httpSource(running.follower.endpoint), representatives: running.representatives.map(function(api) {
 			return(httpSource(api.endpoint));
-		}), store, log: running.log, stopped: new AbortController().signal }, { chain: [], passive: [passive] }, { chain: 0, passive: 0 });
+		}), store, log: running.log, stopped: new AbortController().signal }, { chain: [], passive: [passive] }, { chain: 0, passive: 0 }, noWait);
 
 		expect(summary).toEqual({ match: 1 });
 		expect(running.representatives[0]?.requests).toEqual([`GET /node/ledger/account/${passive}`]);

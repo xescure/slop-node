@@ -972,12 +972,17 @@ export async function recheckDivergences(setup: RecheckSetup): Promise<RecheckSu
 
 /**
  * Reads of the follower's state of a passive account after the
- * representative's, one after another, for the follower to reach the state
- * the representative served: a few minutes of local reads, as the follower
- * may add a staple a representative added a minute or more later, and each
- * state of a busy account stands only until its next staple.
+ * representative's, a second apart, for the follower to reach the state the
+ * representative served: three minutes, as the follower may add a staple a
+ * representative added a minute or more later, and each state of a busy
+ * account stands for the seconds until its next staple.
  */
-const FOLLOWER_CATCH_UP_READS = 20_000;
+const FOLLOWER_CATCH_UP_READS = 180;
+
+const FOLLOWER_CATCH_UP_INTERVAL_MILLISECONDS = 1000;
+
+/** Waits that long, as the caller's clock runs. */
+export type Wait = (milliseconds: number) => Promise<void>;
 
 /**
  * Compares a passive account by itself as its walk compares one in a batch:
@@ -986,12 +991,15 @@ const FOLLOWER_CATCH_UP_READS = 20_000;
  * served, which an account a staple touches every few seconds needs; states
  * apart are compared by themselves.
  */
-async function comparePassiveAlone(setup: Comparing & Pick<SweepSetup, 'stopped'>, representative: APISource, account: string, quietBefore: Date): Promise<SweepOutcome> {
+async function comparePassiveAlone(setup: Comparing & Pick<SweepSetup, 'stopped'>, representative: APISource, account: string, quietBefore: Date, wait: Wait): Promise<SweepOutcome> {
 	const path = `/node/ledger/account/${account}`;
 	try {
 		const representativeState = await getOK(representative, path);
 		if (stateErrorOf(representativeState) === undefined) {
 			for (let read = 0; read < FOLLOWER_CATCH_UP_READS && !isStopped(setup.stopped); read++) {
+				if (read > 0) {
+					await wait(FOLLOWER_CATCH_UP_INTERVAL_MILLISECONDS);
+				}
 				if (firstDifference(await getOK(setup.follower, path), representativeState) === undefined) {
 					return({ kind: 'match', head: headOf(representativeState), staple: null });
 				}
@@ -1012,7 +1020,7 @@ export type NeverCompared = { readonly chain: readonly KnownAccount[]; readonly 
  * in that walk and lap, so that the lap's coverage completes without a
  * whole new lap.
  */
-export async function compareNeverCompared(setup: RecheckSetup, accounts: NeverCompared, laps: Readonly<Record<SweepWalk, number>>): Promise<RecheckSummary> {
+export async function compareNeverCompared(setup: RecheckSetup, accounts: NeverCompared, laps: Readonly<Record<SweepWalk, number>>, wait: Wait): Promise<RecheckSummary> {
 	const quietBefore = await quietBeforeOf(setup.store);
 	if (quietBefore === undefined) {
 		throw(new Error('the follower has read from no representative yet'));
@@ -1038,7 +1046,7 @@ export async function compareNeverCompared(setup: RecheckSetup, accounts: NeverC
 					outcome = await compareChainKnown(setup, representative, entry.known, quietBefore);
 					break;
 				case 'passive':
-					outcome = await comparePassiveAlone(setup, representative, entry.known.account, quietBefore);
+					outcome = await comparePassiveAlone(setup, representative, entry.known.account, quietBefore, wait);
 					break;
 				default:
 					outcome = assertNever(entry.walk);

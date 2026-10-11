@@ -381,7 +381,7 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 			const neverCompared = await compareNeverCompared(tools, neverComparedAccountsOf(records, position), {
 				chain: Math.max(0, position.cursors.chain.lap - 1),
 				passive: Math.max(0, position.cursors.passive.lap - 1)
-			});
+			}, wait);
 			const summary = { sweep, apiDiff, neverCompared };
 			process.stdout.write(`${JSON.stringify(summary, null, '\t')}\n`);
 			return(0);
