@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { freezeClock } from '../testing/network.js';
+import { advanceClock, freezeClock } from '../testing/network.js';
+import { MAX_PASS_MILLISECONDS } from './bootstrap-pass.js';
 import type { PeerProgress } from './bootstrap-pass.js';
 import { FAR_AHEAD_MILLISECONDS, FAR_BEHIND_MILLISECONDS, RANGE_OVERLAP_MILLISECONDS, assigned, updateRanges } from './bootstrap-ranges.js';
 import type { BootstrapRange, RangeEvent, RangeIO, RangeLayout, RangeResult, RangeTask } from './bootstrap-ranges.js';
@@ -407,5 +408,225 @@ describe('reading the history in ranges', function() {
 		expect(kindsOf(harness.events).filter(function(kind): boolean {
 			return(kind !== 'split');
 		})).toEqual(['laid-out', 'read']);
+	});
+
+	/** A layout of the ranges given, from nine days back up to the end. */
+	function layoutOf(ranges: readonly BootstrapRange[], rest: Partial<RangeLayout> = {}): RangeLayout {
+		return({ from: new Date(NOW - 9 * DAY), end: new Date(END), deepScanPeer: 'rep1', ranges, standings: {}, fullQueueUpdates: 0, nextID: ranges.length, ...rest });
+	}
+
+	function peersOf(layout: RangeLayout | undefined): (string | undefined)[] {
+		return((layout?.ranges ?? []).map(function(range): string | undefined {
+			return(range.peer);
+		}));
+	}
+
+	test('reads again with a peer benched until the present', function() {
+		const layout = layoutOf([rangeOf(0, NOW - 9 * DAY, NOW - 5 * DAY, 'rep1'), rangeOf(1, NOW - 5 * DAY, END, 'rep2')], { standings: { rep2: { failures: 0, benchedUntil: new Date(NOW) } } });
+
+		expect(peersOf(assigned(layout, ['rep1', 'rep2'], NOW))).toEqual(['rep1', 'rep2']);
+		expect(peersOf(assigned(layout, ['rep1', 'rep2'], NOW - 1))).toEqual(['rep1', undefined]);
+	});
+
+	test('reads a range that starts a day past the earliest as read ahead, and none such while the ranges read ahead wait', async function() {
+		freezeClock(new Date(NOW));
+		const earliest = NOW - 9 * DAY;
+		const ranges = [rangeOf(0, earliest, earliest + DAY, 'rep1'), rangeOf(1, earliest + FAR_AHEAD_MILLISECONDS, END, 'rep2')];
+		const reading = new Harness();
+		reading.layout = layoutOf(ranges);
+		const waiting = new Harness();
+		waiting.layout = layoutOf(ranges);
+		waiting.hasRoomAhead = false;
+
+		await reading.update(['rep1', 'rep2']);
+		await waiting.update(['rep1', 'rep2']);
+
+		expect(reading.tasks.map(function({ peer, task }): [string, string] {
+			return([peer, task.use]);
+		})).toEqual([['rep1', 'live'], ['rep2', 'ahead']]);
+		// Its own range waits, so it reads part of the earliest instead.
+		expect(waiting.tasks.map(function({ peer, task }): [string, string, boolean] {
+			return([peer, task.use, task.reached.getTime() < earliest + FAR_AHEAD_MILLISECONDS]);
+		})).toEqual([['rep1', 'live', true], ['rep2', 'live', true]]);
+	});
+
+	test('hands the latest range\'s peer the earliest only once every peer reads a range of its own, and leaves the ranges as they are with no peer', function() {
+		const ranges = [rangeOf(0, NOW - 9 * DAY, NOW - 6 * DAY, undefined), rangeOf(1, NOW - 6 * DAY, NOW - 3 * DAY, 'rep1'), rangeOf(2, NOW - 3 * DAY, END, undefined)];
+		const layout = layoutOf(ranges);
+
+		// A free peer takes the earliest on as the update runs.
+		expect(assigned(layout, ['rep1', 'rep2'], NOW).ranges).toEqual(ranges);
+		expect(assigned(layout, ['rep1'], NOW).ranges.map(function(range): [string | undefined, number] {
+			return([range.peer, range.reached.getTime()]);
+		})).toEqual([['rep1', NOW - 9 * DAY], [undefined, NOW - 6 * DAY - RANGE_OVERLAP_MILLISECONDS], [undefined, NOW - 3 * DAY]]);
+		expect(assigned(layoutOf([rangeOf(0, NOW - 9 * DAY, END, undefined)]), [], NOW).ranges).toEqual([rangeOf(0, NOW - 9 * DAY, END, undefined)]);
+	});
+
+	test('lays out what the node lacks between two peers', async function() {
+		freezeClock(new Date(NOW));
+		const harness = new Harness();
+		harness.progress.set('rep1', progressAt(NOW - 9 * DAY));
+
+		await harness.update(['rep1', 'rep2']);
+
+		expect(peersOf(harness.layout)).toEqual(['rep1', 'rep2']);
+	});
+
+	test('keeps the start of the next deep re-scan back on the first peer it has progress on when the one it had reached furthest on has none', async function() {
+		freezeClock(new Date(NOW));
+		const harness = new Harness();
+		const from = NOW - 9 * DAY;
+		harness.layout = layoutOf([rangeOf(0, from, END, 'rep2')], { from: new Date(from), deepScanPeer: 'rep1' });
+		harness.progress.set('rep2', progressAt(from, from - DAY));
+		harness.script = function(): Promise<RangeResult> {
+			return(Promise.resolve('completed'));
+		};
+
+		await harness.update(['rep1', 'rep2']);
+
+		expect(harness.progress.get('rep2')?.deepScanFrom).toEqual(new Date(from - DAY));
+		expect(harness.progress.has('rep1')).toBe(false);
+	});
+
+	test('counts a stopped pass neither for its peer nor against it, and reports it as failed', async function() {
+		freezeClock(new Date(NOW));
+		const harness = new Harness();
+		harness.layout = layoutOf([rangeOf(0, NOW - 9 * DAY, NOW - 5 * DAY, 'rep1'), rangeOf(1, NOW - 5 * DAY, END, 'rep2')], { standings: { rep2: { failures: 2, benchedUntil: undefined } } });
+		harness.script = function(peer): Promise<RangeResult> {
+			if (peer === 'rep2') {
+				return(Promise.resolve('stopped'));
+			}
+			return(Promise.resolve('bounded'));
+		};
+
+		expect(await harness.update(['rep1', 'rep2'])).toEqual(new Map([['rep1', 'bounded'], ['rep2', 'failed']]));
+
+		expect(harness.layout.standings['rep2']).toEqual({ failures: 2, benchedUntil: undefined });
+	});
+
+	test('takes on no other range once a pass that read its own ended as the update\'s time ran out', async function() {
+		freezeClock(new Date(NOW));
+		const harness = new Harness();
+		harness.layout = layoutOf([rangeOf(0, NOW - 9 * DAY, NOW - DAY, 'rep1'), rangeOf(1, NOW - DAY, END, 'rep2')]);
+		harness.script = function(peer): Promise<RangeResult> {
+			if (peer === 'rep2') {
+				advanceClock(MAX_PASS_MILLISECONDS);
+				return(Promise.resolve('completed'));
+			}
+			return(Promise.resolve('bounded'));
+		};
+
+		await harness.update(['rep1', 'rep2']);
+
+		expect(harness.tasks.map(function({ peer }): string {
+			return(peer);
+		})).toEqual(['rep1', 'rep2']);
+		expect(kindsOf(harness.events)).toEqual([]);
+	});
+
+	test('leaves its own range for another once it takes on one near the earliest, and keeps it when it takes on none', async function() {
+		freezeClock(new Date(NOW));
+		const earliest = NOW - 9 * DAY;
+		const taking = new Harness();
+		taking.hasRoomAhead = false;
+		taking.layout = layoutOf([rangeOf(0, earliest, earliest + 2 * RANGE_OVERLAP_MILLISECONDS, undefined), rangeOf(1, earliest + 2 * DAY, END, 'rep2'), rangeOf(2, earliest + DAY - HOUR, earliest + 2 * DAY, 'rep1')]);
+
+		await taking.update(['rep1', 'rep2']);
+
+		expect(taking.ranges().map(function([peer, reached]): [string | undefined, number] {
+			return([peer, reached]);
+		})).toEqual([['rep2', earliest], [undefined, earliest + 2 * DAY - RANGE_OVERLAP_MILLISECONDS], ['rep1', earliest + DAY - HOUR]]);
+
+		const keeping = new Harness();
+		keeping.hasRoomAhead = false;
+		keeping.layout = layoutOf([rangeOf(0, earliest, earliest + 2 * RANGE_OVERLAP_MILLISECONDS, 'rep1'), rangeOf(1, earliest + 2 * DAY, END, 'rep2')]);
+
+		await keeping.update(['rep1', 'rep2']);
+
+		expect(peersOf(keeping.layout)).toEqual(['rep1', 'rep2']);
+	});
+
+	test('splits a range with exactly enough left to split, at a pace that takes longer than an update, and the first of two that take as long', async function() {
+		freezeClock(new Date(NOW));
+		const reached = NOW - 9 * DAY;
+		const split = 4 * RANGE_OVERLAP_MILLISECONDS;
+		const exact = new Harness();
+		exact.layout = layoutOf([rangeOf(0, reached, reached + split, 'rep1')]);
+		await exact.update(['rep1', 'rep2']);
+		expect(kindsOf(exact.events)).toEqual(['split']);
+
+		// A quarter of a millisecond of reading per millisecond of history leaves an update's worth to read.
+		const quick = new Harness();
+		quick.layout = layoutOf([{ ...rangeOf(0, reached, reached + 4 * MAX_PASS_MILLISECONDS, 'rep1'), pace: { spent: 0, advanced: 3000 } }]);
+		await quick.update(['rep1', 'rep2']);
+		expect(kindsOf(quick.events)).toEqual([]);
+
+		const tied = new Harness();
+		tied.layout = layoutOf([rangeOf(0, reached, reached + DAY, 'rep1'), rangeOf(1, reached + 2 * DAY, reached + 3 * DAY, 'rep2')]);
+		await tied.update(['rep1', 'rep2', 'rep3']);
+		expect(tied.events).toMatchObject([{ kind: 'split', left: { id: 0 } }]);
+	});
+
+	test('records the pace of a pass that read its range for as long as it could, and none of one that failed', async function() {
+		freezeClock(new Date(NOW));
+		const reached = NOW - 9 * DAY;
+		const harness = new Harness();
+		harness.layout = layoutOf([rangeOf(0, reached, NOW - 5 * DAY, 'rep1'), rangeOf(1, NOW - 5 * DAY, END, 'rep2')]);
+		harness.script = async function(peer, task): Promise<RangeResult> {
+			advanceClock(10_000);
+			await task.moved(new Date(task.reached.getTime() + 5000));
+			if (peer === 'rep2') {
+				return('failed');
+			}
+			return('bounded');
+		};
+
+		await harness.update(['rep1', 'rep2']);
+
+		expect(harness.layout.ranges.map(function(range): unknown {
+			return(range.pace);
+		})).toEqual([{ spent: 20_000, advanced: 5000 }, { spent: 0, advanced: 0 }]);
+	});
+
+	test('splits a range at the pace of the pass under way over it as well', async function() {
+		freezeClock(new Date(NOW));
+		const reached = NOW - 9 * DAY;
+		const harness = new Harness();
+		harness.layout = layoutOf([rangeOf(0, reached, NOW - DAY, 'rep1'), rangeOf(1, NOW - DAY, END, 'rep2')]);
+		let release: (() => void) | undefined;
+		const released = new Promise<void>(function(resolve) {
+			release = resolve;
+		});
+		harness.script = async function(peer, task): Promise<RangeResult> {
+			if (peer === 'rep1') {
+				advanceClock(MINUTE);
+				await task.moved(new Date(task.reached.getTime() + 6000));
+				await released;
+				return('bounded');
+			}
+			await turns(5);
+			return('completed');
+		};
+
+		const update = harness.update(['rep1', 'rep2']);
+		await turns(30);
+		release?.();
+		await update;
+
+		expect(harness.events[0]).toMatchObject({ kind: 'split', peer: 'rep2', taken: { pace: { spent: MINUTE, advanced: 6000 } } });
+	});
+
+	test('moves the peers on from a layout kept with every range read, before it lays out any other', async function() {
+		freezeClock(new Date(NOW));
+		const harness = new Harness();
+		const from = NOW - 9 * DAY;
+		harness.layout = layoutOf([], { from: new Date(from), deepScanPeer: 'rep1' });
+		harness.progress.set('rep1', progressAt(from, from - DAY));
+
+		expect(await harness.update(['rep1', 'rep2'])).toBeUndefined();
+
+		expect(harness.layout).toBeUndefined();
+		expect(harness.progress.get('rep1')).toMatchObject({ reached: new Date(END - RANGE_OVERLAP_MILLISECONDS), deepScanFrom: new Date(from - DAY) });
+		expect(kindsOf(harness.events)).toEqual(['read']);
 	});
 });

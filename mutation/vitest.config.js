@@ -15,6 +15,7 @@ export default defineConfig({
 		globalSetup: suite.test.globalSetup,
 		maxWorkers: 1,
 		include: [...selectedModule().tests],
+		setupFiles: ['mutation/select-cases.js'],
 		sequence: { sequencer: SmallestFirst }
 	}
 });

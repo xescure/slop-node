@@ -377,3 +377,64 @@ keeps, or the text of a line it logs.
 - src/node/bootstrap.ts:728:213-728:222 StringLiteral "\"\"" harmless: only the text of the log line of a split off a range no peer read changes.
 - src/node/bootstrap.ts:736:4-737:24 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of RangeEvent is unreachable.
 - src/node/bootstrap.ts:737:5-737:24 CallExpression ";" equivalent: the default of a switch that has handled every kind of RangeEvent is unreachable.
+
+## bootstrap-pipeline
+
+Harmless here means the node ends up holding, queuing and staging the same
+staples, in an order its votes allow: what changes is when, how many rounds
+or requests it takes, how much memory it keeps, or a count it logs.
+
+- src/node/bootstrap-ranges.ts:221:153-221:157 BooleanLiteral "false" equivalent: with the front at infinity every range runs, whether or not the ranges read ahead do.
+- src/node/bootstrap-ranges.ts:235:15-235:32 ArithmeticOperator "ranges.length + 1" equivalent: the loop then first steps over two indices past the end, whose ranges are undefined and so have no peer, to the same latest range.
+- src/node/bootstrap-ranges.ts:236:9-236:19 EqualityOperator "latest >= 0" equivalent: the loop stops at the first range then, which has no peer when it runs, and the handover needs a latest past the first either way.
+- src/node/bootstrap-ranges.ts:236:23-236:43 OptionalChaining "ranges[latest].peer" equivalent: the loop reads only indices of ranges that exist.
+- src/node/bootstrap-ranges.ts:240:6-240:25 ConditionalExpression "true" equivalent: a layout with no range is moved on from before any schedule runs, so the first range always exists.
+- src/node/bootstrap-ranges.ts:240:79-240:98 ConditionalExpression "true" equivalent: the latest index is that of a range that exists.
+- src/node/bootstrap-ranges.ts:273:7-273:31 ConditionalExpression "true" equivalent: the last range's end computed as the beginning plus every share is the end itself: dividing an integer below 2^53 by a count of peers and multiplying it back rounds to the same integer (checked over two million layouts), and were it a millisecond short, the peers move on to the overlap before the layout's end, which reads it again.
+- src/node/bootstrap-ranges.ts:273:7-273:31 EqualityOperator "index <= peers.length - 1" equivalent: the last range's end computed as the beginning plus every share is the end itself: dividing an integer below 2^53 by a count of peers and multiplying it back rounds to the same integer (checked over two million layouts), and were it a millisecond short, the peers move on to the overlap before the layout's end, which reads it again.
+- src/node/bootstrap-ranges.ts:273:15-273:31 ArithmeticOperator "peers.length + 1" equivalent: the last range's end computed as the beginning plus every share is the end itself: dividing an integer below 2^53 by a count of peers and multiplying it back rounds to the same integer (checked over two million layouts), and were it a millisecond short, the peers move on to the overlap before the layout's end, which reads it again.
+- src/node/bootstrap-ranges.ts:325:3-326:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled every RangeResult is unreachable.
+- src/node/bootstrap-ranges.ts:339:3-340:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled every RangeResult is unreachable.
+- src/node/bootstrap-ranges.ts:410:20-410:24 BooleanLiteral "false" equivalent: a schedule runs as soon as it is built, so no time has passed for its first claim either way.
+- src/node/bootstrap-ranges.ts:546:3-546:28 CallExpression ";" harmless: a pass that ended is then counted as under way when the range it read is weighed for a split later in the same update, which only changes which range a free peer splits.
+- src/node/bootstrap-ranges.ts:549:7-549:29 ConditionalExpression "false" equivalent: a range whose pass completed is dropped from the layout as the pass settles, so the pace recorded for it is never read.
+- src/node/bootstrap-ranges.ts:549:18-549:29 StringLiteral "\"\"" equivalent: a range whose pass completed is dropped from the layout as the pass settles, so the pace recorded for it is never read.
+- src/node/bootstrap-retry.ts:164:3-165:31 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of Awaited is unreachable.
+- src/node/bootstrap-retry.ts:165:4-165:31 CallExpression ";" equivalent: the default of a switch that has handled every kind of Awaited is unreachable.
+- src/node/bootstrap-retry.ts:259:4-260:30 ConditionalExpression "default:" equivalent: the default of a switch that has handled every QueueUse is unreachable.
+- src/node/bootstrap-retry.ts:319:4-320:34 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of Offered is unreachable.
+- src/node/bootstrap-retry.ts:369:7-369:25 ConditionalExpression "true" equivalent: the ledger answers whether the weight of no set of voters suffices with no answer, so nothing more is due.
+- src/node/bootstrap-retry.ts:369:7-369:25 EqualityOperator "weighed.length >= 0" equivalent: the ledger answers whether the weight of no set of voters suffices with no answer, so nothing more is due.
+- src/node/bootstrap-retry.ts:405:5-406:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of Offered is unreachable.
+- src/node/bootstrap-retry.ts:416:53-416:55 ArrayDeclaration "[\"Stryker was here\"]" equivalent: the placeholder then marks as landed a key no entry has, which #due never finds.
+- src/node/bootstrap-retry.ts:454:7-454:28 ConditionalExpression "false" equivalent: #put is called only for an entry the queue holds, by retries that run one at a time, so the entry is always found.
+- src/node/bootstrap-retry.ts:454:30-456:4 BlockStatement "{}" equivalent: #put is called only for an entry the queue holds, by retries that run one at a time, so the entry is always found.
+- src/node/bootstrap-retry.ts:464:7-464:28 ConditionalExpression "false" equivalent: #remove is called only for an entry the queue holds, by retries that run one at a time, so the entry is always found.
+- src/node/bootstrap-retry.ts:464:30-466:4 BlockStatement "{}" equivalent: #remove is called only for an entry the queue holds, by retries that run one at a time, so the entry is always found.
+- src/node/bootstrap-retry.ts:469:3-469:28 CallExpression ";" equivalent: a staple leaves the queue only once the ledger holds its blocks, so add never queues it again, and the key left marked as landed names no entry.
+- src/node/bootstrap-retry.ts:494:7-494:40 ConditionalExpression "true" harmless: the watchers of a staple that left the queue are kept: a landing then marks its key, which names no entry, so only memory is spent, at most a key per account per staple ever queued.
+- src/node/bootstrap-retry.ts:494:30-494:40 StringLiteral "\"\"" harmless: the watchers of a staple that left the queue are kept: a landing then marks its key, which names no entry, so only memory is spent, at most a key per account per staple ever queued.
+- src/node/bootstrap-retry.ts:497:49-503:4 BlockStatement "{}" harmless: the watchers of a staple that left the queue are kept: a landing then marks its key, which names no entry, so only memory is spent, at most a key per account per staple ever queued.
+- src/node/bootstrap-retry.ts:499:4-499:20 OptionalChaining "watchers.delete" equivalent: an entry that awaits accounts was tracked, which made a set of watchers for each of them.
+- src/node/bootstrap-retry.ts:500:8-500:28 ConditionalExpression "false" harmless: an account's empty set of watchers is kept, which costs memory only: a landing on it marks nothing.
+- src/node/bootstrap-retry.ts:500:8-500:22 OptionalChaining "watchers.size" equivalent: an entry that awaits accounts was tracked, which made a set of watchers for each of them.
+- src/node/bootstrap-retry.ts:500:30-502:5 BlockStatement "{}" harmless: an account's empty set of watchers is kept, which costs memory only: a landing on it marks nothing.
+- src/node/bootstrap-retry.ts:501:5-501:36 CallExpression ";" harmless: an account's empty set of watchers is kept, which costs memory only: a landing on it marks nothing.
+- src/node/bootstrap-retry.ts:521:8-521:33 ConditionalExpression "true" equivalent: nothing sets the load kept while it is under way, so a load that fails is always the one kept.
+- src/node/bootstrap-stage.ts:225:8-225:31 ConditionalExpression "true" equivalent: the counts kept after a read are only ever changes chained on that read, which fail with it, so a failed read is always the one kept or its successors fail too; a read after clearing them reads the stage again.
+- src/node/bootstrap-stage.ts:289:34-289:49 ObjectLiteral "{}" equivalent: the flag is read as false until the work ends either way, undefined being falsy.
+- src/node/bootstrap-stage.ts:310:22-310:54 ConditionalExpression "true" equivalent: the one case it differs in, the work done with staples left and the queue not full nor the time up, continued the loop on the line before.
+- src/node/bootstrap-stage.ts:316:29-316:55 ArrayDeclaration "[]" harmless: a failing adding then rejects before the batch read ahead is dropped and the removal under way ends; the removal still ends, and the caller hears the error that failed the adding.
+- src/node/bootstrap-stage.ts:345:30-345:79 EqualityOperator "this.#stagedSinceAhead >= last.firstVote.getTime()" harmless: a staple staged meanwhile whose earliest vote ties that of the batch's last is added in the batch after rather than in key order among staples of that moment, which depend on none of each other but by the slop a refusal and its retry cover.
+- src/node/bootstrap-stage.ts:351:73-351:91 ArrayDeclaration "[]" harmless: a staple still leaving the stage may be read again, found held or queued, and counted as leaving twice in the log line's count.
+- src/node/bootstrap-stage.ts:379:30-381:4 BlockStatement "{}" harmless: a staple still leaving the stage may be read again, found held or queued, and counted as leaving twice in the log line's count.
+- src/node/bootstrap-stage.ts:380:4-380:27 CallExpression ";" harmless: a staple still leaving the stage may be read again, found held or queued, and counted as leaving twice in the log line's count.
+- src/node/bootstrap-stage.ts:395:13-399:4 BlockStatement "{}" equivalent: a key left in the set names a staple the stage no longer holds, which no read can return.
+- src/node/bootstrap-stage.ts:396:28-398:5 BlockStatement "{}" equivalent: a key left in the set names a staple the stage no longer holds, which no read can return.
+- src/node/bootstrap-stage.ts:397:5-397:31 CallExpression ";" equivalent: a key left in the set names a staple the stage no longer holds, which no read can return.
+- src/node/bootstrap-stage.ts:407:15-407:20 BooleanLiteral "true" harmless: the queue is then offered again after a round that added nothing, which offers only the staples due anyway.
+- src/node/bootstrap-stage.ts:420:12-420:16 BooleanLiteral "false" harmless: a queue with no room then ends the adding a round later, after the batch is read again and refused again.
+- src/node/bootstrap-stage.ts:423:14-423:33 ConditionalExpression "true" harmless: the queue is then offered again after a round that added nothing, which offers only the staples due anyway.
+- src/node/bootstrap-stage.ts:427:7-427:26 ConditionalExpression "true" equivalent: with no batch read ahead, the batch to add next is undefined either way.
+- src/node/bootstrap-stage.ts:433:7-433:20 ConditionalExpression "true" harmless: the queue is then offered again after a round that added nothing, which offers only the staples due anyway.
+- src/node/bootstrap-stage.ts:436:40-436:61 ConditionalExpression "false" harmless: a queue with no room then ends the adding a round later, after the batch is read again and refused again.

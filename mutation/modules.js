@@ -1,11 +1,32 @@
 // @ts-check
 
 /**
+ * The cases of the bootstrap simulation the pipeline is measured by: those
+ * that read the history in ranges, and those of the retry queue, whose
+ * cases are each a second or two. A mutant every case reaches and none
+ * kills runs every case it reaches, and the whole simulation takes five
+ * minutes, which would make a full run take days; one pass over a peer is
+ * measured by its own unit tests (src/node/bootstrap-pass.test.ts).
+ */
+const PIPELINE_SIMULATION_CASES = {
+	'src/node/bootstrap-simulation.test.ts': [
+		'reading the history it lacks in ranges, one per peer, while far behind',
+		'offers a staple refused for want of weight again only once its voters have the weight, however many pages come before the staple that gives it',
+		'offers a staple refused for a balance again once a staple lands on an account it names, long before its wait has passed',
+		'offers a staple that stays refused again after a wait that doubles with each refusal, up to the longest, however often passes run',
+		'fails a pass rather than move past a refused staple its full queue has no room for, and moves on once the queue drains',
+		're-reads the peer, once a full queue stops every pass, for a staple a pass missed that the queued staples need'
+	]
+};
+
+/**
  * The modules "make mutation MODULE=<name>" mutates, each with the tests that
  * stand for its contract. A module is measured by its own tests, so a mutant
  * counts as killed only when a test of that contract notices it. A module's
- * ignorers, from mutation/ignorers.js, name code its score leaves out.
- * @type {Readonly<Record<string, { readonly mutate: readonly string[]; readonly tests: readonly string[]; readonly ignorers: readonly string[] }>>}
+ * ignorers, from mutation/ignorers.js, name code its score leaves out, and
+ * its selected cases, by test file and the name of a case or of a block of
+ * cases, the only cases of those files its runs run (mutation/select-cases.js).
+ * @type {Readonly<Record<string, { readonly mutate: readonly string[]; readonly tests: readonly string[]; readonly ignorers: readonly string[]; readonly selectedCases: Readonly<Record<string, readonly string[]>> }>>}
  */
 const MODULES = {
 	storage: {
@@ -17,13 +38,15 @@ const MODULES = {
 			'src/ledger/storage/memory/*.ts'
 		],
 		tests: ['src/ledger/storage/**/*.test.ts'],
-		ignorers: []
+		ignorers: [],
+		selectedCases: {}
 	},
 	postgres: {
 		mutate: ['src/ledger/storage/postgres/*.ts', '!src/ledger/storage/postgres/*.test.ts'],
 		tests: ['src/ledger/storage/drivers.test.ts', 'src/ledger/storage/postgres/*.test.ts'],
 		// The SQL is measured by the suite and the corpus, not by mutating its text.
-		ignorers: ['postgres-sql']
+		ignorers: ['postgres-sql'],
+		selectedCases: {}
 	},
 	/*
 	 * The bootstrap is mutated in three modules, so that a mutant runs only
@@ -49,7 +72,14 @@ const MODULES = {
 			'src/node/bootstrap-pacing.test.ts',
 			'src/node/bootstrap-update.test.ts'
 		],
-		ignorers: []
+		ignorers: [],
+		selectedCases: {}
+	},
+	'bootstrap-pipeline': {
+		mutate: ['src/node/bootstrap-ranges.ts', 'src/node/bootstrap-stage.ts', 'src/node/bootstrap-retry.ts'],
+		tests: ['src/node/bootstrap-ranges.test.ts', 'src/node/bootstrap-stage.test.ts', 'src/node/bootstrap-retry.test.ts', 'src/node/bootstrap-simulation.test.ts'],
+		ignorers: [],
+		selectedCases: PIPELINE_SIMULATION_CASES
 	}
 };
 

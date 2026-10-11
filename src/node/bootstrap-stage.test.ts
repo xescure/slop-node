@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { MemoryBootstrapStage } from '../ledger/storage/stage.js';
 import type { BootstrapStage } from '../ledger/storage/stage.js';
 import { freezeClock } from '../testing/network.js';
+import { captureUnhandledRejections } from '../testing/unhandled-rejections.js';
 import { decodeSimulatedStaple, SIMULATED_STAPLE_BYTES, SimulatedNode, SimulatedPeer, SimulatedRetryStore, simulatedRetries } from '../testing/simulated-peer.js';
 import type { RefusalReport, SimulatedStaple } from '../testing/simulated-peer.js';
 import type { RangeLayout } from './bootstrap-ranges.js';
@@ -395,4 +396,396 @@ describe('staging what the ranges read', function() {
 		expect(applyFrontier(layoutReached([]))).toBe(8.64e15);
 		expect(applyFrontier(undefined)).toBe(8.64e15);
 	});
+
+	test('refuses a staple from a range read ahead at its bound, naming the bound and the staple', async function() {
+		const [first, second] = staples([[], []]);
+		if (first === undefined || second === undefined) {
+			throw(new Error('no staples'));
+		}
+		const harness = new Harness({ bound: 1 });
+		await harness.staging.take(first, 'live');
+
+		const refused = await harness.staging.take(second, 'ahead').then(function(): never {
+			throw(new Error('expected the stage to be full'));
+		}, function(error: unknown): unknown {
+			return(error);
+		});
+
+		expect(refused).toBeInstanceOf(StageFull);
+		expect(refused).toMatchObject({ name: 'StageFull', message: `the bootstrap stage held its bound of 1 bytes when staple ${second.blocksHash.toString()} came from a range read ahead` });
+	});
+
+	test('keeps its counts as staples are staged and leave, and reads them again after a read that failed', async function() {
+		const list = staples([[], [], []]);
+		const harness = new Harness();
+		expect(await harness.staging.isEmpty()).toBe(true);
+		for (const staple of list) {
+			await harness.staging.take(staple, 'live');
+		}
+		expect(await harness.staging.isEmpty()).toBe(false);
+		expect(await harness.staging.counts()).toEqual({ staples: 3, bytes: 3 * SIMULATED_STAPLE_BYTES });
+
+		await harness.addBefore(8.64e15);
+
+		expect(await harness.staging.counts()).toEqual({ staples: 0, bytes: 0 });
+		const stage = new MemoryBootstrapStage();
+		const counts = vi.spyOn(stage, 'counts').mockRejectedValueOnce(new Error('the stage failed'));
+		const staging = new Staging(stage, harness.retries, { holds: function(): Promise<boolean> {
+			return(Promise.resolve(false));
+		}, decode: decodeSimulatedStaple });
+		await expect(staging.counts()).rejects.toThrow('the stage failed');
+		expect(await staging.counts()).toEqual({ staples: 0, bytes: 0 });
+		expect(counts).toHaveBeenCalledTimes(2);
+	});
+
+	test('asks the stage for no staple to name when none is wanted', async function() {
+		const harness = new Harness();
+		await harness.staging.take(at(staples([[]]), 0), 'live');
+		const lastFrom = vi.spyOn(harness.stage, 'lastFrom');
+
+		expect(await harness.staging.named(new Date(0), 0)).toEqual([]);
+		expect(await harness.staging.named(new Date(0), -3)).toEqual([]);
+		expect(lastFrom).not.toHaveBeenCalled();
+	});
+
+	test('adds a staple staged while the work runs, and one the frontier moved past, without waiting for the work to end', async function() {
+		const [first, second] = staples([[], [0]]);
+		if (first === undefined || second === undefined) {
+			throw(new Error('no staples'));
+		}
+		const harness = new Harness();
+		// Between the two staples' votes.
+		let frontier = NOW + 1;
+		let finish: (() => void) | undefined;
+		const work = new Promise<void>(function(resolve) {
+			finish = resolve;
+		});
+		const adding = harness.staging.alongside(work, function(): number {
+			return(frontier);
+		}, Number.POSITIVE_INFINITY, function(): boolean {
+			return(false);
+		});
+
+		await harness.staging.take(first, 'live');
+		await turnsOfTheLoop();
+		expect(harness.node.holds(first)).toBe(true);
+		await harness.staging.take(second, 'live');
+		await turnsOfTheLoop();
+		expect(harness.node.holds(second)).toBe(false);
+
+		// Only the move tells the node adding that the frontier is past it.
+		frontier = 8.64e15;
+		await turnsOfTheLoop();
+		expect(harness.node.holds(second)).toBe(false);
+		harness.staging.moved();
+		await turnsOfTheLoop();
+		expect(harness.node.holds(second)).toBe(true);
+
+		finish?.();
+		expect((await adding).applied).toEqual({ left: 2, backlog: false });
+	});
+
+	test('adds nothing once stopped, and says nothing is left when nothing was staged', async function() {
+		const list = staples([[], [], []]);
+		const harness = new Harness();
+		for (const staple of list) {
+			await harness.staging.take(staple, 'live');
+		}
+		let offered = 0;
+		const offer = vi.spyOn(harness.node, 'offer');
+		offer.mockImplementation(function(...args: Parameters<SimulatedNode['offer']>): ReturnType<SimulatedNode['offer']> {
+			offered++;
+			offer.mockRestore();
+			const result = harness.node.offer(...args);
+			offer.mockImplementation(function(...again: Parameters<SimulatedNode['offer']>): ReturnType<SimulatedNode['offer']> {
+				offered++;
+				return(SimulatedNode.prototype.offer.apply(harness.node, again));
+			});
+			return(result);
+		});
+
+		const { applied } = await harness.staging.alongside(Promise.resolve(), function(): number {
+			return(8.64e15);
+		}, Number.POSITIVE_INFINITY, function(): boolean {
+			return(offered > 0);
+		});
+
+		expect(applied).toEqual({ left: 1, backlog: true });
+		expect(await harness.stagedIDs()).toEqual([1, 2]);
+
+		const empty = new Harness();
+		expect((await empty.staging.alongside(Promise.resolve(), function(): number {
+			return(8.64e15);
+		}, Number.POSITIVE_INFINITY, function(): boolean {
+			return(true);
+		})).applied).toEqual({ left: 0, backlog: false });
+	});
+
+	test('stops adding once the work is done and its time is up, and says what is left', async function() {
+		freezeClock(new Date(NOW));
+		const list = staples(Array.from({ length: 100 }, function(): readonly number[] {
+			return([]);
+		}));
+		const harness = new Harness();
+		for (const staple of list) {
+			await harness.staging.take(staple, 'live');
+		}
+
+		const { applied } = await harness.staging.alongside(Promise.resolve(), function(): number {
+			return(8.64e15);
+		}, NOW, function(): boolean {
+			return(false);
+		});
+
+		expect(applied).toEqual({ left: 64, backlog: true });
+		expect((await harness.stagedIDs()).length).toBe(36);
+	});
+
+	test('waits for the removal of what left the stage before it ends', async function() {
+		const list = staples([[], []]);
+		const node = new SimulatedNode();
+		const stage = new MemoryBootstrapStage();
+		const slowRemoval: BootstrapStage = {
+			put: function(staged) {
+				return(stage.put(staged));
+			},
+			holds: function(key) {
+				return(stage.holds(key));
+			},
+			firstBefore: function(moment, count, leftOut) {
+				return(stage.firstBefore(moment, count, leftOut));
+			},
+			lastFrom: function(moment, count) {
+				return(stage.lastFrom(moment, count));
+			},
+			remove: async function(keys) {
+				await turnsOfTheLoop();
+				return(await stage.remove(keys));
+			},
+			counts: function() {
+				return(stage.counts());
+			}
+		};
+		const staging = new Staging(slowRemoval, simulatedRetries(node, new SimulatedRetryStore(), []), {
+			holds: function(staple): Promise<boolean> {
+				return(Promise.resolve(node.holds(staple)));
+			},
+			decode: decodeSimulatedStaple
+		});
+		for (const staple of list) {
+			await staging.take(staple, 'live');
+		}
+		freezeClock(new Date(NOW));
+
+		// Its time is up, so it ends after the one batch, while the batch's removal runs.
+		await staging.alongside(Promise.resolve(), function(): number {
+			return(8.64e15);
+		}, NOW, function(): boolean {
+			return(false);
+		});
+
+		expect(await stage.counts()).toEqual({ staples: 0, bytes: 0 });
+	});
+
+	test('fails, once it stops adding, when a staple cannot be added for a reason other than a full queue', async function() {
+		const list = staples([[], []]);
+		const node = new SimulatedNode();
+		const staging = new Staging(new MemoryBootstrapStage(), simulatedRetries(node, new SimulatedRetryStore(), []), {
+			holds: function(staple): Promise<boolean> {
+				return(Promise.resolve(node.holds(staple)));
+			},
+			decode: function(): SimulatedStaple {
+				throw(new Error('the staged bytes are no staple'));
+			}
+		});
+		for (const staple of list) {
+			await staging.take(staple, 'live');
+		}
+
+		await expect(staging.alongside(Promise.resolve(), function(): number {
+			return(8.64e15);
+		}, Number.POSITIVE_INFINITY, function(): boolean {
+			return(false);
+		})).rejects.toThrow('the staged bytes are no staple');
+	});
+
+	test('adds of the batch read ahead only what lies before a frontier that moved back meanwhile', async function() {
+		const list = staples(Array.from({ length: 100 }, function(): readonly number[] {
+			return([]);
+		}));
+		const harness = new Harness();
+		for (const staple of list) {
+			await harness.staging.take(staple, 'live');
+		}
+		const firstVoteOf = function(index: number): number {
+			return(Math.min(...at(list, index).votes.map(function(vote): number {
+				return(vote.validityFrom.getTime());
+			})));
+		};
+		let frontier = 8.64e15;
+		const offer = vi.spyOn(harness.node, 'offer').mockImplementation(function(...args: Parameters<SimulatedNode['offer']>): ReturnType<SimulatedNode['offer']> {
+			// As a range is handed over the overlap before where it reached, the frontier moves back.
+			if (args[0].id === 10) {
+				frontier = firstVoteOf(70);
+			}
+			return(SimulatedNode.prototype.offer.apply(harness.node, args));
+		});
+
+		const { applied } = await harness.staging.alongside(Promise.resolve(), function(): number {
+			return(frontier);
+		}, Number.POSITIVE_INFINITY, function(): boolean {
+			return(false);
+		});
+
+		expect(applied.left).toBe(70);
+		expect(await harness.stagedIDs()).toEqual(Array.from({ length: 30 }, function(_ignored, index): number {
+			return(70 + index);
+		}));
+		offer.mockRestore();
+	});
+
+	test('starts again from the earliest staged staple after a queue that had no room made some, rather than add the batch read ahead', async function() {
+		// A queued staple whose voters gain their weight with genesis frees, once offered again, the one place a node adding has; the staged staple after the first five needs it, and each after that the one before.
+		const list = staples([[], [0], ...Array.from({ length: 100 }, function(_ignored, index): readonly number[] {
+			const id = index + 2;
+			if (id < 7) {
+				return([0]);
+			}
+			if (id === 7) {
+				return([1]);
+			}
+			return([id - 1]);
+		})]);
+		const harness = new Harness({ bounds: { staples: 2, bytes: 1024 * 1024 } });
+		expect(await harness.retries.add(at(list, 1), 'deep')).toBe('queued');
+		await harness.node.add(at(list, 0));
+		for (const staple of list.slice(2)) {
+			await harness.staging.take(staple, 'live');
+		}
+		const offered: number[] = [];
+		vi.spyOn(harness.node, 'offer').mockImplementation(function(...args: Parameters<SimulatedNode['offer']>): ReturnType<SimulatedNode['offer']> {
+			offered.push(args[0].id);
+			return(SimulatedNode.prototype.offer.apply(harness.node, args));
+		});
+
+		await harness.addBefore(8.64e15);
+
+		expect(offered.filter(function(id): boolean {
+			return(id >= 2);
+		})).toEqual([...offered.filter(function(id): boolean {
+			return(id >= 2);
+		})].sort(function(left, right): number {
+			return(left - right);
+		}));
+		expect(harness.node.size).toBe(list.length);
+	});
 });
+
+describe('staging what the ranges read, while something fails', function() {
+	/** A stage whose reads and removals fail as the test says, and whose node's offers each take turns of the loop, as a ledger's do. */
+	function failingHarness(fails: { readonly read?: number; readonly remove?: number }): { readonly staging: Staging<SimulatedStaple>; readonly stage: MemoryBootstrapStage; readonly node: SimulatedNode } {
+		const node = new SimulatedNode();
+		const stage = new MemoryBootstrapStage();
+		let reads = 0;
+		let removals = 0;
+		const failing: BootstrapStage = {
+			put: function(staged) {
+				return(stage.put(staged));
+			},
+			holds: function(key) {
+				return(stage.holds(key));
+			},
+			firstBefore: function(moment, count, leftOut) {
+				reads++;
+				if (reads === fails.read) {
+					return(Promise.reject(new Error('the read failed')));
+				}
+				return(stage.firstBefore(moment, count, leftOut));
+			},
+			lastFrom: function(moment, count) {
+				return(stage.lastFrom(moment, count));
+			},
+			remove: function(keys) {
+				removals++;
+				if (removals === fails.remove) {
+					return(Promise.reject(new Error('the removal failed')));
+				}
+				return(stage.remove(keys));
+			},
+			counts: function() {
+				return(stage.counts());
+			}
+		};
+		vi.spyOn(node, 'offer').mockImplementation(async function(...args: Parameters<SimulatedNode['offer']>): ReturnType<SimulatedNode['offer']> {
+			await turnsOfTheLoop();
+			return(await SimulatedNode.prototype.offer.apply(node, args));
+		});
+		const staging = new Staging(failing, simulatedRetries(node, new SimulatedRetryStore(), []), {
+			holds: function(staple): Promise<boolean> {
+				return(Promise.resolve(node.holds(staple)));
+			},
+			decode: decodeSimulatedStaple
+		});
+		return({ staging, stage, node });
+	}
+
+	async function stageAll(staging: Staging<SimulatedStaple>, count: number): Promise<void> {
+		for (const staple of staples(Array.from({ length: count }, function(): readonly number[] {
+			return([]);
+		}))) {
+			await staging.take(staple, 'live');
+		}
+	}
+
+	test('hears of a work that failed while a staple was being added only once it stops adding, leaving no rejection unhandled', async function() {
+		const unhandled = captureUnhandledRejections();
+		const { staging } = failingHarness({});
+		await stageAll(staging, 2);
+
+		await expect(staging.alongside(Promise.reject(new Error('the peer failed')), function(): number {
+			return(8.64e15);
+		}, Number.POSITIVE_INFINITY, function(): boolean {
+			return(false);
+		})).rejects.toThrow('the peer failed');
+
+		expect(unhandled.reasons).toEqual([]);
+	});
+
+	test('drops a batch read ahead that failed once it stops before it, leaving no rejection unhandled', async function() {
+		const unhandled = captureUnhandledRejections();
+		const { staging, node } = failingHarness({ read: 2 });
+		await stageAll(staging, 100);
+
+		const { applied } = await staging.alongside(Promise.resolve(), function(): number {
+			return(8.64e15);
+		}, Number.POSITIVE_INFINITY, function(): boolean {
+			return(node.size > 0);
+		});
+
+		expect(applied.left).toBe(1);
+		expect(unhandled.reasons).toEqual([]);
+	});
+
+	test('fails with a removal that failed while the next batch was added, leaving no rejection unhandled', async function() {
+		const unhandled = captureUnhandledRejections();
+		const { staging, stage } = failingHarness({ remove: 1 });
+		await stageAll(staging, 100);
+
+		await expect(staging.alongside(Promise.resolve(), function(): number {
+			return(8.64e15);
+		}, Number.POSITIVE_INFINITY, function(): boolean {
+			return(false);
+		})).rejects.toThrow('the removal failed');
+
+		expect(unhandled.reasons).toEqual([]);
+		// The staples whose removal failed stay staged, to be found held when offered again.
+		expect((await stage.counts()).staples).toBeGreaterThan(0);
+	});
+});
+
+/** Lets every promise the staging chained settle, as a few turns of the event loop do. */
+async function turnsOfTheLoop(): Promise<void> {
+	for (let turn = 0; turn < 10; turn++) {
+		await new Promise(setImmediate);
+	}
+}
