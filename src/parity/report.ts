@@ -200,7 +200,6 @@ export type ShadowVotesSignal = {
 		readonly complete: boolean;
 		readonly scoped: ShadowWindowSummary;
 		readonly informational: ShadowWindowSummary & { readonly every: number };
-		readonly refusedForWeight: number;
 		readonly unapplied: number;
 		readonly cost: ShadowRunCost;
 	} | null;
@@ -1018,7 +1017,6 @@ function shadowVotesSignalOf(records: readonly ShadowRunRecord[]): ShadowVotesSi
 		complete: latest.complete,
 		scoped: windowSummaryOf(latest.scoped),
 		informational: { ...windowSummaryOf(latest.informational), every: latest.informationalEvery },
-		refusedForWeight: latest.refusedForWeight,
 		unapplied: latest.unapplied.length,
 		cost: latest.cost
 	};

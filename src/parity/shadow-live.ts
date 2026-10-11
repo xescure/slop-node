@@ -51,7 +51,11 @@ export type ShadowRun = {
 	readonly batchStaples?: number;
 	/** Told after each batch where the run stands. */
 	readonly progress?: (state: ShadowRunState) => void;
-	/** Ends the run after the batch it is in. */
+	/**
+	 * Ends the run after the batch it is in, saved; but a stop that comes
+	 * while a staple of the batch applies the staples it released cuts the
+	 * batch short there, unsaved, and the run resumes from its last save.
+	 */
 	readonly stopped?: AbortSignal;
 };
 
@@ -77,7 +81,6 @@ export function freshShadowRun(scope: ShadowScope, informationalEvery: number, b
 		reached: { sequence: base.sequence, blocksHash: base.blocksHash },
 		scoped: EMPTY_TALLY,
 		informational: EMPTY_TALLY,
-		refusedForWeight: 0,
 		unapplied: []
 	});
 }
@@ -359,17 +362,18 @@ export async function runShadowVotes(run: ShadowRun): Promise<ShadowRunState> {
 		return([staple.blocksHash, staple.why] as const);
 	}));
 	const reloaded = await run.source.staplesOf([...unappliedBefore.keys()]);
-	let deferred = reloaded.filter(function(held): boolean {
+	const adds = new Adds(node, run.storage, reloaded.filter(function(held): boolean {
 		return(unappliedBefore.get(keyOf(held.staple)) === 'deferred');
-	});
-	const adds = new Adds(node, run.storage, deferred, run.stopped);
+	}), run.stopped);
 	/*
 	 * Staples an earlier build left refused for want of voting weight are
-	 * applied as the follower's ledger accepted them, before anything else.
+	 * applied as the follower's ledger accepted them, before anything else;
+	 * one the ledger defers is listed with the deferred staples from then on.
 	 */
 	const refusedBefore = reloaded.filter(function(held): boolean {
 		return(unappliedBefore.get(keyOf(held.staple)) === 'voting-weight');
 	});
+	let deferred = reloaded;
 	let state = run.start;
 	/*
 	 * A stop may have cut a batch short after some of its staples were voted
@@ -394,13 +398,19 @@ export async function runShadowVotes(run: ShadowRun): Promise<ShadowRunState> {
 				 * A stop or a kill may have cut the batch short after an
 				 * applied staple released staples deferred before it in the
 				 * batch, and before the collections applied them. Applied
-				 * now, as the run cut short would have, they are held, their
-				 * recorded votes counted.
+				 * now, as the run cut short would have, at the moment of the
+				 * last staple it applied, they are held, their recorded votes
+				 * counted.
 				 */
-				await drainDeferral(ledger, last.staple.timestamp(), run.stopped);
-				held = await appliedOf(ledger, batch.map(function(entry): VoteStaple {
+				const staples = batch.map(function(entry): VoteStaple {
 					return(entry.staple);
-				}));
+				});
+				const appliedBefore = await appliedOf(ledger, staples);
+				const releasing = staples.filter(function(staple): boolean {
+					return(appliedBefore.has(keyOf(staple)));
+				}).at(-1) ?? last.staple;
+				await drainDeferral(ledger, releasing.timestamp(), run.stopped);
+				held = await appliedOf(ledger, staples);
 				resuming = held.size > 0;
 			}
 			let tallies: Tallies = state;
@@ -442,8 +452,13 @@ export async function runShadowVotes(run: ShadowRun): Promise<ShadowRunState> {
 					await adds.add(entry);
 				}
 			}
-			// The follower runs gc as it adds, which applies the staples deferred until the blocks they build on came.
-			await drainDeferral(ledger, last.staple.timestamp(), run.stopped);
+			/*
+			 * The follower runs gc as it adds, which applies the staples
+			 * deferred until the blocks they build on came. Each staple of the
+			 * batch has applied what it released by now, so a stop waits for
+			 * the batch's save rather than throw its work away.
+			 */
+			await drainDeferral(ledger, last.staple.timestamp(), undefined);
 			const candidates = [...deferred, ...batch];
 			const applied = await appliedOf(ledger, candidates.map(function(held): VoteStaple {
 				return(held.staple);

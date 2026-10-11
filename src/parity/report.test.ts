@@ -100,7 +100,6 @@ function shadowRun(at: string, changes: Partial<ShadowRunRecord>): ShadowRunReco
 		reached: { sequence: '420000', blocksHash: STAPLE },
 		scoped: TALLY_SCOPED,
 		informational: { replayed: 170_000, shadowVoted: 17_000, voted: 16_000, explained: { 'send-recipient-access': 990 }, unexplained: 10, firstUnexplained: [], votedFrom: '2026-05-20T00:00:00.000Z', votedTo: '2026-07-24T20:30:00.000Z' },
-		refusedForWeight: 0,
 		unapplied: [],
 		complete: true,
 		cost: { seconds: 3600, staples: 200_000, shadowVotes: 47_000, maxResidentMiB: 900 },
@@ -294,7 +293,6 @@ describe('the parity report', function() {
 				complete: true,
 				scoped: { replayed: 30_000, shadowVoted: 30_000, voted: 29_990, explained: { 'self-requirement-return': { refusals: 10, changedIn: '0.18.5' } }, unexplained: 0, votedFrom: '2026-07-24T20:40:00.000Z', votedTo: '2026-10-10T09:00:00.000Z' },
 				informational: { replayed: 170_000, shadowVoted: 17_000, voted: 16_000, explained: { 'send-recipient-access': { refusals: 990, changedIn: '0.18.0' } }, unexplained: 10, votedFrom: '2026-05-20T00:00:00.000Z', votedTo: '2026-07-24T20:30:00.000Z', every: 10 },
-				refusedForWeight: 0,
 				unapplied: 0,
 				cost: passed.cost
 			},

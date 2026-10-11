@@ -268,6 +268,54 @@ describe('shadow votes on the follower\'s history', function() {
 		expect(voted.length).toBe(whole.scoped.shadowVoted + whole.informational.shadowVoted);
 	}, REPLAY_TIMEOUT_MILLISECONDS);
 
+	test('keep listing as unapplied a staple an earlier build left refused for voting weight that then waits deferred', async function() {
+		const head = replayOrder(await loadMainnetFixture('head')).slice(0, 100);
+		const replayed = head.slice(0, 50);
+		const place = head.findIndex(function(staple, index): boolean {
+			return(index > replayed.length && head.slice(replayed.length, index).some(function(earlier): boolean {
+				return(buildsOn(staple, earlier));
+			}));
+		});
+		const waiting = head[place];
+		if (waiting === undefined) {
+			throw(new Error('no staple building on one past the target'));
+		}
+		const sequence = String(place + 1);
+		const start: ShadowRunState = { ...freshShadowRun(scopeFrom(head, 49), 3, GENESIS_BASE, targetOf(replayed)), unapplied: [{ sequence, blocksHash: keyOf(waiting), why: 'voting-weight' }] };
+
+		const reached = await runShadowVotes({ source: sourceOf(head), state: memoryState(), storage: new MemoryLedgerStorage(), start, batchStaples: 50 });
+
+		expect(reached.reached.sequence).toBe('50');
+		expect(reached.unapplied).toEqual([{ sequence, blocksHash: keyOf(waiting), why: 'deferred' }]);
+	}, REPLAY_TIMEOUT_MILLISECONDS);
+
+	test('end after the batch a stop came in, saving it, when no staple of the batch released others', async function() {
+		const head = replayOrder(await loadMainnetFixture('head')).slice(0, 100);
+		const start = freshShadowRun(scopeFrom(head, 50), 3, GENESIS_BASE, targetOf(head));
+		const storage = new MemoryLedgerStorage();
+		const state = memoryState();
+		const stopping = new AbortController();
+		const stoppedIn = head[10];
+		if (stoppedIn === undefined) {
+			throw(new Error('no staple at 10'));
+		}
+		const stoppedAt = keyOf(stoppedIn);
+		const adjust = storage.adjust.bind(storage);
+		vi.spyOn(storage, 'adjust').mockImplementation(async function(...args: Parameters<typeof storage.adjust>): ReturnType<typeof storage.adjust> {
+			const applied = await adjust(...args);
+			if (args[1].blocksHash.toString() === stoppedAt) {
+				stopping.abort();
+			}
+			return(applied);
+		});
+
+		const reached = await runShadowVotes({ source: sourceOf(head), state, storage, start, batchStaples: 50, stopped: stopping.signal });
+
+		expect(reached.reached.sequence).toBe('50');
+		expect(reached.unapplied).toEqual([]);
+		expect(state.saved).toEqual(reached);
+	}, REPLAY_TIMEOUT_MILLISECONDS);
+
 	/*
 	 * A snapshot holds deferred copies of staples the follower applied later,
 	 * by a replay of the staple before on their chain, in the same
@@ -397,7 +445,7 @@ describe('shadow votes on the follower\'s history', function() {
 		const late = [...rest.slice(0, 5), ...head.slice(0, 1), ...rest.slice(5)];
 		const reached = await runShadowVotes({ source: sourceOf(late), state: memoryState(), storage: new MemoryLedgerStorage(), start: freshShadowRun(scopeFrom(head, 150), 10, GENESIS_BASE, targetOf(late)), batchStaples: 3 });
 
-		expect(reached).toMatchObject({ refusedForWeight: 0, reached: { sequence: '200' }, unapplied: [] });
+		expect(reached).toMatchObject({ reached: { sequence: '200' }, unapplied: [] });
 		expect(reached.scoped.replayed + reached.informational.replayed).toBe(200);
 	}, REPLAY_TIMEOUT_MILLISECONDS);
 
@@ -529,7 +577,13 @@ describe('shadow votes on the follower\'s history', function() {
 		vi.restoreAllMocks();
 		const chain = new Set(listed.slice(rootPlace - 3, rootPlace).map(keyOf));
 		const appliedAgain: string[] = [];
+		const collectedAt: number[] = [];
 		const resumed = await inLedger(function(storage) {
+			const collect = storage.gc.bind(storage);
+			vi.spyOn(storage, 'gc').mockImplementation(function(...args: Parameters<typeof storage.gc>): Promise<boolean> {
+				collectedAt.push(Date.now());
+				return(collect(...args));
+			});
 			const adjust = storage.adjust.bind(storage);
 			vi.spyOn(storage, 'adjust').mockImplementation(function(...args: Parameters<typeof storage.adjust>): ReturnType<typeof storage.adjust> {
 				if (chain.has(args[1].blocksHash.toString())) {
@@ -543,6 +597,11 @@ describe('shadow votes on the follower\'s history', function() {
 		expect(resumed).toEqual(whole);
 		// The collections applied the chain as the run began, so it is held, not added at its places again.
 		expect(appliedAgain).toEqual([]);
+		// At the moment of the root that released it, as the run never cut applied it, not at the batch's last.
+		const lastMoment = listed.at(-1)?.timestamp().getTime() ?? 0;
+		expect(lastMoment - root.timestamp().getTime()).toBeGreaterThan(60_000);
+		expect((collectedAt[0] ?? lastMoment) - root.timestamp().getTime()).toBeGreaterThanOrEqual(0);
+		expect((collectedAt[0] ?? lastMoment) - root.timestamp().getTime()).toBeLessThan(60_000);
 	}, REPLAY_TIMEOUT_MILLISECONDS);
 
 	test('replay nothing past a target they have reached', async function() {

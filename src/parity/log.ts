@@ -344,7 +344,7 @@ export type ShadowLiveRecord = {
 	readonly unexplained: readonly UnexplainedShadowRefusal[];
 	/** Staples of the window the replay could not apply. */
 	readonly deferredInWindow: readonly string[];
-	/** Staples refused at first for want of voting weight, and tried again as more were added. */
+	/** Staples those builds refused at first for want of voting weight, and tried again as more were added. */
 	readonly refusedForWeight: number;
 	/** Staples before the window the replay never applied, which leave the window's ledger short of them. */
 	readonly unappliedBeforeWindow: readonly string[];
@@ -418,7 +418,12 @@ export type ShadowTarget = {
 	readonly heldBefore: string | null;
 };
 
-/** A staple the replay added that the offline ledger has not applied: one refused for want of voting weight, or one deferred until the block it builds on comes. */
+/**
+ * A staple the replay added that the offline ledger has not applied: one
+ * deferred until the block it builds on comes, or one an earlier build,
+ * which weighed the votes of each staple again, refused for want of voting
+ * weight, which a run resumed from its standing applies first.
+ */
 export type UnappliedStaple = {
 	readonly sequence: string;
 	readonly blocksHash: string;
@@ -441,8 +446,6 @@ export type ShadowRunState = {
 	readonly reached: { readonly sequence: string; readonly blocksHash: string | null };
 	readonly scoped: ShadowWindowTally;
 	readonly informational: ShadowWindowTally;
-	/** Staples refused at first for want of voting weight, and tried again as more were added. */
-	readonly refusedForWeight: number;
 	readonly unapplied: readonly UnappliedStaple[];
 };
 
@@ -1090,12 +1093,17 @@ function unappliedStapleOf(value: unknown): UnappliedStaple | undefined {
 	return({ sequence, blocksHash, why });
 }
 
-/** The state a run's cursor or record holds, or nothing when it holds none this version writes. */
+/**
+ * The state a run's cursor or record holds, or nothing when it holds none
+ * this version writes. Earlier builds also counted the staples they refused
+ * for want of voting weight, which no build weighs again, and that count is
+ * dropped.
+ */
 export function shadowRunStateOf(value: unknown): ShadowRunState | undefined {
 	if (!isFields(value)) {
 		return(undefined);
 	}
-	const { scope, informationalEvery, reached, refusedForWeight } = value;
+	const { scope, informationalEvery, reached } = value;
 	const base = shadowBaseOf(value['base']);
 	const target = shadowTargetOf(value['target']);
 	const scoped = shadowWindowTallyOf(value['scoped']);
@@ -1104,7 +1112,7 @@ export function shadowRunStateOf(value: unknown): ShadowRunState | undefined {
 	if (!isFields(scope) || !isString(scope['release']) || !isString(scope['from']) || !isFields(reached) || !isString(reached['sequence']) || !isStringOrNull(reached['blocksHash'])) {
 		return(undefined);
 	}
-	if (!isCount(informationalEvery) || informationalEvery === 0 || !isCount(refusedForWeight) || base === undefined || target === undefined || scoped === undefined || informational === undefined || unapplied === undefined) {
+	if (!isCount(informationalEvery) || informationalEvery === 0 || base === undefined || target === undefined || scoped === undefined || informational === undefined || unapplied === undefined) {
 		return(undefined);
 	}
 	return({
@@ -1115,7 +1123,6 @@ export function shadowRunStateOf(value: unknown): ShadowRunState | undefined {
 		reached: { sequence: reached['sequence'], blocksHash: reached['blocksHash'] },
 		scoped,
 		informational,
-		refusedForWeight,
 		unapplied
 	});
 }

@@ -86,7 +86,6 @@ const SHADOW_RUN: ShadowRunRecord = {
 		votedFrom: '2025-09-23T00:00:00.000Z',
 		votedTo: '2025-10-01T00:00:00.000Z'
 	},
-	refusedForWeight: 2,
 	unapplied: [{ sequence: '4499', blocksHash: 'EF'.repeat(32), why: 'voting-weight' }],
 	complete: false,
 	cost: { seconds: 61.5, staples: 4500, shadowVotes: 450, maxResidentMiB: 812 }
@@ -190,6 +189,13 @@ describe('the parity log', function() {
 		await appendFile(log.path, `${JSON.stringify({ ...API_DIFF, outcome: { kind: 'match' } })}\n`);
 
 		expect(await log.read()).toEqual({ records: [{ ...API_DIFF, outcome: { kind: 'match', digest: null } }], unreadableLines: 0 });
+	});
+
+	test('reads a shadow run recorded with a count of staples refused for want of voting weight, which no build counts any more, as one without it', async function() {
+		const log = await scratchLog();
+		await appendFile(log.path, `${JSON.stringify({ ...SHADOW_RUN, refusedForWeight: 2 })}\n`);
+
+		expect(await log.read()).toEqual({ records: [SHADOW_RUN], unreadableLines: 0 });
 	});
 
 	test('counts a line cut short, or one it does not know, apart from the records', async function() {
