@@ -329,9 +329,13 @@ describe('a bootstrap client', function() {
 		advanceClock(FIRST_BACKOFF_MILLISECONDS);
 		await client.update();
 		expect(reading.askedFor).toEqual([refused.lostBlock, refused.lostBlock]);
+		// Asked twice, it waits twice as long.
+		advanceClock(FIRST_BACKOFF_MILLISECONDS);
+		await client.update();
+		expect(reading.askedFor).toHaveLength(2);
 
 		reading.holdsNot(refused.lostBlock);
-		advanceClock(2 * FIRST_BACKOFF_MILLISECONDS);
+		advanceClock(FIRST_BACKOFF_MILLISECONDS);
 		await client.update();
 		expect(warnings()).toContainEqual(expect.stringContaining(`lacks block ${refused.lostBlock}, which deferred staples await, and none of its peers holds a staple holding it`));
 		await client.update();
@@ -350,12 +354,150 @@ describe('a bootstrap client', function() {
 		}
 		const read = vi.spyOn(storage, 'listStrandedDeferredStaples');
 		advanceClock(BOOTSTRAP_MARGIN_MILLISECONDS + 1000);
+		const began = Date.now();
 
 		await clientOf(late.node).update();
 
-		expect(read.mock.calls.map(function([, limit, after_]): [number, string | undefined] {
-			return([limit, after_?.staple.blocksHash.toString()]);
-		})).toEqual([[STRANDED_READ, undefined]]);
+		// Those voted before the margin before the update began, whose dependencies its passes read past.
+		expect(read.mock.calls.map(function([before, limit, after_]): [number, number, string | undefined] {
+			return([before.getTime(), limit, after_?.staple.blocksHash.toString()]);
+		})).toEqual([[began - BOOTSTRAP_MARGIN_MILLISECONDS, STRANDED_READ, undefined]]);
+	});
+
+	test('reads no stranded staple in an update in which no pass completed', async function() {
+		const failing = await startFailingPeer();
+		const late = await joiner({ bootstrapFrom: [failing.apiURL] });
+		const storage = late.node.config.ledger.storageDriver;
+		if (!(storage instanceof LedgerStorageDriverBase)) {
+			throw(new Error('the node\'s storage is no driver of this node'));
+		}
+		const read = vi.spyOn(storage, 'listStrandedDeferredStaples');
+
+		expect(await clientOf(late.node).update()).toEqual({ complete: false });
+
+		expect(read).not.toHaveBeenCalled();
+	});
+
+	test('warns, and asks for nothing, when reading the stranded staples fails, and reads them again after the next update', async function() {
+		const peer = await representative();
+		const reading = await startReadingPeer(ONE_VOTE_A_READ);
+		const late = await joiner({ bootstrapFrom: [reading.apiURL] });
+		const { before, lost, after } = await nearTiedHistory(peer.network);
+		reading.apply([peer.network.genesis, before, lost, after]);
+		const storage = late.node.config.ledger.storageDriver;
+		if (!(storage instanceof LedgerStorageDriverBase)) {
+			throw(new Error('the node\'s storage is no driver of this node'));
+		}
+		const read = vi.spyOn(storage, 'listStrandedDeferredStaples').mockRejectedValueOnce(new Error('the read failed'));
+		advanceClock(BOOTSTRAP_MARGIN_MILLISECONDS + 1000);
+		const warnings = warningsOf(late.node);
+		const client = clientOf(late.node);
+
+		expect(await client.update()).toEqual({ complete: true });
+
+		expect(reading.askedFor).toEqual([]);
+		expect(warnings()).toContainEqual(expect.stringContaining('Reading the deferred staples that await blocks the ledger lacks failed; it is read again after the next update: Error: the read failed'));
+		await client.update();
+		expect(read).toHaveBeenCalledTimes(2);
+		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([peer.network.genesis, before, lost, after]));
+	});
+
+	test('warns when adding the staple holding a lacked block fails, and asks for it again only once its wait has passed', async function() {
+		const peer = await representative();
+		const reading = await startReadingPeer(ONE_VOTE_A_READ);
+		const late = await joiner({ bootstrapFrom: [reading.apiURL] });
+		const { before, lost, after, lostBlock } = await nearTiedHistory(peer.network);
+		reading.apply([peer.network.genesis, before, lost, after]);
+		// The ledger failing to say whether it holds the staple, which the queue asks before it adds one.
+		const ledger = late.node.ledger;
+		const getVoteStaple = ledger.getVoteStaple.bind(ledger);
+		let failing = true;
+		vi.spyOn(ledger, 'getVoteStaple').mockImplementation(function(blocksHash, ...rest) {
+			if (failing && blocksHash.toString() === lost.blocksHash.toString()) {
+				return(Promise.reject(new Error('the read failed')));
+			}
+			return(getVoteStaple(blocksHash, ...rest));
+		});
+		advanceClock(BOOTSTRAP_MARGIN_MILLISECONDS + 1000);
+		const warnings = warningsOf(late.node);
+		const client = clientOf(late.node);
+
+		await client.update();
+
+		expect(reading.askedFor).toEqual([lostBlock]);
+		expect(warnings()).toContainEqual(expect.stringContaining(`Adding staple ${lost.blocksHash.toString()}, which holds block ${lostBlock} that deferred staples await, failed; it is asked for again later`));
+		failing = false;
+		await client.update();
+		expect(reading.askedFor).toEqual([lostBlock]);
+		advanceClock(FIRST_BACKOFF_MILLISECONDS);
+		await client.update();
+		expect(reading.askedFor).toEqual([lostBlock, lostBlock]);
+		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([peer.network.genesis, before, lost, after]));
+	});
+
+	test('says a fetched staple the queue found held already, which the ledger then holds no more, was held already', async function() {
+		const peer = await representative();
+		const reading = await startReadingPeer(ONE_VOTE_A_READ);
+		const late = await joiner({ bootstrapFrom: [reading.apiURL] });
+		const { before, lost, after, lostBlock } = await nearTiedHistory(peer.network);
+		reading.apply([peer.network.genesis, before, lost, after]);
+		// The staple on its blocks gone between the queue's look, which finds it held, and the client's, as when the ledger drops it.
+		const ledger = late.node.ledger;
+		const getVoteStaple = ledger.getVoteStaple.bind(ledger);
+		let looks = 0;
+		vi.spyOn(ledger, 'getVoteStaple').mockImplementation(function(blocksHash, ...rest) {
+			if (blocksHash.toString() === lost.blocksHash.toString() && looks++ === 0) {
+				return(Promise.resolve(lost));
+			}
+			return(getVoteStaple(blocksHash, ...rest));
+		});
+		advanceClock(BOOTSTRAP_MARGIN_MILLISECONDS + 1000);
+		const warnings = warningsOf(late.node);
+
+		await clientOf(late.node).update();
+
+		expect(warnings()).toContainEqual(expect.stringContaining(`the node lacks block ${lostBlock}, which deferred staples await; staple ${lost.blocksHash.toString()} holding it, from ${reading.apiURL}, was held already; it is asked for again later`));
+	});
+
+	/*
+	 * Two staples of one user voted in the same millisecond, right after
+	 * another user's, both of which a representative reading one vote at a
+	 * time leaves out, and the user's next staple, which waits on the second.
+	 */
+	test('says a fetched staple the ledger deferred was deferred, and fetches what it awaits in the next update', async function() {
+		const peer = await representative();
+		const reading = await startReadingPeer(ONE_VOTE_A_READ);
+		const late = await joiner({ bootstrapFrom: [reading.apiURL] });
+		const network = peer.network;
+		const cursor = new ChainCursor(network.genesis);
+		const [first, second] = network.users;
+		if (first === undefined || second === undefined) {
+			throw(new Error('two users expected'));
+		}
+		const send = async function(from: Account): Promise<VoteStaple> {
+			const block = cursor.append(await sendBlock({ from, to: RECIPIENT, amount: 1n, token: network.baseToken, previous: cursor.previous(from), network: network.network }));
+			return(await confirmedStaple([block], network.representatives));
+		};
+		advanceClock(1000);
+		const before = await send(first);
+		advanceClock(1);
+		const firstLost = await send(second);
+		const secondLost = await send(second);
+		advanceClock(2000);
+		const after = await send(second);
+		reading.apply([network.genesis, before, firstLost, secondLost, after]);
+		advanceClock(BOOTSTRAP_MARGIN_MILLISECONDS + 1000);
+		const warnings = warningsOf(late.node);
+		const client = clientOf(late.node);
+
+		await client.update();
+
+		const secondBlock = secondLost.blocks[0]?.hash.toString() ?? '';
+		expect(reading.askedFor).toEqual([secondBlock]);
+		expect(warnings()).toContainEqual(expect.stringContaining(`the node lacks block ${secondBlock}, which deferred staples await; staple ${secondLost.blocksHash.toString()} holding it, from ${reading.apiURL}, was deferred; it is asked for again later`));
+		await client.update();
+		expect(reading.askedFor).toEqual([secondBlock, firstLost.blocks[0]?.hash.toString() ?? '']);
+		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([network.genesis, before, firstLost, secondLost, after]));
 	});
 
 	test('reads the next page of stranded staples from after the last one read, carrying the blocks of a round\'s pages, and a new round after a short page', async function() {
@@ -369,8 +511,8 @@ describe('a bootstrap client', function() {
 			throw(new Error('no staples were made'));
 		}
 		const latestVote = new Date();
-		const full = Array.from({ length: STRANDED_READ }, function(): StrandedDeferredStaple {
-			return({ staple: carrier, lacks: [], latestVote });
+		const full = Array.from({ length: STRANDED_READ }, function(_ignored, index): StrandedDeferredStaple {
+			return({ staple: carrier, lacks: [], latestVote: new Date(latestVote.getTime() + index) });
 		});
 		const lacking: StrandedDeferredStaple = { staple: waiting, lacks: [carried], latestVote };
 		const pages = [full, [lacking], [lacking]];
@@ -1328,9 +1470,15 @@ describe('a bootstrap client at the edges of what it accepts and meets', functio
 		expect(await heldBlocksHashes(holder.node)).toEqual(await heldBlocksHashes(peer.node));
 	});
 
-	test('keeps what it stages in memory on a ledger whose driver is not of this node', async function() {
+	test('keeps what it stages in memory on a ledger whose driver is not of this node, and reads no stranded staple there', async function() {
+		const peer = await representative();
 		const late = await joiner();
 		const { log, config, ledger } = late.node;
+		const driver = config.ledger.storageDriver;
+		if (!(driver instanceof LedgerStorageDriverBase)) {
+			throw(new Error('the node\'s storage is no driver of this node'));
+		}
+		const read = vi.spyOn(driver, 'listStrandedDeferredStaples');
 		// The driver as seen through a proxy that is no instance of this node's drivers.
 		const foreign = new Proxy(config.ledger.storageDriver, {
 			getPrototypeOf(): object | null {
@@ -1339,10 +1487,14 @@ describe('a bootstrap client at the edges of what it accepts and meets', functio
 		});
 		expect(foreign instanceof LedgerStorageDriverBase).toBe(false);
 
-		const client = new BootstrapClient({ log, config: { ...config, ledger: { ...config.ledger, storageDriver: foreign } }, ledger });
+		const foreignConfig = { ...config, ledger: { ...config.ledger, storageDriver: foreign } };
+		bootstrapFrom(foreignConfig, [peer.apiURL]);
+		const client = new BootstrapClient({ log, config: foreignConfig, ledger });
 
 		expect(await client.update()).toEqual({ complete: true });
 		await client.stop();
+		expect(read).not.toHaveBeenCalled();
+		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([peer.network.genesis]));
 	});
 
 	describe('adding what it staged', function() {

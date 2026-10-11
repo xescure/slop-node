@@ -325,6 +325,98 @@ describe('the staple holding a block, as a peer holds it', function() {
 		expect((await problemOf(fetcher().stapleHolding(failing.endpoint, block.hash, 1000, NOT_STOPPED, counting().pace))).problem).toEqual({ kind: 'status', status: 500, message: 'An internal error occurred' });
 		expect((await problemOf(fetcher().stapleHolding(other.endpoint, outside, 1000, NOT_STOPPED, counting().pace))).problem).toEqual({ kind: 'malformed', detail: `the staple it holds for block ${outside.toString()} lacks it` });
 		const endpoint = `http://127.0.0.1:${String((await mutePeer()).port)}/api`;
-		expect((await problemOf(fetcher().stapleHolding(endpoint, block.hash, 50, NOT_STOPPED, counting().pace))).problem).toEqual({ kind: 'timeout', milliseconds: 50 });
+		const timedOut = await problemOf(fetcher().stapleHolding(endpoint, block.hash, 50, NOT_STOPPED, counting().pace));
+		expect(timedOut.problem).toEqual({ kind: 'timeout', milliseconds: 50 });
+		expect(timedOut.cause).toBeInstanceOf(Error);
+	});
+
+	test('fails once stopped, keeping what stopped it as the cause', async function() {
+		const peer = await mutePeer();
+		const endpoint = `http://127.0.0.1:${String(peer.port)}/api`;
+		const stopping = new AbortController();
+		const asked = fetcher().stapleHolding(endpoint, new lib.Block.Hash(Buffer.alloc(32, 7)), 30_000, stopping.signal, counting().pace);
+		await peer.connected;
+		stopping.abort();
+
+		const stopped = await problemOf(asked);
+
+		expect(stopped.problem).toEqual({ kind: 'stopped' });
+		expect(stopped.cause).toBeInstanceOf(Error);
+	});
+
+	test('leaves no timer running once it has its answers', async function() {
+		const { endpoint, staple } = await holder();
+		const [block] = staple.blocks;
+		if (block === undefined) {
+			throw(new Error('the fixture staple holds no block'));
+		}
+		const timers = function(): number {
+			return(process.getActiveResourcesInfo().filter(function(resource): boolean {
+				return(resource === 'Timeout');
+			}).length);
+		};
+		const before = timers();
+
+		await fetcher().stapleHolding(endpoint, block.hash, 30_000, NOT_STOPPED, counting().pace);
+
+		expect(timers()).toBe(before);
+	});
+
+	/** A peer answering the votes route and the block route with the bodies given, and otherwise as the fixture's staple's holder does. */
+	async function answering(votes: unknown, block: unknown): Promise<{ readonly endpoint: string; readonly hash: InstanceType<typeof lib.Block.Hash> }> {
+		const staple = new lib.Vote.Staple(await servedStaple());
+		const peer = await peerAnswering(function(response): void {
+			const url = peer.received.at(-1)?.url ?? '';
+			let body = block;
+			if (url.includes('/vote/')) {
+				body = votes;
+			}
+			answerWith(200, JSON.stringify(body))(response);
+		});
+		const [first] = staple.blocks;
+		if (first === undefined) {
+			throw(new Error('the fixture staple holds no block'));
+		}
+		return({ endpoint: peer.endpoint, hash: first.hash });
+	}
+
+	test.each<[string, unknown, unknown, PageProblem]>([
+		['votes that are no record', [], {}, { kind: 'malformed', detail: 'it holds no votes' }],
+		['no votes', { blockhash: 'x' }, {}, { kind: 'malformed', detail: 'it holds no votes' }],
+		['votes that are no list', { votes: 5 }, {}, { kind: 'malformed', detail: 'its votes are no list' }],
+		['a vote with no bytes', { votes: [{}] }, {}, { kind: 'malformed', detail: 'a vote carries no bytes' }],
+		['a vote that cannot be read', { votes: [{ $binary: 'AAAA' }] }, {}, { kind: 'malformed', detail: 'a vote cannot be read' }],
+		['a block answer that is no record', 'votes', [], { kind: 'malformed', detail: 'it holds no block' }],
+		['no block', 'votes', { blockhash: 'x' }, { kind: 'malformed', detail: 'it holds no block' }],
+		['a block with no bytes', 'votes', { block: {} }, { kind: 'malformed', detail: 'a block carries no bytes' }],
+		['a block that cannot be read', 'votes', { block: { $binary: 'AAAA' } }, { kind: 'malformed', detail: 'a block cannot be read' }],
+		['a block the votes do not cover', 'votes', 'other block', { kind: 'malformed', detail: 'its votes and blocks make no staple' }]
+	])('fails on an answer with %s', async function(_ignored: string, votes: unknown, block: unknown, problem: PageProblem) {
+		const page: unknown = JSON.parse(await readFile(new URL('../testing/fixtures/mainnet-rep1-epoch-page.json', import.meta.url), 'utf8'));
+		const written = (page as { readonly voteStaples: readonly string[] }).voteStaples;
+		const [own, other] = written.map(function(encoded): InstanceType<typeof lib.Vote.Staple> {
+			return(new lib.Vote.Staple(encoded));
+		});
+		if (own === undefined || other === undefined) {
+			throw(new Error('the fixture holds fewer than two staples'));
+		}
+		const binary = function(bytes: ArrayBuffer): { readonly $binary: string } {
+			return({ $binary: Buffer.from(bytes).toString('base64') });
+		};
+		let votesAnswer = votes;
+		if (votes === 'votes') {
+			votesAnswer = { votes: own.votes.map(function(vote): { readonly $binary: string } {
+				return(binary(vote.toBytes()));
+			}) };
+		}
+		let blockAnswer = block;
+		if (block === 'other block') {
+			blockAnswer = { block: binary(other.blocks[0]?.toBytes() ?? new ArrayBuffer(0)) };
+		}
+		const { endpoint, hash } = await answering(votesAnswer, blockAnswer);
+
+		const failed = await problemOf(fetcher().stapleHolding(endpoint, hash, 30_000, NOT_STOPPED, counting().pace));
+
+		expect(failed.problem).toEqual(problem);
 	});
 });
