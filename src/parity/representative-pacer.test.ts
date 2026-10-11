@@ -1,6 +1,7 @@
+import { getEventListeners } from 'node:events';
 import { describe, expect, test } from 'vitest';
 import { startFakeAPI } from '../testing/fake-api.js';
-import { pacedSource } from './api-source.js';
+import { answeredByAPI, pacedSource } from './api-source.js';
 import type { APIAnswer } from './api-source.js';
 import { RepresentativePacer } from './representative-pacer.js';
 import type { PacerClock, ServedAnswer } from './representative-pacer.js';
@@ -179,5 +180,64 @@ describe('the representatives\' pacer', function() {
 		expect(await source.get('/node/version')).toEqual({ status: 504, body: 'gateway timeout' });
 		expect(pacer.standing()).toEqual({ [api.endpoint]: { concurrency: 2, backedOff: 1 } });
 		expect(api.requests).toEqual(['GET /node/version']);
+	});
+
+	test('counts three internal failures in a row with no code of the API as strain, as a strained representative answers them, and none with a code', async function() {
+		const clock = fakeClock();
+		const pacer = new RepresentativePacer({ concurrency: 4, gapMilliseconds: 0 }, clock);
+		const failure = served({ status: 500, body: { error: true, message: 'Internal error occurred (error ID: 1)' } });
+		const refusal = served({ status: 500, body: { error: true, code: 'API_INVALID_SIDE', type: 'API', message: 'invalid side' } });
+		for (let answer = 0; answer < 3; answer++) {
+			await pacer.paced(REP, RUNNING, refusal);
+		}
+		await pacer.paced(REP, RUNNING, failure);
+		await pacer.paced(REP, RUNNING, failure);
+		await pacer.paced(REP, RUNNING, served(OK));
+		expect(pacer.standing()).toEqual({ [REP]: { concurrency: 4, backedOff: 0 } });
+		await pacer.paced(REP, RUNNING, failure);
+		await pacer.paced(REP, RUNNING, failure);
+		await pacer.paced(REP, RUNNING, failure);
+		expect(pacer.standing()).toEqual({ [REP]: { concurrency: 2, backedOff: 1 } });
+	});
+
+	test('counts a rate limit or a server error outside the API\'s envelope as no answer of the API', function() {
+		expect(answeredByAPI({ status: 200, body: {} })).toBe(true);
+		expect(answeredByAPI({ status: 500, body: { error: true, message: 'Internal error occurred (error ID: 1)' } })).toBe(true);
+		expect(answeredByAPI({ status: 404, body: 'Cannot GET /api/nothing' })).toBe(true);
+		expect(answeredByAPI({ status: 429, body: { error: true } })).toBe(false);
+		expect(answeredByAPI({ status: 500, body: '<html>proxy error</html>' })).toBe(false);
+		expect(answeredByAPI({ status: 504, body: 'gateway timeout' })).toBe(false);
+	});
+
+	test('leaves no listener on the stop signal once a wait for a turn ends', async function() {
+		const pacer = new RepresentativePacer({ concurrency: 1, gapMilliseconds: 0 }, fakeClock());
+		const stopping = new AbortController();
+		const first = held();
+		const answers = [pacer.paced(REP, stopping.signal, first.request), pacer.paced(REP, stopping.signal, served(OK)), pacer.paced(REP, stopping.signal, served(OK))];
+		await settle();
+		first.release();
+		await Promise.all(answers);
+		expect(getEventListeners(stopping.signal, 'abort')).toHaveLength(0);
+	});
+
+	test('lets every request a step up allows start at once', async function() {
+		const pacer = new RepresentativePacer({ concurrency: 4, gapMilliseconds: 0 }, fakeClock());
+		await pacer.paced(REP, RUNNING, served({ status: 502, body: '' }));
+		await pacer.paced(REP, RUNNING, served({ status: 502, body: '' }));
+		for (let success = 0; success < 9; success++) {
+			await pacer.paced(REP, RUNNING, served(OK));
+		}
+		const [tenth, second, third] = [held(), held(), held()];
+		const answers = [tenth, second, third].map(function({ request }) {
+			return(pacer.paced(REP, RUNNING, request));
+		});
+		await settle();
+		expect([tenth.started(), second.started(), third.started()]).toEqual([true, false, false]);
+		tenth.release();
+		await settle();
+		expect([second.started(), third.started()]).toEqual([true, true]);
+		second.release();
+		third.release();
+		await Promise.all(answers);
 	});
 });

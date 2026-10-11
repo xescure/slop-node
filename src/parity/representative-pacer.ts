@@ -1,3 +1,4 @@
+import { answeredByAPI, isErrorEnvelope } from './api-source.js';
 import type { APIAnswer } from './api-source.js';
 
 /** How hard the parity tools read from each representative. */
@@ -34,12 +35,17 @@ const SUCCESSES_TO_STEP_UP = 10;
 
 const MILLISECONDS_PER_SECOND = 1000;
 
-/** Statuses that tell of a representative's load rather than answer the request. */
-const TOO_MANY_REQUESTS = 429;
+/**
+ * Internal failures in a row with no code of the API, after which a
+ * representative counts as strained. One such answer is the API's answer to
+ * a request it cannot serve, such as a page of history from a start that
+ * is no entry of it, which the parity tools rarely send, since they draw
+ * their requests from what the follower holds; a run of them is the
+ * representative failing under load, which answers in the same envelope.
+ */
+const ANONYMOUS_FAILURES_TO_STRAIN = 3;
 
 const INTERNAL_ERROR = 500;
-
-const FIRST_NON_SERVER_ERROR = 600;
 
 function messageOf(error: unknown): string {
 	if (error instanceof Error) {
@@ -48,24 +54,9 @@ function messageOf(error: unknown): string {
 	return(String(error));
 }
 
-function isFields(value: unknown): value is Readonly<Record<string, unknown>> {
-	return(typeof value === 'object' && value !== null && !Array.isArray(value));
-}
-
-/**
- * Whether the answer shows the representative strained: too many requests,
- * or a server error other than the API's own internal failure, which a
- * representative answers in its error envelope to a request it cannot
- * serve, such as a page from a start that is no entry of a history.
- */
-function strained(answer: APIAnswer): boolean {
-	if (answer.status === TOO_MANY_REQUESTS) {
-		return(true);
-	}
-	if (answer.status < INTERNAL_ERROR || answer.status >= FIRST_NON_SERVER_ERROR) {
-		return(false);
-	}
-	return(!(answer.status === INTERNAL_ERROR && isFields(answer.body) && answer.body['error'] === true));
+/** An internal failure of the API that names no error code of its own. */
+function anonymousFailure(answer: APIAnswer): boolean {
+	return(answer.status >= INTERNAL_ERROR && isErrorEnvelope(answer.body) && answer.body['code'] === undefined);
 }
 
 /** The wait a Retry-After header asks for: a number of seconds, or a date. */
@@ -94,6 +85,7 @@ type Lane = {
 	nextStart: number;
 	strainsInARow: number;
 	successesInARow: number;
+	anonymousFailuresInARow: number;
 	backedOff: number;
 };
 
@@ -125,7 +117,7 @@ export class RepresentativePacer {
 	#laneOf(endpoint: string): Lane {
 		let lane = this.#lanes.get(endpoint);
 		if (lane === undefined) {
-			lane = { limit: this.#pacing.concurrency, inFlight: 0, waiting: [], nextStart: -Infinity, strainsInARow: 0, successesInARow: 0, backedOff: 0 };
+			lane = { limit: this.#pacing.concurrency, inFlight: 0, waiting: [], nextStart: -Infinity, strainsInARow: 0, successesInARow: 0, anonymousFailuresInARow: 0, backedOff: 0 };
 			this.#lanes.set(endpoint, lane);
 		}
 		return(lane);
@@ -136,10 +128,12 @@ export class RepresentativePacer {
 			stopped.throwIfAborted();
 			if (lane.inFlight >= lane.limit) {
 				await new Promise<void>(function(resolve) {
-					lane.waiting.push(resolve);
-					stopped.addEventListener('abort', function() {
+					const woken = function(): void {
+						stopped.removeEventListener('abort', woken);
 						resolve();
-					}, { once: true });
+					};
+					lane.waiting.push(woken);
+					stopped.addEventListener('abort', woken, { once: true });
 				});
 				continue;
 			}
@@ -154,9 +148,16 @@ export class RepresentativePacer {
 		}
 	}
 
+	/** Wakes as many waiting requests as may now start; each checks again once it runs. */
+	#wake(lane: Lane): void {
+		for (let free = lane.limit - lane.inFlight; free > 0; free--) {
+			lane.waiting.shift()?.();
+		}
+	}
+
 	#leave(lane: Lane): void {
 		lane.inFlight--;
-		lane.waiting.shift()?.();
+		this.#wake(lane);
 	}
 
 	#strained(endpoint: string, lane: Lane, retryAfter: string | null, why: string): void {
@@ -177,6 +178,7 @@ export class RepresentativePacer {
 		if (lane.successesInARow >= SUCCESSES_TO_STEP_UP) {
 			lane.successesInARow = 0;
 			lane.limit = Math.min(this.#pacing.concurrency, lane.limit + 1);
+			this.#wake(lane);
 		}
 	}
 
@@ -193,8 +195,16 @@ export class RepresentativePacer {
 		} finally {
 			this.#leave(lane);
 		}
-		if (strained(served.answer)) {
+		if (anonymousFailure(served.answer)) {
+			lane.anonymousFailuresInARow++;
+		} else {
+			lane.anonymousFailuresInARow = 0;
+		}
+		if (!answeredByAPI(served.answer)) {
 			this.#strained(endpoint, lane, served.retryAfter, `answered ${String(served.answer.status)}`);
+		} else if (lane.anonymousFailuresInARow >= ANONYMOUS_FAILURES_TO_STRAIN) {
+			lane.anonymousFailuresInARow = 0;
+			this.#strained(endpoint, lane, served.retryAfter, `answered ${String(ANONYMOUS_FAILURES_TO_STRAIN)} internal failures in a row`);
 		} else {
 			this.#succeeded(lane);
 		}

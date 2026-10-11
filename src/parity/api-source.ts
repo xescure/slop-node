@@ -51,6 +51,36 @@ export function pacedSource(endpoint: string, pacer: RepresentativePacer, stoppe
 	});
 }
 
+const TOO_MANY_REQUESTS = 429;
+
+const FIRST_SERVER_ERROR = 500;
+
+const FIRST_NON_SERVER_ERROR = 600;
+
+function isFields(value: unknown): value is Readonly<Record<string, unknown>> {
+	return(typeof value === 'object' && value !== null && !Array.isArray(value));
+}
+
+/** Whether the body is the API's error envelope, which every failure the API itself answers has. */
+export function isErrorEnvelope(body: unknown): body is Readonly<Record<string, unknown>> {
+	return(isFields(body) && body['error'] === true);
+}
+
+/**
+ * Whether the API itself answered: not a rate limit, nor a server error
+ * without the API's error envelope, which a gateway or proxy in front of a
+ * representative answers in its place.
+ */
+export function answeredByAPI(answer: APIAnswer): boolean {
+	if (answer.status === TOO_MANY_REQUESTS) {
+		return(false);
+	}
+	if (answer.status < FIRST_SERVER_ERROR || answer.status >= FIRST_NON_SERVER_ERROR) {
+		return(true);
+	}
+	return(isErrorEnvelope(answer.body));
+}
+
 /** The body of a 200 answer; any other status is an error naming the request. */
 export async function getOK(source: APISource, path: string): Promise<unknown> {
 	const answer = await source.get(path);
