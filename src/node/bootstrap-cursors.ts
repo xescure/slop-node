@@ -1,6 +1,7 @@
 import type { KVStorageProvider } from '@keetanetwork/keetanet-client/lib/kv/index.js';
 import { assertNever } from '../util/assert-never.js';
-import type { DeepScan, PeerKeying, PeerProgress } from './bootstrap-pass.js';
+import type { PeerKeying } from './bootstrap-evidence.js';
+import type { DeepScan, PeerProgress } from './bootstrap-pass.js';
 import type { BootstrapRange, RangeLayout, RangeStanding } from './bootstrap-ranges.js';
 import type { Awaited, QueuedStaple, RetryStore } from './bootstrap-retry.js';
 

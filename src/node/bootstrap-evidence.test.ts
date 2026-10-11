@@ -1,23 +1,20 @@
 import { describe, expect, test } from 'vitest';
 import {
-	DEEP_SCAN_DEPTH_MILLISECONDS,
-	DEEP_SCAN_PERIOD_MILLISECONDS,
 	KeyingRecord,
 	KnownVotes,
 	VOTE_KEY_TOLERANCE_MILLISECONDS,
 	countedReach,
-	firstProgress,
 	listedForEarlierVotes,
 	madeBetween,
 	mayShowPast,
-	probesHorizonAfter,
 	reachOf,
 	shownTarget,
 	shows,
-	wholeBelowOf,
-	withDeepScanBegun
-} from './bootstrap-pass.js';
-import type { Evidence, PassEvent, PassStaple, PeerKeying, PeerProgress } from './bootstrap-pass.js';
+	wholeBelowOf
+} from './bootstrap-evidence.js';
+import type { Evidence, PeerKeying } from './bootstrap-evidence.js';
+import { DEEP_SCAN_DEPTH_MILLISECONDS, DEEP_SCAN_PERIOD_MILLISECONDS, firstProgress, probesHorizonAfter, withDeepScanBegun } from './bootstrap-pass.js';
+import type { PassEvent, PassStaple, PeerProgress } from './bootstrap-pass.js';
 import { BOOTSTRAP_MARGIN_MILLISECONDS, stapleKey } from './bootstrap-window.js';
 
 const TOLERANCE = VOTE_KEY_TOLERANCE_MILLISECONDS;

@@ -1,5 +1,6 @@
 import { assertNever } from '../util/assert-never.js';
-import { MAX_PASS_MILLISECONDS, VOTE_KEY_TOLERANCE_MILLISECONDS, completes } from './bootstrap-pass.js';
+import { VOTE_KEY_TOLERANCE_MILLISECONDS } from './bootstrap-evidence.js';
+import { MAX_PASS_MILLISECONDS, completes } from './bootstrap-pass.js';
 import type { PassOutcome, RangeSetup } from './bootstrap-pass.js';
 import type { QueueUse } from './bootstrap-retry.js';
 import type { PeerResult, UpdateIO } from './bootstrap-update.js';

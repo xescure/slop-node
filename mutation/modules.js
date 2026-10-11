@@ -52,7 +52,8 @@ const MODULES = {
 	 * The bootstrap is mutated in three modules, so that a mutant runs only
 	 * the tests of its part: the client and how it reaches its peers and
 	 * stores its progress, tested against nodes over HTTP; one pass over a
-	 * peer, tested against simulated peers; and the ranges, the stage and
+	 * peer and what a page's votes show of how far it read, tested against
+	 * simulated peers; and the ranges, the stage and
 	 * the retry queue that carry what the passes read into the ledger.
 	 */
 	'bootstrap-client': {
@@ -76,8 +77,8 @@ const MODULES = {
 		selectedCases: {}
 	},
 	'bootstrap-pass': {
-		mutate: ['src/node/bootstrap-pass.ts', 'src/node/bootstrap-window.ts'],
-		tests: ['src/node/bootstrap-pass.test.ts', 'src/node/bootstrap-pass-evidence.test.ts', 'src/node/bootstrap-window.test.ts'],
+		mutate: ['src/node/bootstrap-pass.ts', 'src/node/bootstrap-evidence.ts', 'src/node/bootstrap-window.ts'],
+		tests: ['src/node/bootstrap-pass.test.ts', 'src/node/bootstrap-evidence.test.ts', 'src/node/bootstrap-window.test.ts'],
 		ignorers: [],
 		selectedCases: {}
 	},

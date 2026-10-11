@@ -4,8 +4,9 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { SimulatedNode, SimulatedPeer } from '../testing/simulated-peer.js';
 import type { SimulatedKeying, SimulatedPeerOptions, SimulatedStaple } from '../testing/simulated-peer.js';
 import { advanceClock, freezeClock } from '../testing/network.js';
+import type { PeerKeying } from './bootstrap-evidence.js';
 import { DEEP_SCAN_DEPTH_MILLISECONDS, DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PrimingWindow, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, bootstrapPeer, bootstrapRange, completes, firstProgress } from './bootstrap-pass.js';
-import type { PassAnswer, PassEvent, PassOptions, PassRequest, PeerIO, PeerKeying, PeerOutcome, PeerProgress, RangeSetup } from './bootstrap-pass.js';
+import type { PassAnswer, PassEvent, PassOptions, PassRequest, PeerIO, PeerOutcome, PeerProgress, RangeSetup } from './bootstrap-pass.js';
 import type { QueueUse } from './bootstrap-retry.js';
 import { BLOOM_CAPACITY, BLOOM_ERROR_RATE, BOOTSTRAP_MARGIN_MILLISECONDS, MAX_NAMED } from './bootstrap-window.js';
 
