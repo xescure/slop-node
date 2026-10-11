@@ -6,14 +6,18 @@ import { startFakeAPI } from '../testing/fake-api.js';
 import { httpSource } from './api-source.js';
 import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-store.js';
 import { ParityLog } from './log.js';
-import type { APIDiffOutcome, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, ShadowRunRecord, ShadowWindowTally, SweepOutcome, SweepRecord } from './log.js';
-import { parityReportOf, runParity } from './report.js';
+import type { APIDiffOutcome, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, ShadowRunRecord, ShadowWindowTally, SweepBatchRecord, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
+import { parityReportOf, runParity, neverComparedCandidatesOf } from './report.js';
+import type { SweepPosition } from './report.js';
+import { sweepCursorPaths } from './sweep.js';
 import type { Stratum } from './strata.js';
 
 const REPRESENTATIVE = 'https://rep1.example/api';
 const OTHER_REPRESENTATIVE = 'https://rep2.example/api';
 const ACCOUNT = 'keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai';
 const OTHER_ACCOUNT = 'keeta_aabk62tezl4whordlviamlx3zrdgux6lk63cghay45vkzdatyemzvqqjuj5resa';
+const THIRD_ACCOUNT = 'keeta_aabwip6zeo2fnzfxp5hssrrqtascs2277w2zk7vqd6d3k3m4dkt2flcbca2mqki';
+const FOURTH_ACCOUNT = 'keeta_aabvmwxttv4q56gbfveighwfwp3yvitlrdfsacic3ckqc7lqelsspvmhc7oldmq';
 const STAPLE = 'A0'.repeat(32);
 
 const PROGRESS: FollowerProgress = { completedPass: undefined, heldBefore: new Date('2025-12-31T00:00:00.000Z'), staged: 0 };
@@ -34,9 +38,17 @@ function blockCount(at: string, verdict: BlockCountVerdict, representative: stri
 	return({ kind: 'block-count', at, representative, completedPass: null, staged: 0, follower: READ, representativeWindow: READ, toleranceBlocks: 100, verdict });
 }
 
-function swept(at: string, account: string, outcome: SweepOutcome): SweepRecord {
-	return({ kind: 'sweep', at, representative: REPRESENTATIVE, account, lap: 0, outcome });
+function swept(at: string, account: string, outcome: SweepOutcome, lap = 0, walk: SweepWalk = 'chain'): SweepRecord {
+	return({ kind: 'sweep', at, representative: REPRESENTATIVE, account, lap, walk, outcome });
 }
+
+/** A batch of the passive walk over the rows after the first through the second, naming the accounts it did not compare. */
+function batch(at: string, lap: number, rows: readonly [string, string], accounts: number, skipped: readonly string[] = [], unanswered: string | null = null): SweepBatchRecord {
+	const matched = accounts - skipped.length;
+	return({ kind: 'sweep-batch', at, representative: REPRESENTATIVE, lap, afterRowID: rows[0], throughRowID: rows[1], accounts, matched, skipped, unanswered });
+}
+
+const CURSORS = { chain: { lap: 1, afterRowID: '7' }, passive: { lap: 0, afterRowID: '40' } } as const;
 
 const MATCH: SweepOutcome = { kind: 'match', head: null, staple: STAPLE };
 const MOVING: SweepOutcome = { kind: 'skipped', reason: 'moving', side: 'representative', detail: 'recent' };
@@ -76,8 +88,9 @@ function shadowRun(at: string, changes: Partial<ShadowRunRecord>): ShadowRunReco
 	});
 }
 
-function report(records: readonly ParityRecord[]) {
-	return(parityReportOf({ generatedAt: new Date('2026-10-09T08:00:00.000Z'), progress: PROGRESS, sweep: { knownAccounts: 10, cursor: { lap: 1, afterRowID: '7' }, walkedThisLap: 4 }, log: { records, unreadableLines: 0 }, knownBehaviors: new Set([KNOWN_BEHAVIOR]) }));
+function report(records: readonly ParityRecord[], position: Partial<SweepPosition> = {}) {
+	const sweep: SweepPosition = { knownAccounts: 10, chainAccounts: 3, cursors: CURSORS, rowIDs: new Map(), ...position };
+	return(parityReportOf({ generatedAt: new Date('2026-10-09T08:00:00.000Z'), progress: PROGRESS, sweep, log: { records, unreadableLines: 0 }, knownBehaviors: new Set([KNOWN_BEHAVIOR]) }));
 }
 
 describe('the parity report', function() {
@@ -234,7 +247,7 @@ describe('the parity report', function() {
 		]).signals.sweep;
 		expect(sweep).toMatchObject({
 			verdict: 'pass',
-			counts: { knownAccounts: 10, lap: 1, walkedThisLap: 4, accountsCompared: 2, matched: 2, diverged: 0, skippedMoving: 0, unanswered: 0 },
+			counts: { accountsCompared: 2, matched: 2, diverged: 0, skippedMoving: 0, unanswered: 0 },
 			confidence: { kind: 'rule-of-three', samples: 2, level: 0.95, divergenceRateBelow: 1.5 },
 			firstDivergence: null
 		});
@@ -261,6 +274,62 @@ describe('the parity report', function() {
 			swept('2026-10-09T01:00:02.000Z', ACCOUNT, MATCH)
 		]).signals.sweep;
 		expect(sweep).toMatchObject({ verdict: 'pass', counts: { accountsCompared: 1, matched: 1, diverged: 0, resolvedDivergences: 1, divergenceRecords: 1 } });
+	});
+
+	test('counts the accounts the passive walk matched in batches among the samples, each batch of rows once', function() {
+		const sweep = report([
+			swept('2026-10-09T01:00:00.000Z', ACCOUNT, MATCH),
+			batch('2026-10-09T01:00:01.000Z', 0, ['0', '20'], 10, [OTHER_ACCOUNT]),
+			batch('2026-10-09T01:00:02.000Z', 0, ['0', '20'], 10),
+			batch('2026-10-09T01:00:03.000Z', 0, ['20', '40'], 5)
+		]).signals.sweep;
+		expect(sweep).toMatchObject({ verdict: 'pass', confidence: { kind: 'rule-of-three', samples: 16 } });
+	});
+
+	test('reports each walk lap by lap against the accounts known', function() {
+		const sweep = report([
+			swept('2026-10-09T01:00:00.000Z', ACCOUNT, MATCH, 0),
+			swept('2026-10-09T01:00:01.000Z', OTHER_ACCOUNT, MOVING, 0),
+			swept('2026-10-09T01:00:02.000Z', OTHER_ACCOUNT, MATCH, 1),
+			swept('2026-10-09T01:00:03.000Z', THIRD_ACCOUNT, diverged(THIRD_ACCOUNT, 'balances'), 0, 'passive'),
+			batch('2026-10-09T01:00:04.000Z', 0, ['0', '20'], 4, [FOURTH_ACCOUNT]),
+			batch('2026-10-09T01:00:05.000Z', 0, ['20', '40'], 3, [], null)
+		]).signals.sweep;
+		expect(sweep.coverage).toEqual({
+			knownAccounts: 10,
+			chainAccounts: 3,
+			walks: {
+				chain: { cursor: CURSORS.chain, laps: [{ lap: 0, complete: true, walked: 2, compared: 1, diverged: 0, skipped: 1 }, { lap: 1, complete: false, walked: 1, compared: 1, diverged: 0, skipped: 0 }] },
+				passive: { cursor: CURSORS.passive, laps: [{ lap: 0, complete: false, walked: 7, compared: 6, diverged: 1, skipped: 1 }] }
+			},
+			neverCompared: 1,
+			firstNeverCompared: [FOURTH_ACCOUNT],
+			everyAccountCompared: false
+		});
+	});
+
+	test('says every account was compared once both walks completed a lap and each account skipped was compared since', function() {
+		const records = [
+			swept('2026-10-09T01:00:00.000Z', ACCOUNT, MOVING, 0),
+			swept('2026-10-09T01:00:01.000Z', ACCOUNT, MATCH, 1),
+			batch('2026-10-09T01:00:02.000Z', 0, ['0', '20'], 4, [OTHER_ACCOUNT, THIRD_ACCOUNT], 'answered 504'),
+			batch('2026-10-09T01:00:03.000Z', 1, ['0', '15'], 3, [THIRD_ACCOUNT]),
+			batch('2026-10-09T01:00:04.000Z', 1, ['15', '30'], 3)
+		];
+		const cursors = { chain: { lap: 2, afterRowID: '0' }, passive: { lap: 2, afterRowID: '0' } };
+		const rowIDs = new Map([[OTHER_ACCOUNT, '12'], [THIRD_ACCOUNT, '18']]);
+		expect(report(records, { cursors, rowIDs }).signals.sweep.coverage).toMatchObject({ neverCompared: 0, firstNeverCompared: [], everyAccountCompared: true });
+		expect(report(records, { cursors, rowIDs: new Map([[OTHER_ACCOUNT, '12'], [THIRD_ACCOUNT, '14']]) }).signals.sweep.coverage).toMatchObject({ neverCompared: 1, firstNeverCompared: [THIRD_ACCOUNT], everyAccountCompared: false });
+		expect(report(records, { cursors: { ...cursors, passive: { lap: 0, afterRowID: '20' } }, rowIDs }).signals.sweep.coverage).toMatchObject({ neverCompared: 0, everyAccountCompared: false });
+	});
+
+	test('lists the accounts the log names as not compared, whose rows the report reads', function() {
+		expect(neverComparedCandidatesOf([
+			swept('2026-10-09T01:00:00.000Z', ACCOUNT, MOVING),
+			swept('2026-10-09T01:00:01.000Z', ACCOUNT, MATCH),
+			swept('2026-10-09T01:00:02.000Z', OTHER_ACCOUNT, UNANSWERED),
+			batch('2026-10-09T01:00:03.000Z', 0, ['0', '20'], 4, [THIRD_ACCOUNT])
+		])).toEqual([OTHER_ACCOUNT, THIRD_ACCOUNT]);
 	});
 
 	test('has nothing comparable in the sweep while every account was skipped', function() {
@@ -294,14 +363,24 @@ describe('a parity run', function() {
 			api.serve(`/node/ledger/account/${ACCOUNT}`, { account: ACCOUNT, balances: [], currentHeadBlock: null, currentHeadBlockHeight: null, info: {}, representative: null });
 		}
 		representative.serve(`/node/ledger/account/${ACCOUNT}/history?limit=1`, { history: [], nextKey: null });
+		const passiveState = { account: OTHER_ACCOUNT, balances: [], currentHeadBlock: null, currentHeadBlockHeight: null, info: {}, representative: null };
+		for (const api of [follower, representative]) {
+			api.serve(`/node/ledger/accounts/${OTHER_ACCOUNT}`, [passiveState]);
+		}
 		const known: KnownAccount[] = [{ rowID: '1', account: ACCOUNT, newestStaple: new Date('2025-06-01T00:00:00.000Z') }];
+		const passive: KnownAccount[] = [{ rowID: '2', account: OTHER_ACCOUNT, newestStaple: new Date('2025-06-01T00:00:00.000Z') }];
+		const after = function(accounts: readonly KnownAccount[], rowID: string) {
+			return(Promise.resolve(accounts.filter(function(entry) {
+				return(BigInt(entry.rowID) > BigInt(rowID));
+			})));
+		};
 		const store: FollowerStore = {
 			progress: () => Promise.resolve(PROGRESS),
-			accountsAfter: (rowID) => Promise.resolve(known.filter(function(entry) {
-				return(BigInt(entry.rowID) > BigInt(rowID));
-			})),
-			accountCount: () => Promise.resolve(known.length),
-			accountsUpTo: () => Promise.resolve(known.length),
+			chainAccountsAfter: (rowID) => after(known, rowID),
+			passiveAccountsAfter: (rowID) => after(passive, rowID),
+			accountCount: () => Promise.resolve(2),
+			chainAccountCount: () => Promise.resolve(1),
+			rowIDsOf: () => Promise.resolve(new Map()),
 			historyHolds: () => Promise.resolve(false),
 			checksumSnapshot: () => Promise.resolve({ stored: 0n, folded: 0n, mainBlocks: 0, mismatched: [] }),
 			quietAccounts: () => Promise.resolve([]),
@@ -320,8 +399,9 @@ describe('a parity run', function() {
 			representatives: [httpSource(representative.endpoint)],
 			store,
 			log,
-			cursorPath: join(directory, 'parity-sweep.json'),
+			cursorPaths: sweepCursorPaths(directory),
 			sampleAccounts: 1,
+			passiveSampleAccounts: 1,
 			apiDiff: { samplesPerStratum: 1, seed: 'test', edgeCaseStaples: [], knownBehaviors: new Set() },
 			gapMilliseconds: 10_000,
 			wait: () => Promise.resolve(),
@@ -329,10 +409,17 @@ describe('a parity run', function() {
 		});
 
 		expect(result.signals.checksum).toMatchObject({ verdict: 'not-comparable-yet', crossCheck: { verdict: 'pass', runs: 1 }, blockCount: { counts: { comparisons: 1 }, notComparableReasons: ['no-completed-pass'] } });
-		expect(result.signals.sweep).toMatchObject({ verdict: 'pass', counts: { knownAccounts: 1, lap: 0, walkedThisLap: 1, accountsCompared: 2, matched: 2 } });
+		expect(result.signals.sweep).toMatchObject({
+			verdict: 'pass',
+			counts: { accountsCompared: 2, matched: 2 },
+			coverage: { knownAccounts: 2, chainAccounts: 1, walks: { chain: { cursor: { lap: 0, afterRowID: '1' } }, passive: { cursor: { lap: 0, afterRowID: '2' }, laps: [{ lap: 0, walked: 1, compared: 1 }] } } }
+		});
 		expect(result.signals.apiDiff).toMatchObject({ verdict: 'not-comparable-yet', counts: { requestsCompared: 0 } });
-		expect((await log.read()).records.map(function(record) {
+		const kinds = (await log.read()).records.map(function(record) {
 			return(record.kind);
-		})).toEqual(['sweep', 'cross-check', 'checksum', 'block-count', 'sweep']);
+		});
+		// The two walks run side by side, so their records interleave in no fixed order.
+		expect(kinds.slice(0, 4)).toEqual(['sweep', 'cross-check', 'checksum', 'block-count']);
+		expect(kinds.slice(4).sort()).toEqual(['sweep', 'sweep-batch']);
 	});
 });

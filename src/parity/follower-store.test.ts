@@ -8,7 +8,7 @@ import { confirmedStaple, setRepresentativeBlock } from '../testing/blocks.js';
 import { createDatabase } from '../testing/postgres.js';
 import type { TestDatabase } from '../testing/postgres.js';
 import { heldBeforeOf, openFollowerStore, readOnlyPool } from './follower-store.js';
-import type { FollowerStore } from './follower-store.js';
+import type { FollowerStore, KnownAccount } from './follower-store.js';
 
 const lib = KeetaNet.lib;
 
@@ -116,26 +116,33 @@ function storedProgress(reached: number): unknown {
 }
 
 describe('the follower\'s store, read from its database', function() {
-	test('lists every account the follower knows, in pages after a row', async function() {
-		const store = storeOf(await followerDatabase({}));
-		const first = await store.accountsAfter('0', 2);
-		expect(first.map(function(known) {
-			return(known.account);
-		})).toEqual(ACCOUNTS.slice(0, 2));
-		const rest = await store.accountsAfter(first[1]?.rowID ?? '', 2);
-		expect(rest.map(function(known) {
-			return(known.account);
-		})).toEqual(ACCOUNTS.slice(2));
-		expect(await store.accountsAfter(rest[0]?.rowID ?? '', 2)).toEqual([]);
-		expect(await store.accountCount()).toBe(3);
-		expect(await store.accountsUpTo(first[1]?.rowID ?? '')).toBe(2);
-	});
+	test('lists the accounts with a chain apart from the rest, each in pages after a row', async function() {
+		const database = await followerDatabase({});
+		const pool = database.pool();
+		const [first = '', second = '', third = ''] = ACCOUNTS;
+		const BLOCK = '12'.repeat(32);
+		await pool.query(`INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position)
+			SELECT $1, 'main', id, $1, 1, '\\x0102', $3, 0 FROM accounts WHERE public_key = $2`, [Buffer.from(BLOCK, 'hex'), second, Buffer.from(STAPLE, 'hex')]);
+		await pool.query('INSERT INTO heads (account_id, block_hash, height) SELECT id, $2, 0 FROM accounts WHERE public_key = $1', [second, Buffer.from(BLOCK, 'hex')]);
+		await database.endPools();
+		const store = storeOf(database);
+		const accountsOf = function(known: readonly KnownAccount[]): readonly string[] {
+			return(known.map(function(entry) {
+				return(entry.account);
+			}));
+		};
 
-	test('gives each account the time of the newest staple in its history', async function() {
-		const store = storeOf(await followerDatabase({}));
-		expect((await store.accountsAfter('0', 2)).map(function(known) {
-			return(known.newestStaple);
-		})).toEqual([new Date('2025-12-01T00:00:00.000Z'), undefined]);
+		const chains = await store.chainAccountsAfter('0', 2);
+		expect(accountsOf(chains)).toEqual([second]);
+		expect(await store.chainAccountsAfter(chains[0]?.rowID ?? '', 2)).toEqual([]);
+		const passive = await store.passiveAccountsAfter('0', 1);
+		expect(passive).toEqual([{ rowID: passive[0]?.rowID, account: first, newestStaple: new Date('2025-12-01T00:00:00.000Z') }]);
+		const rest = await store.passiveAccountsAfter(passive[0]?.rowID ?? '', 2);
+		expect(rest).toEqual([{ rowID: rest[0]?.rowID, account: third, newestStaple: undefined }]);
+		expect(await store.passiveAccountsAfter(rest[0]?.rowID ?? '', 2)).toEqual([]);
+		expect(await store.accountCount()).toBe(3);
+		expect(await store.chainAccountCount()).toBe(1);
+		expect(await store.rowIDsOf([third, first, 'keeta_unknown'])).toEqual(new Map([[first, passive[0]?.rowID], [third, rest[0]?.rowID]]));
 	});
 
 	test('tells whether a staple is in an account\'s history', async function() {

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import { ParityLog, parityLogPath } from './log.js';
-import type { BlockCountRecord, ChecksumRecord, CrossCheckRecord, ParityRecord, ShadowRunRecord, SweepRecord } from './log.js';
+import type { BlockCountRecord, ChecksumRecord, CrossCheckRecord, ParityRecord, ShadowRunRecord, SweepBatchRecord, SweepRecord } from './log.js';
 
 const REPRESENTATIVE = 'https://rep1.example/api';
 const ACCOUNT = 'keeta_aabiko2lb4klv75vi72jxkgaotfravn7p4clfko4lcw7vywrzfznrvemqxb5iai';
@@ -32,11 +32,18 @@ const FAILED_CHECKSUM: ChecksumRecord = {
 	}
 };
 
+const MATCHED: SweepRecord = { kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 0, walk: 'chain', outcome: { kind: 'match', head: 'CD'.repeat(32), staple: null } };
+
 const SWEEPS: readonly SweepRecord[] = [
-	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 0, outcome: { kind: 'match', head: 'CD'.repeat(32), staple: null } },
-	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 0, outcome: { kind: 'diverged', divergence: { account: ACCOUNT, field: 'representative', staple: null }, follower: { representative: null }, representative: { representative: ACCOUNT } } },
-	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 1, outcome: { kind: 'skipped', reason: 'moving', side: 'follower', detail: 'its state changed' } },
-	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 1, outcome: { kind: 'skipped', reason: 'unanswered', detail: '500' } }
+	MATCHED,
+	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 0, walk: 'passive', outcome: { kind: 'diverged', divergence: { account: ACCOUNT, field: 'representative', staple: null }, follower: { representative: null }, representative: { representative: ACCOUNT } } },
+	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 1, walk: 'chain', outcome: { kind: 'skipped', reason: 'moving', side: 'follower', detail: 'its state changed' } },
+	{ kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 1, walk: 'passive', outcome: { kind: 'skipped', reason: 'unanswered', detail: '500' } }
+];
+
+const SWEEP_BATCHES: readonly SweepBatchRecord[] = [
+	{ kind: 'sweep-batch', at: CHECKSUM.at, representative: REPRESENTATIVE, lap: 0, afterRowID: '0', throughRowID: '230', accounts: 100, matched: 98, skipped: [ACCOUNT], unanswered: null },
+	{ kind: 'sweep-batch', at: CHECKSUM.at, representative: REPRESENTATIVE, lap: 0, afterRowID: '230', throughRowID: '231', accounts: 1, matched: 0, skipped: [ACCOUNT], unanswered: 'answered 504' }
 ];
 
 const CROSS_CHECKS: readonly CrossCheckRecord[] = [
@@ -102,7 +109,7 @@ describe('the parity log', function() {
 
 	test('reads back every kind of record it was given, in order', async function() {
 		const log = await scratchLog();
-		const records: readonly ParityRecord[] = [CHECKSUM, ...SWEEPS, FAILED_CHECKSUM, ...CROSS_CHECKS, BLOCK_COUNT, SHADOW_RUN];
+		const records: readonly ParityRecord[] = [CHECKSUM, ...SWEEPS, ...SWEEP_BATCHES, FAILED_CHECKSUM, ...CROSS_CHECKS, BLOCK_COUNT, SHADOW_RUN];
 		await log.append(records.slice(0, 2));
 		await log.append(records.slice(2));
 
@@ -116,6 +123,15 @@ describe('the parity log', function() {
 		await appendFile(log.path, `${JSON.stringify({ ...older, verdict: { kind: 'fail', difference: -728_780 } })}\n`);
 
 		expect(await log.read()).toEqual({ records: [{ ...older, staged: null, verdict: { kind: 'fail', difference: -728_780 } }], unreadableLines: 0 });
+	});
+
+	test('reads a sweep record written before the walks were split as one of the walk over every account', async function() {
+		const log = await scratchLog();
+		const { walk, ...older } = MATCHED;
+		expect(walk).toBe('chain');
+		await appendFile(log.path, `${JSON.stringify(older)}\n`);
+
+		expect(await log.read()).toEqual({ records: [{ ...older, walk: 'every' }], unreadableLines: 0 });
 	});
 
 	test('counts a line cut short, or one it does not know, apart from the records', async function() {

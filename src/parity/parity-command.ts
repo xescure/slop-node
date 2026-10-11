@@ -6,15 +6,27 @@ import { defaultFollowerDirectory, optionsOf, setting } from './follower-config.
 
 export type ParityCommand =
 	| { readonly kind: 'checksum'; readonly directory: string; readonly gapMilliseconds: number }
-	| { readonly kind: 'sweep'; readonly directory: string; readonly accounts: number }
+	| { readonly kind: 'sweep'; readonly directory: string; readonly accounts: number; readonly toLapEnd: boolean }
 	| { readonly kind: 'api-diff'; readonly directory: string; readonly samplesPerStratum: number; readonly seed: string | undefined }
 	| { readonly kind: 'shadow'; readonly directory: string; readonly base: string | undefined; readonly informationalEvery: number; readonly batchStaples: number; readonly restart: boolean }
-	| { readonly kind: 'report'; readonly directory: string; readonly sampleAccounts: number; readonly apiSamples: number; readonly gapMilliseconds: number };
+	| {
+		readonly kind: 'report';
+		readonly directory: string;
+		readonly sampleAccounts: number;
+		readonly passiveSampleAccounts: number;
+		readonly apiSamples: number;
+		readonly gapMilliseconds: number;
+		/** Reports on the log as it stands, comparing nothing afresh, so that it runs beside a sweep. */
+		readonly logOnly: boolean;
+	};
 
 export const DEFAULT_SWEEP_ACCOUNTS = 100;
 
-/** The fresh sweep sample of a report: a few accounts for each representative, a minute or so at their pace. */
+/** The fresh sweep sample of a report: a few chain accounts for each representative, a minute or so at their pace. */
 export const DEFAULT_REPORT_SAMPLE_ACCOUNTS = 16;
+
+/** The fresh sample of passive accounts of a report: one request's worth for each representative. */
+export const DEFAULT_REPORT_PASSIVE_SAMPLE_ACCOUNTS = 400;
 
 /** Requests of each stratum an API diff compares: by the rule of three, a divergence rate below 6% at 95% for each. */
 export const DEFAULT_API_SAMPLES = 50;
@@ -53,6 +65,7 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 			break;
 		case 'sweep':
 			valued = ['--directory', '--accounts'];
+			flags = ['--lap'];
 			break;
 		case 'api-diff':
 			valued = ['--directory', '--samples', '--seed'];
@@ -62,7 +75,8 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 			flags = ['--restart'];
 			break;
 		case 'report':
-			valued = ['--directory', '--sample', '--api-samples', '--gap-ms'];
+			valued = ['--directory', '--sample', '--passive-sample', '--api-samples', '--gap-ms'];
+			flags = ['--log-only'];
 			break;
 		default:
 			return(undefined);
@@ -80,11 +94,16 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 			}
 			return({ kind: name, directory, gapMilliseconds });
 		case 'sweep': {
-			const accounts = setting(options, '--accounts', Number.MAX_SAFE_INTEGER, DEFAULT_SWEEP_ACCOUNTS);
+			const toLapEnd = options.has('--lap');
+			let fallback = DEFAULT_SWEEP_ACCOUNTS;
+			if (toLapEnd) {
+				fallback = Number.MAX_SAFE_INTEGER;
+			}
+			const accounts = setting(options, '--accounts', Number.MAX_SAFE_INTEGER, fallback);
 			if (accounts === undefined) {
 				return(undefined);
 			}
-			return({ kind: name, directory, accounts });
+			return({ kind: name, directory, accounts, toLapEnd });
 		}
 		case 'api-diff': {
 			const samplesPerStratum = setting(options, '--samples', Number.MAX_SAFE_INTEGER, DEFAULT_API_SAMPLES);
@@ -104,11 +123,12 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 		}
 		case 'report': {
 			const sampleAccounts = setting(options, '--sample', Number.MAX_SAFE_INTEGER, DEFAULT_REPORT_SAMPLE_ACCOUNTS);
+			const passiveSampleAccounts = setting(options, '--passive-sample', Number.MAX_SAFE_INTEGER, DEFAULT_REPORT_PASSIVE_SAMPLE_ACCOUNTS);
 			const apiSamples = setting(options, '--api-samples', Number.MAX_SAFE_INTEGER, DEFAULT_REPORT_API_SAMPLES);
-			if (sampleAccounts === undefined || apiSamples === undefined || gapMilliseconds === undefined) {
+			if (sampleAccounts === undefined || passiveSampleAccounts === undefined || apiSamples === undefined || gapMilliseconds === undefined) {
 				return(undefined);
 			}
-			return({ kind: name, directory, sampleAccounts, apiSamples, gapMilliseconds });
+			return({ kind: name, directory, sampleAccounts, passiveSampleAccounts, apiSamples, gapMilliseconds, logOnly: options.has('--log-only') });
 		}
 		default:
 			return(assertNever(name));

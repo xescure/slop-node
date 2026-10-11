@@ -6,13 +6,15 @@ import { getOK } from './api-source.js';
 import type { APIAnswer, APISource } from './api-source.js';
 import type { FollowerStore, KnownAccount } from './follower-store.js';
 import { sweepCursorOf } from './log.js';
-import type { ParityLog, SweepCursor, SweepOutcome, SweepRecord } from './log.js';
+import type { ParityLog, SweepBatchRecord, SweepCursor, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
 
-/** Where the sweep resumes, in the follower's directory. */
-export const SWEEP_CURSOR_FILE = 'parity-sweep.json';
+/** Where each walk of the sweep resumes, in the follower's directory. */
+export const SWEEP_CURSOR_FILES: Readonly<Record<SweepWalk, string>> = { chain: 'parity-sweep-chain.json', passive: 'parity-sweep-passive.json' };
 
-export function sweepCursorPath(directory: string): string {
-	return(join(directory, SWEEP_CURSOR_FILE));
+export type SweepCursorPaths = Readonly<Record<SweepWalk, string>>;
+
+export function sweepCursorPaths(directory: string): SweepCursorPaths {
+	return({ chain: join(directory, SWEEP_CURSOR_FILES.chain), passive: join(directory, SWEEP_CURSOR_FILES.passive) });
 }
 
 /**
@@ -27,8 +29,18 @@ export function sweepCursorPath(directory: string): string {
  */
 export const QUIET_MARGIN_MILLISECONDS: number = 60 * 60_000;
 
-/** Accounts compared before the cursor moves: a few for each representative, which a crash compares again. */
-const ACCOUNTS_PER_REPRESENTATIVE_IN_A_BATCH = 8;
+/** Chain accounts compared before the cursor moves: a few for each representative, which a crash compares again. */
+const CHAIN_ACCOUNTS_PER_REPRESENTATIVE_IN_A_BATCH = 8;
+
+/**
+ * Passive accounts whose states one request asks for. The route takes any
+ * number of accounts, as one path [Keeta TS] index.js:58565-58577, so only
+ * the length of the request line bounds them: the representatives and the
+ * follower answer 431 to a line beyond about 16 KiB, some 225 accounts. A
+ * hundred stays well inside that, and a representative answers it in about
+ * a second.
+ */
+export const ACCOUNTS_PER_STATES_REQUEST = 100;
 
 const START: SweepCursor = { lap: 0, afterRowID: '0' };
 
@@ -149,11 +161,6 @@ type AccountComparison = {
 	readonly account: string;
 };
 
-/** Before any request: the follower itself holds a staple of the account from within the margin of its reach, or nothing at all yet. */
-function movingOnFollower(known: KnownAccount, quietBefore: Date | undefined): boolean {
-	return(quietBefore === undefined || (known.newestStaple !== undefined && known.newestStaple.getTime() >= quietBefore.getTime()));
-}
-
 /**
  * Compares what the follower and the representative hold of the account,
  * when both hold it at the same point. The representative's state is read
@@ -212,123 +219,294 @@ export async function compareAccount(comparison: AccountComparison): Promise<Swe
 }
 
 /** What the sweep reads of the follower's storage. */
-export type SweepStore = Pick<FollowerStore, 'progress' | 'accountsAfter' | 'historyHolds'>;
+export type SweepStore = Pick<FollowerStore, 'progress' | 'chainAccountsAfter' | 'passiveAccountsAfter' | 'historyHolds'>;
 
 export type SweepSetup = {
 	readonly follower: APISource;
-	/** Each account is compared with one of them, in turn; their requests are paced by the caller. */
+	/** Each batch is compared with one of them, in turn; their requests are paced by the caller. */
 	readonly representatives: readonly APISource[];
 	readonly store: SweepStore;
 	readonly log: ParityLog;
-	readonly cursorPath: string;
-	/** How many accounts to walk past before stopping. */
-	readonly accounts: number;
+	readonly cursorPaths: SweepCursorPaths;
+	/** How many accounts each walk goes past before stopping. */
+	readonly accounts: Readonly<Record<SweepWalk, number>>;
+	/** Stops each walk at the end of the lap it is on. */
+	readonly toLapEnd: boolean;
 	/** Stops the sweep after the batch under way; what that batch compared is not recorded. */
 	readonly stopped: AbortSignal;
 };
 
-export type SweepSummary = {
+export type WalkSummary = {
 	/** Accounts walked past, compared or not. */
 	readonly walked: number;
-	/**
-	 * Accounts the follower itself holds a staple of from within the margin
-	 * of its reach, which are moving whatever a representative holds, so
-	 * none is asked about them and they are not recorded; the next lap
-	 * walks past them again.
-	 */
-	readonly movingOnFollower: number;
 	readonly compared: number;
 	readonly matched: number;
 	readonly diverged: number;
-	/** Accounts recorded as skipped, after asking a representative. */
+	/** Accounts not compared: found moving, or unanswered; each is compared again on the next lap. */
 	readonly skipped: number;
 	readonly cursor: SweepCursor;
 };
+
+export type SweepSummary = Readonly<Record<SweepWalk, WalkSummary>>;
+
+type Tally = { walked: number; compared: number; matched: number; diverged: number; skipped: number };
+
+function emptyTally(): Tally {
+	return({ walked: 0, compared: 0, matched: 0, diverged: 0, skipped: 0 });
+}
+
+function count(tally: Tally, outcome: SweepOutcome): void {
+	switch (outcome.kind) {
+		case 'match':
+			tally.compared++;
+			tally.matched++;
+			break;
+		case 'diverged':
+			tally.compared++;
+			tally.diverged++;
+			break;
+		case 'skipped':
+			tally.skipped++;
+			break;
+		default:
+			assertNever(outcome);
+	}
+}
 
 /** Read through a call, as a signal is aborted while the sweep awaits. */
 function isStopped(signal: AbortSignal): boolean {
 	return(signal.aborted);
 }
 
-/** Compares a batch, one worker for each representative, each taking every so many of the accounts, and records each as it is compared. */
-async function compareBatch(setup: SweepSetup, batch: readonly KnownAccount[], lap: number, quietBefore: Date): Promise<readonly SweepOutcome[]> {
-	const outcomes: SweepOutcome[] = [];
+const FOLLOWER_HOLDS_RECENT = 'the follower holds a staple of it from within the margin of its reach';
+
+/**
+ * Compares an account by itself, unless the follower holds a staple of it
+ * from within the margin of its reach: then it is moving whatever a
+ * representative holds, and none is asked about it.
+ */
+function compareKnown(setup: SweepSetup, representative: APISource, known: KnownAccount, quietBefore: Date): Promise<SweepOutcome> {
+	if (known.newestStaple !== undefined && known.newestStaple.getTime() >= quietBefore.getTime()) {
+		return(Promise.resolve({ kind: 'skipped', reason: 'moving', side: 'follower', detail: FOLLOWER_HOLDS_RECENT }));
+	}
+	return(compareAccount({ follower: setup.follower, representative, store: setup.store, quietBefore, account: known.account }));
+}
+
+function sweepRecord(representative: APISource, account: string, lap: number, walk: SweepWalk, outcome: SweepOutcome): SweepRecord {
+	return({ kind: 'sweep', at: new Date().toISOString(), representative: representative.endpoint, account, lap, walk, outcome });
+}
+
+/** Compares a batch of chain accounts, one worker for each representative, each taking every so many of the accounts, and records each as it is compared. */
+async function compareChainAccounts(setup: SweepSetup, batch: readonly KnownAccount[], lap: number, quietBefore: Date): Promise<Tally> {
+	const tally = emptyTally();
 	const workers = setup.representatives.map(async function(representative, worker) {
 		for (let index = worker; index < batch.length; index += setup.representatives.length) {
-			const account = batch[index]?.account ?? '';
-			const outcome = await compareAccount({ follower: setup.follower, representative, store: setup.store, quietBefore, account });
+			const known = batch[index];
+			if (known === undefined) {
+				continue;
+			}
+			const outcome = await compareKnown(setup, representative, known, quietBefore);
 			if (isStopped(setup.stopped)) {
 				return;
 			}
-			const record: SweepRecord = { kind: 'sweep', at: new Date().toISOString(), representative: representative.endpoint, account, lap, outcome };
-			await setup.log.append([record]);
-			outcomes.push(outcome);
+			await setup.log.append([sweepRecord(representative, known.account, lap, 'chain', outcome)]);
+			count(tally, outcome);
 		}
 	});
 	await Promise.all(workers);
-	return(outcomes);
+	return(tally);
+}
+
+/** The states a list of accounts was answered with, one for each in the order asked, or an error naming why it is not that. */
+function statesOf(body: unknown, accounts: readonly KnownAccount[]): readonly unknown[] {
+	if (!Array.isArray(body) || body.length !== accounts.length || !accounts.every(function(known, index): boolean {
+		const entry: unknown = body[index];
+		return(isFields(entry) && entry['account'] === known.account);
+	})) {
+		throw(new Error(`not the state of each account requested: ${JSON.stringify(body).slice(0, 200)}`));
+	}
+	return(body);
+}
+
+type PassiveBatch = { readonly records: readonly SweepRecord[]; readonly batch: SweepBatchRecord };
+
+/**
+ * Compares a batch of passive accounts with one representative: both are
+ * asked for the states of all of them in one request, and an account
+ * answered alike matches, as no lag of either side makes two states equal
+ * that are not. An account answered apart is compared by itself, as a chain
+ * account is, with its newest staple, the latest that touched it, for a
+ * head: the difference counts only when that staple was voted on before the
+ * follower's reach, by the margin, so that the follower holds every staple
+ * of the account the representative does, and it is read again there, on
+ * both sides; otherwise the account is skipped as moving, and compared
+ * again on the next lap. Nothing is returned once the sweep is stopped.
+ */
+async function comparePassiveBatch(setup: SweepSetup, representative: APISource, batch: readonly KnownAccount[], afterRowID: string, lap: number, quietBefore: Date): Promise<PassiveBatch | undefined> {
+	const path = `/node/ledger/accounts/${batch.map(function(known): string {
+		return(known.account);
+	}).join(',')}`;
+	const records: SweepRecord[] = [];
+	const skipped: string[] = [];
+	let matched = 0;
+	let unanswered: string | null = null;
+	let followerStates: readonly unknown[] | undefined;
+	let representativeStates: readonly unknown[] = [];
+	try {
+		const followerAnswer = await setup.follower.get(path);
+		representativeStates = statesOf(await getOK(representative, path), batch);
+		if (followerAnswer.status === 200) {
+			followerStates = statesOf(followerAnswer.body, batch);
+		}
+	} catch (error: unknown) {
+		unanswered = messageOf(error);
+	}
+	for (const [index, known] of batch.entries()) {
+		if (unanswered !== null) {
+			skipped.push(known.account);
+			continue;
+		}
+		if (followerStates !== undefined && isDeepStrictEqual(followerStates[index], representativeStates[index])) {
+			matched++;
+			continue;
+		}
+		const outcome = await compareKnown(setup, representative, known, quietBefore);
+		records.push(sweepRecord(representative, known.account, lap, 'passive', outcome));
+		if (outcome.kind === 'skipped') {
+			skipped.push(known.account);
+		}
+	}
+	if (isStopped(setup.stopped)) {
+		return(undefined);
+	}
+	const throughRowID = batch.at(-1)?.rowID ?? afterRowID;
+	return({
+		records,
+		batch: { kind: 'sweep-batch', at: new Date().toISOString(), representative: representative.endpoint, lap, afterRowID, throughRowID, accounts: batch.length, matched, skipped, unanswered }
+	});
+}
+
+/** Compares a batch of passive accounts, consecutive in their rows, a request's worth for each representative, and records each part as it is compared. */
+async function comparePassiveAccounts(setup: SweepSetup, batch: readonly KnownAccount[], cursor: SweepCursor, quietBefore: Date): Promise<Tally> {
+	const tally = emptyTally();
+	const parts = setup.representatives.map(function(representative, index) {
+		const part = batch.slice(index * ACCOUNTS_PER_STATES_REQUEST, (index + 1) * ACCOUNTS_PER_STATES_REQUEST);
+		const afterRowID = batch[index * ACCOUNTS_PER_STATES_REQUEST - 1]?.rowID ?? cursor.afterRowID;
+		return({ representative, part, afterRowID });
+	}).filter(function(entry): boolean {
+		return(entry.part.length > 0);
+	});
+	await Promise.all(parts.map(async function({ representative, part, afterRowID }) {
+		const compared = await comparePassiveBatch(setup, representative, part, afterRowID, cursor.lap, quietBefore);
+		if (compared === undefined) {
+			return;
+		}
+		await setup.log.append([...compared.records, compared.batch]);
+		tally.matched += compared.batch.matched;
+		tally.compared += compared.batch.matched;
+		for (const record of compared.records) {
+			count(tally, record.outcome);
+		}
+		if (compared.batch.unanswered !== null) {
+			tally.skipped += compared.batch.skipped.length;
+		}
+	}));
+	return(tally);
+}
+
+/** Where the follower holds every staple before, less the margin, read afresh for each batch; nothing while it has read from no representative. */
+async function quietBeforeOf(store: SweepStore): Promise<Date | undefined> {
+	const { heldBefore } = await store.progress();
+	if (heldBefore === undefined) {
+		return(undefined);
+	}
+	return(new Date(heldBefore.getTime() - QUIET_MARGIN_MILLISECONDS));
+}
+
+type Walk = {
+	readonly name: SweepWalk;
+	/** How many accounts one batch walks past, before the cursor moves. */
+	readonly batchSize: number;
+	accountsAfter(rowID: string, count: number): Promise<readonly KnownAccount[]>;
+	compare(batch: readonly KnownAccount[], cursor: SweepCursor, quietBefore: Date): Promise<Tally>;
+};
+
+/**
+ * Walks the accounts of one kind, in the order of their rows, from where
+ * the walk stopped last, and moves its cursor after each batch. Past the
+ * last account, a new lap begins at the first, which compares again what
+ * was skipped. Nothing is walked while the follower has read from no
+ * representative, since every account would be moving.
+ */
+async function walk(setup: SweepSetup, walking: Walk): Promise<WalkSummary> {
+	const path = setup.cursorPaths[walking.name];
+	const limit = setup.accounts[walking.name];
+	let cursor = await readSweepCursor(path);
+	const tally = emptyTally();
+	let emptyLaps = 0;
+	while (tally.walked < limit && !isStopped(setup.stopped) && emptyLaps < 2) {
+		const quietBefore = await quietBeforeOf(setup.store);
+		if (quietBefore === undefined) {
+			break;
+		}
+		const batch = await walking.accountsAfter(cursor.afterRowID, Math.min(limit - tally.walked, walking.batchSize));
+		const last = batch.at(-1);
+		if (last === undefined) {
+			cursor = { lap: cursor.lap + 1, afterRowID: START.afterRowID };
+			await writeSweepCursor(path, cursor);
+			emptyLaps++;
+			if (setup.toLapEnd) {
+				break;
+			}
+			continue;
+		}
+		emptyLaps = 0;
+		const compared = await walking.compare(batch, cursor, quietBefore);
+		if (isStopped(setup.stopped)) {
+			break;
+		}
+		tally.walked += batch.length;
+		tally.compared += compared.compared;
+		tally.matched += compared.matched;
+		tally.diverged += compared.diverged;
+		tally.skipped += compared.skipped;
+		cursor = { lap: cursor.lap, afterRowID: last.rowID };
+		await writeSweepCursor(path, cursor);
+	}
+	return({ ...tally, cursor });
 }
 
 /**
- * Walks the accounts the follower knows, in the order of their rows, from
- * where the last sweep stopped, comparing each with a representative, and
- * moves the cursor after each batch. Past the last account, a new lap
- * begins at the first, which compares again what was skipped as moving.
+ * Walks the follower's accounts in two walks side by side, each with its
+ * own cursor, sharing the representatives' pace: the accounts with a chain
+ * one at a time, compared at the same head; the rest, which only other
+ * accounts' blocks change, a request's worth at a time.
  */
 export async function sweepAccounts(setup: SweepSetup): Promise<SweepSummary> {
 	if (setup.representatives.length === 0) {
 		throw(new Error('the sweep needs a representative to compare with'));
 	}
-	let cursor = await readSweepCursor(setup.cursorPath);
-	const { heldBefore } = await setup.store.progress();
-	let quietBefore: Date | undefined;
-	if (heldBefore !== undefined) {
-		quietBefore = new Date(heldBefore.getTime() - QUIET_MARGIN_MILLISECONDS);
-	}
-	const counts = { walked: 0, movingOnFollower: 0, compared: 0, matched: 0, diverged: 0, skipped: 0 };
-	let emptyLaps = 0;
-	while (counts.walked < setup.accounts && !isStopped(setup.stopped) && emptyLaps < 2) {
-		const size = Math.min(setup.accounts - counts.walked, setup.representatives.length * ACCOUNTS_PER_REPRESENTATIVE_IN_A_BATCH);
-		const batch = await setup.store.accountsAfter(cursor.afterRowID, size);
-		const last = batch.at(-1);
-		if (last === undefined) {
-			cursor = { lap: cursor.lap + 1, afterRowID: START.afterRowID };
-			await writeSweepCursor(setup.cursorPath, cursor);
-			emptyLaps++;
-			continue;
-		}
-		emptyLaps = 0;
-		const quiet = batch.filter(function(known): boolean {
-			return(!movingOnFollower(known, quietBefore));
-		});
-		let outcomes: readonly SweepOutcome[] = [];
-		if (quietBefore !== undefined) {
-			outcomes = await compareBatch(setup, quiet, cursor.lap, quietBefore);
-		}
-		if (isStopped(setup.stopped)) {
-			break;
-		}
-		counts.walked += batch.length;
-		counts.movingOnFollower += batch.length - quiet.length;
-		for (const outcome of outcomes) {
-			switch (outcome.kind) {
-				case 'match':
-					counts.compared++;
-					counts.matched++;
-					break;
-				case 'diverged':
-					counts.compared++;
-					counts.diverged++;
-					break;
-				case 'skipped':
-					counts.skipped++;
-					break;
-				default:
-					assertNever(outcome);
+	const [chain, passive] = await Promise.all([
+		walk(setup, {
+			name: 'chain',
+			batchSize: setup.representatives.length * CHAIN_ACCOUNTS_PER_REPRESENTATIVE_IN_A_BATCH,
+			accountsAfter(rowID, size) {
+				return(setup.store.chainAccountsAfter(rowID, size));
+			},
+			compare(batch, cursor, quietBefore) {
+				return(compareChainAccounts(setup, batch, cursor.lap, quietBefore));
 			}
-		}
-		cursor = { lap: cursor.lap, afterRowID: last.rowID };
-		await writeSweepCursor(setup.cursorPath, cursor);
-	}
-	return({ ...counts, cursor });
+		}),
+		walk(setup, {
+			name: 'passive',
+			batchSize: setup.representatives.length * ACCOUNTS_PER_STATES_REQUEST,
+			accountsAfter(rowID, size) {
+				return(setup.store.passiveAccountsAfter(rowID, size));
+			},
+			compare(batch, cursor, quietBefore) {
+				return(comparePassiveAccounts(setup, batch, cursor, quietBefore));
+			}
+		})
+	]);
+	return({ chain, passive });
 }

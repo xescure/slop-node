@@ -20,11 +20,12 @@ import { ParityLog, parityLogPath } from './log.js';
 import type { ShadowBase, ShadowRunRecord, ShadowRunState, ShadowTarget } from './log.js';
 import { lockParity, PARITY_LOCK_FILE, parseParityCommand, SHADOW_LOCK_FILE } from './parity-command.js';
 import type { ParityCommand } from './parity-command.js';
-import { runParity, sweepPointerOf } from './report.js';
+import { reportOnLog, runParity, sweepPointerOf } from './report.js';
 import type { ParityReport } from './report.js';
 import { freshShadowRun, runShadowVotes, SHADOW_SCOPE, shadowRunComplete } from './shadow-live.js';
 import { fileShadowState, shadowDirectory } from './shadow-state.js';
-import { sweepAccounts, sweepCursorPath } from './sweep.js';
+import { sweepAccounts, sweepCursorPaths } from './sweep.js';
+import type { SweepCursorPaths } from './sweep.js';
 
 /**
  * Every parity tool leaves each representative at least this long without a
@@ -44,8 +45,11 @@ const USAGE = [
 	'  checksum  check the follower\'s stored ledger checksum against the XOR of its main blocks, compare its',
 	'            block count with each representative\'s, and record each representative\'s checksum',
 	'            --gap-ms <ms>      how long both are read apart (10000)',
-	'  sweep     compare the state of the accounts the follower knows, from where the last sweep stopped',
-	'            --accounts <n>     how many accounts (100)',
+	'  sweep     compare the state of the accounts the follower knows, in two walks side by side, each from',
+	'            where it stopped last: the accounts with a chain one at a time, compared at the same head,',
+	'            and the rest a hundred at a time, each answered apart compared again by itself',
+	'            --accounts <n>     how many accounts each walk goes past (100)',
+	'            --lap              go on to the end of the lap each walk is on (as many as there are)',
 	'  api-diff  send the same GET requests, drawn from what the follower holds within its reach, to the',
 	'            follower and to a representative, and compare the answers, stratum by stratum',
 	'            --samples <n>      how many requests of each stratum to compare (50)',
@@ -63,7 +67,9 @@ const USAGE = [
 	'            --restart                  drop the offline ledger and the standing, and start again',
 	'  report    check the checksum and compare a sweep sample and an API diff sample, then print the',
 	'            parity report as JSON, with the latest shadow-vote run from the log; exits 1 when a signal fails',
-	'            --sample <n>       how many accounts the sweep sample compares (16)',
+	'            --sample <n>       how many chain accounts the sweep sample compares (16)',
+	'            --passive-sample <n>  how many passive accounts the sweep sample goes past (400)',
+	'            --log-only         compare nothing afresh: report on the log as it stands, beside a running sweep',
 	'            --api-samples <n>  how many requests of each stratum the API diff sample compares (2)',
 	'            --gap-ms <ms>      as for checksum',
 	'',
@@ -292,7 +298,7 @@ type Tools = {
 	readonly representatives: readonly APISource[];
 	readonly store: FollowerStore;
 	readonly log: ParityLog;
-	readonly cursorPath: string;
+	readonly cursorPaths: SweepCursorPaths;
 	readonly stopped: AbortSignal;
 };
 
@@ -317,7 +323,7 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 				gapMilliseconds: command.gapMilliseconds,
 				wait,
 				sweep() {
-					return(sweepPointerOf(tools.log, tools.cursorPath));
+					return(sweepPointerOf(tools.log, tools.cursorPaths));
 				}
 			});
 			const records = [crossCheck, ...comparison.checksums, ...comparison.blockCounts];
@@ -326,7 +332,7 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 			return(0);
 		}
 		case 'sweep': {
-			const summary = await sweepAccounts({ ...tools, accounts: command.accounts });
+			const summary = await sweepAccounts({ ...tools, accounts: { chain: command.accounts, passive: command.accounts }, toLapEnd: command.toLapEnd });
 			process.stdout.write(`${JSON.stringify(summary, null, '\t')}\n`);
 			return(0);
 		}
@@ -344,13 +350,18 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 		case 'shadow':
 			return(await shadow(command, tools.directory, tools));
 		case 'report': {
+			if (command.logOnly) {
+				const report = await reportOnLog({ ...tools, knownBehaviors: await capturedBehaviors(fileURLToPath(CAPTURE_DIRECTORY)) });
+				process.stdout.write(`${JSON.stringify(report, null, '\t')}\n`);
+				return(0);
+			}
 			const apiDiff = {
 				samplesPerStratum: command.apiSamples,
 				seed: new Date().toISOString(),
 				edgeCaseStaples: await edgeCaseStaples(),
 				knownBehaviors: await capturedBehaviors(fileURLToPath(CAPTURE_DIRECTORY))
 			};
-			const report = await runParity({ ...tools, sampleAccounts: command.sampleAccounts, apiDiff, gapMilliseconds: command.gapMilliseconds, wait });
+			const report = await runParity({ ...tools, sampleAccounts: command.sampleAccounts, passiveSampleAccounts: command.passiveSampleAccounts, apiDiff, gapMilliseconds: command.gapMilliseconds, wait });
 			process.stdout.write(`${JSON.stringify(report, null, '\t')}\n`);
 			if (anyFails(report)) {
 				return(1);
@@ -360,6 +371,23 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 		default:
 			return(assertNever(command));
 	}
+}
+
+/**
+ * The shadow run sends no request, and a report on the log alone only
+ * reads, so neither takes the lock that keeps the representatives' pace
+ * across the tools that do.
+ */
+async function lockFor(command: ParityCommand, directory: string): Promise<() => Promise<void>> {
+	if (command.kind === 'shadow') {
+		return(await lockParity(directory, process.pid, SHADOW_LOCK_FILE));
+	}
+	if (command.kind === 'report' && command.logOnly) {
+		return(function(): Promise<void> {
+			return(Promise.resolve());
+		});
+	}
+	return(await lockParity(directory, process.pid, PARITY_LOCK_FILE));
 }
 
 async function main(argv: readonly string[]): Promise<ExitCode> {
@@ -375,11 +403,7 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
 			process.stderr.write(`no follower was started in ${directory}\n`);
 			return(1);
 		}
-		let lock = PARITY_LOCK_FILE;
-		if (command.kind === 'shadow') {
-			lock = SHADOW_LOCK_FILE;
-		}
-		const release = await lockParity(directory, process.pid, lock);
+		const release = await lockFor(command, directory);
 		const stopping = new AbortController();
 		const stop = function(): void {
 			stopping.abort(new Error('stopped'));
@@ -397,7 +421,7 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
 				}),
 				store,
 				log: new ParityLog(parityLogPath(directory)),
-				cursorPath: sweepCursorPath(directory),
+				cursorPaths: sweepCursorPaths(directory),
 				stopped: stopping.signal
 			}));
 		} finally {

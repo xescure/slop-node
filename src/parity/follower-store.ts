@@ -105,11 +105,14 @@ export type SequencedStaple = HeldStaple & {
 /** What the parity tools read of the follower's own storage. */
 export type FollowerStore = {
 	progress(): Promise<FollowerProgress>;
-	/** The accounts after the row, in row order, at most the count of them. */
-	accountsAfter(rowID: string, count: number): Promise<readonly KnownAccount[]>;
+	/** The accounts with a chain on the main ledger after the row, in row order, at most the count of them. */
+	chainAccountsAfter(rowID: string, count: number): Promise<readonly KnownAccount[]>;
+	/** The accounts without a chain on the main ledger after the row, in row order, at most the count of them. */
+	passiveAccountsAfter(rowID: string, count: number): Promise<readonly KnownAccount[]>;
 	accountCount(): Promise<number>;
-	/** How many accounts there are up to the row, in row order. */
-	accountsUpTo(rowID: string): Promise<number>;
+	chainAccountCount(): Promise<number>;
+	/** The row of each of the accounts the follower knows. */
+	rowIDsOf(accounts: readonly string[]): Promise<ReadonlyMap<string, string>>;
 	/** Whether the staple, by the hash of its blocks, is in the account's history on the follower's main ledger. */
 	historyHolds(account: string, blocksHash: string): Promise<boolean>;
 	checksumSnapshot(): Promise<ChecksumSnapshot>;
@@ -178,10 +181,18 @@ const KV_VALUE = 'SELECT value FROM kv_entries WHERE arena = $1 AND key = $2 AND
 
 const KV_VALUES = 'SELECT value FROM kv_entries WHERE arena = $1 AND (expires_at IS NULL OR expires_at > now())';
 
-/** The history key leads with the account and the staple time, so its newest staple is the last of its keys. */
-const ACCOUNTS_AFTER = `
+/*
+ * The history key leads with the account and the staple time, so its newest
+ * staple is the last of its keys; an account has a chain when it has a
+ * head, one row each.
+ */
+const CHAIN_ACCOUNTS_AFTER = `
 	SELECT a.id, a.public_key, (SELECT max(h.staple_time) FROM history h WHERE h.account_id = a.id) AS newest_staple
-	FROM accounts a WHERE a.id > $1::bigint ORDER BY a.id LIMIT $2`;
+	FROM heads c JOIN accounts a ON a.id = c.account_id WHERE c.account_id > $1::bigint ORDER BY c.account_id LIMIT $2`;
+
+const PASSIVE_ACCOUNTS_AFTER = `
+	SELECT a.id, a.public_key, (SELECT max(h.staple_time) FROM history h WHERE h.account_id = a.id) AS newest_staple
+	FROM accounts a WHERE a.id > $1::bigint AND NOT EXISTS (SELECT 1 FROM heads c WHERE c.account_id = a.id) ORDER BY a.id LIMIT $2`;
 
 /** The history key is (account, staple time, blocks hash), and the staple's time is found from its hash. */
 const HISTORY_HOLDS = `
@@ -406,6 +417,13 @@ async function accountCandidateOf(pool: pg.Pool, id: string, account: string): P
 	});
 }
 
+async function knownAccounts(pool: pg.Pool, query: string, rowID: string, count: number): Promise<readonly KnownAccount[]> {
+	const result = await pool.query<{ id: string; public_key: string; newest_staple: Date | null }>(query, [rowID, count]);
+	return(result.rows.map(function(row): KnownAccount {
+		return({ rowID: row.id, account: row.public_key, newestStaple: row.newest_staple ?? undefined });
+	}));
+}
+
 /** Reads every query in one view of the database, so that no commit lands between them. */
 async function inOneView<Result>(pool: pg.Pool, read: (client: pg.PoolClient) => Promise<Result>): Promise<Result> {
 	const client = await pool.connect();
@@ -446,19 +464,25 @@ export function openFollowerStore(connectionString: string): FollowerStore {
 			const staged = await pool.query<{ count: string }>(STAGED);
 			return({ completedPass, heldBefore: heldBeforeOf(layoutOf(layout.rows[0]?.value), peers), staged: Number(staged.rows[0]?.count ?? 0) });
 		},
-		async accountsAfter(rowID: string, count: number): Promise<readonly KnownAccount[]> {
-			const result = await pool.query<{ id: string; public_key: string; newest_staple: Date | null }>(ACCOUNTS_AFTER, [rowID, count]);
-			return(result.rows.map(function(row): KnownAccount {
-				return({ rowID: row.id, account: row.public_key, newestStaple: row.newest_staple ?? undefined });
-			}));
+		chainAccountsAfter(rowID: string, count: number): Promise<readonly KnownAccount[]> {
+			return(knownAccounts(pool, CHAIN_ACCOUNTS_AFTER, rowID, count));
+		},
+		passiveAccountsAfter(rowID: string, count: number): Promise<readonly KnownAccount[]> {
+			return(knownAccounts(pool, PASSIVE_ACCOUNTS_AFTER, rowID, count));
 		},
 		async accountCount(): Promise<number> {
 			const result = await pool.query<{ count: string }>('SELECT count(*) AS count FROM accounts');
 			return(Number(result.rows[0]?.count ?? 0));
 		},
-		async accountsUpTo(rowID: string): Promise<number> {
-			const result = await pool.query<{ count: string }>('SELECT count(*) AS count FROM accounts WHERE id <= $1::bigint', [rowID]);
+		async chainAccountCount(): Promise<number> {
+			const result = await pool.query<{ count: string }>('SELECT count(*) AS count FROM heads');
 			return(Number(result.rows[0]?.count ?? 0));
+		},
+		async rowIDsOf(accounts: readonly string[]): Promise<ReadonlyMap<string, string>> {
+			const result = await pool.query<{ id: string; public_key: string }>('SELECT id, public_key FROM accounts WHERE public_key = ANY($1::text[])', [accounts]);
+			return(new Map(result.rows.map(function(row): [string, string] {
+				return([row.public_key, row.id]);
+			})));
 		},
 		async historyHolds(account: string, blocksHash: string): Promise<boolean> {
 			const result = await pool.query<{ holds: boolean }>(HISTORY_HOLDS, [account, Buffer.from(blocksHash, 'hex')]);

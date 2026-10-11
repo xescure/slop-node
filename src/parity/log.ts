@@ -89,13 +89,47 @@ export type SweepOutcome =
 	| { readonly kind: 'skipped'; readonly reason: 'moving'; readonly side: MovingSide; readonly detail: string }
 	| { readonly kind: 'skipped'; readonly reason: 'unanswered'; readonly detail: string };
 
+/**
+ * Which of the follower's accounts a walk of the sweep goes over: those with
+ * blocks on its main ledger, compared one at a time by their heads, or the
+ * rest, compared in batches.
+ */
+export type SweepWalk = 'chain' | 'passive';
+
+/** A walk a record was written in: one of the two, or the walk over every account one at a time, before they were split. */
+export type RecordedWalk = SweepWalk | 'every';
+
+/** One account compared, or not, by itself. */
 export type SweepRecord = {
 	readonly kind: 'sweep';
 	readonly at: string;
 	readonly representative: string;
 	readonly account: string;
 	readonly lap: number;
+	readonly walk: RecordedWalk;
 	readonly outcome: SweepOutcome;
+};
+
+/**
+ * A batch of the passive walk, written after a sweep record for each of its
+ * accounts whose states the two answered apart, so that the accounts it
+ * walked are known by their rows and those it did not compare by name.
+ */
+export type SweepBatchRecord = {
+	readonly kind: 'sweep-batch';
+	readonly at: string;
+	readonly representative: string;
+	readonly lap: number;
+	/** The batch walked every passive account after the first row through the second. */
+	readonly afterRowID: string;
+	readonly throughRowID: string;
+	readonly accounts: number;
+	/** Accounts whose states the two answered alike. */
+	readonly matched: number;
+	/** Accounts not compared: found moving, or unanswered. */
+	readonly skipped: readonly string[];
+	/** Why the representative answered none of the batch, or null when it answered. */
+	readonly unanswered: string | null;
 };
 
 /**
@@ -333,7 +367,7 @@ export type ShadowRunRecord = ShadowRunState & {
 	readonly cost: ShadowRunCost;
 };
 
-export type ParityRecord = ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | APIDiffRecord | ShadowLiveRecord | ShadowRunRecord;
+export type ParityRecord = ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | SweepBatchRecord | APIDiffRecord | ShadowLiveRecord | ShadowRunRecord;
 
 /** The records a log holds, and how many of its lines were not records, as the end of a line cut short by a crash. */
 export type ParityLogContents = {
@@ -880,13 +914,37 @@ function shadowRunRecordOf(value: Fields): ShadowRunRecord | undefined {
 	return({ kind: 'shadow-run', at, ...state, complete, cost });
 }
 
+/** A record written before the walks were split names none, and compared every account one at a time. */
+function recordedWalkOf(value: unknown): RecordedWalk | undefined {
+	switch (value) {
+		case undefined:
+			return('every');
+		case 'chain':
+		case 'passive':
+		case 'every':
+			return(value);
+		default:
+			return(undefined);
+	}
+}
+
 function sweepRecordOf(value: Fields): SweepRecord | undefined {
 	const { at, representative, account, lap } = value;
+	const walk = recordedWalkOf(value['walk']);
 	const outcome = sweepOutcomeOf(value['outcome']);
-	if (!isString(at) || !isString(representative) || !isString(account) || !isCount(lap) || outcome === undefined) {
+	if (!isString(at) || !isString(representative) || !isString(account) || !isCount(lap) || walk === undefined || outcome === undefined) {
 		return(undefined);
 	}
-	return({ kind: 'sweep', at, representative, account, lap, outcome });
+	return({ kind: 'sweep', at, representative, account, lap, walk, outcome });
+}
+
+function sweepBatchRecordOf(value: Fields): SweepBatchRecord | undefined {
+	const { at, representative, lap, afterRowID, throughRowID, accounts, matched, unanswered } = value;
+	const skipped = listOf(value['skipped'], textOf);
+	if (!isString(at) || !isString(representative) || !isCount(lap) || !isString(afterRowID) || !isString(throughRowID) || !isCount(accounts) || !isCount(matched) || skipped === undefined || !isStringOrNull(unanswered)) {
+		return(undefined);
+	}
+	return({ kind: 'sweep-batch', at, representative, lap, afterRowID, throughRowID, accounts, matched, skipped, unanswered });
 }
 
 /** The record a line holds, or nothing when it holds none this version writes. */
@@ -909,6 +967,8 @@ export function parityRecordOf(line: string): ParityRecord | undefined {
 			return(crossCheckRecordOf(value));
 		case 'sweep':
 			return(sweepRecordOf(value));
+		case 'sweep-batch':
+			return(sweepBatchRecordOf(value));
 		case 'api-diff':
 			return(apiDiffRecordOf(value));
 		case 'shadow-live':

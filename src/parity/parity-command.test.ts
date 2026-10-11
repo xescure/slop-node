@@ -10,18 +10,21 @@ const DIRECTORY = '/home/slop/.local/share/slop-node-follower';
 describe('the parity command line', function() {
 	test('names each command with its defaults', function() {
 		expect(parseParityCommand(['checksum'], HOME)).toEqual({ kind: 'checksum', directory: DIRECTORY, gapMilliseconds: 10_000 });
-		expect(parseParityCommand(['sweep'], HOME)).toEqual({ kind: 'sweep', directory: DIRECTORY, accounts: 100 });
+		expect(parseParityCommand(['sweep'], HOME)).toEqual({ kind: 'sweep', directory: DIRECTORY, accounts: 100, toLapEnd: false });
+		expect(parseParityCommand(['sweep', '--lap'], HOME)).toEqual({ kind: 'sweep', directory: DIRECTORY, accounts: Number.MAX_SAFE_INTEGER, toLapEnd: true });
 		expect(parseParityCommand(['shadow'], HOME)).toEqual({ kind: 'shadow', directory: DIRECTORY, base: undefined, informationalEvery: 10, batchStaples: 500, restart: false });
 		expect(parseParityCommand(['shadow', '--base', 'follower_snapshot_20261010061500', '--informational-every', '1', '--batch', '50', '--restart'], HOME)).toEqual({ kind: 'shadow', directory: DIRECTORY, base: 'follower_snapshot_20261010061500', informationalEvery: 1, batchStaples: 50, restart: true });
 		expect(parseParityCommand(['shadow', '--base', 'follower; DROP DATABASE follower'], HOME)).toBeUndefined();
 		expect(parseParityCommand(['shadow', '--informational-every', '0'], HOME)).toBeUndefined();
 		expect(parseParityCommand(['api-diff'], HOME)).toEqual({ kind: 'api-diff', directory: DIRECTORY, samplesPerStratum: 50, seed: undefined });
-		expect(parseParityCommand(['report'], HOME)).toEqual({ kind: 'report', directory: DIRECTORY, sampleAccounts: 16, apiSamples: 2, gapMilliseconds: 10_000 });
+		expect(parseParityCommand(['report'], HOME)).toEqual({ kind: 'report', directory: DIRECTORY, sampleAccounts: 16, passiveSampleAccounts: 400, apiSamples: 2, gapMilliseconds: 10_000, logOnly: false });
 	});
 
 	test('takes the options each command has', function() {
-		expect(parseParityCommand(['sweep', '--accounts', '300', '--directory', '/data/follower'], HOME)).toEqual({ kind: 'sweep', directory: '/data/follower', accounts: 300 });
-		expect(parseParityCommand(['report', '--sample', '4', '--api-samples', '1', '--gap-ms', '5000'], HOME)).toEqual({ kind: 'report', directory: DIRECTORY, sampleAccounts: 4, apiSamples: 1, gapMilliseconds: 5000 });
+		expect(parseParityCommand(['sweep', '--accounts', '300', '--directory', '/data/follower'], HOME)).toEqual({ kind: 'sweep', directory: '/data/follower', accounts: 300, toLapEnd: false });
+		expect(parseParityCommand(['sweep', '--accounts', '300', '--lap'], HOME)).toEqual({ kind: 'sweep', directory: DIRECTORY, accounts: 300, toLapEnd: true });
+		expect(parseParityCommand(['report', '--sample', '4', '--passive-sample', '100', '--api-samples', '1', '--gap-ms', '5000'], HOME)).toEqual({ kind: 'report', directory: DIRECTORY, sampleAccounts: 4, passiveSampleAccounts: 100, apiSamples: 1, gapMilliseconds: 5000, logOnly: false });
+		expect(parseParityCommand(['report', '--log-only'], HOME)).toMatchObject({ kind: 'report', logOnly: true });
 		expect(parseParityCommand(['api-diff', '--samples', '300', '--seed', 'run-1'], HOME)).toEqual({ kind: 'api-diff', directory: DIRECTORY, samplesPerStratum: 300, seed: 'run-1' });
 	});
 
