@@ -8,6 +8,7 @@ import { LedgerInternals } from '../../../upstream/internals.js';
 import { confirmedStaple, feeBlock, manageCertificateBlock, modifyPermissionsBlock, sendBlock } from '../../../testing/blocks.js';
 import { advanceClock } from '../../../testing/network.js';
 import type { TestLedgerOptions, TestNetwork } from '../../../testing/network.js';
+import { FAILED_RETRY_PAUSE_MILLISECONDS } from '../base.js';
 import type { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
 import {
 	ChainCursor,
@@ -16,6 +17,7 @@ import {
 	RecordingLog,
 	TESTING_KEY,
 	advancePastExpiry,
+	afterPersisting,
 	blocksHashesOf,
 	certificateFor,
 	checksumOf,
@@ -61,6 +63,12 @@ type SideRows = {
 	readonly votes: string[] | null;
 	readonly block: string | null;
 };
+
+function sortedByHash(staples: readonly VoteStaple[]): VoteStaple[] {
+	return([...staples].sort(function(left, right): number {
+		return(Number(left.blocksHash.toString() > right.blocksHash.toString()) - Number(left.blocksHash.toString() < right.blocksHash.toString()));
+	}));
+}
 
 function sendFrom(network: TestNetwork, user: number, previous: BlockHash, amount: bigint, idempotent?: string): Promise<Block> {
 	const from = requireAt(network.users, user);
@@ -453,9 +461,7 @@ export function defineGcCases(driver: DriverUnderTest): void {
 				return(await confirmedStaple([await sendFrom(network, user, first.hash, 7n)], network.representatives));
 			}));
 			// The one listed first fails: first by hash, and deferred first.
-			const [failing, applying] = [...seconds].sort(function(left, right): number {
-				return(Number(left.blocksHash.toString() > right.blocksHash.toString()) - Number(left.blocksHash.toString() < right.blocksHash.toString()));
-			});
+			const [failing, applying] = sortedByHash(seconds);
 			if (failing === undefined || applying === undefined) {
 				throw(new Error('two staples expected'));
 			}
@@ -476,6 +482,68 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			expect(reported.length).toBeLessThanOrEqual(3);
 			expect(hashOf(await node.ledger.getBlock(requireAt(applying.blocks, 0).hash, 'main'))).toBe(hashOf(requireAt(applying.blocks, 0)));
 			expect(await node.ledger.getBlock(requireAt(failing.blocks, 0).hash, 'main')).toBeNull();
+		});
+
+		test('released staples whose retries fail, listed ahead of a whole batch, keep no later batch from the staple after them', async function() {
+			const { network, startNode } = await startNetwork();
+			const { node, storage } = await startNode(0, { heapProcessWindowMs: 0 });
+			const firsts = await Promise.all(network.users.map(function(_user, index) {
+				return(sendFromGenesis(network, index, 5n));
+			}));
+			const seconds = await Promise.all(firsts.map(async function(first, user) {
+				return(await confirmedStaple([await sendFrom(network, user, first.hash, 7n)], network.representatives));
+			}));
+			// The two listed first fail, and fill a batch of two: first by hash, and deferred first.
+			const [firstFailing, secondFailing, applying] = sortedByHash(seconds);
+			if (firstFailing === undefined || secondFailing === undefined || applying === undefined) {
+				throw(new Error('three staples expected'));
+			}
+			for (const staple of [firstFailing, secondFailing, applying]) {
+				expect(await node.ledger.add(staple)).toEqual([]);
+			}
+			for (const first of firsts) {
+				await node.ledger.add(await confirmedStaple([first], network.representatives));
+			}
+			afterPersisting(storage, [firstFailing, secondFailing], function(blocksHash): void {
+				throw(new Error(`injected failure after persisting ${blocksHash}`));
+			});
+			const batch = function(): Promise<boolean> {
+				return(writeStorage(storage, function(transaction) {
+					return(storage._Testing(TESTING_KEY).gcBatch(transaction, 2));
+				}));
+			};
+
+			const reported: boolean[] = [];
+			for (let call = 0; call < 6 && reported.at(-1) !== false; call++) {
+				reported.push(await batch());
+			}
+
+			expect(reported.at(-1)).toBe(false);
+			expect(hashOf(await node.ledger.getBlock(requireAt(applying.blocks, 0).hash, 'main'))).toBe(hashOf(requireAt(applying.blocks, 0)));
+			expect(await node.ledger.getBlock(requireAt(firstFailing.blocks, 0).hash, 'main')).toBeNull();
+			expect(await node.ledger.getBlock(requireAt(secondFailing.blocks, 0).hash, 'main')).toBeNull();
+		});
+
+		test('a released staple whose retry failed waits out the retry pause before gc retries it, and gc reports nothing left meanwhile', async function() {
+			const { network, startNode } = await startNetwork();
+			const { node, storage } = await startNode(0, { heapProcessWindowMs: 0 });
+			const first = await sendFromGenesis(network, 0, 5n);
+			const second = await sendFrom(network, 0, first.hash, 7n);
+			const secondStaple = await confirmedStaple([second], network.representatives);
+			expect(await node.ledger.add(secondStaple)).toEqual([]);
+			await node.ledger.add(await confirmedStaple([first], network.representatives));
+			const restore = failAfterPersisting(storage, secondStaple);
+			expect(await node.ledger.gc()).toBe(false);
+			restore();
+
+			expect(await node.ledger.gc()).toBe(false);
+			expect(await node.ledger.getBlock(second.hash, 'main')).toBeNull();
+			advanceClock(FAILED_RETRY_PAUSE_MILLISECONDS - 1);
+			expect(await node.ledger.gc()).toBe(false);
+			expect(await node.ledger.getBlock(second.hash, 'main')).toBeNull();
+			advanceClock(1);
+			expect(await node.ledger.gc()).toBe(false);
+			expect(hashOf(await node.ledger.getBlock(second.hash, 'main'))).toBe(hashOf(second));
 		});
 
 		test('a gc retry that fails after its write leaves nothing behind and stays deferred', async function() {

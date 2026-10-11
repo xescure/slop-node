@@ -144,6 +144,14 @@ const DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS = 5000;
 // Upstream's gc loop checks its time budget only between batches, so a batch stays small.
 const GC_BATCH_LIMIT = 100;
 
+/*
+ * How long gc leaves a released deferred staple whose retry failed before it
+ * retries it again. A persistent failure that every gc retried first would
+ * spend each slice on itself, and enough of them would leave every gc
+ * reporting more left without ever reaching the staples after them.
+ */
+export const FAILED_RETRY_PAUSE_MILLISECONDS = 60_000;
+
 /** Upstream's default time budget of one gc [Keeta TS] index.js:67852. */
 const DEFAULT_GC_TIME_LIMIT_MILLISECONDS = 280_000;
 
@@ -171,6 +179,8 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	#driver: DriverState = { state: 'uninitialized' };
 	// Deferred staples each gc transaction has already retried; one that fails is not retried again in the same pass.
 	readonly #retriedByGc = new WeakMap<Transaction, Set<StapleKey>>();
+	// When each released deferred staple whose gc retry failed may be retried again; it outlives the transaction, as the failure does not roll back.
+	readonly #failedRetryPausedUntil = new Map<StapleKey, number>();
 	// The tail of the work queued on each transaction that may open isolated units; it never rejects.
 	readonly #exclusiveWork = new WeakMap<Transaction, Promise<void>>();
 
@@ -674,15 +684,14 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * A deferred staple whose awaited blocks are all on main should have been
 	 * replayed when the last of them arrived; the replay window may have run
 	 * out, or the replay failed. It is retried the way a replay would run it.
-	 * One that fails again stays deferred and is logged, and is not retried
-	 * again by the same gc pass, so it never keeps the pass going. Once the
-	 * replay window is spent the batch stops, after it applied or dropped one
-	 * staple at least, and the staples it listed and left are listed again by
-	 * the next: a batch runs in the gc's one transaction, which a hundred
-	 * staples of hundreds of operations each would hold open for minutes. A
-	 * failed retry counts for nothing there: the next gc, in a transaction of
-	 * its own, lists it first again, so a batch that stopped after it would
-	 * never reach the staples listed after it, and the gc never end.
+	 * One that fails again stays deferred and is logged, and no gc retries it
+	 * again until the retry pause has passed, so it never keeps a gc going,
+	 * is never listed ahead of the staples after it, and costs its retry once
+	 * a pause rather than once a slice. Once the replay window is spent the
+	 * batch stops, after it tried one staple at least, and the staples it
+	 * listed and left are listed again by the next: a batch runs in the gc's
+	 * one transaction, which a hundred staples of hundreds of operations each
+	 * would hold open for minutes.
 	 */
 	async #retryReleasedDeferredStaples(transaction: Transaction, limit: number): Promise<boolean> {
 		const { config } = this.initialized;
@@ -692,28 +701,46 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			completed: new Set(),
 			deadline: Date.now() + (config.heapProcessWindowMs ?? DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS)
 		};
-		let settled = 0;
-		for (const staple of await this.listReleasedDeferredStaples(transaction, limit, retried)) {
-			if (settled > 0 && Date.now() >= replay.deadline) {
+		const passedOver = (): ReadonlySet<StapleKey> => {
+			return(new Set([...retried, ...this.#pausedAfterFailedRetry()]));
+		};
+		let tried = 0;
+		for (const staple of await this.listReleasedDeferredStaples(transaction, limit, passedOver())) {
+			if (tried > 0 && Date.now() >= replay.deadline) {
 				break;
 			}
+			tried++;
 			const stapleKey = toStapleKey(staple.blocksHash);
 			retried.add(stapleKey);
 			if (await this.#isDead(transaction, staple)) {
 				await this.removeDeferredStaple(transaction, stapleKey);
 				this.#reportDeadDeferredStaple(staple);
-				settled++;
 				continue;
 			}
 			try {
 				const applied = await this.#applyIsolated(transaction, staple, replay);
 				recordSettlement(transaction, applied);
-				settled++;
+				this.#failedRetryPausedUntil.delete(stapleKey);
 			} catch (error: unknown) {
-				config.log?.error(LOG_SOURCE, `retrying deferred staple ${stapleKey} failed; it stays deferred`, error);
+				this.#failedRetryPausedUntil.set(stapleKey, Date.now() + FAILED_RETRY_PAUSE_MILLISECONDS);
+				config.log?.error(LOG_SOURCE, `retrying deferred staple ${stapleKey} failed; it stays deferred, and gc retries it again in ${String(FAILED_RETRY_PAUSE_MILLISECONDS / 1000)} s at the earliest`, error);
 			}
 		}
-		return((await this.listReleasedDeferredStaples(transaction, 1, retried)).length > 0);
+		return((await this.listReleasedDeferredStaples(transaction, 1, passedOver())).length > 0);
+	}
+
+	/** The staples whose failed gc retry is still in its pause; those whose pause has passed are forgotten. */
+	#pausedAfterFailedRetry(): StapleKey[] {
+		const now = Date.now();
+		const paused: StapleKey[] = [];
+		for (const [stapleKey, pausedUntil] of this.#failedRetryPausedUntil) {
+			if (now < pausedUntil) {
+				paused.push(stapleKey);
+			} else {
+				this.#failedRetryPausedUntil.delete(stapleKey);
+			}
+		}
+		return(paused);
 	}
 
 	/*
