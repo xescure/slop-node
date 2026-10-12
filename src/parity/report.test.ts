@@ -6,7 +6,7 @@ import { startFakeAPI } from '../testing/fake-api.js';
 import { httpSource } from './api-source.js';
 import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-store.js';
 import { ParityLog } from './log.js';
-import type { APIDiffExplainedRecord, APIDiffOutcome, APIDiffPlanRecord, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, SelfCheck, ShadowRunRecord, ShadowWindowTally, SweepBatchRecord, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
+import type { APIDiffExplainedRecord, APIDiffOutcome, APIDiffPlanRecord, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, SelfCheck, ShadowExplainedRecord, ShadowRunRecord, ShadowRunState, ShadowWindowTally, SweepBatchRecord, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
 import { answerDigest } from './api-diff.js';
 import { exitCodeOf, neverComparedAccountsOf, parityReportOf, runParity, neverComparedCandidatesOf } from './report.js';
 import type { SweepPosition } from './report.js';
@@ -117,9 +117,9 @@ function shadowRun(at: string, changes: Partial<ShadowRunRecord>): ShadowRunReco
 	});
 }
 
-function report(records: readonly ParityRecord[], position: Partial<SweepPosition> = {}) {
+function report(records: readonly ParityRecord[], position: Partial<SweepPosition> = {}, shadowStanding: ShadowRunState | null = null) {
 	const sweep: SweepPosition = { knownAccounts: 10, chainAccounts: [], cursors: CURSORS, rowIDs: new Map(), ...position };
-	return(parityReportOf({ generatedAt: new Date('2026-10-09T08:00:00.000Z'), progress: PROGRESS, sweep, log: { records, unreadableLines: 0 }, knownBehaviors: new Set([KNOWN_BEHAVIOR]) }));
+	return(parityReportOf({ generatedAt: new Date('2026-10-09T08:00:00.000Z'), progress: PROGRESS, sweep, log: { records, unreadableLines: 0 }, knownBehaviors: new Set([KNOWN_BEHAVIOR]), shadowStanding }));
 }
 
 describe('the parity report', function() {
@@ -380,8 +380,8 @@ describe('the parity report', function() {
 				target: passed.target,
 				reached: '420000',
 				complete: true,
-				scoped: { replayed: 30_000, shadowVoted: 30_000, voted: 29_990, explained: { 'self-requirement-return': { refusals: 10, changedIn: '0.18.5' } }, unexplained: 0, votedFrom: '2026-07-24T20:40:00.000Z', votedTo: '2026-10-10T09:00:00.000Z' },
-				informational: { replayed: 170_000, shadowVoted: 17_000, voted: 16_000, explained: { 'send-recipient-access': { refusals: 990, changedIn: '0.18.0' } }, unexplained: 10, votedFrom: '2026-05-20T00:00:00.000Z', votedTo: '2026-07-24T20:30:00.000Z', every: 10 },
+				scoped: { replayed: 30_000, shadowVoted: 30_000, voted: 29_990, explained: { 'self-requirement-return': { refusals: 10, changedIn: '0.18.5' } }, explainedByRule: [], unexplained: 0, votedFrom: '2026-07-24T20:40:00.000Z', votedTo: '2026-10-10T09:00:00.000Z' },
+				informational: { replayed: 170_000, shadowVoted: 17_000, voted: 16_000, explained: { 'send-recipient-access': { refusals: 990, changedIn: '0.18.0' } }, explainedByRule: [], unexplained: 10, votedFrom: '2026-05-20T00:00:00.000Z', votedTo: '2026-07-24T20:30:00.000Z', every: 10 },
 				unapplied: 0,
 				cost: passed.cost
 			},
@@ -406,6 +406,33 @@ describe('the parity report', function() {
 			confidence: { kind: 'observed', samples: 30_000, divergences: 1 },
 			firstDivergence: { at: failed.at, staple: STAPLE, code: 'LEDGER_INVALID_PERMISSIONS', why: 'no access: 0 reasons explain the refusal' }
 		});
+	});
+
+	test('fails shadow votes on any refusal in the scoped window no classified difference explains, listed or only counted', function() {
+		const counted = shadowRun('2026-10-10T07:00:00.000Z', { scoped: { ...TALLY_SCOPED, voted: 29_989, unexplained: 1, firstUnexplained: [] } });
+		expect(report([counted]).signals.shadowVotes).toMatchObject({ verdict: 'fail', firstDivergence: { at: counted.at, staple: null, code: 'unlisted', why: '1 refusals no classified difference explains, past the 20 listed' } });
+	});
+
+	test('counts a refusal the run left unexplained as explained once its rule alone explains it, listed apart from those the run explained', function() {
+		const refusal = { blocksHash: STAPLE, code: 'LEDGER_BLOCK_EXPIRED', message: 'Refusing to issue vote for block dated 2026-10-08T19:48:47.109Z', why: 'only a permission refusal is explained, not LEDGER_BLOCK_EXPIRED' };
+		const run = shadowRun('2026-10-12T16:20:00.000Z', { scoped: { ...TALLY_SCOPED, voted: 29_989, unexplained: 1, firstUnexplained: [refusal] } });
+		const byRule: ShadowExplainedRecord = { kind: 'shadow-explained', at: '2026-10-12T17:00:00.000Z', blocksHash: STAPLE, window: 'scoped', code: 'LEDGER_BLOCK_EXPIRED', reason: 'permanent-vote-block-age', basis: 'by-rule', replaces: refusal.why };
+
+		expect(report([run, byRule]).signals.shadowVotes).toMatchObject({ verdict: 'pass', latest: { scoped: { explained: { 'self-requirement-return': { refusals: 10 } }, explainedByRule: [{ blocksHash: STAPLE, reason: 'permanent-vote-block-age', code: 'LEDGER_BLOCK_EXPIRED' }], unexplained: 0 } }, confidence: { kind: 'rule-of-three' } });
+		expect(report([run, { ...byRule, replaces: 'the vote at the newest block\'s date, 2026-10-08T19:48:47.109Z, was refused too' }]).signals.shadowVotes).toMatchObject({ verdict: 'fail', latest: { scoped: { explainedByRule: [], unexplained: 1 } } });
+		expect(report([run, { ...byRule, window: 'informational' }]).signals.shadowVotes).toMatchObject({ verdict: 'fail' });
+	});
+
+	test('reads the run as it stands from its cursor while an invocation runs or after one was cut short, and from the latest record otherwise', function() {
+		const recorded = shadowRun('2026-10-11T11:17:13.539Z', { complete: false, target: { sequence: '431911', fixedAt: '2026-10-11T10:40:00.000Z', followerCaughtUp: true, heldBefore: null }, reached: { sequence: '192973', blocksHash: STAPLE } });
+		const { kind, at, complete, cost, ...state } = recorded;
+		const further: ShadowRunState = { ...state, reached: { sequence: '411473', blocksHash: STAPLE }, target: { ...state.target, sequence: '442715', fixedAt: '2026-10-12T14:14:23.149Z' } };
+
+		expect(report([recorded], {}, further).signals.shadowVotes).toMatchObject({ runs: 1, latest: { at: null, reached: '411473', complete: false, cost: null }, notComparableReasons: ['run-incomplete'] });
+		expect(report([recorded], {}, { ...further, reached: { sequence: further.target.sequence, blocksHash: STAPLE } }).signals.shadowVotes).toMatchObject({ latest: { at: null, reached: '442715', complete: true } });
+		expect(report([recorded], {}, { ...state, reached: { sequence: '190000', blocksHash: STAPLE } }).signals.shadowVotes).toMatchObject({ latest: { at, reached: '192973', cost } });
+		expect(report([], {}, further).signals.shadowVotes).toMatchObject({ runs: 0, latest: { at: null, reached: '411473' } });
+		expect([kind, complete]).toEqual(['shadow-run', false]);
 	});
 
 	test('fails shadow votes on a staple the complete run never applied', function() {
@@ -640,7 +667,7 @@ describe('the parity report', function() {
 
 	test('passes no signal while the log holds lines it cannot read, which may have been records, and fails one that fails', function() {
 		const at = '2026-10-09T02:00:00.000Z';
-		const signals = parityReportOf({ generatedAt: new Date(at), progress: PROGRESS, sweep: { knownAccounts: 10, chainAccounts: [], cursors: COMPLETE_CURSORS, rowIDs: new Map() }, log: { records: [crossCheck(at, { kind: 'equal' }), blockCount(at, { kind: 'pass' }), swept(at, ACCOUNT, MATCH), swept(at, OTHER_ACCOUNT, diverged(OTHER_ACCOUNT, 'balances[0].balance'))], unreadableLines: 1 }, knownBehaviors: new Set() }).signals;
+		const signals = parityReportOf({ generatedAt: new Date(at), progress: PROGRESS, sweep: { knownAccounts: 10, chainAccounts: [], cursors: COMPLETE_CURSORS, rowIDs: new Map() }, log: { records: [crossCheck(at, { kind: 'equal' }), blockCount(at, { kind: 'pass' }), swept(at, ACCOUNT, MATCH), swept(at, OTHER_ACCOUNT, diverged(OTHER_ACCOUNT, 'balances[0].balance'))], unreadableLines: 1 }, knownBehaviors: new Set(), shadowStanding: null }).signals;
 		expect(signals.checksum).toMatchObject({ verdict: 'not-comparable-yet', notComparableReasons: ['log-unreadable'] });
 		expect(signals.sweep).toMatchObject({ verdict: 'fail' });
 	});
@@ -735,7 +762,8 @@ describe('a parity run', function() {
 			apiDiff: { samplesPerStratum: 1, seed: 'test', edgeCaseStaples: [], knownBehaviors: new Set() },
 			gapMilliseconds: 10_000,
 			wait: () => Promise.resolve(),
-			stopped: new AbortController().signal
+			stopped: new AbortController().signal,
+			shadowStanding: () => Promise.resolve(undefined)
 		});
 
 		expect(result.signals.checksum).toMatchObject({ verdict: 'not-comparable-yet', crossCheck: { verdict: 'pass', runs: 1 }, blockCount: { counts: { comparisons: 1 }, notComparableReasons: ['no-completed-pass'] } });

@@ -18,6 +18,8 @@ export type ParityCommand =
 	/** Records the triage of an API divergence of a state that moved on, which closes it; untestedBecause, from --force, states why no later comparison needs to have retested it. */
 	| { readonly kind: 'explain'; readonly directory: string; readonly stratum: Stratum; readonly path: string; readonly divergenceAt: string; readonly divergence: DivergenceClass; readonly reference: string; readonly untestedBecause: string | null }
 	| { readonly kind: 'shadow'; readonly directory: string; readonly base: string | undefined; readonly informationalEvery: number; readonly batchStaples: number; readonly restart: boolean }
+	/** Records, for the refusals the latest shadow-vote run left unexplained, those a classified difference's rule alone explains. */
+	| { readonly kind: 'explain-shadow'; readonly directory: string }
 	| {
 		readonly kind: 'report';
 		readonly directory: string;
@@ -110,6 +112,9 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 		case 'explain':
 			valued = ['--directory', '--stratum', '--path', '--at', '--class', '--reference', '--force'];
 			break;
+		case 'explain-shadow':
+			valued = ['--directory'];
+			break;
 		case 'report':
 			valued = ['--directory', '--sample', '--passive-sample', '--api-samples', '--gap-ms', ...PACING_OPTIONS];
 			flags = ['--log-only'];
@@ -147,6 +152,8 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 		}
 		case 'recheck':
 			return({ kind: name, directory, pacing });
+		case 'explain-shadow':
+			return({ kind: name, directory });
 		case 'explain': {
 			const stratum = stratumOf(options.get('--stratum'));
 			const divergence = DIVERGENCE_CLASSES.find(function(known): boolean {

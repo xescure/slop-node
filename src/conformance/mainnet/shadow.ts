@@ -35,8 +35,18 @@ const lib = KeetaNet.lib;
  *   account vouched for alone; no representative was asked to vote on it.
  * - `send-recipient-access`: the recipient's access on a sent token, which no
  *   release before 0.18.0 required and which the staple's votes predate.
+ * - `permanent-vote-block-age`: a block dated more than five minutes before
+ *   the staple's earliest vote. A representative checks a block's date only
+ *   as it issues a temporary vote, and the staple carries the permanent votes
+ *   that replaced those, while the shadow vote is a temporary one issued at
+ *   the permanent votes' moment. It is explained only once the same ledger
+ *   votes for the staple with the clock at its newest block's date.
  */
-export const SHADOW_REFUSAL_REASONS = ['self-requirement-return', 'same-staple-grant-scope', 'trusted-account-genesis', 'send-recipient-access'] as const;
+const PERMISSION_REFUSAL_REASONS = ['self-requirement-return', 'same-staple-grant-scope', 'trusted-account-genesis', 'send-recipient-access'] as const;
+
+type PermissionRefusalReason = typeof PERMISSION_REFUSAL_REASONS[number];
+
+export const SHADOW_REFUSAL_REASONS: readonly [...typeof PERMISSION_REFUSAL_REASONS, 'permanent-vote-block-age'] = [...PERMISSION_REFUSAL_REASONS, 'permanent-vote-block-age'];
 
 export type ShadowRefusalReason = typeof SHADOW_REFUSAL_REASONS[number];
 
@@ -47,13 +57,15 @@ export type ShadowRefusalReason = typeof SHADOW_REFUSAL_REASONS[number];
  * and scope an earlier grant [Keeta TS 0.18.5] index.js:67903; 0.18.4 has
  * neither [Keeta TS 0.18.4] index.js:68490-68491. 0.18.0 is the first that
  * lists a SEND's recipient [Keeta TS 0.18.0] index.js:68263-68279. Every
- * release refuses the genesis staple's vote.
+ * release refuses the genesis staple's vote, and checks a block's date only
+ * for a temporary vote.
  */
 export const SHADOW_REFUSAL_RELEASES: Readonly<Record<ShadowRefusalReason, string | null>> = {
 	'self-requirement-return': '0.18.5',
 	'same-staple-grant-scope': '0.18.5',
 	'trusted-account-genesis': null,
-	'send-recipient-access': '0.18.0'
+	'send-recipient-access': '0.18.0',
+	'permanent-vote-block-age': null
 };
 
 export type LedgerRefusal = { readonly code: ErrorCode; readonly message: string };
@@ -81,9 +93,14 @@ export function refusalOf(error: unknown): LedgerRefusal {
 }
 
 /** The ledger's vote on the staple's blocks, which must run with the clock at the staple's moment. */
-export async function shadowVote(staple: VoteStaple, ledger: Ledger): Promise<ShadowVote> {
-	if (Date.now() !== staple.timestamp().valueOf()) {
-		throw(new Error(`a shadow vote on ${staple.blocksHash.toString()} runs with the clock away from the staple's timestamp`));
+export function shadowVote(staple: VoteStaple, ledger: Ledger): Promise<ShadowVote> {
+	return(shadowVoteAt(staple, ledger, staple.timestamp()));
+}
+
+/** The ledger's vote on the staple's blocks, which must run with the clock at the moment given. */
+export async function shadowVoteAt(staple: VoteStaple, ledger: Ledger, moment: Date): Promise<ShadowVote> {
+	if (Date.now() !== moment.valueOf()) {
+		throw(new Error(`a shadow vote on ${staple.blocksHash.toString()} runs with the clock away from ${moment.toISOString()}`));
 	}
 	let vote: Vote;
 	try {
@@ -311,7 +328,7 @@ function requiredOnlyOfRecipient(staple: RefusedStaple, refused: Requirement): b
 	}));
 }
 
-function explains(reason: ShadowRefusalReason, staple: RefusedStaple, refused: Requirement, anchors: NetworkAnchors): boolean {
+function explains(reason: PermissionRefusalReason, staple: RefusedStaple, refused: Requirement, anchors: NetworkAnchors): boolean {
 	switch (reason) {
 		case 'self-requirement-return':
 			return(skippedAfterSelfRequirement(staple.blocks, refused));
@@ -326,19 +343,66 @@ function explains(reason: ShadowRefusalReason, staple: RefusedStaple, refused: R
 	}
 }
 
-export type ExplainedRefusal = {
-	readonly reason: ShadowRefusalReason;
-	/** The requirement the refusal names, as the staple's effects record it. */
-	readonly requirement: Requirement;
-};
+/** How far from the moment a temporary vote is issued a block may be dated [Keeta TS] index.js:70185-70197. */
+export const BLOCK_DATE_WINDOW_MILLISECONDS: number = 5 * 60_000;
 
-/** The one reason that explains the refusal, with the requirement refused; any other outcome throws UnexplainedRefusal. */
+/** When the staple's newest block is dated, the moment a confirming vote is issued at. */
+export function newestBlockDate(staple: Pick<RefusedStaple, 'blocks'>): Date {
+	return(new Date(Math.max(...staple.blocks.map(function(block): number {
+		return(block.date.valueOf());
+	}))));
+}
+
+/*
+ * A representative checks a block's date only as it issues a temporary
+ * vote: a vote asked for beside temporary votes is permanent and issued
+ * without the check, as is a temporary one beside permanent votes alone
+ * [Keeta TS] index.js:69028-69050, 69309-69316, 69317-69347, and the check
+ * comes once the ledger's outcome of the blocks has validated
+ * [Keeta TS] index.js:70179-70197. A staple carries the permanent votes, so
+ * one whose every block is dated more than the window before its earliest
+ * vote had its temporary votes issued earlier, as the blocks were new. A
+ * block dated after the votes, or within the window before them, is no such
+ * staple's.
+ */
+function datedBeforeTheVotes(staple: RefusedStaple): boolean {
+	if (staple.votes.length === 0) {
+		return(false);
+	}
+	const earliestVote = Math.min(...staple.votes.map(function(vote): number {
+		return(vote.validityFrom.valueOf());
+	}));
+	return(staple.blocks.every(function(block): boolean {
+		return(block.date.valueOf() < earliestVote - BLOCK_DATE_WINDOW_MILLISECONDS);
+	}));
+}
+
+export type ExplainedRefusal =
+	{
+		readonly reason: PermissionRefusalReason;
+		/** The requirement the refusal names, as the staple's effects record it. */
+		readonly requirement: Requirement;
+	} |
+	{ readonly reason: 'permanent-vote-block-age'; readonly requirement: null };
+
+/**
+ * The one reason that explains the refusal, with the requirement refused;
+ * any other outcome throws UnexplainedRefusal. A refusal for a block's date
+ * is explained by the staple's dates alone, which a vote at its newest
+ * block's date then confirms (src/parity/shadow-live.ts).
+ */
 export function explainRefusal(staple: RefusedStaple, refusal: LedgerRefusal, anchors: NetworkAnchors): ExplainedRefusal {
+	if (refusal.code === 'LEDGER_BLOCK_EXPIRED') {
+		if (!datedBeforeTheVotes(staple)) {
+			throw(new UnexplainedRefusal(`a block of the staple is dated after its earliest vote or within ${String(BLOCK_DATE_WINDOW_MILLISECONDS / 60_000)} min before it: ${refusal.message}`));
+		}
+		return({ reason: 'permanent-vote-block-age', requirement: null });
+	}
 	if (refusal.code !== 'LEDGER_INVALID_PERMISSIONS') {
-		throw(new UnexplainedRefusal(`only a permission refusal is explained, not ${refusal.code}: ${refusal.message}`));
+		throw(new UnexplainedRefusal(`only a permission or a block date refusal is explained, not ${refusal.code}: ${refusal.message}`));
 	}
 	const refused = refusedRequirement(staple.blocks, refusal, anchors);
-	const reasons = SHADOW_REFUSAL_REASONS.filter(function(reason): boolean {
+	const reasons = PERMISSION_REFUSAL_REASONS.filter(function(reason): boolean {
 		return(explains(reason, staple, refused, anchors));
 	});
 	const [reason] = reasons;
@@ -348,19 +412,27 @@ export function explainRefusal(staple: RefusedStaple, refusal: LedgerRefusal, an
 	return({ reason, requirement: refused });
 }
 
-export type ShadowVoteException = ExplainedRefusal & {
+export type ShadowVoteException = Extract<ExplainedRefusal, { readonly requirement: Requirement }> & {
 	readonly blocksHash: string;
 	readonly code: ErrorCode;
 };
 
-/** Each refused staple with its reason; an unexplained refusal throws. */
+/**
+ * Each refused staple with its reason; an unexplained refusal throws, as
+ * does one for a block's date, which the replay's voter does not confirm.
+ */
 export function shadowVoteExceptions(votes: readonly ShadowVote[], anchors: NetworkAnchors): ShadowVoteException[] {
 	return(votes.flatMap(function(vote): ShadowVoteException[] {
 		switch (vote.outcome) {
 			case 'voted':
 				return([]);
-			case 'refused':
-				return([{ blocksHash: vote.staple.blocksHash.toString(), code: vote.refusal.code, ...explainRefusal(vote.staple, vote.refusal, anchors) }]);
+			case 'refused': {
+				const explained = explainRefusal(vote.staple, vote.refusal, anchors);
+				if (explained.requirement === null) {
+					throw(new UnexplainedRefusal(`a refusal for a block's date is explained only by a vote at the newest block's date, which the replay does not make: ${vote.refusal.message}`));
+				}
+				return([{ blocksHash: vote.staple.blocksHash.toString(), code: vote.refusal.code, ...explained }]);
+			}
 			default:
 				return(assertNever(vote));
 		}

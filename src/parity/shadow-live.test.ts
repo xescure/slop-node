@@ -1,22 +1,30 @@
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, inject, test, vi } from 'vitest';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { loadMainnetFixture, mainnetNodeConfig } from '../conformance/mainnet/fixture.js';
+import { newestBlockDate } from '../conformance/mainnet/shadow.js';
 import { REPLAY_TIMEOUT_MILLISECONDS } from '../conformance/mainnet/head-replay.js';
 import { replayOrder } from '../conformance/mainnet/replay.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
+import { confirmedStaple, operationsBlock } from '../testing/blocks.js';
 import { createDatabase } from '../testing/postgres.js';
 import type { TestDatabase } from '../testing/postgres.js';
 import type { SequencedStaple } from './follower-store.js';
-import type { ShadowBase, ShadowRunState, ShadowTarget, ShadowVoteEntry } from './log.js';
-import { SHADOW_GC_SLICE_MILLISECONDS, freshShadowRun, runShadowVotes, sampledForInformation, shadowLedgerStorage, shadowRunComplete, shadowWindowOf, votedFrom } from './shadow-live.js';
+import { ParityLog } from './log.js';
+import type { ShadowBase, ShadowRunRecord, ShadowRunState, ShadowTarget, ShadowVoteEntry } from './log.js';
+import { recordsOf } from './report.js';
+import { CONFIRMATION_REFUSED, SHADOW_GC_SLICE_MILLISECONDS, explainByRule, freshShadowRun, runShadowVotes, sampledForInformation, shadowLedgerStorage, shadowRunComplete, shadowWindowOf, votedFrom } from './shadow-live.js';
 import type { ShadowScope, ShadowSource, ShadowState } from './shadow-live.js';
 
 const lib = KeetaNet.lib;
 
 const GENESIS_BASE: ShadowBase = { database: null, sequence: '0', blocksHash: null, scopedStaples: 0 };
+
+const SCOPE_OF_TEST: ShadowScope = { release: 'test', from: new Date(0) };
 
 function keyOf(staple: VoteStaple): string {
 	return(staple.blocksHash.toString());
@@ -231,6 +239,73 @@ describe('shadow votes on the follower\'s history', function() {
 			}));
 		}));
 	}, REPLAY_TIMEOUT_MILLISECONDS);
+
+	test('explain a refusal for blocks dated more than five minutes before the staple\'s votes once a vote at the newest block\'s date passes, and only then', async function() {
+		const head = replayOrder(await loadMainnetFixture('head')).slice(0, 160);
+		const exceptions = await committedExceptions();
+		const place = head.findIndex(function(staple, index): boolean {
+			return(index >= 100 && !exceptions.has(keyOf(staple)));
+		});
+		const original = head[place];
+		if (original === undefined) {
+			throw(new Error('no staple the shadow votes for'));
+		}
+		const voter = lib.Account.fromSeed('5b1e8d2c4a6f7e9b0c3d5a7f9e1b3c5d7a9f0e2b4c6d8a0f2e4b6c8d0a2f4e6b', 0);
+		const late = await confirmedStaple(original.blocks, [voter], { voteDelays: [10 * 60_000] });
+		const replayed = [...head.slice(0, place), late, ...head.slice(place + 1)];
+		const everyStaple: ShadowScope = { release: 'test', from: new Date(0) };
+		const outcomeOfLate = async function(): Promise<ShadowVoteEntry['outcome'] | undefined> {
+			const state = memoryState();
+			await runShadowVotes({ source: sourceOf(replayed), state, storage: new MemoryLedgerStorage(), start: freshShadowRun(everyStaple, 1, GENESIS_BASE, targetOf(replayed)), batchStaples: 200 });
+			return(state.votes.find(function(vote): boolean {
+				return(vote.blocksHash === keyOf(late));
+			})?.outcome);
+		};
+
+		expect(await outcomeOfLate()).toEqual({ kind: 'explained', reason: 'permanent-vote-block-age', code: 'LEDGER_BLOCK_EXPIRED' });
+
+		const realVote = Reflect.get(lib.Ledger.prototype, 'vote');
+		const confirmedAt = newestBlockDate(late).toISOString();
+		vi.spyOn(lib.Ledger.prototype, 'vote').mockImplementation(function(this: InstanceType<typeof lib.Ledger>, ...args: Parameters<InstanceType<typeof lib.Ledger>['vote']>) {
+			if (new Date().toISOString() === confirmedAt) {
+				return(Promise.reject(lib.Error.fromJSON({ type: 'LEDGER', code: 'LEDGER_INVALID_DATE', message: 'refused at the newest block\'s date' })));
+			}
+			return(Reflect.apply(realVote, this, args));
+		});
+		expect(await outcomeOfLate()).toMatchObject({ kind: 'unexplained', code: 'LEDGER_BLOCK_EXPIRED', why: `the vote at the newest block's date, ${confirmedAt}, was refused too: LEDGER_INVALID_DATE: refused at the newest block's date` });
+	}, REPLAY_TIMEOUT_MILLISECONDS);
+
+	test('explain by rule alone a refusal for a block\'s date that a build without the confirming vote recorded, once, and no other', async function() {
+		const voter = lib.Account.fromSeed('5b1e8d2c4a6f7e9b0c3d5a7f9e1b3c5d7a9f0e2b4c6d8a0f2e4b6c8d0a2f4e6b', 1);
+		const voted = new Date('2026-10-08T19:54:38.360Z');
+		const datedStaple = async function(minutesBefore: number, index: number): Promise<VoteStaple> {
+			const block = await operationsBlock({ account: lib.Account.fromSeed('5b1e8d2c4a6f7e9b0c3d5a7f9e1b3c5d7a9f0e2b4c6d8a0f2e4b6c8d0a2f4e6b', 10 + index), signer: undefined, previous: null, network: 0x5382n, date: new Date(voted.valueOf() - minutesBefore * 60_000), operations: [{ type: lib.Block.OperationType.SET_REP, to: voter }] });
+			return(confirmedStaple([block], [voter], { voteDelays: [minutesBefore * 60_000] }));
+		};
+		const old = await datedStaple(6, 0);
+		const confirmedApart = await datedStaple(6, 1);
+		const recent = await datedStaple(2, 2);
+		const preRule = 'only a permission refusal is explained, not LEDGER_BLOCK_EXPIRED: Refusing to issue vote';
+		const unexplained = function(staple: VoteStaple, why: string) {
+			return({ blocksHash: keyOf(staple), code: 'LEDGER_BLOCK_EXPIRED', message: 'Refusing to issue vote', why });
+		};
+		const tally = { ...freshShadowRun(SCOPE_OF_TEST, 1, GENESIS_BASE, targetOf([])).scoped, unexplained: 3, firstUnexplained: [unexplained(old, preRule), unexplained(confirmedApart, `${CONFIRMATION_REFUSED} 2026-10-08T19:48:38.360Z, was refused too: LEDGER_BLOCK_EXPIRED: Refusing`), unexplained(recent, preRule)] };
+		const run: ShadowRunRecord = { kind: 'shadow-run', at: '2026-10-12T16:20:00.000Z', ...freshShadowRun(SCOPE_OF_TEST, 1, GENESIS_BASE, targetOf([])), scoped: tally, complete: true, cost: { seconds: 1, staples: 3, shadowVotes: 3, maxResidentMiB: 1 } };
+		const directory = await mkdtemp(join(tmpdir(), 'slop-shadow-explain-'));
+		const log = new ParityLog(join(directory, 'parity.jsonl'));
+		await log.append([run]);
+		const anchors = { initialTrustedAccount: voter, ...lib.Account.generateBaseAddresses(0x5382n) };
+		try {
+			const at = new Date('2026-10-12T17:00:00.000Z');
+			const explained = await explainByRule(log, sourceOf([old, confirmedApart, recent]), anchors, at);
+
+			expect(explained).toEqual([{ kind: 'shadow-explained', at: at.toISOString(), blocksHash: keyOf(old), window: 'scoped', code: 'LEDGER_BLOCK_EXPIRED', reason: 'permanent-vote-block-age', basis: 'by-rule', replaces: preRule }]);
+			expect(await explainByRule(log, sourceOf([old, confirmedApart, recent]), anchors, at)).toEqual([]);
+			expect(recordsOf((await log.read()).records, 'shadow-explained')).toEqual(explained);
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	});
 
 	test('resume where a stop left them, voting on no staple twice and skipping none', async function() {
 		const head = replayOrder(await loadMainnetFixture('head')).slice(0, 400);

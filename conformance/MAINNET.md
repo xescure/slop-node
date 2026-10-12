@@ -81,8 +81,9 @@ The rules a staple was voted under are those of the release its representatives 
 | `same-staple-grant-scope` | 0 |
 | `trusted-account-genesis` | 1 |
 | `send-recipient-access` | 0 |
+| `permanent-vote-block-age` | 0 |
 
-Two of the reasons are permission fixes between 0.18.4 and 0.18.7. Both fixed forms first appear in 0.18.5 [Keeta TS 0.18.5] index.js:68512-68513, 67903, which the npm registry published on 2026-09-30, a minute before 0.18.6 and 0.18.7; 0.16.2 has the same early return [Keeta TS 0.16.2] index.js:68179-68181 and the same grant scope [Keeta TS 0.16.2] index.js:67640 as 0.18.4. Rewriting either fix in the 0.18.7 bundle back to its 0.18.4 form, and replaying again, removes exactly that reason's staples from the refusals; with both rewritten, only the genesis staple is refused. The staples the fixes explain were therefore voted under rules that accept them. A third reason, `send-recipient-access`, is a requirement that 0.18.0 added (section 6.4).
+Two of the reasons are permission fixes between 0.18.4 and 0.18.7. Both fixed forms first appear in 0.18.5 [Keeta TS 0.18.5] index.js:68512-68513, 67903, which the npm registry published on 2026-09-30, a minute before 0.18.6 and 0.18.7; 0.16.2 has the same early return [Keeta TS 0.16.2] index.js:68179-68181 and the same grant scope [Keeta TS 0.16.2] index.js:67640 as 0.18.4. Rewriting either fix in the 0.18.7 bundle back to its 0.18.4 form, and replaying again, removes exactly that reason's staples from the refusals; with both rewritten, only the genesis staple is refused. The staples the fixes explain were therefore voted under rules that accept them. A third reason, `send-recipient-access`, is a requirement that 0.18.0 added (section 6.4). A fourth, `permanent-vote-block-age`, is not a refused requirement but a refusal for a block's date, which the shadow vote's method causes (section 6.5); the head replay, which makes no confirming vote, lists none as an exception.
 
 ### 6.1 `self-requirement-return`
 
@@ -108,7 +109,11 @@ Every requirement of an operation has the block's account or its signer as its p
 
 The airdrop of `mainnet/recipient-access.jsonl.gz` has this reason: its senders hold `ACCESS` on their tokens, and its recipients hold none. No staple of the head has it.
 
-### 6.5 Following is unaffected
+### 6.5 `permanent-vote-block-age`
+
+A ledger refuses a temporary vote on a block dated more than five minutes from its clock, with `LEDGER_BLOCK_EXPIRED`, and checks this only once the ledger's outcome of the blocks has validated [Keeta TS] index.js:70179-70197. It checks it only for a temporary vote: a vote asked for beside temporary votes is permanent and issued without the check, as is a temporary vote asked for beside permanent votes alone [Keeta TS] index.js:69028-69050, 69309-69316, 69317-69347. A staple carries the permanent votes, issued once the representatives' temporary votes were gathered, and the shadow vote is a temporary one with the clock at those permanent votes' moment. A staple whose blocks are all dated more than five minutes before its earliest vote therefore had its temporary votes issued earlier, while its blocks were new, and the shadow vote refuses it for the date alone. A refusal has this reason when every block of the staple is dated more than five minutes before the staple's earliest vote; a block dated after the votes, or within five minutes before them, is never explained. The live shadow run explains it only once the same ledger, standing where it refused, votes for the staple with the clock at its newest block's date, and records the refusal as unexplained when that vote is refused too. On the main network, staple `1BE261B7…` has a block dated 2026-10-08T19:48:47.109Z and four permanent votes 5 min 51 s later.
+
+### 6.6 Following is unaffected
 
 `Ledger.add` checks the voting weight of a staple's votes, computes its effects and applies them [Keeta TS] index.js:69361-69408. It does not check permission requirements: only a vote does [Keeta TS] index.js:70171-70179, 69989-70022. The fixes and the added requirement change only which requirements are recorded, so a 0.18.7 node follows mainnet as before: every staple of the head is added, with and without the shadow votes, and both replays reach the same state.
 

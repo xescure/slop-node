@@ -5,14 +5,14 @@ import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { mainnetNodeConfig } from '../conformance/mainnet/fixture.js';
 import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
 import { LedgerInternals } from '../upstream/internals.js';
-import { explainRefusal, shadowVote, UnexplainedRefusal } from '../conformance/mainnet/shadow.js';
-import type { ShadowVote } from '../conformance/mainnet/shadow.js';
+import { explainRefusal, newestBlockDate, shadowVote, shadowVoteAt, UnexplainedRefusal } from '../conformance/mainnet/shadow.js';
+import type { NetworkAnchors, ShadowVote } from '../conformance/mainnet/shadow.js';
 import { recordNoTiming } from '../node/timing.js';
 import { assertNever } from '../util/assert-never.js';
 import type { FollowerStore, SequencedStaple } from './follower-store.js';
 import { atMoment, fromMoment } from './frozen-clock.js';
-import { UNEXPLAINED_LISTED } from './log.js';
-import type { ShadowBase, ShadowRunState, ShadowTarget, ShadowVoteEntry, ShadowVoteOutcome, ShadowWindow, ShadowWindowTally, UnappliedStaple } from './log.js';
+import { SHADOW_WINDOWS, UNEXPLAINED_LISTED } from './log.js';
+import type { ParityLog, ShadowExplainedRecord, ShadowRunRecord, ShadowBase, ShadowRunState, ShadowTarget, ShadowVoteEntry, ShadowVoteOutcome, ShadowWindow, ShadowWindowTally, UnappliedStaple } from './log.js';
 
 const lib = KeetaNet.lib;
 
@@ -249,14 +249,82 @@ class Adds {
 	}
 }
 
-/** The vote's outcome, its refusal judged by the classified differences (src/conformance/mainnet/shadow.ts). */
-function outcomeOf(vote: ShadowVote, ledger: Ledger): ShadowVoteOutcome {
+/** How the classification of a refusal whose confirming vote was refused begins. */
+export const CONFIRMATION_REFUSED = 'the vote at the newest block\'s date,';
+
+/**
+ * Explains by the classified differences' rules alone the refusals the
+ * latest run lists as unexplained, as recorded by a build that made no
+ * confirming vote: one whose confirming vote was refused stays unexplained.
+ * The offline ledger has moved past each such staple, so no vote on it can
+ * be made again; the explanation is recorded as by rule, apart from those
+ * a run confirmed. A refusal explained so already is not recorded again.
+ */
+export async function explainByRule(log: ParityLog, source: Pick<ShadowSource, 'staplesOf'>, anchors: NetworkAnchors, at: Date): Promise<readonly ShadowExplainedRecord[]> {
+	const { records } = await log.read();
+	const runs = records.filter(function(record): record is ShadowRunRecord {
+		return(record.kind === 'shadow-run');
+	});
+	const latest = runs.at(-1);
+	if (latest === undefined) {
+		throw(new Error('no shadow-vote run is recorded'));
+	}
+	const already = new Set(records.flatMap(function(record): string[] {
+		if (record.kind !== 'shadow-explained') {
+			return([]);
+		}
+		return([`${record.blocksHash} ${record.replaces}`]);
+	}));
+	const explained: ShadowExplainedRecord[] = [];
+	for (const window of SHADOW_WINDOWS) {
+		for (const refused of latest[window].firstUnexplained) {
+			if (refused.why.startsWith(CONFIRMATION_REFUSED) || already.has(`${refused.blocksHash} ${refused.why}`) || !lib.Error.isValidErrorCode(refused.code)) {
+				continue;
+			}
+			const [held] = await source.staplesOf([refused.blocksHash]);
+			if (held === undefined) {
+				throw(new Error(`the follower's ledger holds no staple ${refused.blocksHash}, which the run refused`));
+			}
+			let reason: ShadowExplainedRecord['reason'];
+			try {
+				reason = explainRefusal(held.staple, { code: refused.code, message: refused.message }, anchors).reason;
+			} catch (error: unknown) {
+				if (error instanceof UnexplainedRefusal) {
+					continue;
+				}
+				throw(error);
+			}
+			explained.push({ kind: 'shadow-explained', at: at.toISOString(), blocksHash: refused.blocksHash, window, code: refused.code, reason, basis: 'by-rule', replaces: refused.why });
+		}
+	}
+	await log.append(explained);
+	return(explained);
+}
+
+/**
+ * The vote's outcome, its refusal judged by the classified differences
+ * (src/conformance/mainnet/shadow.ts). A refusal for a block's date is
+ * explained only once the ledger, standing where it was refused, votes for
+ * the staple with the clock at its newest block's date, as the temporary
+ * votes the staple's permanent ones replaced were issued while its blocks
+ * were new.
+ */
+async function outcomeOf(vote: ShadowVote, ledger: Ledger): Promise<ShadowVoteOutcome> {
 	switch (vote.outcome) {
 		case 'voted':
 			return({ kind: 'voted' });
 		case 'refused':
 			try {
 				const { reason } = explainRefusal(vote.staple, vote.refusal, ledger);
+				if (reason === 'permanent-vote-block-age') {
+					const moment = newestBlockDate(vote.staple);
+					const confirming = await atMoment(moment, function() {
+						return(shadowVoteAt(vote.staple, ledger, moment));
+					});
+					if (confirming.outcome === 'refused') {
+						return({ kind: 'unexplained', code: vote.refusal.code, message: vote.refusal.message, why: `${CONFIRMATION_REFUSED} ${moment.toISOString()}, was refused too: ${confirming.refusal.code}: ${confirming.refusal.message}` });
+					}
+				}
 				return({ kind: 'explained', reason, code: vote.refusal.code });
 			} catch (error: unknown) {
 				if (!(error instanceof UnexplainedRefusal)) {
@@ -508,9 +576,9 @@ export async function runShadowVotes(run: ShadowRun): Promise<ShadowRunState> {
 						if ((await appliedOf(ledger, [staple])).has(blocksHash)) {
 							throw(new Error(`the offline ledger applied staple ${blocksHash} before its place ${sequence.toString()}, replaying a deferred copy of it, so a vote on it would see a ledger that holds it`));
 						}
-						const outcome = await atMoment(staple.timestamp(), async function() {
-							return(outcomeOf(await shadowVote(staple, ledger), ledger));
-						});
+						const outcome = await outcomeOf(await atMoment(staple.timestamp(), function() {
+							return(shadowVote(staple, ledger));
+						}), ledger);
 						vote = { sequence: sequence.toString(), blocksHash, window, votedFrom: moment, outcome };
 						await run.state.record(vote);
 					}

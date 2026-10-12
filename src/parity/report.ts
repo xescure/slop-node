@@ -7,8 +7,9 @@ import { checksumsEqual, compareChecksums, crossCheckChecksum } from './checksum
 import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-store.js';
 import { SHADOW_REFUSAL_REASONS, SHADOW_REFUSAL_RELEASES } from '../conformance/mainnet/shadow.js';
 import type { ShadowRefusalReason } from '../conformance/mainnet/shadow.js';
-import { standsDiverging, standsInPlaceOf } from './log.js';
-import type { APIDiffExplainedRecord, APIDiffPlanRecord, APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, ShadowBase, ShadowRunCost, ShadowRunRecord, ShadowTarget, ShadowWindowTally, SweepBatchRecord, SweepCursor, SweepOutcome, SweepPointer, SweepRecord, SweepWalk } from './log.js';
+import { standsDiverging, standsInPlaceOf, UNEXPLAINED_LISTED } from './log.js';
+import type { APIDiffExplainedRecord, APIDiffPlanRecord, APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, ShadowBase, ShadowExplainedRecord, ShadowRunCost, ShadowRunRecord, ShadowRunState, ShadowTarget, ShadowWindow, ShadowWindowTally, UnexplainedShadowRefusal, SweepBatchRecord, SweepCursor, SweepOutcome, SweepPointer, SweepRecord, SweepWalk } from './log.js';
+import { shadowRunComplete } from './shadow-live.js';
 import { STRATA } from './strata.js';
 import type { Stratum } from './strata.js';
 import { readSweepCursor, sweepAccounts } from './sweep.js';
@@ -195,9 +196,15 @@ export type ShadowNotComparableReason =
 	/** The log holds lines it could not read, which may have been records. */
 	| 'log-unreadable';
 
-/** A window's refusals by the classified difference that explains them, with the release that changed the rule. */
+/**
+ * A window's refusals by the classified difference that explains them, with
+ * the release that changed the rule, as the run explained them; those
+ * explained since by the rule alone apart; and the refusals left that none
+ * explains.
+ */
 export type ShadowWindowSummary = Omit<ShadowWindowTally, 'explained' | 'firstUnexplained'> & {
 	readonly explained: Readonly<Partial<Record<ShadowRefusalReason, { readonly refusals: number; readonly changedIn: string | null }>>>;
+	readonly explainedByRule: readonly { readonly blocksHash: string; readonly reason: ShadowRefusalReason; readonly code: string }[];
 };
 
 /**
@@ -209,7 +216,8 @@ export type ShadowVotesSignal = {
 	readonly runs: number;
 	readonly notComparableReasons: readonly ShadowNotComparableReason[];
 	readonly latest: {
-		readonly at: string;
+		/** When the invocation that recorded the standing ended, or null for one read from the run's cursor, still running or cut short. */
+		readonly at: string | null;
 		readonly scope: { readonly release: string; readonly from: string };
 		readonly base: ShadowBase;
 		readonly target: ShadowTarget;
@@ -218,11 +226,11 @@ export type ShadowVotesSignal = {
 		readonly scoped: ShadowWindowSummary;
 		readonly informational: ShadowWindowSummary & { readonly every: number };
 		readonly unapplied: number;
-		readonly cost: ShadowRunCost;
+		readonly cost: ShadowRunCost | null;
 	} | null;
 	/** Of the refusals in the scoped window that no classified difference explains. */
 	readonly confidence: ConfidenceBound;
-	readonly firstDivergence: { readonly at: string; readonly staple: string; readonly code: string; readonly why: string } | null;
+	readonly firstDivergence: { readonly at: string | null; readonly staple: string | null; readonly code: string; readonly why: string } | null;
 };
 
 /** The census a stratum stands on: its every request, and how many of them were compared. */
@@ -1050,7 +1058,20 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], plans: readonly APID
 	return({ verdict: 'pass', notComparableReasons: [], strata, counts, ...coverage, newBehaviors: behaviors, firstDivergence: null });
 }
 
-function windowSummaryOf(tally: ShadowWindowTally): ShadowWindowSummary {
+/** The refusals a window lists that a by-rule explanation covers: of the same staple, recorded unexplained for the same reason it names. */
+function explainedByRuleOf(tally: ShadowWindowTally, window: ShadowWindow, byRule: readonly ShadowExplainedRecord[]): ShadowWindowSummary['explainedByRule'] {
+	return(tally.firstUnexplained.flatMap(function(refused): ShadowWindowSummary['explainedByRule'] {
+		const explanation = byRule.find(function(record): boolean {
+			return(record.window === window && record.blocksHash === refused.blocksHash && record.replaces === refused.why);
+		});
+		if (explanation === undefined) {
+			return([]);
+		}
+		return([{ blocksHash: refused.blocksHash, reason: explanation.reason, code: refused.code }]);
+	}));
+}
+
+function windowSummaryOf(tally: ShadowWindowTally, window: ShadowWindow, byRule: readonly ShadowExplainedRecord[]): ShadowWindowSummary {
 	const explained: Partial<Record<ShadowRefusalReason, { readonly refusals: number; readonly changedIn: string | null }>> = {};
 	for (const reason of SHADOW_REFUSAL_REASONS) {
 		const refusals = tally.explained[reason];
@@ -1058,10 +1079,27 @@ function windowSummaryOf(tally: ShadowWindowTally): ShadowWindowSummary {
 			explained[reason] = { refusals, changedIn: SHADOW_REFUSAL_RELEASES[reason] };
 		}
 	}
-	return({ replayed: tally.replayed, shadowVoted: tally.shadowVoted, voted: tally.voted, explained, unexplained: tally.unexplained, votedFrom: tally.votedFrom, votedTo: tally.votedTo });
+	const explainedByRule = explainedByRuleOf(tally, window, byRule);
+	return({ replayed: tally.replayed, shadowVoted: tally.shadowVoted, voted: tally.voted, explained, explainedByRule, unexplained: tally.unexplained - explainedByRule.length, votedFrom: tally.votedFrom, votedTo: tally.votedTo });
 }
 
-function shadowNotComparableReasonsOf(latest: ShadowRunRecord): ShadowNotComparableReason[] {
+/** The refusals the window lists that remain unexplained once those explained by rule are set apart. */
+function stillUnexplained(tally: ShadowWindowTally, summary: ShadowWindowSummary): readonly UnexplainedShadowRefusal[] {
+	return(tally.firstUnexplained.filter(function(refused): boolean {
+		return(!summary.explainedByRule.some(function(explained): boolean {
+			return(explained.blocksHash === refused.blocksHash);
+		}));
+	}));
+}
+
+/** A run's standing as the report reads it: from the record of an invocation that ended, or from the run's cursor. */
+type ShadowStanding = ShadowRunState & {
+	readonly at: string | null;
+	readonly complete: boolean;
+	readonly cost: ShadowRunCost | null;
+};
+
+function shadowNotComparableReasonsOf(latest: ShadowStanding): ShadowNotComparableReason[] {
 	const reasons: ShadowNotComparableReason[] = [];
 	if (!latest.complete) {
 		reasons.push('run-incomplete');
@@ -1079,18 +1117,43 @@ function shadowNotComparableReasonsOf(latest: ShadowRunRecord): ShadowNotCompara
 }
 
 /**
- * The latest run decides. A refusal in the scoped window that no classified
- * difference explains fails it at once; so does a staple the replay could
- * not apply, once the run is complete, since the follower's ledger applied
- * it there. It passes only once the run has voted on every staple of the
- * window, up to a target fixed while the follower held every staple voted
- * for before its reach. The informational window decides nothing.
+ * The run as it stands: its cursor, saved after each batch, when it is of
+ * a later invocation than the latest record, or further on in the same
+ * one, as of an invocation still running or cut short, which records
+ * nothing until it ends; the latest record otherwise.
  */
-function shadowVotesSignalOf(records: readonly ShadowRunRecord[]): ShadowVotesSignal {
+function latestStanding(records: readonly ShadowRunRecord[], cursor: ShadowRunState | null): ShadowStanding | undefined {
 	const latest = records.at(-1);
+	if (cursor === null) {
+		return(latest);
+	}
+	const fromCursor = { ...cursor, at: null, complete: shadowRunComplete(cursor), cost: null };
+	if (latest === undefined || cursor.target.fixedAt > latest.target.fixedAt) {
+		return(fromCursor);
+	}
+	if (cursor.target.fixedAt === latest.target.fixedAt && BigInt(cursor.reached.sequence) > BigInt(latest.reached.sequence)) {
+		return(fromCursor);
+	}
+	return(latest);
+}
+
+/**
+ * The run as it stands decides. A refusal in the scoped window that no
+ * classified difference explains fails it at once, whether listed or only
+ * counted; so does a staple the replay could not apply, once the run is
+ * complete, since the follower's ledger applied it there. A refusal the
+ * run left unexplained that a classified difference's rule alone explains
+ * since counts as explained, listed apart from those the run explained. It
+ * passes only once the run has voted on every staple of the window, up to
+ * a target fixed while the follower held every staple voted for before its
+ * reach. The informational window decides nothing.
+ */
+function shadowVotesSignalOf(records: readonly ShadowRunRecord[], byRule: readonly ShadowExplainedRecord[], cursor: ShadowRunState | null): ShadowVotesSignal {
+	const latest = latestStanding(records, cursor);
 	if (latest === undefined) {
 		return({ verdict: 'not-comparable-yet', runs: 0, notComparableReasons: ['no-run'], latest: null, confidence: { kind: 'none', why: 'no shadow-vote run yet' }, firstDivergence: null });
 	}
+	const scoped = windowSummaryOf(latest.scoped, 'scoped', byRule);
 	const summary = {
 		at: latest.at,
 		scope: latest.scope,
@@ -1098,16 +1161,19 @@ function shadowVotesSignalOf(records: readonly ShadowRunRecord[]): ShadowVotesSi
 		target: latest.target,
 		reached: latest.reached.sequence,
 		complete: latest.complete,
-		scoped: windowSummaryOf(latest.scoped),
-		informational: { ...windowSummaryOf(latest.informational), every: latest.informationalEvery },
+		scoped,
+		informational: { ...windowSummaryOf(latest.informational, 'informational', byRule), every: latest.informationalEvery },
 		unapplied: latest.unapplied.length,
 		cost: latest.cost
 	};
-	const confidence = confidenceOf(latest.scoped.shadowVoted, latest.scoped.unexplained, 'staple of the scoped window');
+	const confidence = confidenceOf(latest.scoped.shadowVoted, scoped.unexplained, 'staple of the scoped window');
 	const notComparableReasons = shadowNotComparableReasonsOf(latest);
 	const signal = { runs: records.length, notComparableReasons, latest: summary, confidence };
-	const [refused] = latest.scoped.firstUnexplained;
-	if (refused !== undefined) {
+	if (scoped.unexplained > 0) {
+		const [refused] = stillUnexplained(latest.scoped, scoped);
+		if (refused === undefined) {
+			return({ ...signal, verdict: 'fail', firstDivergence: { at: latest.at, staple: null, code: 'unlisted', why: `${String(scoped.unexplained)} refusals no classified difference explains, past the ${String(UNEXPLAINED_LISTED)} listed` } });
+		}
 		return({ ...signal, verdict: 'fail', firstDivergence: { at: latest.at, staple: refused.blocksHash, code: refused.code, why: `${refused.message}: ${refused.why}` } });
 	}
 	const [unapplied] = latest.unapplied;
@@ -1137,6 +1203,8 @@ export type ReportInput = {
 	readonly log: ParityLogContents;
 	/** The kinds of answer the capture set holds. */
 	readonly knownBehaviors: ReadonlySet<string>;
+	/** The shadow-vote run's standing in its cursor, or null when no run has saved one. */
+	readonly shadowStanding: ShadowRunState | null;
 };
 
 /**
@@ -1161,7 +1229,7 @@ export function parityReportOf(input: ReportInput): ParityReport {
 			checksum: withLogRead(checksumSignalOf(records), unreadableLines, 'log-unreadable'),
 			sweep: withLogRead(sweepSignalOf(records, input.sweep), unreadableLines, 'log-unreadable'),
 			apiDiff: withLogRead(apiDiffSignalOf(recordsOf(records, 'api-diff'), recordsOf(records, 'api-diff-plan'), recordsOf(records, 'api-diff-explained'), input.knownBehaviors), unreadableLines, 'log-unreadable'),
-			shadowVotes: withLogRead(shadowVotesSignalOf(recordsOf(records, 'shadow-run')), unreadableLines, 'log-unreadable')
+			shadowVotes: withLogRead(shadowVotesSignalOf(recordsOf(records, 'shadow-run'), recordsOf(records, 'shadow-explained'), input.shadowStanding), unreadableLines, 'log-unreadable')
 		}
 	});
 }
@@ -1195,6 +1263,8 @@ export type ReportSources = {
 	readonly cursorPaths: SweepCursorPaths;
 	/** The kinds of answer the capture set holds. */
 	readonly knownBehaviors: ReadonlySet<string>;
+	/** Reads the shadow-vote run's standing from its cursor, writing nothing. */
+	readonly shadowStanding: () => Promise<ShadowRunState | undefined>;
 };
 
 /** The accounts the store looks up at once, well within what a query takes as one parameter. */
@@ -1240,7 +1310,7 @@ export function neverComparedAccountsOf(allRecords: readonly ParityRecord[], pos
 export async function reportOnLog(sources: ReportSources): Promise<ParityReport> {
 	const log = await sources.log.read();
 	const sweep = await sweepPositionOf(sources, log.records);
-	return(parityReportOf({ generatedAt: new Date(), progress: await sources.store.progress(), sweep, log, knownBehaviors: sources.knownBehaviors }));
+	return(parityReportOf({ generatedAt: new Date(), progress: await sources.store.progress(), sweep, log, knownBehaviors: sources.knownBehaviors, shadowStanding: await sources.shadowStanding() ?? null }));
 }
 
 export type ParityRun = {
@@ -1259,6 +1329,7 @@ export type ParityRun = {
 	readonly gapMilliseconds: number;
 	readonly wait: (milliseconds: number) => Promise<void>;
 	readonly stopped: AbortSignal;
+	readonly shadowStanding: ReportSources['shadowStanding'];
 };
 
 /** Checks the checksum now, compares a sample of the sweep from its cursors and a sample of the API, records them, and reports on the whole log. */
@@ -1287,5 +1358,5 @@ export async function runParity(run: ParityRun): Promise<ParityReport> {
 		stopped: run.stopped
 	});
 	await sampleAPI({ ...run.apiDiff, follower: run.follower, representatives: run.representatives, store: run.store, log: run.log, stopped: run.stopped });
-	return(await reportOnLog({ store: run.store, log: run.log, cursorPaths: run.cursorPaths, knownBehaviors: run.apiDiff.knownBehaviors }));
+	return(await reportOnLog({ store: run.store, log: run.log, cursorPaths: run.cursorPaths, knownBehaviors: run.apiDiff.knownBehaviors, shadowStanding: run.shadowStanding }));
 }

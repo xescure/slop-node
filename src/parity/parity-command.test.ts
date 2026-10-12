@@ -16,6 +16,8 @@ describe('the parity command line', function() {
 		expect(parseParityCommand(['recheck'], HOME)).toEqual({ kind: 'recheck', directory: DIRECTORY, pacing: PACING });
 		expect(parseParityCommand(['sweep', '--lap'], HOME)).toEqual({ kind: 'sweep', directory: DIRECTORY, accounts: Number.MAX_SAFE_INTEGER, toLapEnd: true, pacing: PACING });
 		expect(parseParityCommand(['shadow'], HOME)).toEqual({ kind: 'shadow', directory: DIRECTORY, base: undefined, informationalEvery: 10, batchStaples: 500, restart: false });
+		expect(parseParityCommand(['explain-shadow'], HOME)).toEqual({ kind: 'explain-shadow', directory: DIRECTORY });
+		expect(parseParityCommand(['explain-shadow', '--force', 'why'], HOME)).toBeUndefined();
 		expect(parseParityCommand(['shadow', '--base', 'follower_snapshot_20261010061500', '--informational-every', '1', '--batch', '50', '--restart'], HOME)).toEqual({ kind: 'shadow', directory: DIRECTORY, base: 'follower_snapshot_20261010061500', informationalEvery: 1, batchStaples: 50, restart: true });
 		expect(parseParityCommand(['shadow', '--base', 'follower; DROP DATABASE follower'], HOME)).toBeUndefined();
 		expect(parseParityCommand(['shadow', '--informational-every', '0'], HOME)).toBeUndefined();

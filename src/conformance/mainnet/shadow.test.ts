@@ -5,10 +5,10 @@ import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { BlockOperations, BlockOperationSEND } from '@keetanetwork/keetanet-client/lib/block/operations.js';
 import type { ACLPermissionRequirement } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
-import { operationsBlock, sendBlock } from '../../testing/blocks.js';
+import { confirmedStaple, operationsBlock, sendBlock } from '../../testing/blocks.js';
 import { LedgerInternals } from '../../upstream/internals.js';
 import { loadMainnetFixture, MAINNET_NETWORK, mainnetTrustedRoot } from './fixture.js';
-import { UnexplainedRefusal, explainRefusal, renderShadowVoteExceptions, sendRequirements } from './shadow.js';
+import { UnexplainedRefusal, explainRefusal, renderShadowVoteExceptions, sendRequirements, shadowVoteExceptions } from './shadow.js';
 import type { LedgerRefusal, NetworkAnchors, RefusedStaple } from './shadow.js';
 
 const lib = KeetaNet.lib;
@@ -273,6 +273,55 @@ describe('a shadow-vote refusal is explained by its refused requirement', functi
 		expect(function() {
 			return(explainRefusal(staple, { ...lacking(user, token, 'ACCESS'), code: 'LEDGER_INVALID_BALANCE' }, anchors));
 		}).toThrow(UnexplainedRefusal);
+	});
+});
+
+describe('a shadow-vote refusal for a block\'s date', function() {
+	const VOTED = new Date('2026-10-08T19:54:38.360Z');
+	const expired = function(date: Date): LedgerRefusal {
+		return({ code: 'LEDGER_BLOCK_EXPIRED', message: `Refusing to issue vote for block dated ${date.toISOString()}` });
+	};
+	const datedBlock = function(date: Date): Promise<Block> {
+		return(operationsBlock({ account: user, signer: user, previous: null, network: NETWORK, date, operations: [{ type: lib.Block.OperationType.SET_REP, to: representative }] }));
+	};
+
+	test('is explained when every block is dated more than five minutes before the staple\'s earliest vote, as the permanent votes replaced temporary ones', async function() {
+		const blockDate = new Date('2026-10-08T19:48:47.109Z');
+		const staple: RefusedStaple = { blocks: [await datedBlock(blockDate)], votes: [{ issuer: representative, validityFrom: new Date(VOTED.valueOf() + 240) }, { issuer: delegate, validityFrom: VOTED }] };
+
+		expect(explainRefusal(staple, expired(blockDate), anchors)).toEqual({ reason: 'permanent-vote-block-age', requirement: null });
+	});
+
+	test.each([
+		['five minutes before the earliest vote', -5 * 60_000],
+		['within five minutes before it', -4 * 60_000],
+		['after it', 60_000],
+		['more than five minutes after it, in the future of the votes', 6 * 60_000]
+	])('is unexplained for a block dated %s', async function(_, offset) {
+		const blockDate = new Date(VOTED.valueOf() + offset);
+		const staple: RefusedStaple = { blocks: [await datedBlock(blockDate)], votes: [{ issuer: representative, validityFrom: VOTED }] };
+
+		expect(function() {
+			return(explainRefusal(staple, expired(blockDate), anchors));
+		}).toThrow(UnexplainedRefusal);
+	});
+
+	test('is unexplained when any block is dated within five minutes of the votes, however old the others', async function() {
+		const old = new Date(VOTED.valueOf() - 10 * 60_000);
+		const staple: RefusedStaple = { blocks: [await datedBlock(old), await datedBlock(new Date(VOTED.valueOf() - 60_000))], votes: [{ issuer: representative, validityFrom: VOTED }] };
+
+		expect(function() {
+			return(explainRefusal(staple, expired(old), anchors));
+		}).toThrow(UnexplainedRefusal);
+	});
+
+	test('is no exception the head replay lists, as only a vote at the newest block\'s date confirms it', async function() {
+		const blockDate = new Date(VOTED.valueOf() - 10 * 60_000);
+		const staple = await confirmedStaple([await datedBlock(blockDate)], [representative], { voteDelays: [10 * 60_000] });
+
+		expect(function() {
+			return(shadowVoteExceptions([{ outcome: 'refused', staple, refusal: expired(blockDate) }], anchors));
+		}).toThrow('a refusal for a block\'s date is explained only by a vote at the newest block\'s date');
 	});
 });
 

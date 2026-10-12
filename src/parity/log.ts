@@ -525,7 +525,27 @@ export type ShadowRunRecord = ShadowRunState & {
 	readonly cost: ShadowRunCost;
 };
 
-export type ParityRecord = ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | SweepBatchRecord | APIDiffRecord | APIDiffPlanRecord | APIDiffExplainedRecord | ShadowLiveRecord | ShadowRunRecord;
+/**
+ * A refusal a run recorded as unexplained, explained since by the
+ * classified difference's rule alone: the build that voted made no
+ * confirming vote, and the offline ledger has moved past the staple, so
+ * none can be made. It names the classification it replaces, so that a
+ * later run's refusal of the same staple, classified with the confirming
+ * vote, is not covered.
+ */
+export type ShadowExplainedRecord = {
+	readonly kind: 'shadow-explained';
+	readonly at: string;
+	readonly blocksHash: string;
+	readonly window: ShadowWindow;
+	readonly code: string;
+	readonly reason: ShadowRefusalReason;
+	readonly basis: 'by-rule';
+	/** Why the run recorded the refusal as unexplained. */
+	readonly replaces: string;
+};
+
+export type ParityRecord = ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | SweepBatchRecord | APIDiffRecord | APIDiffPlanRecord | APIDiffExplainedRecord | ShadowLiveRecord | ShadowRunRecord | ShadowExplainedRecord;
 
 /** The records a log holds, and how many of its lines were not records, as the end of a line cut short by a crash. */
 export type ParityLogContents = {
@@ -1292,6 +1312,18 @@ function shadowRunRecordOf(value: Fields): ShadowRunRecord | undefined {
 	return({ kind: 'shadow-run', at, ...state, complete, cost });
 }
 
+function shadowExplainedRecordOf(value: Fields): ShadowExplainedRecord | undefined {
+	const { at, blocksHash, code, replaces } = value;
+	const window = shadowWindowOf(value['window']);
+	const reason = SHADOW_REFUSAL_REASONS.find(function(known): boolean {
+		return(known === value['reason']);
+	});
+	if (!isString(at) || !isString(blocksHash) || !isString(code) || !isString(replaces) || window === undefined || reason === undefined || value['basis'] !== 'by-rule') {
+		return(undefined);
+	}
+	return({ kind: 'shadow-explained', at, blocksHash, window, code, reason, basis: 'by-rule', replaces });
+}
+
 /** A record written before the walks were split names none, and compared every account one at a time. */
 function recordedWalkOf(value: unknown): RecordedWalk | undefined {
 	switch (value) {
@@ -1357,6 +1389,8 @@ export function parityRecordOf(line: string): ParityRecord | undefined {
 			return(shadowLiveRecordOf(value));
 		case 'shadow-run':
 			return(shadowRunRecordOf(value));
+		case 'shadow-explained':
+			return(shadowExplainedRecordOf(value));
 		default:
 			return(undefined);
 	}

@@ -6,6 +6,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { gunzipSync } from 'node:zlib';
 import pg from 'pg';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
+import { MAINNET_NETWORK, mainnetTrustedRoot } from '../conformance/mainnet/fixture.js';
+import type { NetworkAnchors } from '../conformance/mainnet/shadow.js';
 import { assertNever } from '../util/assert-never.js';
 import { capturedBehaviors, explainDivergence, recheckAPIDivergences, sampleAPI } from './api-diff.js';
 import { httpSource, pacedSource } from './api-source.js';
@@ -21,8 +23,8 @@ import type { ParityCommand } from './parity-command.js';
 import { exitCodeOf, neverComparedAccountsOf, reportOnLog, runParity, sweepPointerOf, sweepPositionOf } from './report.js';
 import { DEFAULT_REPRESENTATIVE_PACING, RepresentativePacer } from './representative-pacer.js';
 import type { PacerClock, RepresentativePacing } from './representative-pacer.js';
-import { freshShadowRun, runShadowVotes, SHADOW_SCOPE, shadowLedgerStorage, shadowRunComplete } from './shadow-live.js';
-import { fileShadowState, shadowDirectory } from './shadow-state.js';
+import { explainByRule, freshShadowRun, runShadowVotes, SHADOW_SCOPE, shadowLedgerStorage, shadowRunComplete } from './shadow-live.js';
+import { fileShadowState, readShadowStanding, shadowDirectory } from './shadow-state.js';
 import { compareNeverCompared, recheckDivergences, sweepAccounts, sweepCursorPaths } from './sweep.js';
 import { retryingStore } from './transient-store.js';
 import type { TransientFailure } from './transient-store.js';
@@ -40,7 +42,7 @@ const WALL_CLOCK: PacerClock = {
 
 /** The shadow votes send no request, so they take the pacing they never use. */
 function pacingOf(command: ParityCommand): RepresentativePacing {
-	if (command.kind === 'shadow' || command.kind === 'explain') {
+	if (command.kind === 'shadow' || command.kind === 'explain' || command.kind === 'explain-shadow') {
 		return(DEFAULT_REPRESENTATIVE_PACING);
 	}
 	return(command.pacing);
@@ -96,6 +98,10 @@ const USAGE = [
 	'            --class our-bug|upstream-version|operational-artifact --reference <fixing change or document section>',
 	'            refused unless a later comparison of the request retested the divergence, or found it moving:',
 	'            --force <why>      record it all the same, with why no retest is needed',
+	'  explain-shadow  record, for each refusal the latest shadow-vote run left unexplained as a build without',
+	'            the confirming vote classified it, whether a classified difference\'s rule alone explains it; such',
+	'            explanations count apart from those a run confirmed, and a refusal whose confirming vote was',
+	'            refused stays unexplained',
 	'  report    check the checksum and compare a sweep sample and an API diff sample, then print the',
 	'            parity report as JSON, with the latest shadow-vote run from the log; exits 1 when a signal fails',
 	'            --sample <n>       how many chain accounts the sweep sample compares (16)',
@@ -137,6 +143,9 @@ async function edgeCaseStaples(): Promise<readonly string[]> {
 		return(new KeetaNet.lib.Vote.Staple(Buffer.from(line, 'base64')).blocksHash.toString());
 	}));
 }
+
+/** The main network's trusted account, base token and network address, by which a shadow vote's refusal is classified. */
+const MAINNET_ANCHORS: NetworkAnchors = { initialTrustedAccount: mainnetTrustedRoot(), ...KeetaNet.lib.Account.generateBaseAddresses(MAINNET_NETWORK) };
 
 /** The offline ledger of shadow votes, a database of the follower's cluster. */
 const SHADOW_DATABASE = `${FOLLOWER_DATABASE}_shadow`;
@@ -325,6 +334,7 @@ type Tools = {
 	readonly log: ParityLog;
 	readonly cursorPaths: SweepCursorPaths;
 	readonly stopped: AbortSignal;
+	readonly shadowStanding: () => Promise<ShadowRunState | undefined>;
 };
 
 
@@ -391,6 +401,11 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 		}
 		case 'shadow':
 			return(await shadow(command, tools.directory, tools));
+		case 'explain-shadow': {
+			const explained = await explainByRule(tools.log, tools.store, MAINNET_ANCHORS, new Date());
+			process.stdout.write(`${JSON.stringify(explained, null, '\t')}\n`);
+			return(0);
+		}
 		case 'explain': {
 			const { stratum, path, divergenceAt, divergence, reference, untestedBecause } = command;
 			const explained = await explainDivergence(tools.log, { stratum, path, divergenceAt, divergence, reference, untestedBecause });
@@ -427,7 +442,7 @@ async function lockFor(command: ParityCommand, directory: string): Promise<() =>
 	if (command.kind === 'shadow') {
 		return(await lockParity(directory, process.pid, SHADOW_LOCK_FILE));
 	}
-	if ((command.kind === 'report' && command.logOnly) || command.kind === 'explain') {
+	if ((command.kind === 'report' && command.logOnly) || command.kind === 'explain' || command.kind === 'explain-shadow') {
 		return(function(): Promise<void> {
 			return(Promise.resolve());
 		});
@@ -476,7 +491,10 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
 					store,
 					log: new ParityLog(parityLogPath(directory)),
 					cursorPaths: sweepCursorPaths(directory),
-					stopped: stopping.signal
+					stopped: stopping.signal,
+					shadowStanding() {
+						return(readShadowStanding(shadowDirectory(directory)));
+					}
 				}));
 			} finally {
 				process.stderr.write(`representatives: ${JSON.stringify(pacer.standing())}\n`);

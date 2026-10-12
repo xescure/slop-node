@@ -50,6 +50,19 @@ function wholeLinesLength(bytes: Buffer): number {
 	return(bytes.lastIndexOf(0x0A) + 1);
 }
 
+/** The standing a run's cursor holds, or nothing when no run saved one, read without touching the run's files, so beside a run. */
+export async function readShadowStanding(directory: string): Promise<ShadowRunState | undefined> {
+	const cursorPath = join(directory, CURSOR_FILE);
+	try {
+		return(cursorOf(await readFile(cursorPath, 'utf8'), cursorPath).state);
+	} catch (error: unknown) {
+		if (isMissing(error)) {
+			return(undefined);
+		}
+		throw(error);
+	}
+}
+
 /**
  * The standing in a cursor file, replaced whole by a rename, and the votes
  * in a file of one JSON line each, appended. A vote is appended before its
