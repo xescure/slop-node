@@ -213,7 +213,9 @@ export type SweepBatchRecord = {
  * an earlier point of the history than the representatives', and counts
  * fewer blocks for that alone.
  */
-export type BlockCountNotComparableReason = Extract<NotComparableReason, 'no-completed-pass' | 'follower-unanswered' | 'representative-unanswered'> | 'stage-not-empty';
+export type BlockCountNotComparableReason = Extract<NotComparableReason, 'no-completed-pass' | 'follower-unanswered' | 'representative-unanswered'> | 'stage-not-empty'
+	/** The representative counts farther than the floor from the others' median, a count of its own. */
+	| 'representative-outlier';
 
 export type BlockCountVerdict =
 	| { readonly kind: 'pass' }
@@ -580,7 +582,7 @@ function reasonOf(value: unknown): NotComparableReason | undefined {
 	}));
 }
 
-const BLOCK_COUNT_REASONS: readonly BlockCountNotComparableReason[] = ['no-completed-pass', 'stage-not-empty', 'follower-unanswered', 'representative-unanswered'];
+const BLOCK_COUNT_REASONS: readonly BlockCountNotComparableReason[] = ['no-completed-pass', 'stage-not-empty', 'follower-unanswered', 'representative-unanswered', 'representative-outlier'];
 
 function blockCountVerdictOf(value: unknown): BlockCountVerdict | undefined {
 	if (!isFields(value)) {

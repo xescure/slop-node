@@ -170,21 +170,41 @@ describe('comparing the follower\'s checksum with each representative\'s', funct
 });
 
 describe('comparing the follower\'s block count with each representative\'s', function() {
-	test('passes within the floor, widened by the representatives\' spread and by what each side added in its window', async function() {
+	test('passes within the floor of each representative, widened by what each side added in its window, never by how far the others count apart', async function() {
 		const running = await setup(2);
 		serveReadings(running.follower, [['0x1', 1000], ['0x2', 1010]]);
-		serveReadings(running.representatives[0] ?? running.follower, [['0x3', 1000 + BLOCK_COUNT_FLOOR + 40]]);
+		serveReadings(running.representatives[0] ?? running.follower, [['0x3', 1000 + BLOCK_COUNT_FLOOR]]);
 		serveReadings(running.representatives[1] ?? running.follower, [['0x4', 1000], ['0x5', 1005]]);
 
 		const { blockCounts } = await compareAll(running, COMPLETED);
 
-		// The spread is 1140 - 1005 = 135; the follower moved 10 and the second representative 5.
+		// The follower moved 10 and the second representative 5.
 		expect(blockCounts.map(function(record) {
 			return([record.toleranceBlocks, record.verdict]);
 		})).toEqual([
-			[BLOCK_COUNT_FLOOR + 135 + 10, { kind: 'pass' }],
-			[BLOCK_COUNT_FLOOR + 135 + 15, { kind: 'pass' }]
+			[BLOCK_COUNT_FLOOR + 10, { kind: 'pass' }],
+			[BLOCK_COUNT_FLOOR + 15, { kind: 'pass' }]
 		]);
+	});
+
+	test('fails against the representatives that agree among themselves, a representative counting far from the others not comparable, which widens nothing', async function() {
+		const running = await setup(4);
+		serveReadings(running.follower, [['0x1', 900_000]]);
+		[940_000, 940_005, 940_010, 890_000].forEach(function(count, index) {
+			serveReadings(running.representatives[index] ?? running.follower, [['0x2', count]]);
+		});
+
+		const { blockCounts } = await compareAll(running, COMPLETED);
+
+		expect(blockCounts.map(function(record) {
+			return(record.verdict);
+		})).toEqual([
+			{ kind: 'fail', difference: -40_000 },
+			{ kind: 'fail', difference: -40_005 },
+			{ kind: 'fail', difference: -40_010 },
+			{ kind: 'not-comparable-yet', reasons: ['representative-outlier'] }
+		]);
+		expect(blockCounts[0]?.toleranceBlocks).toBe(BLOCK_COUNT_FLOOR);
 	});
 
 	test('fails beyond the tolerance, with the difference', async function() {

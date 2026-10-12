@@ -114,8 +114,7 @@ async function verdictOf(comparison: ChecksumComparison, follower: ChecksumWindo
 
 /**
  * How many blocks two nodes holding the same ledger may count apart besides
- * what they added while being read and what the representatives count apart
- * among themselves. Each representative's count is its own statistic, kept
+ * what they added while being read. Each representative's count is its own statistic, kept
  * like its checksum (conformance/API.md, Differences), and the four main
  * network representatives counted up to 20 blocks apart while each held
  * still; a hundred blocks is a few minutes of the main network's traffic.
@@ -126,18 +125,25 @@ function movement(window: Extract<ChecksumWindow, { kind: 'read' }>): number {
 	return(Math.abs(window.second.blockCount - window.first.blockCount));
 }
 
-/** How far apart the representatives that answered count, at the end of their windows. */
-function spreadOf(windows: readonly ChecksumWindow[]): number {
+/** The median of the counts the representatives that answered served at the end of their windows, or nothing when none answered. */
+function medianOf(windows: readonly ChecksumWindow[]): number | undefined {
 	const counts = windows.flatMap(function(window): number[] {
 		if (window.kind !== 'read') {
 			return([]);
 		}
 		return([window.second.blockCount]);
+	}).sort(function(left, right): number {
+		return(left - right);
 	});
-	if (counts.length === 0) {
-		return(0);
+	const middle = Math.floor(counts.length / 2);
+	const upper = counts[middle];
+	if (upper === undefined) {
+		return(undefined);
 	}
-	return(Math.max(...counts) - Math.min(...counts));
+	if (counts.length % 2 === 1) {
+		return(upper);
+	}
+	return(((counts[middle - 1] ?? upper) + upper) / 2);
 }
 
 function isoOrNull(moment: Date | undefined): string | null {
@@ -149,11 +155,12 @@ function isoOrNull(moment: Date | undefined): string | null {
 
 /**
  * The follower's count must be within the floor of the representative's,
- * widened by how far the representatives count apart and by what either
- * side added within its window, as the two may have been read at different
- * points of the same ledger.
+ * widened by what either side added within its window, as the two may have
+ * been read at different points of the same ledger. A representative that
+ * counts farther than the floor from the others' median keeps a count of
+ * its own, which is no evidence about the follower's, and widens nothing.
  */
-function blockCountRecordOf(at: string, progress: FollowerProgress, follower: ChecksumWindow, representative: string, representativeWindow: ChecksumWindow, spread: number): BlockCountRecord {
+function blockCountRecordOf(at: string, progress: FollowerProgress, follower: ChecksumWindow, representative: string, representativeWindow: ChecksumWindow, median: number | undefined): BlockCountRecord {
 	const reasons: BlockCountNotComparableReason[] = [];
 	const completedPass = isoOrNull(progress.completedPass);
 	if (completedPass === null) {
@@ -167,8 +174,10 @@ function blockCountRecordOf(at: string, progress: FollowerProgress, follower: Ch
 	}
 	if (representativeWindow.kind === 'unanswered') {
 		reasons.push('representative-unanswered');
+	} else if (median !== undefined && Math.abs(representativeWindow.second.blockCount - median) > BLOCK_COUNT_FLOOR) {
+		reasons.push('representative-outlier');
 	}
-	let toleranceBlocks = BLOCK_COUNT_FLOOR + spread;
+	let toleranceBlocks = BLOCK_COUNT_FLOOR;
 	let verdict: BlockCountVerdict = { kind: 'not-comparable-yet', reasons };
 	if (follower.kind === 'read' && representativeWindow.kind === 'read') {
 		toleranceBlocks += movement(follower) + movement(representativeWindow);
@@ -209,10 +218,10 @@ export async function compareChecksums(comparison: ChecksumComparison): Promise<
 	const completedPass = isoOrNull(comparison.progress.completedPass);
 	const checksums: ChecksumRecord[] = [];
 	const blockCounts: BlockCountRecord[] = [];
-	const spread = spreadOf(representativeWindows);
+	const median = medianOf(representativeWindows);
 	for (const [index, source] of comparison.representatives.entries()) {
 		const representativeWindow = representativeWindows[index] ?? { kind: 'unanswered', error: 'not read' };
-		blockCounts.push(blockCountRecordOf(at, comparison.progress, follower, source.endpoint, representativeWindow, spread));
+		blockCounts.push(blockCountRecordOf(at, comparison.progress, follower, source.endpoint, representativeWindow, median));
 		checksums.push({
 			kind: 'checksum',
 			at,
