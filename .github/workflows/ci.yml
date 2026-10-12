@@ -20,6 +20,9 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      # The image check runs the entrypoint under bwrap, which needs an
+      # unprivileged user namespace; Ubuntu's AppArmor policy denies its uid map.
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       # Single-user Nix: the runner owns /nix/store, so cache-nix-action can
       # restore into it (a root-owned multi-user store fails every file).
       - uses: nixbuild/nix-quick-install-action@v30
