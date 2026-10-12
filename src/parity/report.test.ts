@@ -82,7 +82,7 @@ const REPRESENTATIVE_INFO = { status: 200, body: { info: { name: 'KTA' } } };
 const FOLLOWER_INFO = { status: 200, body: { info: { name: '' } } };
 
 /** An API answer apart, with no other representative read again. */
-const DIVERGED_INFO = { kind: 'diverged', field: 'body.info.name', follower: FOLLOWER_INFO, representative: REPRESENTATIVE_INFO, readings: [] } as const;
+const DIVERGED_INFO = { kind: 'diverged', field: 'body.info.name', follower: FOLLOWER_INFO, representative: REPRESENTATIVE_INFO, readings: [], selfCheck: null } as const;
 
 /** A comparison of an account's state that found the follower answering what the representative answered in DIVERGED_INFO. */
 const MATCHED_INFO: APIDiffOutcome = { kind: 'match', digest: answerDigest(`/node/ledger/account/${ACCOUNT}`, REPRESENTATIVE_INFO) ?? null };
@@ -314,13 +314,24 @@ describe('the parity report', function() {
 
 	test('fails the API diff on an unresolved request, but counts one representative\'s own difference apart without failing', function() {
 		const path = `/node/ledger/account/${ACCOUNT}`;
-		const disputed = { field: 'body.info', follower: FOLLOWER_INFO, representative: REPRESENTATIVE_INFO, readings: [] };
+		const disputed = { field: 'body.info', follower: FOLLOWER_INFO, representative: REPRESENTATIVE_INFO, readings: [], selfCheck: { kind: 'accounts', checks: [{ account: ACCOUNT, check: { kind: 'consistent', tokens: 1 } }] } } as const;
 		const local = report([apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'representative-local', ...disputed })]).signals.apiDiff;
 		expect(local).toMatchObject({ verdict: 'not-comparable-yet', notComparableReasons: ['strata-uncovered'], counts: { requestsCompared: 1, matched: 0, diverged: 0, representativeLocal: 1 }, representativeLocal: { [REPRESENTATIVE]: 1 } });
 		const alsoApart = report([apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'representative-local', ...disputed, readings: [{ representative: OTHER_REPRESENTATIVE, kind: 'disagrees', answer: {} }] })]).signals.apiDiff;
 		expect(alsoApart.representativeLocal).toEqual({ [REPRESENTATIVE]: 1, [OTHER_REPRESENTATIVE]: 1 });
 		const unresolved = report([apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'unresolved', ...disputed })]).signals.apiDiff;
 		expect(unresolved).toMatchObject({ verdict: 'fail', counts: { diverged: 1, unresolved: 1 }, firstDivergence: { path, field: 'body.info' } });
+	});
+
+	test('fails the API diff on a difference left to the representatives apart that rests on no consistent check of the follower\'s balances', function() {
+		const path = `/node/ledger/account/${ACCOUNT}`;
+		const disputed = { field: 'body.info', follower: FOLLOWER_INFO, representative: REPRESENTATIVE_INFO, readings: [] } as const;
+		const unchecked = report([apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'representative-local', ...disputed, selfCheck: null })]).signals.apiDiff;
+		expect(unchecked).toMatchObject({ verdict: 'fail', counts: { diverged: 1, unresolved: 1, representativeLocal: 0 }, firstDivergence: { path, field: 'body.info' } });
+		const moved = report([apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'representative-local', ...disputed, selfCheck: { kind: 'accounts', checks: [{ account: ACCOUNT, check: { kind: 'unchecked', why: 'moved' } }] } })]).signals.apiDiff;
+		expect(moved).toMatchObject({ verdict: 'fail', counts: { diverged: 1, representativeLocal: 0 } });
+		const readsNone = report([apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'representative-local', ...disputed, selfCheck: { kind: 'none', why: 'reads no account' } })]).signals.apiDiff;
+		expect(readsNone).toMatchObject({ counts: { diverged: 0, representativeLocal: 1 } });
 	});
 
 	test('states a census of a stratum whose every planned request was compared, and covers a stratum by 300 requests or its census', function() {

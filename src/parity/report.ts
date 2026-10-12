@@ -1,5 +1,5 @@
 import { assertNever } from '../util/assert-never.js';
-import { API_DIFF_SAMPLES_TARGET, keyOf, requestStandings, routeAttemptsOf, routeUncovered, sampleAPI, standingCensuses, standsOnExplanation } from './api-diff.js';
+import { API_DIFF_SAMPLES_TARGET, followerDivergesOn, keyOf, requestStandings, routeAttemptsOf, routeUncovered, sampleAPI, standingCensuses, standsOnExplanation } from './api-diff.js';
 import type { ExplainedDivergence, RequestStanding, RouteAttempts, SupersededDivergence } from './api-diff.js';
 import type { APIDiffSetup } from './api-diff.js';
 import type { APISource } from './api-source.js';
@@ -1013,13 +1013,11 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], plans: readonly APID
 		unanswered,
 		unresolved: diverging.filter(function(standing): boolean {
 			return(standing.open.some(function({ divergence }): boolean {
-				return(divergence.outcome.kind === 'unresolved');
+				return(divergence.outcome.kind !== 'diverged');
 			}));
 		}).length,
 		representativeLocal: local.length,
-		divergenceRecords: records.filter(function(record): boolean {
-			return(record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved');
-		}).length,
+		divergenceRecords: records.filter(followerDivergesOn).length,
 		superseded: superseded.length,
 		explained: explained.length
 	};

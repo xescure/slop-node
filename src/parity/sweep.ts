@@ -488,7 +488,7 @@ async function compareAdjudicated(setup: Comparing, representative: APISource, a
  * is checked of the state compared. Stored balances apart from the history
  * are the follower's divergence whatever moved.
  */
-async function selfCheckOfAccount(setup: Comparing, account: string, compared: unknown): Promise<SelfCheck> {
+export async function selfCheckOfAccount(setup: { readonly follower: APISource; readonly store: Pick<SweepStore, 'balancesSnapshot'> }, account: string, compared: unknown): Promise<SelfCheck> {
 	try {
 		const { stored, head, fromHistory, during } = await setup.store.balancesSnapshot(account, function() {
 			return(getOK(setup.follower, `/node/ledger/account/${account}`));

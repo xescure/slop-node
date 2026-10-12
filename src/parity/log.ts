@@ -278,6 +278,13 @@ export type APIDiffReading =
 	/** No reading that counts: it did not answer, or an account the answer reads is not quiet on it. */
 	| { readonly representative: string; readonly kind: 'unanswered' | 'moving'; readonly detail: string };
 
+/** The check of the follower's balances a difference of an answer left to the representatives apart rests on. */
+export type APISelfCheck =
+	/** Of every account the answer reads. */
+	| { readonly kind: 'accounts'; readonly checks: readonly { readonly account: string; readonly check: SelfCheck }[] }
+	/** None applies, as the answer reads no account. */
+	| { readonly kind: 'none'; readonly why: string };
+
 /** The comparison of one sampled request's answers. */
 export type APIDiffOutcome =
 	/** The digest of the answer both gave once normalized, or null in a record written before matches kept one. */
@@ -287,7 +294,7 @@ export type APIDiffOutcome =
 	 * normalized; the answers are kept as served, with every other
 	 * representative's, which decide whose the difference is.
 	 */
-	| { readonly kind: DisputedKind; readonly field: string; readonly follower: unknown; readonly representative: unknown; readonly readings: readonly APIDiffReading[] }
+	| { readonly kind: DisputedKind; readonly field: string; readonly follower: unknown; readonly representative: unknown; readonly readings: readonly APIDiffReading[]; readonly selfCheck: APISelfCheck | null }
 	/** Not compared: an account the answer reads may be held at different points. */
 	| { readonly kind: 'skipped'; readonly reason: 'moving'; readonly side: MovingSide; readonly detail: string }
 	| { readonly kind: 'skipped'; readonly reason: 'unanswered'; readonly detail: string };
@@ -897,6 +904,39 @@ function sweepOutcomeOf(value: unknown): SweepOutcome | undefined {
 	}
 }
 
+function accountSelfCheckOf(value: unknown): { readonly account: string; readonly check: SelfCheck } | undefined {
+	if (!isFields(value) || !isString(value['account'])) {
+		return(undefined);
+	}
+	const check = selfCheckOf(value['check']);
+	if (check === undefined) {
+		return(undefined);
+	}
+	return({ account: value['account'], check });
+}
+
+function apiSelfCheckOf(value: unknown): APISelfCheck | undefined {
+	if (!isFields(value)) {
+		return(undefined);
+	}
+	switch (value['kind']) {
+		case 'accounts': {
+			const checks = listOf(value['checks'], accountSelfCheckOf);
+			if (checks === undefined) {
+				return(undefined);
+			}
+			return({ kind: 'accounts', checks });
+		}
+		case 'none':
+			if (!isString(value['why'])) {
+				return(undefined);
+			}
+			return({ kind: 'none', why: value['why'] });
+		default:
+			return(undefined);
+	}
+}
+
 function apiDiffReadingOf(value: unknown): APIDiffReading | undefined {
 	if (!isFields(value) || !isString(value['representative'])) {
 		return(undefined);
@@ -1017,10 +1057,11 @@ function apiDiffOutcomeOf(value: unknown): APIDiffOutcome | undefined {
 			if (value['readings'] !== undefined) {
 				readings = listOf(value['readings'], apiDiffReadingOf);
 			}
-			if (!isString(value['field']) || readings === undefined) {
+			const selfCheck = nullable(value['selfCheck'] ?? null, apiSelfCheckOf);
+			if (!isString(value['field']) || readings === undefined || selfCheck === undefined) {
 				return(undefined);
 			}
-			return({ kind: value['kind'], field: value['field'], follower: value['follower'], representative: value['representative'], readings });
+			return({ kind: value['kind'], field: value['field'], follower: value['follower'], representative: value['representative'], readings, selfCheck });
 		}
 		case 'skipped': {
 			const skipped = sweepOutcomeOf(value);

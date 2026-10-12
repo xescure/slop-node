@@ -162,7 +162,24 @@ type StoreContents = {
 	readonly newest?: ReadonlyMap<string, Date>;
 	/** Staples, by the hash of their blocks, the follower holds in the history of every account. */
 	readonly held?: readonly string[];
+	/** The balances the follower stores of every account and those its history leaves it with; by default, those of the state it serves. */
+	readonly balances?: { readonly stored: ReadonlyMap<string, bigint>; readonly fromHistory: ReadonlyMap<string, bigint> };
 };
+
+/** The balances a served state holds, by token. */
+function balancesServed(state: unknown): ReadonlyMap<string, bigint> {
+	const balances = new Map<string, bigint>();
+	if (typeof state !== 'object' || state === null || !('balances' in state) || !Array.isArray(state.balances)) {
+		return(balances);
+	}
+	const entries: readonly unknown[] = state.balances;
+	for (const entry of entries) {
+		if (typeof entry === 'object' && entry !== null && 'token' in entry && 'balance' in entry && typeof entry.token === 'string' && typeof entry.balance === 'string') {
+			balances.set(entry.token, BigInt(entry.balance));
+		}
+	}
+	return(balances);
+}
 
 function memoryStore(contents: StoreContents): APIDiffStore {
 	return({
@@ -176,7 +193,12 @@ function memoryStore(contents: StoreContents): APIDiffStore {
 		heldBlocksInPages: (fromPage, toPage) => Promise.resolve((contents.blocks ?? []).slice(fromPage, toPage)),
 		heldBlocksOfStaples: () => Promise.resolve([]),
 		newestStaples: () => Promise.resolve(contents.newest ?? new Map()),
-		historyHolds: (_account, staple) => Promise.resolve(contents.held?.includes(staple) ?? false)
+		historyHolds: (_account, staple) => Promise.resolve(contents.held?.includes(staple) ?? false),
+		async balancesSnapshot(_account, during) {
+			const seen = await during();
+			const served = balancesServed(seen);
+			return({ stored: contents.balances?.stored ?? served, head: null, fromHistory: contents.balances?.fromHistory ?? served, during: seen });
+		}
 	});
 }
 
@@ -370,6 +392,7 @@ function balanceOf(amount: string): unknown {
 /** The follower's balance, and each representative's, every account quiet on each of them. */
 function servingBalances(setup: Representatives, follower: string, representatives: readonly (string | undefined)[]): void {
 	setup.follower.serve(BALANCE, balanceOf(follower));
+	setup.follower.serve(`/node/ledger/account/${TOKEN}`, { ...STATE, balances: [{ token: TOKEN, balance: follower }] });
 	setup.representatives.forEach(function(representative, index) {
 		representative.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, QUIET_HISTORY);
 		const amount = representatives[index];
@@ -392,7 +415,7 @@ function sources(setup: Representatives) {
 	});
 }
 
-const RECORDED_DIVERGENCE: APIDiffOutcome = { kind: 'diverged', field: 'body.balances[0].balance', follower: { status: 200, body: balanceOf('0x1') }, representative: { status: 200, body: balanceOf('0x2') }, readings: [] };
+const RECORDED_DIVERGENCE: APIDiffOutcome = { kind: 'diverged', field: 'body.balances[0].balance', follower: { status: 200, body: balanceOf('0x1') }, representative: { status: 200, body: balanceOf('0x2') }, readings: [], selfCheck: null };
 
 /** Compares again a divergence recorded with the first representative. */
 async function recheck(setup: Representatives, store: APIDiffStore = memoryStore({})) {
@@ -507,6 +530,23 @@ describe('a divergence of the API', function() {
 		const { summary } = await recheck(setup, memoryStore({ held: [held] }));
 
 		expect(summary).toEqual({ unresolved: 1 });
+	});
+
+	test('left to the representatives apart rests on a consistent check of the follower\'s balances of every account the answer reads', async function() {
+		const consistent = await runningWith(4);
+		servingBalances(consistent, '0x1', ['0x2', '0x1', '0x1', '0x3']);
+		const { latest } = await recheck(consistent);
+		expect(latest?.outcome).toMatchObject({ kind: 'representative-local', selfCheck: { kind: 'accounts', checks: [{ account: TOKEN, check: { kind: 'consistent', tokens: 1 } }] } });
+
+		const apart = await runningWith(4);
+		servingBalances(apart, '0x1', ['0x2', '0x1', '0x1', '0x3']);
+		const { latest: diverging } = await recheck(apart, memoryStore({ balances: { stored: new Map([[TOKEN, 1n]]), fromHistory: new Map([[TOKEN, 2n]]) } }));
+		expect(diverging?.outcome).toMatchObject({ kind: 'diverged', selfCheck: { kind: 'accounts', checks: [{ account: TOKEN, check: { kind: 'inconsistent' } }] } });
+
+		const moved = await runningWith(4);
+		servingBalances(moved, '0x1', ['0x2', '0x1', '0x1', '0x3']);
+		const { latest: unsettled } = await recheck(moved, memoryStore({ balances: { stored: new Map([[TOKEN, 5n]]), fromHistory: new Map([[TOKEN, 5n]]) } }));
+		expect(unsettled?.outcome).toMatchObject({ kind: 'unresolved', selfCheck: { kind: 'accounts', checks: [{ account: TOKEN, check: { kind: 'unchecked' } }] } });
 	});
 
 	test('is unresolved when two answer as the follower and two answer one failure, told apart only by its error ID', async function() {
@@ -650,6 +690,23 @@ describe('a divergence of the API', function() {
 
 		expect(await recheckAPIDivergences({ ...sources(setup), store: memoryStore({ blocks: [block] }) })).toEqual({ diverged: 1 });
 		expect(setup.representatives[0]?.requests).toEqual([`GET ${path}`, `GET /node/ledger/account/${OWNER}/history?limit=1`, `GET /node/ledger/account/${OWNER}/history?limit=1`]);
+	});
+
+	test('of a block that reads no account is left to the representatives apart with why no check of the follower\'s balances applies', async function() {
+		const setup = await runningWith(4);
+		const block = await heldSend();
+		const path = `/node/ledger/block/${block.hash}`;
+		setup.follower.serve(path, { block: 'follower' });
+		setup.representatives.forEach(function(representative, index) {
+			representative.serve(path, { block: ['apart', 'follower', 'follower', 'apart too'][index] });
+		});
+		const recorded: APIDiffRecord = { kind: 'api-diff', at: '2026-10-09T08:40:00.000Z', representative: setup.representatives[0]?.endpoint ?? '', stratum: 'operation:SEND', route: '/api/node/ledger/block/{blockhash}', path, behaviors: [], outcome: { ...RECORDED_DIVERGENCE, field: 'body.block' } };
+		await setup.log.append([recorded]);
+
+		await recheckAPIDivergences({ ...sources(setup), store: memoryStore({ blocks: [block] }) });
+
+		const latest = recordsOf((await setup.log.read()).records, 'api-diff').at(-1);
+		expect(latest?.outcome).toMatchObject({ kind: 'representative-local', selfCheck: { kind: 'none', why: 'the answer reads no account, so no balances of the follower bear on it' } });
 	});
 });
 

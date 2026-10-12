@@ -95,8 +95,8 @@ const API_DIFF: APIDiffRecord = { kind: 'api-diff', at: CHECKSUM.at, representat
 
 const API_DIFFS: readonly APIDiffRecord[] = [
 	API_DIFF,
-	{ ...API_DIFF, outcome: { kind: 'representative-local', field: 'body.balances[0].balance', follower: { status: 200, body: {} }, representative: { status: 200, body: { balances: [1] } }, readings: [{ representative: 'https://rep2.example/api', kind: 'agrees', answer: { status: 200, body: {} } }, { representative: 'https://rep3.example/api', kind: 'moving', detail: 'recent' }] } },
-	{ ...API_DIFF, outcome: { kind: 'unresolved', field: 'status', follower: { status: 200, body: {} }, representative: { status: 500, body: {} }, readings: [{ representative: 'https://rep2.example/api', kind: 'disagrees', answer: { status: 500, body: {} } }, { representative: 'https://rep3.example/api', kind: 'unanswered', detail: 'answered 504' }] } },
+	{ ...API_DIFF, outcome: { kind: 'representative-local', field: 'body.balances[0].balance', follower: { status: 200, body: {} }, representative: { status: 200, body: { balances: [1] } }, readings: [{ representative: 'https://rep2.example/api', kind: 'agrees', answer: { status: 200, body: {} } }, { representative: 'https://rep3.example/api', kind: 'moving', detail: 'recent' }], selfCheck: { kind: 'accounts', checks: [{ account: 'keeta_aabb', check: { kind: 'consistent', tokens: 1 } }] } } },
+	{ ...API_DIFF, outcome: { kind: 'unresolved', field: 'status', follower: { status: 200, body: {} }, representative: { status: 500, body: {} }, readings: [{ representative: 'https://rep2.example/api', kind: 'disagrees', answer: { status: 500, body: {} } }, { representative: 'https://rep3.example/api', kind: 'unanswered', detail: 'answered 504' }], selfCheck: null } },
 	{ ...API_DIFF, outcome: { kind: 'skipped', reason: 'moving', side: 'representative', detail: 'recent' } }
 ];
 
@@ -177,12 +177,12 @@ describe('the parity log', function() {
 		expect(await log.read()).toEqual({ records: [{ ...MATCHED, outcome: { ...outcome, readings: [], selfCheck: null } }], unreadableLines: 0 });
 	});
 
-	test('reads an API divergence recorded before divergences were sent again as one with no other representative\'s reading', async function() {
+	test('reads an API divergence recorded before divergences were sent again as one with no other representative\'s reading, nor a check of the follower\'s balances', async function() {
 		const log = await scratchLog();
 		const outcome = { kind: 'diverged', field: 'body.error', follower: { status: 200, body: {} }, representative: { status: 500, body: { error: true } } };
 		await appendFile(log.path, `${JSON.stringify({ ...API_DIFF, outcome })}\n`);
 
-		expect(await log.read()).toEqual({ records: [{ ...API_DIFF, outcome: { ...outcome, readings: [] } }], unreadableLines: 0 });
+		expect(await log.read()).toEqual({ records: [{ ...API_DIFF, outcome: { ...outcome, readings: [], selfCheck: null } }], unreadableLines: 0 });
 	});
 
 	test('reads an API match recorded before matches kept a digest as one with none', async function() {

@@ -9,10 +9,10 @@ import { assertNever } from '../util/assert-never.js';
 import { answeredByAPI, isAnonymousFailure } from './api-source.js';
 import type { APIAnswer, APISource } from './api-source.js';
 import type { AccountCandidate, FollowerStore, HeldBlock } from './follower-store.js';
-import type { APIDiffExplainedRecord, APIDiffOutcome, APIDiffPlanRecord, APIDiffReading, APIDiffRecord, ParityLog, ParityRecord, RepresentativeReading, StratumPopulation, TriageRetest } from './log.js';
+import type { APIDiffExplainedRecord, APIDiffOutcome, APIDiffPlanRecord, APIDiffReading, APIDiffRecord, APISelfCheck, DisputedKind, ParityLog, ParityRecord, RepresentativeReading, SelfCheck, StratumPopulation, TriageRetest } from './log.js';
 import { ACCOUNT_KINDS, OPERATION_NAMES, operationStratum, STRATA } from './strata.js';
 import type { OperationName, Stratum } from './strata.js';
-import { disputedKindOf, firstDifference, newestStapleOf, QUIET_MARGIN_MILLISECONDS } from './sweep.js';
+import { disputedKindOf, firstDifference, newestStapleOf, QUIET_MARGIN_MILLISECONDS, selfCheckOfAccount } from './sweep.js';
 
 const lib = KeetaNet.lib;
 
@@ -268,7 +268,7 @@ export function shuffled<Item>(items: readonly Item[], keyOf: (item: Item) => st
 }
 
 /** What the API diff reads of the follower's storage. */
-export type APIDiffStore = Pick<FollowerStore, 'progress' | 'quietAccounts' | 'heldBlocks' | 'blockPages' | 'heldBlocksInPages' | 'heldBlocksOfStaples' | 'newestStaples' | 'historyHolds'>;
+export type APIDiffStore = Pick<FollowerStore, 'progress' | 'quietAccounts' | 'heldBlocks' | 'blockPages' | 'heldBlocksInPages' | 'heldBlocksOfStaples' | 'newestStaples' | 'historyHolds' | 'balancesSnapshot'>;
 
 /**
  * Pages of the blocks' table read at a time: some two thousand blocks, in
@@ -722,6 +722,52 @@ async function dissentHeld(request: SampledRequest, answers: { readonly follower
 }
 
 /**
+ * The check of the follower's balances a difference left to the
+ * representatives apart rests on, as the sweep's does: of every account
+ * the answer reads, the entities a principal's permissions list included,
+ * each against the follower's own history, and against the state the
+ * follower served when the answer is that account's state.
+ */
+async function apiSelfCheckOf(request: SampledRequest, answers: { readonly follower: APIAnswer; readonly representative: APIAnswer }, follower: APISource, store: Pick<APIDiffStore, 'balancesSnapshot'>): Promise<APISelfCheck> {
+	const accounts = [...request.quiet];
+	if (request.listsEntities) {
+		for (const answer of [answers.follower, answers.representative]) {
+			accounts.push(...entitiesListed(answer.body));
+		}
+	}
+	const unique = [...new Set(accounts)];
+	if (unique.length === 0) {
+		return({ kind: 'none', why: 'the answer reads no account, so no balances of the follower bear on it' });
+	}
+	const checks = [];
+	for (const account of unique) {
+		let compared: unknown = null;
+		if (request.route === '/api/node/ledger/account/{account}' && account === request.quiet[0]) {
+			compared = answers.follower.body;
+		}
+		checks.push({ account, check: await selfCheckOfAccount({ follower, store }, account, compared) });
+	}
+	return({ kind: 'accounts', checks });
+}
+
+/** The kind a difference left to the representatives apart stands as once its check is made: the follower's when a check is inconsistent, unresolved while one could not be made. */
+function selfCheckedKind(selfCheck: APISelfCheck): DisputedKind {
+	if (selfCheck.kind === 'none') {
+		return('representative-local');
+	}
+	const kinds = selfCheck.checks.map(function({ check }): SelfCheck['kind'] {
+		return(check.kind);
+	});
+	if (kinds.includes('inconsistent')) {
+		return('diverged');
+	}
+	if (kinds.includes('unchecked')) {
+		return('unresolved');
+	}
+	return('representative-local');
+}
+
+/**
  * Sends the request to the follower before and after the representative,
  * so that an account the follower changes in between shows as a change,
  * and compares the two answers once normalized. Answers alike match, with
@@ -731,7 +777,8 @@ async function dissentHeld(request: SampledRequest, answers: { readonly follower
  * its answer, so that one it added since shows; they are then read again
  * from every other representative, and judged by the sweep's rule.
  */
-async function compareRequest(request: SampledRequest, follower: APISource, representative: APISource, others: readonly APISource[], quiet: QuietAccounts): Promise<Compared> {
+async function compareRequest(request: SampledRequest, sources: { readonly follower: APISource; readonly representative: APISource; readonly others: readonly APISource[] }, quiet: QuietAccounts, store: Pick<APIDiffStore, 'balancesSnapshot'>): Promise<Compared> {
+	const { follower, representative, others } = sources;
 	let followerAfter: APIAnswer;
 	let representativeAnswer: APIAnswer;
 	let field: string | undefined;
@@ -765,7 +812,7 @@ async function compareRequest(request: SampledRequest, follower: APISource, repr
 	const readings = await Promise.all(others.map(function(other) {
 		return(readingOf(request, other, answered, judged, quiet));
 	}));
-	const kind = disputedKindOf(readings.map(function(reading): RepresentativeReading {
+	let kind = disputedKindOf(readings.map(function(reading): RepresentativeReading {
 		return(judgedAsTheSweepDoes(request.route, reading));
 	}), judged, {
 		compared: normalizedAnswer(request.route, representativeAnswer),
@@ -783,7 +830,12 @@ async function compareRequest(request: SampledRequest, follower: APISource, repr
 	if (HISTORY_ROUTES.has(request.route) && isAnonymousFailure(representativeAnswer) && kind !== 'diverged') {
 		return({ outcome: { kind: 'skipped', reason: 'unanswered', detail: `${representative.endpoint} failed internally, and most representatives did not answer apart from the follower` }, representativeAnswer: undefined });
 	}
-	return({ outcome: { kind, field, follower: followerAfter, representative: representativeAnswer, readings }, representativeAnswer });
+	let selfCheck: APISelfCheck | null = null;
+	if (kind === 'representative-local') {
+		selfCheck = await apiSelfCheckOf(request, { follower: answered, representative: representativeAnswer }, follower, store);
+		kind = selfCheckedKind(selfCheck);
+	}
+	return({ outcome: { kind, field, follower: followerAfter, representative: representativeAnswer, readings, selfCheck }, representativeAnswer });
 }
 
 /** The route of the document a request below the API's root is of, and its decoded path parameters. */
@@ -1004,7 +1056,7 @@ export async function sampleAPI(setup: APIDiffSetup): Promise<APIDiffSummary> {
 				if (request === undefined) {
 					return;
 				}
-				const compared = await compareRequest(request, setup.follower, representative, othersThan(setup.representatives, representative), quiet);
+				const compared = await compareRequest(request, { follower: setup.follower, representative, others: othersThan(setup.representatives, representative) }, quiet, setup.store);
 				// A stop ends what the request waited on, a read of the follower's database among them, which compared nothing.
 				if (isStopped(setup.stopped)) {
 					return;
@@ -1098,8 +1150,32 @@ export function keyOf(stratum: Stratum, path: string): string {
 	return(`${stratum} ${path}`);
 }
 
-function followerDivergesOn(record: APIDiffRecord): boolean {
-	return(record.outcome.kind === 'diverged' || record.outcome.kind === 'unresolved');
+/**
+ * Whether the comparison counts against the follower: it disagrees with
+ * most representatives, they split, or the difference left to them apart
+ * rests on no consistent check of the follower's balances, as one recorded
+ * before such a check was made does not.
+ */
+export function followerDivergesOn(record: APIDiffRecord): boolean {
+	switch (record.outcome.kind) {
+		case 'diverged':
+		case 'unresolved':
+			return(true);
+		case 'representative-local':
+			return(!selfCheckHolds(record.outcome.selfCheck));
+		case 'match':
+		case 'skipped':
+			return(false);
+		default:
+			return(assertNever(record.outcome));
+	}
+}
+
+function selfCheckHolds(selfCheck: APISelfCheck | null): boolean {
+	if (selfCheck === null) {
+		return(false);
+	}
+	return(selfCheckedKind(selfCheck) === 'representative-local');
 }
 
 /**
@@ -1111,7 +1187,7 @@ function followerDivergesOn(record: APIDiffRecord): boolean {
  * of the API, which another such failure would equal whatever its cause.
  */
 export function supersedes(divergence: APIDiffRecord, later: APIDiffRecord): boolean {
-	if (divergence.outcome.kind !== 'diverged' && divergence.outcome.kind !== 'unresolved') {
+	if (divergence.outcome.kind === 'match' || divergence.outcome.kind === 'skipped' || !followerDivergesOn(divergence)) {
 		return(false);
 	}
 	const { representative } = divergence.outcome;
@@ -1126,6 +1202,9 @@ export function supersedes(divergence: APIDiffRecord, later: APIDiffRecord): boo
 		case 'match':
 			return(later.outcome.digest === then);
 		case 'representative-local':
+			if (followerDivergesOn(later)) {
+				return(false);
+			}
 			return(answerDigest(later.path, later.outcome.follower) === then);
 		case 'diverged':
 		case 'unresolved':
@@ -1397,7 +1476,7 @@ export async function recheckAPIDivergences(setup: APIRecheckSetup): Promise<API
 		if (representative === undefined || request === undefined) {
 			continue;
 		}
-		const compared = await compareRequest(request, setup.follower, representative, othersThan(setup.representatives, representative), quiet);
+		const compared = await compareRequest(request, { follower: setup.follower, representative, others: othersThan(setup.representatives, representative) }, quiet, setup.store);
 		if (isStopped(setup.stopped)) {
 			break;
 		}
