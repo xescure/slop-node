@@ -868,39 +868,53 @@ export class BootstrapClient {
 	}
 
 	/**
-	 * The staple as the peer serves it in its pages, if it serves it: a peer
-	 * keyed by votes lists it for its earliest vote in the read from there,
+	 * The staple as the peer serves it in its pages, if it serves it. A peer
+	 * keyed by votes lists it for its earliest vote in a read from there,
 	 * which a page cut short may leave for the next, asked for with a filter
-	 * naming what came before. A peer that does not list it, or fails, leaves
-	 * the staple as it was built.
+	 * naming what came before. A read from earlier would end, on the main
+	 * network, on the vote a millisecond or less before, which is how the
+	 * staple was lost, and skip it; so only a peer that lists none of it
+	 * from its vote's own moment, as one keying votes a little early would,
+	 * is read again from the tolerance before. A peer that lists it in
+	 * neither, or fails, leaves the staple as it was built; one that asks
+	 * the node to slow down is left alone.
 	 */
 	async #asTheyAreServed(endpoint: string, built: VoteStaple, fetcher: PageFetcher): Promise<VoteStaple> {
-		const start = new Date(Math.min(...built.votes.map(function(vote): number {
+		const earliest = Math.min(...built.votes.map(function(vote): number {
 			return(vote.validityFrom.getTime());
-		})));
-		const named = new NamedStaples();
+		}));
 		const key = built.blocksHash.toString();
 		try {
-			for (let page = 0; page < SERVED_BYTES_PAGES; page++) {
-				const bloomFilter = named.filter(randomInt(FILTER_SEED_LIMIT)).serialized;
-				const staples = await this.#pacer.paced(endpoint, this.#stopping.signal, () => {
-					return(fetcher.page({ endpoint, start, limit: SERVED_BYTES_PAGE_LIMIT, bloomFilter }, this.timeout, this.#stopping.signal));
-				});
-				const served = staples.find(function(listed): boolean {
-					return(listed.blocksHash.toString() === key);
-				});
+			for (const start of [earliest, earliest - VOTE_KEY_TOLERANCE_MILLISECONDS]) {
+				const served = await this.#servedFrom(endpoint, key, new Date(start), fetcher);
 				if (served !== undefined) {
 					return(served);
 				}
-				if (staples.length === 0) {
-					break;
-				}
-				named.receive(staples);
 			}
 		} catch (error: unknown) {
+			this.#noteThrottling(endpoint, error);
 			this.#node.log.debug(LOG_SOURCE, `Asking ${endpoint} for the bytes it serves of staple ${key} failed; the node adds it as built from its votes and blocks:`, error);
 		}
 		return(built);
+	}
+
+	/** The staple of that key in the peer's pages from the start, at most SERVED_BYTES_PAGES of them. */
+	async #servedFrom(endpoint: string, key: string, start: Date, fetcher: PageFetcher): Promise<VoteStaple | undefined> {
+		const named = new NamedStaples();
+		for (let page = 0; page < SERVED_BYTES_PAGES; page++) {
+			const bloomFilter = named.filter(randomInt(FILTER_SEED_LIMIT)).serialized;
+			const staples = await this.#pacer.paced(endpoint, this.#stopping.signal, () => {
+				return(fetcher.page({ endpoint, start, limit: SERVED_BYTES_PAGE_LIMIT, bloomFilter }, this.timeout, this.#stopping.signal));
+			});
+			const served = staples.find(function(listed): boolean {
+				return(listed.blocksHash.toString() === key);
+			});
+			if (served !== undefined || staples.length === 0) {
+				return(served);
+			}
+			named.receive(staples);
+		}
+		return(undefined);
 	}
 
 	/** A peer that answered with a status asking the node to slow down is left alone for a while (PeerPacer). */

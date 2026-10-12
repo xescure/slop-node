@@ -27,6 +27,7 @@ import type { ServingNode, StorageUnderTest } from '../testing/sdk.js';
 import { BootstrapClient } from './bootstrap.js';
 import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RETRY_ARENA, BootstrapCursors } from './bootstrap-cursors.js';
 import { bootstrapEndpointsOf, bootstrapFrom, bootstrapSources } from './bootstrap-peers.js';
+import { VOTE_KEY_TOLERANCE_MILLISECONDS } from './bootstrap-evidence.js';
 import { DEEP_SCAN_PERIOD_MILLISECONDS, MAX_PASS_MILLISECONDS } from './bootstrap-pass.js';
 import { FIRST_BACKOFF_MILLISECONDS, REPORT_REFUSED_AFTER_MILLISECONDS } from './bootstrap-retry.js';
 import { stagedOf } from './bootstrap-stage.js';
@@ -311,6 +312,65 @@ describe('a bootstrap client', function() {
 		expect(reading.askedFor).toEqual([lostBlock]);
 		const stored = await late.node.ledger.getVoteStaple(lost.blocksHash, 'main');
 		expect(Buffer.from(stored?.toBytes() ?? new ArrayBuffer(0)).equals(Buffer.from(served.toBytes()))).toBe(true);
+	});
+
+	/*
+	 * The representative keys every vote 50 ms before it was made, so a page
+	 * from the vote's own moment lists none of the staple; and leaves the
+	 * staple out of the pages a pass asks for, so that the staple after it
+	 * waits on it.
+	 */
+	test('finds the staple as the representative serves it, though the representative keys its votes a little before they were made', async function() {
+		const peer = await representative();
+		const reading = await startReadingPeer({ ...ONE_VOTE_A_READ, keyOffset: -50 });
+		const late = await joiner({ bootstrapFrom: [reading.apiURL] });
+		const [lost, after] = await sendsFrom(peer.network, 0, 2);
+		if (lost === undefined || after === undefined) {
+			throw(new Error('no staples were made'));
+		}
+		const served = new lib.Vote.Staple(deflateSync(inflateSync(Buffer.from(lost.toBytes())), { level: 1 }));
+		reading.apply([peer.network.genesis, served, after]);
+		reading.leavesOut(lost.blocksHash.toString(), function(_start, limit): boolean {
+			return(limit !== '200');
+		});
+		advanceClock(BOOTSTRAP_MARGIN_MILLISECONDS + 1000);
+
+		expect(await clientOf(late.node).update()).toEqual({ complete: true });
+
+		const stored = await late.node.ledger.getVoteStaple(lost.blocksHash, 'main');
+		expect(Buffer.from(stored?.toBytes() ?? new ArrayBuffer(0)).equals(Buffer.from(served.toBytes()))).toBe(true);
+		const earliest = Math.min(...lost.votes.map(function(vote): number {
+			return(vote.validityFrom.getTime());
+		}));
+		// From its vote's moment first, then, as that listed none of it, from the tolerance before.
+		expect([...new Set(reading.pages.filter(function(page): boolean {
+			return(page.limit === '200');
+		}).map(function(page): string | null {
+			return(page.start);
+		}))]).toEqual([new Date(earliest).toISOString(), new Date(earliest - VOTE_KEY_TOLERANCE_MILLISECONDS).toISOString()]);
+	});
+
+	test('leaves alone a representative that asks it to slow down while it looks for the bytes it serves of a fetched staple', async function() {
+		const peer = await representative();
+		const reading = await startReadingPeer(ONE_VOTE_A_READ);
+		const late = await joiner({ bootstrapFrom: [reading.apiURL] });
+		const { before, lost, after } = await nearTiedHistory(peer.network);
+		reading.apply([peer.network.genesis, before, lost, after]);
+		advanceClock(BOOTSTRAP_MARGIN_MILLISECONDS + 1000);
+		// Only the lookup asks for pages of 200.
+		reading.throttlesPages(function(_start, limit): boolean {
+			return(limit === '200');
+		});
+		const warnings = warningsOf(late.node);
+		const client = clientOf(late.node);
+
+		expect(await client.update()).toEqual({ complete: true });
+		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([peer.network.genesis, before, lost, after]));
+		const asked = reading.pages.length;
+		await client.update();
+
+		expect(reading.pages).toHaveLength(asked);
+		expect(warnings()).toContainEqual(expect.stringContaining(`the bootstrap asks ${reading.apiURL} nothing for 60 s more, as it asked the node to slow down`));
 	});
 
 	test('asks the next peer for a lacked block when one holds no staple of it, or fails, after a pass over some peer completed', async function() {

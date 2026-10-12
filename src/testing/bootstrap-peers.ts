@@ -335,15 +335,21 @@ export type ReadingPeer = ServingPeer & {
 	readonly askedFor: readonly string[];
 	/** Answers no votes on the blocks named from now on, as a representative that holds no staple of theirs. */
 	readonly holdsNot: (block: string) => void;
+	/** Answers 429, asking for a minute's wait, every request for a page whose start and limit, as the query spells them, the test picks. */
+	readonly throttlesPages: (picks: (start: string | null, limit: string | null) => boolean) => void;
+	/** Leaves the staple of those blocks out of every page whose start and limit the test picks, as if it held none. */
+	readonly leavesOut: (blocksHash: string, picks: (start: string | null, limit: string | null) => boolean) => void;
 };
 
 /**
  * How a main network representative reads its votes for a page: so many at
  * a time, from the first keyed at or after the start, each read after the
  * first beginning past the key of the read before's last vote by
- * resumesPast, so that a vote keyed that close after it is in no read.
+ * resumesPast, so that a vote keyed that close after it is in no read. It
+ * keys each vote keyOffset after the moment it was made, 0 unless given, as
+ * a representative may key one a little off.
  */
-export type ReadingRule = { readonly votesPerRead: number; readonly resumesPast: number };
+export type ReadingRule = { readonly votesPerRead: number; readonly resumesPast: number; readonly keyOffset?: number };
 
 /**
  * A representative keyed by votes that reads them as the rule says, lists
@@ -357,6 +363,10 @@ export async function startReadingPeer(rule: ReadingRule): Promise<ReadingPeer> 
 	const pages: RecordedPage[] = [];
 	const askedFor: string[] = [];
 	const heldNot = new Set<string>();
+	let throttled = function(_start: string | null, _limit: string | null): boolean {
+		return(false);
+	};
+	const leftOut = new Map<string, (start: string | null, limit: string | null) => boolean>();
 	let served = 0;
 	const holding = function(block: string): VoteStaple | undefined {
 		if (heldNot.has(block)) {
@@ -399,12 +409,18 @@ export async function startReadingPeer(rule: ReadingRule): Promise<ReadingPeer> 
 			return;
 		}
 		const query = url.searchParams;
+		if (throttled(query.get('start'), query.get('limit'))) {
+			response.writeHead(429, { 'content-type': 'application/json', 'retry-after': '60' });
+			response.end(JSON.stringify({ error: true, message: 'Too many requests' }));
+			pages.push({ start: query.get('start'), limit: query.get('limit'), bloomFilter: bloomFilterOf(query), status: 429, served: [], received, answered: performance.now() });
+			return;
+		}
 		const start = Date.parse(query.get('start') ?? '');
 		const limit = Number(query.get('limit') ?? '1000');
 		const filter = bloomFilterOf(query);
 		const votes = applied.flatMap(function(staple): { readonly staple: VoteStaple; readonly made: number }[] {
 			return(staple.votes.map(function(vote): { readonly staple: VoteStaple; readonly made: number } {
-				return({ staple, made: vote.validityFrom.getTime() });
+				return({ staple, made: vote.validityFrom.getTime() + (rule.keyOffset ?? 0) });
 			}));
 		}).sort(function(left, right): number {
 			return(left.made - right.made);
@@ -426,7 +442,8 @@ export async function startReadingPeer(rule: ReadingRule): Promise<ReadingPeer> 
 				if (page.length >= limit) {
 					break;
 				}
-				if (filter?.has(staple.toBytes()) !== true) {
+				const hidden = leftOut.get(staple.blocksHash.toString())?.(query.get('start'), query.get('limit')) === true;
+				if (!hidden && filter?.has(staple.toBytes()) !== true) {
 					page.push(Buffer.from(staple.toBytes()).toString('base64'));
 				}
 			}
@@ -443,6 +460,12 @@ export async function startReadingPeer(rule: ReadingRule): Promise<ReadingPeer> 
 		askedFor,
 		holdsNot: function(block: string): void {
 			heldNot.add(block);
+		},
+		throttlesPages: function(picks): void {
+			throttled = picks;
+		},
+		leavesOut: function(blocksHash, picks): void {
+			leftOut.set(blocksHash, picks);
 		},
 		apply: function(staples: readonly ServedStaple[]): void {
 			for (const staple of staples) {
