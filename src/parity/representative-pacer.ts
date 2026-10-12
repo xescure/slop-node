@@ -1,5 +1,6 @@
 import { answeredByAPI, isAnonymousFailure } from './api-source.js';
 import type { APIAnswer } from './api-source.js';
+import { messageOf } from './values.js';
 
 /** How hard the parity tools read from each representative. */
 export type RepresentativePacing = {
@@ -45,12 +46,6 @@ const MILLISECONDS_PER_SECOND = 1000;
  */
 const ANONYMOUS_FAILURES_TO_STRAIN = 3;
 
-function messageOf(error: unknown): string {
-	if (error instanceof Error) {
-		return(error.message);
-	}
-	return(String(error));
-}
 
 /** The wait a Retry-After header asks for: a number of seconds, or a date. */
 function retryAfterMilliseconds(header: string | null, now: number): number | undefined {

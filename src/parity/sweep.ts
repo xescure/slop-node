@@ -8,6 +8,7 @@ import type { FollowerStore, KnownAccount } from './follower-store.js';
 import { standsDiverging, standsInPlaceOf, sweepCursorOf } from './log.js';
 import { balancesCheckOf, selfCheckOf } from './self-check.js';
 import type { Disputed, DisputedKind, ParityLog, RecordedWalk, RepresentativeReading, SelfCheck, SweepBatchRecord, SweepCursor, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
+import { isFields, isStopped, messageOf } from './values.js';
 
 /** Where each walk of the sweep resumes, in the follower's directory. */
 export const SWEEP_CURSOR_FILES: Readonly<Record<SweepWalk, string>> = { chain: 'parity-sweep-chain.json', passive: 'parity-sweep-passive.json' };
@@ -85,9 +86,6 @@ async function writeSweepCursor(path: string, cursor: SweepCursor): Promise<void
 	await rename(`${path}.new`, path);
 }
 
-function isFields(value: unknown): value is Readonly<Record<string, unknown>> {
-	return(typeof value === 'object' && value !== null && !Array.isArray(value));
-}
 
 /** The path of the first field at which the two bodies differ, or nothing when they are equal. */
 export function firstDifference(follower: unknown, representative: unknown, path = ''): string | undefined {
@@ -182,12 +180,6 @@ function headBlockOf(answer: unknown): string | null {
 	return(block['$hash']);
 }
 
-function messageOf(error: unknown): string {
-	if (error instanceof Error) {
-		return(error.message);
-	}
-	return(String(error));
-}
 
 type AccountComparison = {
 	readonly follower: APISource;
@@ -346,10 +338,6 @@ function count(tally: Tally, outcome: SweepOutcome): void {
 	}
 }
 
-/** Read through a call, as a signal is aborted while the sweep awaits. */
-function isStopped(signal: AbortSignal): boolean {
-	return(signal.aborted);
-}
 
 const FOLLOWER_HOLDS_RECENT = 'the follower holds a staple of it from within the margin of its reach';
 

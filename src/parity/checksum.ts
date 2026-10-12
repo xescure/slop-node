@@ -3,6 +3,7 @@ import { getOK } from './api-source.js';
 import type { APISource } from './api-source.js';
 import type { ChecksumSnapshot, FollowerProgress, FollowerStore } from './follower-store.js';
 import type { BlockCountNotComparableReason, BlockCountRecord, BlockCountVerdict, ChecksumReading, ChecksumRecord, ChecksumVerdict, ChecksumWindow, CrossCheckOutcome, CrossCheckRecord, HeldBackRecord, MismatchedStapleRecord, NotComparableReason } from './log.js';
+import { isoOrNull, messageOf } from './values.js';
 
 /**
  * How long a representative's checksum and block count must hold still to
@@ -32,12 +33,6 @@ export type ChecksumComparison = {
 
 type Reading = { readonly kind: 'read'; readonly reading: ChecksumReading } | { readonly kind: 'unanswered'; readonly error: string };
 
-function messageOf(error: unknown): string {
-	if (error instanceof Error) {
-		return(error.message);
-	}
-	return(String(error));
-}
 
 function fieldOf(body: unknown, name: string): unknown {
 	if (typeof body !== 'object' || body === null || !(name in body)) {
@@ -76,8 +71,9 @@ async function windowOf(source: APISource, first: Reading): Promise<ChecksumWind
 	return({ kind: 'read', first: first.reading, second: second.reading });
 }
 
-function heldStill(window: Extract<ChecksumWindow, { kind: 'read' }>): boolean {
-	return(window.first.blockCount === window.second.blockCount && checksumsEqual(window.first.checksum, window.second.checksum));
+/** Whether the node answered at both ends of its window, and served the same block count and checksum at each. */
+export function heldStill(window: ChecksumWindow): window is Extract<ChecksumWindow, { kind: 'read' }> {
+	return(window.kind === 'read' && window.first.blockCount === window.second.blockCount && checksumsEqual(window.first.checksum, window.second.checksum));
 }
 
 function verdictOf(comparison: ChecksumComparison, follower: ChecksumWindow, representative: ChecksumWindow): ChecksumVerdict {
@@ -138,12 +134,6 @@ function medianOf(windows: readonly ChecksumWindow[]): number | undefined {
 	return(((counts[middle - 1] ?? upper) + upper) / 2);
 }
 
-function isoOrNull(moment: Date | undefined): string | null {
-	if (moment === undefined) {
-		return(null);
-	}
-	return(moment.toISOString());
-}
 
 /**
  * The follower's count must be within the floor of the representative's,

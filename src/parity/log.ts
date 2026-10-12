@@ -6,6 +6,8 @@ import type { ShadowRefusalReason } from '../conformance/mainnet/shadow.js';
 import type { HeldBack, QueuedStaple, StrandedStaple } from './follower-store.js';
 import { stratumOf } from './strata.js';
 import type { Stratum } from './strata.js';
+import { isFields } from './values.js';
+import type { Fields } from './values.js';
 
 /** The parity log, one JSON record per line, in the follower's directory. */
 export const PARITY_LOG_FILE = 'parity.jsonl';
@@ -372,41 +374,12 @@ export type APIDiffExplainedRecord = {
 	readonly retest: TriageRetest;
 };
 
-/** A staple of the window the offline ledger refused to vote on, and the classified difference that explains it. */
-export type ShadowRefusal = {
-	readonly blocksHash: string;
-	readonly reason: ShadowRefusalReason;
-	readonly code: string;
-};
-
 /** A refusal no classified difference explains, or more than one does. */
 export type UnexplainedShadowRefusal = {
 	readonly blocksHash: string;
 	readonly code: string;
 	readonly message: string;
 	readonly why: string;
-};
-
-/** Shadow votes on a window of the follower's history, replayed from its first staple into an offline ledger, as builds before the version-scoped run recorded them. */
-export type ShadowLiveRecord = {
-	readonly kind: 'shadow-live';
-	readonly at: string;
-	/** Staples replayed, the window's among them. */
-	readonly replayed: number;
-	readonly windowStaples: number;
-	/** The moments of the window's first and last staples. */
-	readonly windowFrom: string | null;
-	readonly windowTo: string | null;
-	/** Staples of the window the offline ledger voted for. */
-	readonly voted: number;
-	readonly explained: readonly ShadowRefusal[];
-	readonly unexplained: readonly UnexplainedShadowRefusal[];
-	/** Staples of the window the replay could not apply. */
-	readonly deferredInWindow: readonly string[];
-	/** Staples those builds refused at first for want of voting weight, and tried again as more were added. */
-	readonly refusedForWeight: number;
-	/** Staples before the window the replay never applied, which leave the window's ledger short of them. */
-	readonly unappliedBeforeWindow: readonly string[];
 };
 
 /**
@@ -552,7 +525,7 @@ export type HeldBackRecord = HeldBack & {
 	readonly at: string;
 };
 
-export type ParityRecord = HeldBackRecord | ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | SweepBatchRecord | APIDiffRecord | APIDiffPlanRecord | APIDiffExplainedRecord | ShadowLiveRecord | ShadowRunRecord | ShadowExplainedRecord;
+export type ParityRecord = HeldBackRecord | ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | SweepBatchRecord | APIDiffRecord | APIDiffPlanRecord | APIDiffExplainedRecord | ShadowRunRecord | ShadowExplainedRecord;
 
 /** The records a log holds, and how many of its lines were not records, as the end of a line cut short by a crash. */
 export type ParityLogContents = {
@@ -560,11 +533,7 @@ export type ParityLogContents = {
 	readonly unreadableLines: number;
 };
 
-type Fields = Readonly<Record<string, unknown>>;
 
-function isFields(value: unknown): value is Fields {
-	return(typeof value === 'object' && value !== null && !Array.isArray(value));
-}
 
 function isString(value: unknown): value is string {
 	return(typeof value === 'string');
@@ -1108,37 +1077,11 @@ function textOf(value: unknown): string | undefined {
 	return(value);
 }
 
-function shadowRefusalOf(value: unknown): ShadowRefusal | undefined {
-	if (!isFields(value) || !isString(value['blocksHash']) || !isString(value['code'])) {
-		return(undefined);
-	}
-	const reason = SHADOW_REFUSAL_REASONS.find(function(known): boolean {
-		return(known === value['reason']);
-	});
-	if (reason === undefined) {
-		return(undefined);
-	}
-	return({ blocksHash: value['blocksHash'], reason, code: value['code'] });
-}
-
 function unexplainedShadowRefusalOf(value: unknown): UnexplainedShadowRefusal | undefined {
 	if (!isFields(value) || !isString(value['blocksHash']) || !isString(value['code']) || !isString(value['message']) || !isString(value['why'])) {
 		return(undefined);
 	}
 	return({ blocksHash: value['blocksHash'], code: value['code'], message: value['message'], why: value['why'] });
-}
-
-function shadowLiveRecordOf(value: Fields): ShadowLiveRecord | undefined {
-	const { at, replayed, windowStaples, windowFrom, windowTo, voted } = value;
-	const explained = listOf(value['explained'], shadowRefusalOf);
-	const unexplained = listOf(value['unexplained'], unexplainedShadowRefusalOf);
-	const deferredInWindow = listOf(value['deferredInWindow'], textOf);
-	const unappliedBeforeWindow = listOf(value['unappliedBeforeWindow'], textOf);
-	const { refusedForWeight } = value;
-	if (!isString(at) || !isCount(replayed) || !isCount(windowStaples) || !isStringOrNull(windowFrom) || !isStringOrNull(windowTo) || !isCount(voted) || !isCount(refusedForWeight) || explained === undefined || unexplained === undefined || deferredInWindow === undefined || unappliedBeforeWindow === undefined) {
-		return(undefined);
-	}
-	return({ kind: 'shadow-live', at, replayed, windowStaples, windowFrom, windowTo, voted, explained, unexplained, deferredInWindow, refusedForWeight, unappliedBeforeWindow });
 }
 
 function reasonCountsOf(value: unknown): Partial<Record<ShadowRefusalReason, number>> | undefined {
@@ -1379,6 +1322,23 @@ function sweepBatchRecordOf(value: Fields): SweepBatchRecord | undefined {
 	return({ kind: 'sweep-batch', at, representative, lap, afterRowID, throughRowID, accounts, matched, skipped, unanswered });
 }
 
+/**
+ * Kinds of record earlier builds wrote that no signal reads any longer:
+ * the shadow votes of a window replayed from the follower's first staple,
+ * which the resumable run's records replace.
+ */
+const RETIRED_KINDS: ReadonlySet<string> = new Set(['shadow-live']);
+
+/** Whether the line holds a whole record of a kind this version no longer reads, which is no unreadable line. */
+function isRetiredRecord(line: string): boolean {
+	try {
+		const value: unknown = JSON.parse(line);
+		return(isFields(value) && typeof value['kind'] === 'string' && RETIRED_KINDS.has(value['kind']));
+	} catch {
+		return(false);
+	}
+}
+
 /** The record a line holds, or nothing when it holds none this version writes. */
 export function parityRecordOf(line: string): ParityRecord | undefined {
 	let value: unknown;
@@ -1407,8 +1367,6 @@ export function parityRecordOf(line: string): ParityRecord | undefined {
 			return(apiDiffPlanRecordOf(value));
 		case 'api-diff-explained':
 			return(apiDiffExplainedRecordOf(value));
-		case 'shadow-live':
-			return(shadowLiveRecordOf(value));
 		case 'shadow-run':
 			return(shadowRunRecordOf(value));
 		case 'shadow-explained':
@@ -1492,7 +1450,9 @@ export class ParityLog {
 			}
 			const record = parityRecordOf(line);
 			if (record === undefined) {
-				unreadableLines++;
+				if (!isRetiredRecord(line)) {
+					unreadableLines++;
+				}
 				continue;
 			}
 			records.push(record);

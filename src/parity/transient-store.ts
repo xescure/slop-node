@@ -1,6 +1,7 @@
 import { everyChainAccount } from './follower-store.js';
 import type { FollowerStore, KnownAccount } from './follower-store.js';
 import type { PacerClock } from './representative-pacer.js';
+import { messageOf } from './values.js';
 
 /**
  * What pg-pool and pg raise when no session came within the pool's
@@ -74,12 +75,6 @@ export type TransientRetry = {
 	readonly retrying?: (error: unknown, failure: TransientFailure) => void;
 };
 
-function messageOf(error: unknown): string {
-	if (error instanceof Error) {
-		return(error.message);
-	}
-	return(String(error));
-}
 
 /** The statement timeouts in a row once the failure is counted: one more for a timeout, none after any other failure. */
 function timeoutsAfter(error: unknown, before: number): number {

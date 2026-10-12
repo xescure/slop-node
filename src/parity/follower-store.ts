@@ -275,8 +275,11 @@ const PASSIVE_ACCOUNTS_AFTER = `
 
 const HOLDS_BLOCK = 'SELECT EXISTS (SELECT 1 FROM blocks WHERE hash = $1 AND ledger = \'main\') AS holds';
 
-/** An account's history, oldest first, in the order of its key. */
-/* The staples of an account's history by their hashes alone, in the order the ledger added them, which one statement reads whatever its length. */
+/*
+ * An account's history is read by the hashes of its staples alone, which
+ * one statement reads whatever the history's length, and their bytes then
+ * so many at a time, so that a long history is never held whole.
+ */
 const HISTORY_STAPLE_HASHES = `
 	SELECT s.blocks_hash FROM history h JOIN staples s ON s.blocks_hash = h.blocks_hash
 	WHERE h.account_id = (SELECT id FROM accounts WHERE public_key = $1)

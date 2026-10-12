@@ -2,6 +2,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerInternals } from '../upstream/internals.js';
 import type { SelfCheck } from './log.js';
+import { isFields } from './values.js';
 
 const lib = KeetaNet.lib;
 
@@ -47,9 +48,6 @@ export function foldBalances(balances: Map<string, bigint>, staples: readonly Vo
 	}
 }
 
-function isFields(value: unknown): value is Readonly<Record<string, unknown>> {
-	return(typeof value === 'object' && value !== null && !Array.isArray(value));
-}
 
 /** The balances a state serves, by token, or nothing when it serves none. */
 function servedBalances(state: unknown): ReadonlyMap<string, bigint> | undefined {

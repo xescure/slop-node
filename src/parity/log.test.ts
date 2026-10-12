@@ -172,6 +172,13 @@ describe('the parity log', function() {
 		expect(await log.read()).toEqual({ records: [{ ...MATCHED, outcome: { ...outcome, readings: [], selfCheck: null } }], unreadableLines: 0 });
 	});
 
+	test('passes over a record of a kind an earlier build wrote that no signal reads, which is no unreadable line', async function() {
+		const log = await scratchLog();
+		await appendFile(log.path, `${JSON.stringify({ kind: 'shadow-live', at: CHECKSUM.at, replayed: 1 })}\n${JSON.stringify({ kind: 'unknown', at: CHECKSUM.at })}\n`);
+
+		expect(await log.read()).toEqual({ records: [], unreadableLines: 1 });
+	});
+
 	test('reads back what kept the follower from being caught up at a checksum comparison', async function() {
 		const log = await scratchLog();
 		const heldBack: ParityRecord = { kind: 'held-back', at: CHECKSUM.at, queued: [{ key: 'AB'.repeat(32), code: null, queuedAt: '2026-10-09T05:00:00.000Z' }], stranded: [{ blocksHash: 'CD'.repeat(32), latestVoteFrom: '2026-10-09T04:00:00.000Z', lacks: ['EF'.repeat(32)] }] };

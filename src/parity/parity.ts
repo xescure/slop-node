@@ -29,6 +29,7 @@ import { compareNeverCompared, recheckDivergences, sweepAccounts, sweepCursorPat
 import { retryingStore } from './transient-store.js';
 import type { TransientFailure } from './transient-store.js';
 import type { SweepCursorPaths } from './sweep.js';
+import { messageOf } from './values.js';
 
 /** The pacer reads the wall clock, which a Retry-After date is in. */
 const WALL_CLOCK: PacerClock = {
@@ -120,12 +121,6 @@ const USAGE = [
 	''
 ].join('\n');
 
-function messageOf(error: unknown): string {
-	if (error instanceof Error) {
-		return(error.message);
-	}
-	return(String(error));
-}
 
 /** The repository the tool was built in, three levels above its build/parity/parity directory. */
 const REPOSITORY = new URL('../../../', import.meta.url);

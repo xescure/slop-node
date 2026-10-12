@@ -13,6 +13,7 @@ import type { APIDiffExplainedRecord, APIDiffOutcome, APIDiffPlanRecord, APIDiff
 import { ACCOUNT_KINDS, OPERATION_NAMES, operationStratum, STRATA } from './strata.js';
 import type { OperationName, Stratum } from './strata.js';
 import { disputedKindOf, firstDifference, newestStapleOf, QUIET_MARGIN_MILLISECONDS, selfCheckOfAccount } from './sweep.js';
+import { isFields, isStopped, messageOf } from './values.js';
 
 const lib = KeetaNet.lib;
 
@@ -131,11 +132,7 @@ export function getRoutesOf(document: unknown): readonly string[] {
 	}).sort());
 }
 
-type Fields = Readonly<Record<string, unknown>>;
 
-function isFields(value: unknown): value is Fields {
-	return(typeof value === 'object' && value !== null && !Array.isArray(value));
-}
 
 /** One request the API diff sends to the follower and to a representative. */
 export type SampledRequest = {
@@ -550,12 +547,6 @@ export function entitiesListed(body: unknown): readonly string[] {
 	}));
 }
 
-function messageOf(error: unknown): string {
-	if (error instanceof Error) {
-		return(error.message);
-	}
-	return(String(error));
-}
 
 function normalizedAnswer(route: RoutePath, answer: APIAnswer): unknown {
 	const use = GET_ROUTES[route];
@@ -989,10 +980,6 @@ function recordOf(representative: APISource, request: SampledRequest, compared: 
 	return({ kind: 'api-diff', at: new Date().toISOString(), representative: representative.endpoint, stratum: request.stratum, route: request.route, path: request.path, behaviors, outcome });
 }
 
-/** Read through a call, as a signal is aborted while the sampler awaits. */
-function isStopped(signal: AbortSignal): boolean {
-	return(signal.aborted);
-}
 
 function emptySummary(stratum: Stratum, available: number): StratumSummary {
 	return({ stratum, available, compared: 0, matched: 0, diverged: 0, skipped: 0 });

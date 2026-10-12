@@ -1,4 +1,5 @@
 import type { RepresentativePacer, ServedAnswer } from './representative-pacer.js';
+import { isFields } from './values.js';
 
 /** An answer of a node's HTTP API: its status, and its body parsed as JSON, or as text when it is not JSON. */
 export type APIAnswer = { readonly status: number; readonly body: unknown };
@@ -57,9 +58,6 @@ const FIRST_SERVER_ERROR = 500;
 
 const FIRST_NON_SERVER_ERROR = 600;
 
-function isFields(value: unknown): value is Readonly<Record<string, unknown>> {
-	return(typeof value === 'object' && value !== null && !Array.isArray(value));
-}
 
 /** Whether the body is the API's error envelope, which every failure the API itself answers has. */
 export function isErrorEnvelope(body: unknown): body is Readonly<Record<string, unknown>> {

@@ -3,18 +3,19 @@ import { API_DIFF_SAMPLES_TARGET, followerDivergesOn, keyOf, requestStandings, r
 import type { ExplainedDivergence, RequestStanding, RouteAttempts, SupersededDivergence } from './api-diff.js';
 import type { APIDiffSetup } from './api-diff.js';
 import type { APISource } from './api-source.js';
-import { checksumsEqual, compareChecksums, crossCheckChecksum, heldBackRecordOf } from './checksum.js';
+import { checksumsEqual, compareChecksums, crossCheckChecksum, heldBackRecordOf, heldStill } from './checksum.js';
 import type { FollowerProgress, FollowerStore, HeldBack, KnownAccount } from './follower-store.js';
 import { REPORT_REFUSED_AFTER_MILLISECONDS } from '../node/bootstrap-retry.js';
 import { SHADOW_REFUSAL_REASONS, SHADOW_REFUSAL_RELEASES } from '../conformance/mainnet/shadow.js';
 import type { ShadowRefusalReason } from '../conformance/mainnet/shadow.js';
 import { standsDiverging, standsInPlaceOf, UNEXPLAINED_LISTED } from './log.js';
-import type { APIDiffExplainedRecord, APIDiffPlanRecord, APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, HeldBackRecord, ParityLog, ParityLogContents, ParityRecord, ShadowBase, ShadowExplainedRecord, ShadowRunCost, ShadowRunRecord, ShadowRunState, ShadowTarget, ShadowWindow, ShadowWindowTally, UnexplainedShadowRefusal, SweepBatchRecord, SweepCursor, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
+import type { APIDiffExplainedRecord, APIDiffOutcome, APIDiffPlanRecord, APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, CrossCheckRecord, Divergence, HeldBackRecord, ParityLog, ParityLogContents, ParityRecord, ShadowBase, ShadowExplainedRecord, ShadowRunCost, ShadowRunRecord, ShadowRunState, ShadowTarget, ShadowWindow, ShadowWindowTally, UnexplainedShadowRefusal, SweepBatchRecord, SweepCursor, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
 import { shadowRunComplete } from './shadow-live.js';
 import { STRATA } from './strata.js';
 import type { Stratum } from './strata.js';
 import { readSweepCursor, sweepAccounts } from './sweep.js';
 import type { NeverCompared, SweepCursorPaths } from './sweep.js';
+import { isoOrNull } from './values.js';
 
 /** A signal's verdict. */
 export type Verdict = 'pass' | 'fail' | 'not-comparable-yet';
@@ -342,16 +343,6 @@ export type ParityReport = {
 /** The 95% bound of the rule of three. */
 const RULE_OF_THREE = 3;
 
-function isoOrNull(moment: Date | undefined): string | null {
-	if (moment === undefined) {
-		return(null);
-	}
-	return(moment.toISOString());
-}
-
-function heldStill(window: ChecksumWindow): window is Extract<ChecksumWindow, { kind: 'read' }> {
-	return(window.kind === 'read' && window.first.blockCount === window.second.blockCount && checksumsEqual(window.first.checksum, window.second.checksum));
-}
 
 /** The records of the latest run: those written at the time of the last. */
 function latestRun<Record extends { readonly at: string }>(records: readonly Record[]): readonly Record[] {
@@ -768,23 +759,33 @@ function sweepCoverageOf(records: readonly SweepRecord[], batches: readonly Swee
 	});
 }
 
-/** The accounts whose latest comparison left the difference to the representatives apart, by each of them, with the first such record. */
-function representativeLocalOf(records: readonly SweepRecord[], localNow: readonly SweepRecord[]): RepresentativeLocal {
-	const byRepresentative: Record<string, number> = {};
-	for (const record of localNow) {
-		// Every representative that answered apart from the follower and the others is charged with the difference.
-		const dissenting = [record.representative];
-		if (record.outcome.kind === 'representative-local') {
-			for (const reading of record.outcome.readings) {
-				if (reading.kind === 'disagrees') {
-					dissenting.push(reading.representative);
-				}
-			}
+/**
+ * How many differences left to the representatives apart each is charged
+ * with: every representative that answered apart from the follower and the
+ * others, the one compared with included.
+ */
+function chargedByRepresentative(differences: readonly { readonly representative: string; readonly outcome: SweepOutcome | APIDiffOutcome }[]): Record<string, number> {
+	const charged: Record<string, number> = {};
+	for (const { representative, outcome } of differences) {
+		if (outcome.kind !== 'representative-local') {
+			continue;
 		}
-		for (const representative of dissenting) {
-			byRepresentative[representative] = (byRepresentative[representative] ?? 0) + 1;
+		const readings: readonly { readonly representative: string; readonly kind: string }[] = outcome.readings;
+		const dissenting = [representative, ...readings.filter(function(reading): boolean {
+			return(reading.kind === 'disagrees');
+		}).map(function(reading): string {
+			return(reading.representative);
+		})];
+		for (const dissenter of dissenting) {
+			charged[dissenter] = (charged[dissenter] ?? 0) + 1;
 		}
 	}
+	return(charged);
+}
+
+/** The accounts whose latest comparison left the difference to the representatives apart, by each of them, with the first such record. */
+function representativeLocalOf(records: readonly SweepRecord[], localNow: readonly SweepRecord[]): RepresentativeLocal {
+	const byRepresentative = chargedByRepresentative(localNow);
 	const accounts = new Set(localNow.map(function(record): string {
 		return(record.account);
 	}));
@@ -1075,21 +1076,9 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], plans: readonly APID
 	const local = standings.filter(function({ latest, open: divergences }): boolean {
 		return(divergences.length === 0 && latest.outcome.kind === 'representative-local');
 	});
-	const representativeLocal: Record<string, number> = {};
-	for (const { latest } of local) {
-		// Every representative that answered apart from the follower and the others is charged with the difference.
-		const dissenting = [latest.representative];
-		if (latest.outcome.kind === 'representative-local') {
-			for (const reading of latest.outcome.readings) {
-				if (reading.kind === 'disagrees') {
-					dissenting.push(reading.representative);
-				}
-			}
-		}
-		for (const representative of dissenting) {
-			representativeLocal[representative] = (representativeLocal[representative] ?? 0) + 1;
-		}
-	}
+	const representativeLocal = chargedByRepresentative(local.map(function({ latest }): APIDiffRecord {
+		return(latest);
+	}));
 	const superseded = [...standingsByKey.values()].flatMap(function(standing): readonly SupersededDivergence[] {
 		return(standing.superseded);
 	});
