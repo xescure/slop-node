@@ -280,6 +280,8 @@ describe('a peer that asks the node to slow down', function() {
 			}
 			return(failure.milliseconds);
 		};
+		// Off the clock's first moment, so that the moments it records are not zero.
+		await vi.advanceTimersByTimeAsync(1);
 
 		pacer.throttled(PEER, undefined);
 		expect(await leftFor()).toBe(FIRST_THROTTLE_MILLISECONDS);
