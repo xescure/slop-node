@@ -48,7 +48,6 @@ export function foldBalances(balances: Map<string, bigint>, staples: readonly Vo
 	}
 }
 
-
 /** The balances a state serves, by token, or nothing when it serves none. */
 function servedBalances(state: unknown): ReadonlyMap<string, bigint> | undefined {
 	if (!isFields(state) || !Array.isArray(state['balances'])) {

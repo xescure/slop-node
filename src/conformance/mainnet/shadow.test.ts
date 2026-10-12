@@ -306,7 +306,7 @@ describe('a shadow-vote refusal for a block\'s date', function() {
 		}).toThrow(UnexplainedRefusal);
 	});
 
-	test('is explained for a staple whose one block is older than five minutes and the other as new as its votes, as 1BE261B7… on the main network', async function() {
+	test('is explained for a staple whose one block is older than five minutes and the other as new as its votes, as 1BE261B781FE0DF70EAC7FA5F6076197416F0A5AB01D42FD5D4781F81728DFF4 on the main network', async function() {
 		const old = new Date('2026-10-08T19:48:47.109Z');
 		const staple: RefusedStaple = {
 			blocks: [await datedBlock(old), await datedBlock(new Date('2026-10-08T19:54:38.145Z'))],

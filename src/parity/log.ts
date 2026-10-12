@@ -538,13 +538,11 @@ export type FollowerBuildRecord = {
 
 export type ParityRecord = FollowerBuildRecord | HeldBackRecord | ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | SweepBatchRecord | APIDiffRecord | APIDiffPlanRecord | APIDiffExplainedRecord | ShadowRunRecord | ShadowExplainedRecord;
 
-/** The records a log holds, and how many of its lines were not records, as the end of a line cut short by a crash. */
+/** The records a log holds, and the numbers, from 1, of its lines that were not records, as the end of a line cut short by a crash. */
 export type ParityLogContents = {
 	readonly records: readonly ParityRecord[];
-	readonly unreadableLines: number;
+	readonly unreadableLines: readonly number[];
 };
-
-
 
 function isString(value: unknown): value is string {
 	return(typeof value === 'string');
@@ -1454,20 +1452,20 @@ export class ParityLog {
 			text = await readFile(this.path, 'utf8');
 		} catch (error: unknown) {
 			if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-				return({ records: [], unreadableLines: 0 });
+				return({ records: [], unreadableLines: [] });
 			}
 			throw(error);
 		}
 		const records: ParityRecord[] = [];
-		let unreadableLines = 0;
-		for (const line of text.split('\n')) {
+		const unreadableLines: number[] = [];
+		for (const [index, line] of text.split('\n').entries()) {
 			if (line === '') {
 				continue;
 			}
 			const record = parityRecordOf(line);
 			if (record === undefined) {
 				if (!isRetiredRecord(line)) {
-					unreadableLines++;
+					unreadableLines.push(index + 1);
 				}
 				continue;
 			}

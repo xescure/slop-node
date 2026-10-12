@@ -120,9 +120,13 @@ function shadowRun(at: string, changes: Partial<ShadowRunRecord>): ShadowRunReco
 
 const NOTHING_HELD_BACK: HeldBack = { queued: [], stranded: [] };
 
-function report(records: readonly ParityRecord[], position: Partial<SweepPosition> = {}, shadowStanding: ShadowRunState | null = null, heldBack: HeldBack = NOTHING_HELD_BACK) {
+type FollowerNow = { readonly progress: FollowerProgress; readonly nodeStartedAt: Date | null };
+
+const FOLLOWER_NOW: FollowerNow = { progress: PROGRESS, nodeStartedAt: null };
+
+function report(records: readonly ParityRecord[], position: Partial<SweepPosition> = {}, shadowStanding: ShadowRunState | null = null, heldBack: HeldBack = NOTHING_HELD_BACK, follower: FollowerNow = FOLLOWER_NOW) {
 	const sweep: SweepPosition = { knownAccounts: 10, chainAccounts: [], cursors: CURSORS, rowIDs: new Map(), ...position };
-	return(parityReportOf({ generatedAt: new Date('2026-10-09T08:00:00.000Z'), progress: PROGRESS, sweep, log: { records, unreadableLines: 0 }, knownBehaviors: new Set([KNOWN_BEHAVIOR]), shadowStanding, heldBack }));
+	return(parityReportOf({ generatedAt: new Date('2026-10-09T08:00:00.000Z'), progress: follower.progress, sweep, log: { records, unreadableLines: [] }, knownBehaviors: new Set([KNOWN_BEHAVIOR]), shadowStanding, heldBack, nodeStartedAt: follower.nodeStartedAt }));
 }
 
 describe('the parity report', function() {
@@ -439,20 +443,39 @@ describe('the parity report', function() {
 		const minutesAgo = function(minutes: number): string {
 			return(new Date(NOW - minutes * 60_000).toISOString());
 		};
+		const passed: FollowerNow = { progress: { ...PROGRESS, completedPass: new Date(minutesAgo(600)) }, nodeStartedAt: new Date(minutesAgo(600)) };
 		const passing = [crossCheck(minutesAgo(1), { kind: 'equal' }), blockCount(minutesAgo(1), { kind: 'pass' })];
 		const queued = { key: 'AB'.repeat(32), code: 'LEDGER_INVALID_BALANCE', queuedAt: minutesAgo(61) };
-		const refused = report(passing, {}, null, { queued: [queued], stranded: [] }).signals.checksum;
+		const refused = report(passing, {}, null, { queued: [queued], stranded: [] }, passed).signals.checksum;
 		expect(refused).toMatchObject({ verdict: 'fail', heldBack: { verdict: 'fail', queued: 1, refusedForGood: [queued] }, firstDivergence: { staple: queued.key, field: `retryQueue: refused since ${queued.queuedAt} with LEDGER_INVALID_BALANCE` } });
-		expect(report(passing, {}, null, { queued: [{ ...queued, queuedAt: minutesAgo(10) }], stranded: [] }).signals.checksum).toMatchObject({ verdict: 'not-comparable-yet', heldBack: { verdict: 'not-comparable-yet', refusedForGood: [] } });
+		expect(report(passing, {}, null, { queued: [{ ...queued, queuedAt: minutesAgo(10) }], stranded: [] }, passed).signals.checksum).toMatchObject({ verdict: 'not-comparable-yet', heldBack: { verdict: 'not-comparable-yet', refusedForGood: [] } });
 
 		const stranded = { blocksHash: 'CD'.repeat(32), latestVoteFrom: minutesAgo(300), lacks: ['EF'.repeat(32)] };
 		const reading = function(minutes: number, listed: readonly typeof stranded[]): HeldBackRecord {
 			return({ kind: 'held-back', at: minutesAgo(minutes), queued: [], stranded: listed });
 		};
-		const lasting = report([reading(90, [stranded]), reading(30, [stranded]), ...passing], {}, null, { queued: [], stranded: [stranded] }).signals.checksum;
+		const lasting = report([reading(90, [stranded]), reading(30, [stranded]), ...passing], {}, null, { queued: [], stranded: [stranded] }, passed).signals.checksum;
 		expect(lasting).toMatchObject({ verdict: 'fail', heldBack: { strandedForGood: [{ blocksHash: stranded.blocksHash, lacks: stranded.lacks, strandedSince: minutesAgo(90) }] }, firstDivergence: { staple: stranded.blocksHash } });
-		expect(report([reading(90, [stranded]), reading(30, []), ...passing], {}, null, { queued: [], stranded: [stranded] }).signals.checksum).toMatchObject({ verdict: 'not-comparable-yet', heldBack: { strandedForGood: [] } });
-		expect(report(passing).signals.checksum).toMatchObject({ verdict: 'pass', heldBack: { verdict: 'pass', queued: 0, stranded: 0 } });
+		expect(report([reading(90, [stranded]), reading(30, []), ...passing], {}, null, { queued: [], stranded: [stranded] }, passed).signals.checksum).toMatchObject({ verdict: 'not-comparable-yet', heldBack: { strandedForGood: [] } });
+		expect(report(passing, {}, null, NOTHING_HELD_BACK, passed).signals.checksum).toMatchObject({ verdict: 'pass', heldBack: { verdict: 'pass', queued: 0, stranded: 0 } });
+	});
+
+	test('decides nothing held back for good before a pass has completed, nor from before the node started, as a node that was down retried nothing', function() {
+		const NOW = Date.parse('2026-10-09T08:00:00.000Z');
+		const minutesAgo = function(minutes: number): string {
+			return(new Date(NOW - minutes * 60_000).toISOString());
+		};
+		const passing = [crossCheck(minutesAgo(1), { kind: 'equal' }), blockCount(minutesAgo(1), { kind: 'pass' })];
+		const stranded = { blocksHash: 'CD'.repeat(32), latestVoteFrom: minutesAgo(300), lacks: ['EF'.repeat(32)] };
+		const heldBack: HeldBack = { queued: [{ key: 'AB'.repeat(32), code: 'LEDGER_INVALID_BALANCE', queuedAt: minutesAgo(600) }], stranded: [stranded] };
+		const readings: HeldBackRecord[] = [{ kind: 'held-back', at: minutesAgo(120), queued: [], stranded: [stranded] }];
+		const undecided = { verdict: 'not-comparable-yet', heldBack: { verdict: 'not-comparable-yet', refusedForGood: [], strandedForGood: [] } };
+
+		expect(report([...readings, ...passing], {}, null, heldBack, { progress: PROGRESS, nodeStartedAt: new Date(minutesAgo(600)) }).signals.checksum).toMatchObject(undecided);
+		const passed = { ...PROGRESS, completedPass: new Date(minutesAgo(700)) };
+		expect(report([...readings, ...passing], {}, null, heldBack, { progress: passed, nodeStartedAt: new Date(minutesAgo(30)) }).signals.checksum).toMatchObject(undecided);
+		expect(report([...readings, ...passing], {}, null, heldBack, { progress: passed, nodeStartedAt: null }).signals.checksum).toMatchObject(undecided);
+		expect(report([...readings, ...passing], {}, null, heldBack, { progress: passed, nodeStartedAt: new Date(minutesAgo(61)) }).signals.checksum).toMatchObject({ verdict: 'fail', heldBack: { refusedForGood: [{ key: 'AB'.repeat(32) }], strandedForGood: [{ blocksHash: stranded.blocksHash }] } });
 	});
 
 	test('fails shadow votes on any refusal in the scoped window no classified difference explains, listed or only counted', function() {
@@ -468,6 +491,7 @@ describe('the parity report', function() {
 		expect(report([run, byRule]).signals.shadowVotes).toMatchObject({ verdict: 'pass', latest: { scoped: { explained: { 'self-requirement-return': { refusals: 10 } }, explainedByRule: [{ blocksHash: STAPLE, reason: 'permanent-vote-block-age', code: 'LEDGER_BLOCK_EXPIRED' }], unexplained: 0 } }, confidence: { kind: 'rule-of-three' } });
 		expect(report([run, { ...byRule, replaces: 'the vote at the newest block\'s date, 2026-10-08T19:48:47.109Z, was refused too' }]).signals.shadowVotes).toMatchObject({ verdict: 'fail', latest: { scoped: { explainedByRule: [], unexplained: 1 } } });
 		expect(report([run, { ...byRule, window: 'informational' }]).signals.shadowVotes).toMatchObject({ verdict: 'fail' });
+		expect(report([run, { ...byRule, code: 'LEDGER_INVALID_DATE' }]).signals.shadowVotes).toMatchObject({ verdict: 'fail', latest: { scoped: { explainedByRule: [], unexplained: 1 } } });
 	});
 
 	test('reads the run as it stands from its cursor while an invocation runs or after one was cut short, and from the latest record otherwise', function() {
@@ -729,7 +753,9 @@ describe('the parity report', function() {
 
 	test('passes no signal while the log holds lines it cannot read, which may have been records, and fails one that fails', function() {
 		const at = '2026-10-09T02:00:00.000Z';
-		const signals = parityReportOf({ generatedAt: new Date(at), progress: PROGRESS, sweep: { knownAccounts: 10, chainAccounts: [], cursors: COMPLETE_CURSORS, rowIDs: new Map() }, log: { records: [crossCheck(at, { kind: 'equal' }), blockCount(at, { kind: 'pass' }), swept(at, ACCOUNT, MATCH), swept(at, OTHER_ACCOUNT, diverged(OTHER_ACCOUNT, 'balances[0].balance'))], unreadableLines: 1 }, knownBehaviors: new Set(), shadowStanding: null, heldBack: NOTHING_HELD_BACK }).signals;
+		const made = parityReportOf({ generatedAt: new Date(at), progress: PROGRESS, sweep: { knownAccounts: 10, chainAccounts: [], cursors: COMPLETE_CURSORS, rowIDs: new Map() }, log: { records: [crossCheck(at, { kind: 'equal' }), blockCount(at, { kind: 'pass' }), swept(at, ACCOUNT, MATCH), swept(at, OTHER_ACCOUNT, diverged(OTHER_ACCOUNT, 'balances[0].balance'))], unreadableLines: [7] }, knownBehaviors: new Set(), shadowStanding: null, heldBack: NOTHING_HELD_BACK, nodeStartedAt: null });
+		const { signals } = made;
+		expect(made.logUnreadableLines).toEqual([7]);
 		expect(signals.checksum).toMatchObject({ verdict: 'not-comparable-yet', notComparableReasons: ['log-unreadable'] });
 		expect(signals.sweep).toMatchObject({ verdict: 'fail' });
 	});
@@ -826,7 +852,8 @@ describe('a parity run', function() {
 			gapMilliseconds: 10_000,
 			wait: () => Promise.resolve(),
 			stopped: new AbortController().signal,
-			shadowStanding: () => Promise.resolve(undefined)
+			shadowStanding: () => Promise.resolve(undefined),
+			nodeStartedAt: () => Promise.resolve(null)
 		});
 
 		expect(result.signals.checksum).toMatchObject({ verdict: 'not-comparable-yet', crossCheck: { verdict: 'pass', runs: 1 }, blockCount: { counts: { comparisons: 1 }, notComparableReasons: ['no-completed-pass'] } });

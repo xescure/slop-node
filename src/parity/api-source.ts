@@ -58,7 +58,6 @@ const FIRST_SERVER_ERROR = 500;
 
 const FIRST_NON_SERVER_ERROR = 600;
 
-
 /** Whether the body is the API's error envelope, which every failure the API itself answers has. */
 export function isErrorEnvelope(body: unknown): body is Readonly<Record<string, unknown>> {
 	return(isFields(body) && body['error'] === true);

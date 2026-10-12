@@ -33,7 +33,6 @@ export type ChecksumComparison = {
 
 type Reading = { readonly kind: 'read'; readonly reading: ChecksumReading } | { readonly kind: 'unanswered'; readonly error: string };
 
-
 function fieldOf(body: unknown, name: string): unknown {
 	if (typeof body !== 'object' || body === null || !(name in body)) {
 		return(undefined);
@@ -133,7 +132,6 @@ function medianOf(windows: readonly ChecksumWindow[]): number | undefined {
 	}
 	return(((counts[middle - 1] ?? upper) + upper) / 2);
 }
-
 
 /**
  * The follower's count must be within the floor of the representative's,

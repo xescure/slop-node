@@ -341,7 +341,8 @@ export type ParityReport = {
 	 * made name no build (null).
 	 */
 	readonly evidence: readonly BuildEvidence[];
-	readonly logUnreadableLines: number;
+	/** The numbers, from 1, of the log's lines that hold no record, which keep every signal from passing until they are removed (conformance/DEPLOY.md). */
+	readonly logUnreadableLines: readonly number[];
 	readonly signals: {
 		readonly checksum: ChecksumSignal;
 		readonly sweep: SweepSignal;
@@ -352,7 +353,6 @@ export type ParityReport = {
 
 /** The 95% bound of the rule of three. */
 const RULE_OF_THREE = 3;
-
 
 /** The records of the latest run: those written at the time of the last. */
 function latestRun<Record extends { readonly at: string }>(records: readonly Record[]): readonly Record[] {
@@ -456,15 +456,29 @@ function strandedSince(blocksHash: string, readings: readonly HeldBackRecord[]):
 	return(since);
 }
 
-function heldBackPartOf(records: readonly HeldBackRecord[], now: HeldBack, at: Date): HeldBackPart {
+/**
+ * Held back for good is decided only once a pass has completed, as before
+ * that every deferred staple awaiting a block counts as stranded, and only
+ * from when the node started, as a node that was down retried nothing:
+ * a staple counts from the later of then and when it was queued, or first
+ * found stranded. Without a running node nothing is decided.
+ */
+function heldBackPartOf(records: readonly HeldBackRecord[], now: HeldBack, at: Date, decidable: { readonly completedPass: Date | undefined; readonly nodeStartedAt: Date | null }): HeldBackPart {
 	const readings = [...records, { kind: 'held-back', at: at.toISOString(), ...now } as const];
 	const longAgo = at.valueOf() - REPORT_REFUSED_AFTER_MILLISECONDS;
+	const { completedPass, nodeStartedAt } = decidable;
+	const heldForLong = function(since: string): boolean {
+		if (completedPass === undefined || nodeStartedAt === null) {
+			return(false);
+		}
+		return(Math.max(Date.parse(since), nodeStartedAt.valueOf()) <= longAgo);
+	};
 	const refusedForGood = now.queued.filter(function(staple): boolean {
-		return(Date.parse(staple.queuedAt) <= longAgo);
+		return(heldForLong(staple.queuedAt));
 	});
 	const strandedForGood = now.stranded.flatMap(function(staple): HeldBackPart['strandedForGood'] {
 		const since = strandedSince(staple.blocksHash, readings);
-		if (since === undefined || Date.parse(since) > longAgo) {
+		if (since === undefined || !heldForLong(since)) {
 			return([]);
 		}
 		return([{ blocksHash: staple.blocksHash, lacks: staple.lacks, strandedSince: since }]);
@@ -478,9 +492,9 @@ function heldBackPartOf(records: readonly HeldBackRecord[], now: HeldBack, at: D
 	return({ verdict, queued: now.queued.length, stranded: now.stranded.length, refusedForGood, strandedForGood });
 }
 
-function checksumSignalOf(records: readonly ParityRecord[], now: HeldBack, at: Date): ChecksumSignal {
+function checksumSignalOf(records: readonly ParityRecord[], now: HeldBack, at: Date, decidable: Parameters<typeof heldBackPartOf>[3]): ChecksumSignal {
 	const crossCheck = crossCheckPartOf(recordsOf(records, 'cross-check'));
-	const heldBack = heldBackPartOf(recordsOf(records, 'held-back'), now, at);
+	const heldBack = heldBackPartOf(recordsOf(records, 'held-back'), now, at, decidable);
 	const blockCounts = recordsOf(records, 'block-count');
 	const blockCount = blockCountPartOf(blockCounts);
 	let firstDivergence: FirstDivergence | null = null;
@@ -516,7 +530,6 @@ function checksumSignalOf(records: readonly ParityRecord[], now: HeldBack, at: D
 export function followerDiverged(outcome: SweepOutcome): boolean {
 	return(outcome.kind === 'diverged' || outcome.kind === 'unresolved');
 }
-
 
 /** Whether the account was compared: an outcome other than a skip or an error both sides answered. */
 export function wasCompared(outcome: SweepOutcome): boolean {
@@ -812,11 +825,7 @@ function representativeLocalOf(records: readonly SweepRecord[], localNow: readon
 	return({ records: recorded, accounts: localNow.length, byRepresentative, first: firstExample });
 }
 
-/**
- * The passive walk's batch matches among the samples: each lap's, every span
- * once, and of the laps the one that matched most, since every lap goes
- * over the same accounts.
- */
+/** The rows a batch went over: those after the first and up to the last. */
 type RowSpan = { readonly after: bigint; readonly through: bigint };
 
 /**
@@ -1171,11 +1180,11 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], plans: readonly APID
 	return({ verdict: 'pass', notComparableReasons: [], strata, counts, ...coverage, newBehaviors: behaviors, firstDivergence: null });
 }
 
-/** The refusals a window lists that a by-rule explanation covers: of the same staple, recorded unexplained for the same reason it names. */
+/** The refusals a window lists that a by-rule explanation covers: of the same staple, refused with the same code and recorded unexplained for the same reason it names. */
 function explainedByRuleOf(tally: ShadowWindowTally, window: ShadowWindow, byRule: readonly ShadowExplainedRecord[]): ShadowWindowSummary['explainedByRule'] {
 	return(tally.firstUnexplained.flatMap(function(refused): ShadowWindowSummary['explainedByRule'] {
 		const explanation = byRule.find(function(record): boolean {
-			return(record.window === window && record.blocksHash === refused.blocksHash && record.replaces === refused.why);
+			return(record.window === window && record.blocksHash === refused.blocksHash && record.code === refused.code && record.replaces === refused.why);
 		});
 		if (explanation === undefined) {
 			return([]);
@@ -1320,6 +1329,8 @@ export type ReportInput = {
 	readonly shadowStanding: ShadowRunState | null;
 	/** What keeps the follower from being caught up, read as the report is made. */
 	readonly heldBack: HeldBack;
+	/** When the follower's node was started, or null when none runs. */
+	readonly nodeStartedAt: Date | null;
 };
 
 /**
@@ -1327,8 +1338,8 @@ export type ReportInput = {
  * pass yet: a line cut short or unknown may have been a divergence. One
  * that fails still fails.
  */
-function withLogRead<Signal extends { readonly verdict: Verdict; readonly notComparableReasons: readonly Reason[] }, Reason>(signal: Signal, unreadableLines: number, reason: Reason): Signal {
-	if (unreadableLines === 0 || signal.verdict !== 'pass') {
+function withLogRead<Signal extends { readonly verdict: Verdict; readonly notComparableReasons: readonly Reason[] }, Reason>(signal: Signal, unreadableLines: readonly number[], reason: Reason): Signal {
+	if (unreadableLines.length === 0 || signal.verdict !== 'pass') {
 		return(signal);
 	}
 	return({ ...signal, verdict: 'not-comparable-yet', notComparableReasons: [...signal.notComparableReasons, reason] });
@@ -1362,7 +1373,7 @@ export function parityReportOf(input: ReportInput): ParityReport {
 		evidence: buildEvidenceOf(records),
 		logUnreadableLines: unreadableLines,
 		signals: {
-			checksum: withLogRead(checksumSignalOf(records, input.heldBack, input.generatedAt), unreadableLines, 'log-unreadable'),
+			checksum: withLogRead(checksumSignalOf(records, input.heldBack, input.generatedAt, { completedPass: input.progress.completedPass, nodeStartedAt: input.nodeStartedAt }), unreadableLines, 'log-unreadable'),
 			sweep: withLogRead(sweepSignalOf(records, input.sweep), unreadableLines, 'log-unreadable'),
 			apiDiff: withLogRead(apiDiffSignalOf(recordsOf(records, 'api-diff'), recordsOf(records, 'api-diff-plan'), recordsOf(records, 'api-diff-explained'), input.knownBehaviors), unreadableLines, 'log-unreadable'),
 			shadowVotes: withLogRead(shadowVotesSignalOf(recordsOf(records, 'shadow-run'), recordsOf(records, 'shadow-explained'), input.shadowStanding), unreadableLines, 'log-unreadable')
@@ -1389,6 +1400,8 @@ export type ReportSources = {
 	readonly knownBehaviors: ReadonlySet<string>;
 	/** Reads the shadow-vote run's standing from its cursor, writing nothing. */
 	readonly shadowStanding: () => Promise<ShadowRunState | undefined>;
+	/** When the follower's node was started, or null when none runs. */
+	readonly nodeStartedAt: () => Promise<Date | null>;
 };
 
 /** The accounts the store looks up at once, well within what a query takes as one parameter. */
@@ -1440,7 +1453,7 @@ export function neverComparedAccountsOf(allRecords: readonly ParityRecord[], pos
 export async function reportOnLog(sources: ReportSources): Promise<ParityReport> {
 	const log = await sources.log.read();
 	const sweep = await sweepPositionOf(sources, log.records);
-	return(parityReportOf({ generatedAt: new Date(), progress: await sources.store.progress(), sweep, log, knownBehaviors: sources.knownBehaviors, shadowStanding: await sources.shadowStanding() ?? null, heldBack: await sources.store.heldBack() }));
+	return(parityReportOf({ generatedAt: new Date(), progress: await sources.store.progress(), sweep, log, knownBehaviors: sources.knownBehaviors, shadowStanding: await sources.shadowStanding() ?? null, heldBack: await sources.store.heldBack(), nodeStartedAt: await sources.nodeStartedAt() }));
 }
 
 export type ParityRun = {
@@ -1460,6 +1473,7 @@ export type ParityRun = {
 	readonly wait: (milliseconds: number) => Promise<void>;
 	readonly stopped: AbortSignal;
 	readonly shadowStanding: ReportSources['shadowStanding'];
+	readonly nodeStartedAt: ReportSources['nodeStartedAt'];
 };
 
 /** Checks the checksum now, compares a sample of the sweep from its cursors and a sample of the API, records them, and reports on the whole log. */
@@ -1485,5 +1499,5 @@ export async function runParity(run: ParityRun): Promise<ParityReport> {
 		stopped: run.stopped
 	});
 	await sampleAPI({ ...run.apiDiff, follower: run.follower, representatives: run.representatives, store: run.store, log: run.log, stopped: run.stopped });
-	return(await reportOnLog({ store: run.store, log: run.log, cursorPaths: run.cursorPaths, knownBehaviors: run.apiDiff.knownBehaviors, shadowStanding: run.shadowStanding }));
+	return(await reportOnLog({ store: run.store, log: run.log, cursorPaths: run.cursorPaths, knownBehaviors: run.apiDiff.knownBehaviors, shadowStanding: run.shadowStanding, nodeStartedAt: run.nodeStartedAt }));
 }

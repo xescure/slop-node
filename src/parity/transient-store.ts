@@ -75,7 +75,6 @@ export type TransientRetry = {
 	readonly retrying?: (error: unknown, failure: TransientFailure) => void;
 };
 
-
 /** The statement timeouts in a row once the failure is counted: one more for a timeout, none after any other failure. */
 function timeoutsAfter(error: unknown, before: number): number {
 	if (error instanceof Error && Reflect.get(error, 'code') === STATEMENT_TIMEOUT_CODE) {

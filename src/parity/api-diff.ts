@@ -132,8 +132,6 @@ export function getRoutesOf(document: unknown): readonly string[] {
 	}).sort());
 }
 
-
-
 /** One request the API diff sends to the follower and to a representative. */
 export type SampledRequest = {
 	readonly stratum: Stratum;
@@ -546,7 +544,6 @@ export function entitiesListed(body: unknown): readonly string[] {
 		return([]);
 	}));
 }
-
 
 function normalizedAnswer(route: RoutePath, answer: APIAnswer): unknown {
 	const use = GET_ROUTES[route];
@@ -979,7 +976,6 @@ function recordOf(representative: APISource, request: SampledRequest, compared: 
 	}
 	return({ kind: 'api-diff', at: new Date().toISOString(), representative: representative.endpoint, stratum: request.stratum, route: request.route, path: request.path, behaviors, outcome });
 }
-
 
 function emptySummary(stratum: Stratum, available: number): StratumSummary {
 	return({ stratum, available, compared: 0, matched: 0, diverged: 0, skipped: 0 });

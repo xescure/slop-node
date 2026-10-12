@@ -86,7 +86,6 @@ async function writeSweepCursor(path: string, cursor: SweepCursor): Promise<void
 	await rename(`${path}.new`, path);
 }
 
-
 /** The path of the first field at which the two bodies differ, or nothing when they are equal. */
 export function firstDifference(follower: unknown, representative: unknown, path = ''): string | undefined {
 	const here = path || '(body)';
@@ -179,7 +178,6 @@ function headBlockOf(answer: unknown): string | null {
 	}
 	return(block['$hash']);
 }
-
 
 type AccountComparison = {
 	readonly follower: APISource;
@@ -337,7 +335,6 @@ function count(tally: Tally, outcome: SweepOutcome): void {
 			assertNever(outcome);
 	}
 }
-
 
 const FOLLOWER_HOLDS_RECENT = 'the follower holds a staple of it from within the margin of its reach';
 

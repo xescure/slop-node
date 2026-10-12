@@ -118,7 +118,6 @@ export type SequencedStaple = HeldStaple & {
 	readonly sequence: bigint;
 };
 
-/** What the parity tools read of the follower's own storage. */
 /** A staple the ledger refused, waiting in the retry queue: its key, the code of its latest refusal, and when it was queued. */
 export type QueuedStaple = { readonly key: string; readonly code: string | null; readonly queuedAt: string };
 
@@ -133,6 +132,7 @@ export type HeldBack = {
 
 export const HELD_BACK_LISTED = 100;
 
+/** What the parity tools read of the follower's own storage. */
 export type FollowerStore = {
 	progress(): Promise<FollowerProgress>;
 	heldBack(): Promise<HeldBack>;

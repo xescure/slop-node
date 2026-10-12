@@ -46,7 +46,6 @@ const MILLISECONDS_PER_SECOND = 1000;
  */
 const ANONYMOUS_FAILURES_TO_STRAIN = 3;
 
-
 /** The wait a Retry-After header asks for: a number of seconds, or a date. */
 function retryAfterMilliseconds(header: string | null, now: number): number | undefined {
 	if (header === null) {

@@ -134,7 +134,7 @@ afterEach(async function() {
 
 describe('the parity log', function() {
 	test('holds no record before one is appended', async function() {
-		expect(await (await scratchLog()).read()).toEqual({ records: [], unreadableLines: 0 });
+		expect(await (await scratchLog()).read()).toEqual({ records: [], unreadableLines: [] });
 	});
 
 	test('reads back every kind of record it was given, in order', async function() {
@@ -143,7 +143,7 @@ describe('the parity log', function() {
 		await log.append(records.slice(0, 2));
 		await log.append(records.slice(2));
 
-		expect(await log.read()).toEqual({ records, unreadableLines: 0 });
+		expect(await log.read()).toEqual({ records, unreadableLines: [] });
 	});
 
 	test('reads a block count recorded before the stage was read as one that names no staged staples', async function() {
@@ -152,7 +152,7 @@ describe('the parity log', function() {
 		expect(staged).toBe(339_533);
 		await appendFile(log.path, `${JSON.stringify({ ...older, verdict: { kind: 'fail', difference: -728_780 } })}\n`);
 
-		expect(await log.read()).toEqual({ records: [{ ...older, staged: null, verdict: { kind: 'fail', difference: -728_780 } }], unreadableLines: 0 });
+		expect(await log.read()).toEqual({ records: [{ ...older, staged: null, verdict: { kind: 'fail', difference: -728_780 } }], unreadableLines: [] });
 	});
 
 	test('reads a sweep record written before the walks were split as one of the walk over every account', async function() {
@@ -161,7 +161,7 @@ describe('the parity log', function() {
 		expect(walk).toBe('chain');
 		await appendFile(log.path, `${JSON.stringify(older)}\n`);
 
-		expect(await log.read()).toEqual({ records: [{ ...older, walk: 'every' }], unreadableLines: 0 });
+		expect(await log.read()).toEqual({ records: [{ ...older, walk: 'every' }], unreadableLines: [] });
 	});
 
 	test('reads a divergence recorded before divergences were read again as one with no other representative\'s reading', async function() {
@@ -169,14 +169,14 @@ describe('the parity log', function() {
 		const outcome = { kind: 'diverged', divergence: { account: ACCOUNT, field: 'history', staple: null }, follower: {}, representative: {} };
 		await appendFile(log.path, `${JSON.stringify({ ...MATCHED, outcome })}\n`);
 
-		expect(await log.read()).toEqual({ records: [{ ...MATCHED, outcome: { ...outcome, readings: [], selfCheck: null } }], unreadableLines: 0 });
+		expect(await log.read()).toEqual({ records: [{ ...MATCHED, outcome: { ...outcome, readings: [], selfCheck: null } }], unreadableLines: [] });
 	});
 
 	test('passes over a record of a kind an earlier build wrote that no signal reads, which is no unreadable line', async function() {
 		const log = await scratchLog();
 		await appendFile(log.path, `${JSON.stringify({ kind: 'shadow-live', at: CHECKSUM.at, replayed: 1 })}\n${JSON.stringify({ kind: 'unknown', at: CHECKSUM.at })}\n`);
 
-		expect(await log.read()).toEqual({ records: [], unreadableLines: 1 });
+		expect(await log.read()).toEqual({ records: [], unreadableLines: [2] });
 	});
 
 	test('reads back what kept the follower from being caught up at a checksum comparison', async function() {
@@ -184,7 +184,7 @@ describe('the parity log', function() {
 		const heldBack: ParityRecord = { kind: 'held-back', at: CHECKSUM.at, queued: [{ key: 'AB'.repeat(32), code: null, queuedAt: '2026-10-09T05:00:00.000Z' }], stranded: [{ blocksHash: 'CD'.repeat(32), latestVoteFrom: '2026-10-09T04:00:00.000Z', lacks: ['EF'.repeat(32)] }] };
 		await log.append([heldBack]);
 
-		expect(await log.read()).toEqual({ records: [heldBack], unreadableLines: 0 });
+		expect(await log.read()).toEqual({ records: [heldBack], unreadableLines: [] });
 	});
 
 	test('reads a checksum comparison an earlier build recorded as a pass or a fail, with an aid to bisect it, as one that agrees or differs', async function() {
@@ -192,7 +192,7 @@ describe('the parity log', function() {
 		const bisect = { followerBlockCount: 7, representativeBlockCount: 8, sweep: { cursor: { lap: 0, afterRowID: '41' }, firstDivergence: null } };
 		await appendFile(log.path, `${JSON.stringify({ ...CHECKSUM, verdict: { kind: 'fail', bisect } })}\n${JSON.stringify({ ...CHECKSUM, verdict: { kind: 'pass' } })}\n`);
 
-		expect(await log.read()).toEqual({ records: [{ ...CHECKSUM, verdict: { kind: 'differs' } }, { ...CHECKSUM, verdict: { kind: 'agrees' } }], unreadableLines: 0 });
+		expect(await log.read()).toEqual({ records: [{ ...CHECKSUM, verdict: { kind: 'differs' } }, { ...CHECKSUM, verdict: { kind: 'agrees' } }], unreadableLines: [] });
 	});
 
 	test('reads an API divergence recorded before divergences were sent again as one with no other representative\'s reading, nor a check of the follower\'s balances', async function() {
@@ -200,21 +200,21 @@ describe('the parity log', function() {
 		const outcome = { kind: 'diverged', field: 'body.error', follower: { status: 200, body: {} }, representative: { status: 500, body: { error: true } } };
 		await appendFile(log.path, `${JSON.stringify({ ...API_DIFF, outcome })}\n`);
 
-		expect(await log.read()).toEqual({ records: [{ ...API_DIFF, outcome: { ...outcome, readings: [], selfCheck: null } }], unreadableLines: 0 });
+		expect(await log.read()).toEqual({ records: [{ ...API_DIFF, outcome: { ...outcome, readings: [], selfCheck: null } }], unreadableLines: [] });
 	});
 
 	test('reads an API match recorded before matches kept a digest as one with none', async function() {
 		const log = await scratchLog();
 		await appendFile(log.path, `${JSON.stringify({ ...API_DIFF, outcome: { kind: 'match' } })}\n`);
 
-		expect(await log.read()).toEqual({ records: [{ ...API_DIFF, outcome: { kind: 'match', digest: null } }], unreadableLines: 0 });
+		expect(await log.read()).toEqual({ records: [{ ...API_DIFF, outcome: { kind: 'match', digest: null } }], unreadableLines: [] });
 	});
 
 	test('reads a shadow run recorded with a count of staples refused for want of voting weight, which no build counts any more, as one without it', async function() {
 		const log = await scratchLog();
 		await appendFile(log.path, `${JSON.stringify({ ...SHADOW_RUN, refusedForWeight: 2 })}\n`);
 
-		expect(await log.read()).toEqual({ records: [SHADOW_RUN], unreadableLines: 0 });
+		expect(await log.read()).toEqual({ records: [SHADOW_RUN], unreadableLines: [] });
 	});
 
 	test('reads a triage recorded before triages were checked for a retest as one whose retest is unrecorded, which no reason given to a forced triage can read as', async function() {
@@ -223,7 +223,7 @@ describe('the parity log', function() {
 		expect(retest.kind).toBe('forced');
 		await appendFile(log.path, `${JSON.stringify(older)}\n${JSON.stringify({ ...older, retest: { kind: 'forced', why: 'unrecorded' } })}\n`);
 
-		expect(await log.read()).toEqual({ records: [{ ...older, retest: { kind: 'unrecorded' } }, { ...older, retest: { kind: 'forced', why: 'unrecorded' } }], unreadableLines: 0 });
+		expect(await log.read()).toEqual({ records: [{ ...older, retest: { kind: 'unrecorded' } }, { ...older, retest: { kind: 'forced', why: 'unrecorded' } }], unreadableLines: [] });
 	});
 
 	test('starts a record on a line of its own after a line a crash cut short', async function() {
@@ -231,14 +231,14 @@ describe('the parity log', function() {
 		await appendFile(log.path, JSON.stringify(CHECKSUM).slice(0, 40));
 		await log.append([FAILED_CHECKSUM]);
 
-		expect(await log.read()).toEqual({ records: [FAILED_CHECKSUM], unreadableLines: 1 });
+		expect(await log.read()).toEqual({ records: [FAILED_CHECKSUM], unreadableLines: [1] });
 	});
 
-	test('counts a line cut short, or one it does not know, apart from the records', async function() {
+	test('names by number a line cut short, or one it does not know, apart from the records', async function() {
 		const log = await scratchLog();
 		await log.append([CHECKSUM]);
 		await appendFile(log.path, `${JSON.stringify({ ...CHECKSUM, kind: 'other' })}\n${JSON.stringify(FAILED_CHECKSUM).slice(0, 40)}`);
 
-		expect(await log.read()).toEqual({ records: [CHECKSUM], unreadableLines: 2 });
+		expect(await log.read()).toEqual({ records: [CHECKSUM], unreadableLines: [2, 3] });
 	});
 });

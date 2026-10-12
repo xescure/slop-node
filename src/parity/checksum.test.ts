@@ -15,7 +15,6 @@ const CATCHING_UP: FollowerProgress = { completedPass: undefined, heldBefore: ne
 /** A pass has completed, so the follower read everything, but it has not added all it read. */
 const APPLYING: FollowerProgress = { ...COMPLETED, staged: 339_533 };
 
-
 function checksum(value: string): unknown {
 	return({ moment: '2026-10-09T06:00:00.000Z', momentRange: 1, checksum: value });
 }

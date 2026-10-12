@@ -14,7 +14,7 @@ import { httpSource, pacedSource } from './api-source.js';
 import type { APISource } from './api-source.js';
 import { compareChecksums, crossCheckChecksum, heldBackRecordOf } from './checksum.js';
 import { FOLLOWER_DATABASE, FOLLOWER_LISTEN_IP, followerDatabaseURL, followerDatabaseURLOf, followerDirectory, MAINNET_REPRESENTATIVE_APIS, readFollowerSettings } from './follower-config.js';
-import { followerBuildOf } from './follower-build.js';
+import { followerBuildOf, nodeStartedAt } from './follower-build.js';
 import { caughtUp, openFollowerStore } from './follower-store.js';
 import type { FollowerStore } from './follower-store.js';
 import { ParityLog, parityLogPath } from './log.js';
@@ -121,7 +121,6 @@ const USAGE = [
 	'The directory is the follower\'s (~/.local/share/slop-node-follower); the follower must be up.',
 	''
 ].join('\n');
-
 
 /** The repository the tool was built in, three levels above its build/parity/parity directory. */
 const REPOSITORY = new URL('../../../', import.meta.url);
@@ -331,8 +330,8 @@ type Tools = {
 	readonly cursorPaths: SweepCursorPaths;
 	readonly stopped: AbortSignal;
 	readonly shadowStanding: () => Promise<ShadowRunState | undefined>;
+	readonly nodeStartedAt: () => Promise<Date | null>;
 };
-
 
 /** The latest lap of a walk it has completed, or undefined, with why on the standard error, when it has completed none. */
 function latestCompleteLap(walk: SweepWalk, cursor: SweepCursor): number | undefined {
@@ -492,6 +491,9 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
 					stopped: stopping.signal,
 					shadowStanding() {
 						return(readShadowStanding(shadowDirectory(directory)));
+					},
+					nodeStartedAt() {
+						return(nodeStartedAt(directory));
 					}
 				}));
 			} finally {

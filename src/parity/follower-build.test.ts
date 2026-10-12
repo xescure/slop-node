@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
-import { followerBuildOf } from './follower-build.js';
+import { followerBuildOf, nodeStartedAt } from './follower-build.js';
 
 const directories: string[] = [];
 
@@ -45,5 +45,13 @@ describe('the follower\'s build', function() {
 		expect(await followerBuildOf(directory, processes)).toBeNull();
 		await rm(join(directory, 'node.pid'));
 		expect(await followerBuildOf(directory, processes)).toBeNull();
+	});
+
+	test('counts from when its node was started, as up wrote its process ID, and from nothing when no node runs', async function() {
+		const { directory, processes } = await running(true);
+		await utimes(join(directory, 'node.pid'), new Date('2026-10-12T14:14:00.000Z'), new Date('2026-10-12T14:14:00.000Z'));
+		expect(await nodeStartedAt(directory, processes)).toEqual(new Date('2026-10-12T14:14:00.000Z'));
+		await rm(join(processes, '4242'), { recursive: true });
+		expect(await nodeStartedAt(directory, processes)).toBeNull();
 	});
 });
