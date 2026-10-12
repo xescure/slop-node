@@ -138,6 +138,7 @@ export type ConfigProblem =
 	| { readonly kind: 'too-many-fee-accounts'; readonly count: number; readonly maximum: number }
 	| { readonly kind: 'writable-on-public-network'; readonly network: PublicNetwork; readonly ledgerWriteMode: LedgerWriteMode }
 	| { readonly kind: 'peers-on-keeta-network'; readonly network: Networks; readonly ledgerWriteMode: LedgerWriteMode; readonly variable: PeerVariable }
+	| { readonly kind: 'peers-on-public-network'; readonly network: PublicNetwork }
 	| { readonly kind: 'remembered-peers'; readonly network: Networks; readonly ledgerWriteMode: LedgerWriteMode; readonly arenas: readonly PeerArena[] }
 	| { readonly kind: 'peers-in-memory' }
 	| { readonly kind: 'history-in-memory' }
@@ -175,8 +176,10 @@ function describeProblem(problem: ConfigProblem): string {
 			return(`the ${problem.network} network is public, so the node may only follow it: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to ${FOLLOWING_WRITE_MODES.join(' or ')} (it is ${problem.ledgerWriteMode})`);
 		case 'peers-on-keeta-network':
 			return(`the ${problem.network} network is Keeta's, so a node with peers on it may only follow it: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to ${FOLLOWING_WRITE_MODES.join(' or ')} (it is ${problem.ledgerWriteMode}), or leave ${problem.variable} unset`);
+		case 'peers-on-public-network':
+			return(`the ${problem.network} network is public, so the node keeps its peer-to-peer surface closed there and reads it only by its bootstrap: leave KEETANET_LOCAL_NODE_MANUAL_PEERS unset`);
 		case 'remembered-peers':
-			return(`the ${problem.network} network is Keeta's, and the store of KEETANET_LOCAL_NODE_POSTGRES_URL remembers peers (in ${problem.arenas.join(', ')}), which the node would reach even without KEETANET_LOCAL_NODE_MANUAL_PEERS: run "slop-node clear-peers" with the same environment to forget them, or set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to ${FOLLOWING_WRITE_MODES.join(' or ')} (it is ${problem.ledgerWriteMode})`);
+			return(`the ${problem.network} network is Keeta's, and the store of KEETANET_LOCAL_NODE_POSTGRES_URL remembers peers (in ${problem.arenas.join(', ')}), which the node would reach even without KEETANET_LOCAL_NODE_MANUAL_PEERS: run "slop-node clear-peers" with the same environment to forget them${rememberedPeersRemedy(problem.network, problem.ledgerWriteMode)}`);
 		case 'peers-in-memory':
 			return('clear-peers needs KEETANET_LOCAL_NODE_POSTGRES_URL: a node in memory forgets its peers when it stops');
 		case 'history-in-memory':
@@ -910,7 +913,7 @@ function readFeePolicy(reader: EnvironmentReader): FeePolicy {
  * this is that network, when the node may do more. Network 0 is this node's
  * own.
  */
-export function networkClosedToPeers(network: NetworkSelection, ledgerWriteMode: LedgerWriteMode): Networks | undefined {
+function networkClosedToPeers(network: NetworkSelection, ledgerWriteMode: LedgerWriteMode): Networks | undefined {
 	if (network.kind === 'local' || isFollowingWriteMode(ledgerWriteMode)) {
 		return(undefined);
 	}
@@ -918,15 +921,36 @@ export function networkClosedToPeers(network: NetworkSelection, ledgerWriteMode:
 }
 
 /**
- * networkClosedToPeers for a node as it was built, from its network ID. An ID
+ * The network the node keeps its peer-to-peer surface closed on: it serves no
+ * /p2p WebSocket, refuses every message posted over HTTP, dials no peer and
+ * starts with none remembered. A public network is closed to it in every
+ * mode, as a node there only follows it, which its bootstrap does over HTTP
+ * alone; any other as networkClosedToPeers says.
+ */
+export function networkClosedToP2P(network: NetworkSelection, ledgerWriteMode: LedgerWriteMode): Networks | undefined {
+	return(publicNetworkOf(network) ?? networkClosedToPeers(network, ledgerWriteMode));
+}
+
+/**
+ * networkClosedToP2P for a node as it was built, from its network ID. An ID
  * the client does not know names no network of Keeta's.
  */
-export function nodeNetworkClosedToPeers(network: bigint, ledgerWriteMode: LedgerWriteMode): Networks | undefined {
+export function nodeNetworkClosedToP2P(network: bigint, ledgerWriteMode: LedgerWriteMode): Networks | undefined {
 	const selection = networkWithID(network);
 	if (selection === undefined) {
 		return(undefined);
 	}
-	return(networkClosedToPeers(selection, ledgerWriteMode));
+	return(networkClosedToP2P(selection, ledgerWriteMode));
+}
+
+/** What else a node remembering peers on the network may do: on a public network it already only follows. */
+function rememberedPeersRemedy(network: Networks, ledgerWriteMode: LedgerWriteMode): string {
+	if (PUBLIC_NETWORKS.some(function(candidate): boolean {
+		return(candidate === network);
+	})) {
+		return('');
+	}
+	return(`, or set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to ${FOLLOWING_WRITE_MODES.join(' or ')} (it is ${ledgerWriteMode})`);
 }
 
 function refusePeersOnKeetaNetwork(reader: EnvironmentReader, network: NetworkSelection, ledgerWriteMode: LedgerWriteMode): void {
@@ -939,6 +963,13 @@ function refusePeersOnKeetaNetwork(reader: EnvironmentReader, network: NetworkSe
 	});
 	if (variable !== undefined) {
 		throw(new ConfigError({ kind: 'peers-on-keeta-network', network: closed, ledgerWriteMode, variable }));
+	}
+}
+
+function refuseManualPeersOnPublicNetwork(reader: EnvironmentReader, network: NetworkSelection): void {
+	const publicNetwork = publicNetworkOf(network);
+	if (publicNetwork !== undefined && reader.isSet('KEETANET_LOCAL_NODE_MANUAL_PEERS')) {
+		throw(new ConfigError({ kind: 'peers-on-public-network', network: publicNetwork }));
 	}
 }
 
@@ -983,6 +1014,7 @@ export function getConfigFromEnv(environment: Environment): EnvironmentConfig {
 		throw(new ConfigError({ kind: 'writable-on-public-network', network: publicNetwork, ledgerWriteMode }));
 	}
 	refusePeersOnKeetaNetwork(reader, network, ledgerWriteMode);
+	refuseManualPeersOnPublicNetwork(reader, network);
 
 	const representative = readSeedAccount(reader, 'KEETANET_LOCAL_NODE_SEED', 'KEETANET_LOCAL_NODE_SEED_INDEX');
 	const listen: ListenAddress = {

@@ -1,5 +1,5 @@
 import type { KVStorageProviderAPI } from '@keetanetwork/keetanet-client/lib/kv/index.js';
-import { ConfigError, networkClosedToPeers } from './config.js';
+import { ConfigError, networkClosedToP2P } from './config.js';
 import type { EnvironmentConfig } from './config.js';
 
 /**
@@ -31,10 +31,11 @@ export async function rememberedPeerArenas(kv: KVStorageProviderAPI): Promise<Pe
 /**
  * The switch dials and broadcasts to the peers its store remembers, whatever
  * the environment names [Keeta TS] index.js:72519-72620, 73250-73306, so a node
- * that may not have peers on its network refuses to start with any.
+ * whose network is closed to its peer-to-peer surface (networkClosedToP2P)
+ * refuses to start with any.
  */
 export async function refuseRememberedPeers(config: EnvironmentConfig, kv: KVStorageProviderAPI): Promise<void> {
-	const network = networkClosedToPeers(config.network, config.ledgerWriteMode);
+	const network = networkClosedToP2P(config.network, config.ledgerWriteMode);
 	if (network === undefined) {
 		return;
 	}

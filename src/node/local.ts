@@ -12,7 +12,7 @@ import { assertNever } from '../util/assert-never.js';
 import type { AssertNever } from '../util/assert-never.js';
 import type { ClassSurface } from '../util/class-surface.js';
 import { BootstrapClient } from './bootstrap.js';
-import { nodeNetworkClosedToPeers } from './config.js';
+import { nodeNetworkClosedToP2P } from './config.js';
 import { SwitchConnections } from './connections.js';
 import { LocalNodeError } from './errors.js';
 import { SwitchMessages } from './messages.js';
@@ -402,7 +402,7 @@ export class LocalNode extends ClientNode {
 	}
 
 	#openToPeers(): boolean {
-		return(nodeNetworkClosedToPeers(this.config.network, this.ledger.ledgerWriteMode) === undefined);
+		return(nodeNetworkClosedToP2P(this.config.network, this.ledger.ledgerWriteMode) === undefined);
 	}
 
 	/** A ledger that is read-only adds nothing, bootstrapped or not [Keeta TS] index.js:69363-69365. */

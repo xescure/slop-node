@@ -259,6 +259,11 @@ describe('the safety rule', function() {
 			expect(problemOf(environment)).toEqual({ kind: 'peers-on-keeta-network', network, ledgerWriteMode: mode, variable: 'KEETANET_LOCAL_NODE_MANUAL_PEERS' });
 			return;
 		}
+		// Its peer-to-peer surface closed, a node following a public network has no peer to dial.
+		if (network !== 'local' && peers && PUBLIC.includes(network)) {
+			expect(problemOf(environment)).toEqual({ kind: 'peers-on-public-network', network });
+			return;
+		}
 		const config = parse(environment);
 		expect(config.ledgerWriteMode).toBe(mode);
 		expect(config.manualPeers.length > 0).toBe(peers);
@@ -279,6 +284,10 @@ describe('the safety rule', function() {
 			return;
 		}
 		expect(parse(environment).bootstrapPeers.length > 0).toBe(peers);
+	});
+
+	test('says why a node following main or test names no peer', function() {
+		expect(messageOf({ KEETANET_LOCAL_NODE_NETWORK: 'main', KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'bootstrap-only', KEETANET_LOCAL_NODE_MANUAL_PEERS: PEER })).toBe('the main network is public, so the node keeps its peer-to-peer surface closed there and reads it only by its bootstrap: leave KEETANET_LOCAL_NODE_MANUAL_PEERS unset');
 	});
 
 	test('says why bootstrapping from peers makes a node only follow dev and staging', function() {

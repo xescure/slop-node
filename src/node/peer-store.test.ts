@@ -45,6 +45,23 @@ describe('a node that may not have peers on its network', function() {
 		expect(await problemOf(environment, await storeWith([arena]))).toEqual({ kind: 'remembered-peers', network, ledgerWriteMode: mode, arenas: [arena] });
 	});
 
+	test.each(PEER_ARENAS.flatMap(function(arena) {
+		return((['main', 'test'] as const).flatMap(function(network) {
+			return((['bootstrap-only', 'read-only'] as const).map(function(mode) {
+				return({ arena, network, mode });
+			}));
+		}));
+	}))('refuses to start following $network in $mode mode when $arena remembers a peer, its peer-to-peer surface being closed there', async function({ arena, network, mode }) {
+		const environment = { KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: mode };
+		expect(await problemOf(environment, await storeWith([arena]))).toEqual({ kind: 'remembered-peers', network, ledgerWriteMode: mode, arenas: [arena] });
+	});
+
+	test('tells a node following main only to forget the peers it remembers', async function() {
+		const kv = await storeWith(['knownPeers']);
+		const environment = { KEETANET_LOCAL_NODE_NETWORK: 'main', KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'bootstrap-only' };
+		await expect(refuseRememberedPeers(getConfigFromEnv({ ...NODE, ...environment }), kv)).rejects.toThrow('the main network is Keeta\'s, and the store of KEETANET_LOCAL_NODE_POSTGRES_URL remembers peers (in knownPeers), which the node would reach even without KEETANET_LOCAL_NODE_MANUAL_PEERS: run "slop-node clear-peers" with the same environment to forget them');
+	});
+
 	test('names every arena that remembers a peer, and how to forget them', async function() {
 		const kv = await storeWith(['knownPeers', 'lastSeenPeers']);
 		const environment = { KEETANET_LOCAL_NODE_NETWORK: 'dev' };
@@ -62,8 +79,7 @@ describe('a node that may have peers', function() {
 	test.each([
 		{ network: 'local', mode: 'read-write' },
 		{ network: 'dev', mode: 'read-only' },
-		{ network: 'staging', mode: 'bootstrap-only' },
-		{ network: 'main', mode: 'read-only' }
+		{ network: 'staging', mode: 'bootstrap-only' }
 	])('starts on $network in $mode mode with remembered peers', async function({ network, mode }) {
 		const environment = { KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: mode };
 		expect(await problemOf(environment, await storeWith(PEER_ARENAS))).toBeUndefined();

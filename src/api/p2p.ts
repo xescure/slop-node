@@ -2,7 +2,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { P2PConnection, P2PPeer, P2PPeerRep, P2PSwitch } from '@keetanetwork/keetanet-client/lib/p2p.js';
 import type { JSONSerializableObject } from '@keetanetwork/keetanet-client/lib/utils/conversion.js';
-import { nodeNetworkClosedToPeers } from '../node/config.js';
+import { nodeNetworkClosedToP2P } from '../node/config.js';
 import { P2PInternals } from '../upstream/internals.js';
 import type { DeclaredP2PGroup, DeclaredResult } from './declared.js';
 import { asPayload, requiredObject, requiredString } from './payload.js';
@@ -202,14 +202,15 @@ function deliver(node: Node, connection: P2PConnection, message: Buffer): void {
  * rather than a message whose greeting the switch has already seen
  * overtaking the one before it.
  *
- * A node whose network is closed to peers refuses every message unread: the
- * greeting alone would make the sender a peer the node broadcasts to
+ * A node whose network is closed to its peer-to-peer surface
+ * (networkClosedToP2P) refuses every message unread: the greeting alone
+ * would make the sender a peer the node broadcasts to
  * [Keeta TS] index.js:73250, 73563-73567, and one it remembers. So does a node
  * handling as many messages posted over HTTP as its peer limits allow.
  */
 function handleMessage(request: APIRequest, body: unknown): Promise<DeclaredResult<DeclaredP2PGroup['message']['POST']>> {
 	const node = request.node;
-	if (nodeNetworkClosedToPeers(node.config.network, node.ledger.ledgerWriteMode) !== undefined || postedHandledBy(node.switch) >= request.peerLimits.postedMessages) {
+	if (nodeNetworkClosedToP2P(node.config.network, node.ledger.ledgerWriteMode) !== undefined || postedHandledBy(node.switch) >= request.peerLimits.postedMessages) {
 		return(Promise.resolve({ success: false }));
 	}
 	const payload = asPayload(body);

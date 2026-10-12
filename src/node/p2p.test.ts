@@ -880,6 +880,24 @@ describe('a node configured from its environment', function() {
 	});
 
 	test.each([
+		{ network: 'main', mode: 'bootstrap-only' },
+		{ network: 'main', mode: 'read-only' },
+		{ network: 'test', mode: 'bootstrap-only' }
+	] as const)('serves no /p2p WebSocket and refuses a message posted over HTTP while it follows $network in $mode mode, handing the switch nothing and keeping no peer', async function({ network, mode }) {
+		const serving = await startConfigured(network, mode);
+		const greeting = await senderGreeting();
+		const handle = vi.spyOn(serving.node.switch, 'recvMessageFromPeer');
+
+		await expect(opened(new WebSocket(p2pEndpointOf(serving.node)))).rejects.toThrow('did not open');
+		const answer = await postJSON(apiOf(serving), '/p2p/message', { message: peerMessage('hello', greeting, 0), greeting });
+
+		expect(answer.body).toEqual({ success: false });
+		expect(handle).not.toHaveBeenCalled();
+		expect(await serving.node.switch.peers({ includeUnverified: true, includeStale: true })).toEqual([]);
+		expect(await rememberedPeerArenas(serving.node.switch.config.kv)).toEqual([]);
+	});
+
+	test.each([
 		{ network: 'local', mode: 'read-write' },
 		{ network: 'dev', mode: 'read-only' },
 		{ network: 'staging', mode: 'bootstrap-only' }
