@@ -12,7 +12,7 @@ import type { NamedStaple } from './bootstrap-window.js';
  * twice the main network's history to date, so that on it they never wait,
  * while a history far larger is read no further ahead than this.
  */
-export const STAGE_AHEAD_BYTES: number = 4 * 1024 ** 3;
+const STAGE_AHEAD_BYTES: number = 4 * 1024 ** 3;
 
 /** How many staged staples the node reads at a time to add them. */
 const APPLY_BATCH = 64;
@@ -131,9 +131,9 @@ export type Applied = {
  * side, kept until it adds them, which it does in the order of their votes.
  *
  * Why. The ledger judges a staple by the voting weight it holds when the
- * staple is added [Keeta TS] index.js:69419-69423, 69761-69779, and nothing
+ * staple is added [Keeta TS] index.js:69397-69401, 69739-69757, and nothing
  * in upstream relaxes that for a bootstrap: a bootstrap add only passes a
- * ledger that is otherwise read-only [Keeta TS] index.js:69385-69392. Upstream
+ * ledger that is otherwise read-only [Keeta TS] index.js:69363-69370. Upstream
  * serves the history in the order of its votes [Keeta TS] index.js:69655-69702,
  * one page after another from a moment, so a node reading it from the start
  * adds each staple onto the history before it, as the representatives that
