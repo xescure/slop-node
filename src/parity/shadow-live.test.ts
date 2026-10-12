@@ -5,7 +5,6 @@ import { afterEach, describe, expect, inject, test, vi } from 'vitest';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { loadMainnetFixture, mainnetNodeConfig } from '../conformance/mainnet/fixture.js';
-import { newestBlockDate } from '../conformance/mainnet/shadow.js';
 import { REPLAY_TIMEOUT_MILLISECONDS } from '../conformance/mainnet/head-replay.js';
 import { replayOrder } from '../conformance/mainnet/replay.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
@@ -240,7 +239,7 @@ describe('shadow votes on the follower\'s history', function() {
 		}));
 	}, REPLAY_TIMEOUT_MILLISECONDS);
 
-	test('explain a refusal for blocks dated more than five minutes before the staple\'s votes once a vote at the newest block\'s date passes, and only then', async function() {
+	test('explain a refusal for blocks dated more than five minutes before the staple\'s votes once a vote beside its own permanent votes passes, and only then', async function() {
 		const head = replayOrder(await loadMainnetFixture('head')).slice(0, 160);
 		const exceptions = await committedExceptions();
 		const place = head.findIndex(function(staple, index): boolean {
@@ -250,6 +249,7 @@ describe('shadow votes on the follower\'s history', function() {
 		if (original === undefined) {
 			throw(new Error('no staple the shadow votes for'));
 		}
+		// Its blocks fail the age check at its votes' moment, ten minutes after them.
 		const voter = lib.Account.fromSeed('5b1e8d2c4a6f7e9b0c3d5a7f9e1b3c5d7a9f0e2b4c6d8a0f2e4b6c8d0a2f4e6b', 0);
 		const late = await confirmedStaple(original.blocks, [voter], { voteDelays: [10 * 60_000] });
 		const replayed = [...head.slice(0, place), late, ...head.slice(place + 1)];
@@ -262,17 +262,19 @@ describe('shadow votes on the follower\'s history', function() {
 			})?.outcome);
 		};
 
-		expect(await outcomeOfLate()).toEqual({ kind: 'explained', reason: 'permanent-vote-block-age', code: 'LEDGER_BLOCK_EXPIRED' });
+		// The voter holds no weight on the main network, so a vote beside its vote alone is refused.
+		expect(await outcomeOfLate()).toMatchObject({ kind: 'unexplained', code: 'LEDGER_BLOCK_EXPIRED', why: `${CONFIRMATION_REFUSED} LEDGER_INSUFFICIENT_VOTING_WEIGHT: Temporary vote must represent at least a minority of the voting weight` });
 
-		const realVote = Reflect.get(lib.Ledger.prototype, 'vote');
-		const confirmedAt = newestBlockDate(late).toISOString();
-		vi.spyOn(lib.Ledger.prototype, 'vote').mockImplementation(function(this: InstanceType<typeof lib.Ledger>, ...args: Parameters<InstanceType<typeof lib.Ledger>['vote']>) {
-			if (new Date().toISOString() === confirmedAt) {
-				return(Promise.reject(lib.Error.fromJSON({ type: 'LEDGER', code: 'LEDGER_INVALID_DATE', message: 'refused at the newest block\'s date' })));
+		// Holding every delegation, its vote is enough for a vote beside it, which skips the check of the blocks' dates.
+		const realWeight = Reflect.get(MemoryLedgerStorage.prototype, 'delegatedWeight');
+		vi.spyOn(MemoryLedgerStorage.prototype, 'delegatedWeight').mockImplementation(function(this: MemoryLedgerStorage, ...args: Parameters<MemoryLedgerStorage['delegatedWeight']>) {
+			const [transaction, representative] = args;
+			if (representative instanceof lib.Account && representative.comparePublicKey(voter)) {
+				return(Reflect.apply(realWeight, this, [transaction]));
 			}
-			return(Reflect.apply(realVote, this, args));
+			return(Reflect.apply(realWeight, this, args));
 		});
-		expect(await outcomeOfLate()).toMatchObject({ kind: 'unexplained', code: 'LEDGER_BLOCK_EXPIRED', why: `the vote at the newest block's date, ${confirmedAt}, was refused too: LEDGER_INVALID_DATE: refused at the newest block's date` });
+		expect(await outcomeOfLate()).toEqual({ kind: 'explained', reason: 'permanent-vote-block-age', code: 'LEDGER_BLOCK_EXPIRED' });
 	}, REPLAY_TIMEOUT_MILLISECONDS);
 
 	test('explain by rule alone a refusal for a block\'s date that a build without the confirming vote recorded, once, and no other', async function() {
@@ -289,7 +291,7 @@ describe('shadow votes on the follower\'s history', function() {
 		const unexplained = function(staple: VoteStaple, why: string) {
 			return({ blocksHash: keyOf(staple), code: 'LEDGER_BLOCK_EXPIRED', message: 'Refusing to issue vote', why });
 		};
-		const tally = { ...freshShadowRun(SCOPE_OF_TEST, 1, GENESIS_BASE, targetOf([])).scoped, unexplained: 3, firstUnexplained: [unexplained(old, preRule), unexplained(confirmedApart, `${CONFIRMATION_REFUSED} 2026-10-08T19:48:38.360Z, was refused too: LEDGER_BLOCK_EXPIRED: Refusing`), unexplained(recent, preRule)] };
+		const tally = { ...freshShadowRun(SCOPE_OF_TEST, 1, GENESIS_BASE, targetOf([])).scoped, unexplained: 3, firstUnexplained: [unexplained(old, preRule), unexplained(confirmedApart, `${CONFIRMATION_REFUSED} LEDGER_INSUFFICIENT_VOTING_WEIGHT: Temporary vote must represent at least a minority of the voting weight`), unexplained(recent, preRule)] };
 		const run: ShadowRunRecord = { kind: 'shadow-run', at: '2026-10-12T16:20:00.000Z', ...freshShadowRun(SCOPE_OF_TEST, 1, GENESIS_BASE, targetOf([])), scoped: tally, complete: true, cost: { seconds: 1, staples: 3, shadowVotes: 3, maxResidentMiB: 1 } };
 		const directory = await mkdtemp(join(tmpdir(), 'slop-shadow-explain-'));
 		const log = new ParityLog(join(directory, 'parity.jsonl'));

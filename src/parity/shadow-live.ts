@@ -5,7 +5,7 @@ import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { mainnetNodeConfig } from '../conformance/mainnet/fixture.js';
 import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
 import { LedgerInternals } from '../upstream/internals.js';
-import { explainRefusal, newestBlockDate, shadowVote, shadowVoteAt, UnexplainedRefusal } from '../conformance/mainnet/shadow.js';
+import { explainRefusal, shadowVote, UnexplainedRefusal, voteBesidePermanentVotes } from '../conformance/mainnet/shadow.js';
 import type { NetworkAnchors, ShadowVote } from '../conformance/mainnet/shadow.js';
 import { recordNoTiming } from '../node/timing.js';
 import { assertNever } from '../util/assert-never.js';
@@ -250,7 +250,7 @@ class Adds {
 }
 
 /** How the classification of a refusal whose confirming vote was refused begins. */
-export const CONFIRMATION_REFUSED = 'the vote at the newest block\'s date,';
+export const CONFIRMATION_REFUSED = 'the vote beside the staple\'s own permanent votes, which skips the date check, was refused too:';
 
 /**
  * Explains by the classified differences' rules alone the refusals the
@@ -305,9 +305,10 @@ export async function explainByRule(log: ParityLog, source: Pick<ShadowSource, '
  * The vote's outcome, its refusal judged by the classified differences
  * (src/conformance/mainnet/shadow.ts). A refusal for a block's date is
  * explained only once the ledger, standing where it was refused, votes for
- * the staple with the clock at its newest block's date, as the temporary
- * votes the staple's permanent ones replaced were issued while its blocks
- * were new.
+ * the staple beside the staple's own permanent votes, the representatives'
+ * way of voting without the check of the blocks' dates: the rest of the
+ * vote, the ledger's outcome of the blocks first, is then checked as for
+ * any other.
  */
 async function outcomeOf(vote: ShadowVote, ledger: Ledger): Promise<ShadowVoteOutcome> {
 	switch (vote.outcome) {
@@ -317,12 +318,11 @@ async function outcomeOf(vote: ShadowVote, ledger: Ledger): Promise<ShadowVoteOu
 			try {
 				const { reason } = explainRefusal(vote.staple, vote.refusal, ledger);
 				if (reason === 'permanent-vote-block-age') {
-					const moment = newestBlockDate(vote.staple);
-					const confirming = await atMoment(moment, function() {
-						return(shadowVoteAt(vote.staple, ledger, moment));
+					const confirming = await atMoment(vote.staple.timestamp(), function() {
+						return(voteBesidePermanentVotes(vote.staple, ledger));
 					});
 					if (confirming.outcome === 'refused') {
-						return({ kind: 'unexplained', code: vote.refusal.code, message: vote.refusal.message, why: `${CONFIRMATION_REFUSED} ${moment.toISOString()}, was refused too: ${confirming.refusal.code}: ${confirming.refusal.message}` });
+						return({ kind: 'unexplained', code: vote.refusal.code, message: vote.refusal.message, why: `${CONFIRMATION_REFUSED} ${confirming.refusal.code}: ${confirming.refusal.message}` });
 					}
 				}
 				return({ kind: 'explained', reason, code: vote.refusal.code });

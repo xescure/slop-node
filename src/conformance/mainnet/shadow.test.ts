@@ -285,7 +285,7 @@ describe('a shadow-vote refusal for a block\'s date', function() {
 		return(operationsBlock({ account: user, signer: user, previous: null, network: NETWORK, date, operations: [{ type: lib.Block.OperationType.SET_REP, to: representative }] }));
 	};
 
-	test('is explained when every block is dated more than five minutes before the staple\'s earliest vote, as the permanent votes replaced temporary ones', async function() {
+	test('is explained when a block is dated more than five minutes before the staple\'s earliest vote, as the representatives voted without the date check', async function() {
 		const blockDate = new Date('2026-10-08T19:48:47.109Z');
 		const staple: RefusedStaple = { blocks: [await datedBlock(blockDate)], votes: [{ issuer: representative, validityFrom: new Date(VOTED.valueOf() + 240) }, { issuer: delegate, validityFrom: VOTED }] };
 
@@ -297,7 +297,7 @@ describe('a shadow-vote refusal for a block\'s date', function() {
 		['within five minutes before it', -4 * 60_000],
 		['after it', 60_000],
 		['more than five minutes after it, in the future of the votes', 6 * 60_000]
-	])('is unexplained for a block dated %s', async function(_, offset) {
+	])('is unexplained for a staple whose one block is dated %s', async function(_, offset) {
 		const blockDate = new Date(VOTED.valueOf() + offset);
 		const staple: RefusedStaple = { blocks: [await datedBlock(blockDate)], votes: [{ issuer: representative, validityFrom: VOTED }] };
 
@@ -306,22 +306,34 @@ describe('a shadow-vote refusal for a block\'s date', function() {
 		}).toThrow(UnexplainedRefusal);
 	});
 
-	test('is unexplained when any block is dated within five minutes of the votes, however old the others', async function() {
-		const old = new Date(VOTED.valueOf() - 10 * 60_000);
-		const staple: RefusedStaple = { blocks: [await datedBlock(old), await datedBlock(new Date(VOTED.valueOf() - 60_000))], votes: [{ issuer: representative, validityFrom: VOTED }] };
+	test('is explained for a staple whose one block is older than five minutes and the other as new as its votes, as 1BE261B7… on the main network', async function() {
+		const old = new Date('2026-10-08T19:48:47.109Z');
+		const staple: RefusedStaple = {
+			blocks: [await datedBlock(old), await datedBlock(new Date('2026-10-08T19:54:38.145Z'))],
+			votes: [{ issuer: representative, validityFrom: new Date('2026-10-08T19:54:38.363Z') }, { issuer: delegate, validityFrom: new Date('2026-10-08T19:54:38.384Z') }]
+		};
 
-		expect(function() {
-			return(explainRefusal(staple, expired(old), anchors));
-		}).toThrow(UnexplainedRefusal);
+		expect(explainRefusal(staple, expired(old), anchors)).toEqual({ reason: 'permanent-vote-block-age', requirement: null });
 	});
 
-	test('is no exception the head replay lists, as only a vote at the newest block\'s date confirms it', async function() {
+	test('is unexplained when any block is dated after the earliest vote, however old the others', async function() {
+		const old = new Date(VOTED.valueOf() - 10 * 60_000);
+		for (const offset of [1, 6 * 60_000]) {
+			const staple: RefusedStaple = { blocks: [await datedBlock(old), await datedBlock(new Date(VOTED.valueOf() + offset))], votes: [{ issuer: representative, validityFrom: VOTED }] };
+
+			expect(function() {
+				return(explainRefusal(staple, expired(old), anchors));
+			}).toThrow(UnexplainedRefusal);
+		}
+	});
+
+	test('is no exception the head replay lists, as only a vote beside the staple\'s permanent votes confirms it', async function() {
 		const blockDate = new Date(VOTED.valueOf() - 10 * 60_000);
 		const staple = await confirmedStaple([await datedBlock(blockDate)], [representative], { voteDelays: [10 * 60_000] });
 
 		expect(function() {
 			return(shadowVoteExceptions([{ outcome: 'refused', staple, refusal: expired(blockDate) }], anchors));
-		}).toThrow('a refusal for a block\'s date is explained only by a vote at the newest block\'s date');
+		}).toThrow('a refusal for a block\'s date is explained only by a vote beside the staple\'s permanent votes');
 	});
 });
 

@@ -36,11 +36,12 @@ const lib = KeetaNet.lib;
  * - `send-recipient-access`: the recipient's access on a sent token, which no
  *   release before 0.18.0 required and which the staple's votes predate.
  * - `permanent-vote-block-age`: a block dated more than five minutes before
- *   the staple's earliest vote. A representative checks a block's date only
- *   as it issues a temporary vote, and the staple carries the permanent votes
- *   that replaced those, while the shadow vote is a temporary one issued at
- *   the permanent votes' moment. It is explained only once the same ledger
- *   votes for the staple with the clock at its newest block's date.
+ *   the staple's earliest vote, and none after it. A representative checks a
+ *   block's date only as it issues a temporary vote on its own, not one
+ *   asked for beside permanent votes alone, while the shadow vote is a
+ *   temporary one on its own at the permanent votes' moment. It is explained
+ *   only once the same ledger votes for the staple beside the staple's own
+ *   permanent votes.
  */
 const PERMISSION_REFUSAL_REASONS = ['self-requirement-return', 'same-staple-grant-scope', 'trusted-account-genesis', 'send-recipient-access'] as const;
 
@@ -94,17 +95,31 @@ export function refusalOf(error: unknown): LedgerRefusal {
 
 /** The ledger's vote on the staple's blocks, which must run with the clock at the staple's moment. */
 export function shadowVote(staple: VoteStaple, ledger: Ledger): Promise<ShadowVote> {
-	return(shadowVoteAt(staple, ledger, staple.timestamp()));
+	return(voteOn(staple, ledger, undefined));
 }
 
-/** The ledger's vote on the staple's blocks, which must run with the clock at the moment given. */
-export async function shadowVoteAt(staple: VoteStaple, ledger: Ledger, moment: Date): Promise<ShadowVote> {
-	if (Date.now() !== moment.valueOf()) {
-		throw(new Error(`a shadow vote on ${staple.blocksHash.toString()} runs with the clock away from ${moment.toISOString()}`));
+/**
+ * The ledger's vote on the staple's blocks asked for beside the staple's
+ * own permanent votes, as a temporary vote that skips the check of the
+ * blocks' dates, once those votes hold more than a quarter of the voting
+ * weight [Keeta TS] index.js:69028-69050, 69228-69238, 69309-69316; it
+ * must run with the clock at the staple's moment.
+ */
+export function voteBesidePermanentVotes(staple: VoteStaple, ledger: Ledger): Promise<ShadowVote> {
+	return(voteOn(staple, ledger, staple.votes));
+}
+
+async function voteOn(staple: VoteStaple, ledger: Ledger, otherVotes: readonly Vote[] | undefined): Promise<ShadowVote> {
+	if (Date.now() !== staple.timestamp().valueOf()) {
+		throw(new Error(`a shadow vote on ${staple.blocksHash.toString()} runs with the clock away from the staple's timestamp`));
 	}
 	let vote: Vote;
 	try {
-		vote = await ledger.vote(staple.blocks);
+		let others: Vote[] | undefined;
+		if (otherVotes !== undefined) {
+			others = [...otherVotes];
+		}
+		vote = await ledger.vote(staple.blocks, others);
 	} catch (error: unknown) {
 		return({ outcome: 'refused', staple, refusal: refusalOf(error) });
 	}
@@ -346,34 +361,32 @@ function explains(reason: PermissionRefusalReason, staple: RefusedStaple, refuse
 /** How far from the moment a temporary vote is issued a block may be dated [Keeta TS] index.js:70185-70197. */
 export const BLOCK_DATE_WINDOW_MILLISECONDS: number = 5 * 60_000;
 
-/** When the staple's newest block is dated, the moment a confirming vote is issued at. */
-export function newestBlockDate(staple: Pick<RefusedStaple, 'blocks'>): Date {
-	return(new Date(Math.max(...staple.blocks.map(function(block): number {
-		return(block.date.valueOf());
-	}))));
-}
-
 /*
- * A representative checks a block's date only as it issues a temporary
- * vote: a vote asked for beside temporary votes is permanent and issued
- * without the check, as is a temporary one beside permanent votes alone
- * [Keeta TS] index.js:69028-69050, 69309-69316, 69317-69347, and the check
- * comes once the ledger's outcome of the blocks has validated
- * [Keeta TS] index.js:70179-70197. A staple carries the permanent votes, so
- * one whose every block is dated more than the window before its earliest
- * vote had its temporary votes issued earlier, as the blocks were new. A
- * block dated after the votes, or within the window before them, is no such
- * staple's.
+ * A ledger checks a block's date only once the ledger's outcome of the
+ * blocks has validated, and only for a temporary vote asked for on its own:
+ * a vote asked for beside temporary votes is permanent and issued without
+ * the check, as is a temporary one asked for beside permanent votes alone
+ * [Keeta TS] index.js:69028-69050, 69309-69316, 69317-69347, 70179-70197;
+ * 0.18.4 checks the same [Keeta TS 0.18.4] index.js:70013-70025. A staple
+ * whose block is dated more than the window before its earliest vote was
+ * therefore voted on through one of those, as its blocks were older than
+ * the window when the votes were made. A block dated after the votes is no
+ * such staple's: the representatives' clocks were then behind it.
  */
-function datedBeforeTheVotes(staple: RefusedStaple): boolean {
+function voteSkippedTheDateCheck(staple: RefusedStaple): boolean {
 	if (staple.votes.length === 0) {
 		return(false);
 	}
 	const earliestVote = Math.min(...staple.votes.map(function(vote): number {
 		return(vote.validityFrom.valueOf());
 	}));
-	return(staple.blocks.every(function(block): boolean {
-		return(block.date.valueOf() < earliestVote - BLOCK_DATE_WINDOW_MILLISECONDS);
+	const dates = staple.blocks.map(function(block): number {
+		return(block.date.valueOf());
+	});
+	return(dates.every(function(date): boolean {
+		return(date <= earliestVote);
+	}) && dates.some(function(date): boolean {
+		return(date < earliestVote - BLOCK_DATE_WINDOW_MILLISECONDS);
 	}));
 }
 
@@ -388,13 +401,13 @@ export type ExplainedRefusal =
 /**
  * The one reason that explains the refusal, with the requirement refused;
  * any other outcome throws UnexplainedRefusal. A refusal for a block's date
- * is explained by the staple's dates alone, which a vote at its newest
- * block's date then confirms (src/parity/shadow-live.ts).
+ * is explained by the staple's dates alone, which a vote beside the
+ * staple's own permanent votes then confirms (src/parity/shadow-live.ts).
  */
 export function explainRefusal(staple: RefusedStaple, refusal: LedgerRefusal, anchors: NetworkAnchors): ExplainedRefusal {
 	if (refusal.code === 'LEDGER_BLOCK_EXPIRED') {
-		if (!datedBeforeTheVotes(staple)) {
-			throw(new UnexplainedRefusal(`a block of the staple is dated after its earliest vote or within ${String(BLOCK_DATE_WINDOW_MILLISECONDS / 60_000)} min before it: ${refusal.message}`));
+		if (!voteSkippedTheDateCheck(staple)) {
+			throw(new UnexplainedRefusal(`a block of the staple is dated after its earliest vote, or none more than ${String(BLOCK_DATE_WINDOW_MILLISECONDS / 60_000)} min before it: ${refusal.message}`));
 		}
 		return({ reason: 'permanent-vote-block-age', requirement: null });
 	}
@@ -429,7 +442,7 @@ export function shadowVoteExceptions(votes: readonly ShadowVote[], anchors: Netw
 			case 'refused': {
 				const explained = explainRefusal(vote.staple, vote.refusal, anchors);
 				if (explained.requirement === null) {
-					throw(new UnexplainedRefusal(`a refusal for a block's date is explained only by a vote at the newest block's date, which the replay does not make: ${vote.refusal.message}`));
+					throw(new UnexplainedRefusal(`a refusal for a block's date is explained only by a vote beside the staple's permanent votes, which the replay does not make: ${vote.refusal.message}`));
 				}
 				return([{ blocksHash: vote.staple.blocksHash.toString(), code: vote.refusal.code, ...explained }]);
 			}
