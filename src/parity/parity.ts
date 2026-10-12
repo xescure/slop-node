@@ -6,7 +6,6 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { gunzipSync } from 'node:zlib';
 import pg from 'pg';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
 import { assertNever } from '../util/assert-never.js';
 import { capturedBehaviors, explainDivergence, recheckAPIDivergences, sampleAPI } from './api-diff.js';
 import { httpSource, pacedSource } from './api-source.js';
@@ -22,7 +21,7 @@ import type { ParityCommand } from './parity-command.js';
 import { exitCodeOf, neverComparedAccountsOf, reportOnLog, runParity, sweepPointerOf, sweepPositionOf } from './report.js';
 import { DEFAULT_REPRESENTATIVE_PACING, RepresentativePacer } from './representative-pacer.js';
 import type { PacerClock, RepresentativePacing } from './representative-pacer.js';
-import { freshShadowRun, runShadowVotes, SHADOW_SCOPE, shadowRunComplete } from './shadow-live.js';
+import { freshShadowRun, runShadowVotes, SHADOW_SCOPE, shadowLedgerStorage, shadowRunComplete } from './shadow-live.js';
 import { fileShadowState, shadowDirectory } from './shadow-state.js';
 import { compareNeverCompared, recheckDivergences, sweepAccounts, sweepCursorPaths } from './sweep.js';
 import { retryingStore } from './transient-store.js';
@@ -141,8 +140,6 @@ async function edgeCaseStaples(): Promise<readonly string[]> {
 
 /** The offline ledger of shadow votes, a database of the follower's cluster. */
 const SHADOW_DATABASE = `${FOLLOWER_DATABASE}_shadow`;
-
-const OFFLINE_TIMEOUT_MILLISECONDS = 600_000;
 
 async function withMaintenance<Result>(directory: string, work: (client: pg.Client) => Promise<Result>): Promise<Result> {
 	const client = new pg.Client({ connectionString: followerDatabaseURLOf(directory, 'postgres') });
@@ -277,17 +274,7 @@ async function shadow(command: Extract<ParityCommand, { kind: 'shadow' }>, direc
 	if (loaded === undefined) {
 		await state.save(start);
 	}
-	const storage = new PostgresLedgerStorage({
-		kind: 'connection-string',
-		connectionString: followerDatabaseURLOf(directory, SHADOW_DATABASE),
-		/*
-		 * The offline ledger is the database's only client, and a vote on a
-		 * staple of hundreds of operations computes its effects for many
-		 * seconds inside one transaction, so its sessions are not ended for
-		 * idling there, as a node's are to free locks for other writers.
-		 */
-		options: { statementTimeoutMillis: OFFLINE_TIMEOUT_MILLISECONDS, idleInTransactionTimeoutMillis: OFFLINE_TIMEOUT_MILLISECONDS }
-	});
+	const storage = shadowLedgerStorage(followerDatabaseURLOf(directory, SHADOW_DATABASE));
 	const at = new Date().toISOString();
 	const started = performance.now();
 	let lastReport = started;

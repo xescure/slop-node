@@ -11,7 +11,7 @@ import { createDatabase } from '../testing/postgres.js';
 import type { TestDatabase } from '../testing/postgres.js';
 import type { SequencedStaple } from './follower-store.js';
 import type { ShadowBase, ShadowRunState, ShadowTarget, ShadowVoteEntry } from './log.js';
-import { SHADOW_GC_SLICE_MILLISECONDS, freshShadowRun, runShadowVotes, sampledForInformation, shadowRunComplete, shadowWindowOf, votedFrom } from './shadow-live.js';
+import { SHADOW_GC_SLICE_MILLISECONDS, freshShadowRun, runShadowVotes, sampledForInformation, shadowLedgerStorage, shadowRunComplete, shadowWindowOf, votedFrom } from './shadow-live.js';
 import type { ShadowScope, ShadowSource, ShadowState } from './shadow-live.js';
 
 const lib = KeetaNet.lib;
@@ -267,6 +267,44 @@ describe('shadow votes on the follower\'s history', function() {
 		expect(new Set(voted).size).toBe(voted.length);
 		expect(voted.length).toBe(whole.scoped.shadowVoted + whole.informational.shadowVoted);
 	}, REPLAY_TIMEOUT_MILLISECONDS);
+
+	test('refuse to resume on an offline ledger that lacks a staple of the batch saved last, as a kill losing its last commits leaves it', async function() {
+		const head = replayOrder(await loadMainnetFixture('head')).slice(0, 100);
+		const start = freshShadowRun(scopeFrom(head, 50), 3, GENESIS_BASE, targetOf(head));
+		const saved = memoryState();
+		await runShadowVotes({ source: sourceOf(head), state: saved, storage: new MemoryLedgerStorage(), start, batchStaples: 50 });
+		const behind = await offlineLedger();
+		await behind(function(storage) {
+			return(runShadowVotes({ source: sourceOf(head), state: memoryState(), storage, start: { ...start, target: targetOf(head.slice(0, 99)) }, batchStaples: 50 }));
+		});
+		const standing = saved.saved;
+		const lost = head[99];
+		if (standing === undefined || lost === undefined) {
+			throw(new Error('the run saved no standing'));
+		}
+
+		await expect(behind(function(storage) {
+			return(runShadowVotes({ source: sourceOf(head), state: saved, storage, start: standing, batchStaples: 50 }));
+		})).rejects.toThrow(`the offline ledger lacks 1 staple of the batch saved last, the first ${keyOf(lost)} at 100; it lost them to a kill, so start again with --restart`);
+	}, REPLAY_TIMEOUT_MILLISECONDS);
+
+	test('commit each session of the offline ledger synchronously, whatever the cluster commits by default', async function() {
+		const database = await createDatabase(inject('postgresCluster'), inject('postgresLedgerTemplate'));
+		databases.push(database);
+		const plain = database.pool();
+		expect((await plain.query<{ synchronous_commit: string }>('SHOW synchronous_commit')).rows[0]?.synchronous_commit).toBe('off');
+		const storage = shadowLedgerStorage(database.connectionString);
+		const node = new lib.Node(mainnetNodeConfig(storage));
+		try {
+			const transaction = await storage.beginTransaction({ node, moment: new Date(), identifier: 'shadow-settings', readOnly: true });
+			const settings = await transaction.execute('SELECT current_setting(\'synchronous_commit\') AS commit, current_setting(\'statement_timeout\') AS statement');
+			await storage.abortTransaction(transaction);
+			expect(settings).toEqual([{ commit: 'on', statement: '10min' }]);
+		} finally {
+			await node.stop();
+			await storage.destroy();
+		}
+	});
 
 	test('keep listing as unapplied a staple an earlier build left refused for voting weight that then waits deferred', async function() {
 		const head = replayOrder(await loadMainnetFixture('head')).slice(0, 100);

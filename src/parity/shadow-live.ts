@@ -3,6 +3,7 @@ import type { Ledger, LedgerStorageAPI } from '@keetanetwork/keetanet-client/lib
 import type { Node as KeetaNode } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { mainnetNodeConfig } from '../conformance/mainnet/fixture.js';
+import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
 import { LedgerInternals } from '../upstream/internals.js';
 import { explainRefusal, shadowVote, UnexplainedRefusal } from '../conformance/mainnet/shadow.js';
 import type { ShadowVote } from '../conformance/mainnet/shadow.js';
@@ -340,6 +341,74 @@ function unappliedOf(held: SequencedStaple, why: UnappliedStaple['why']): Unappl
 	return({ sequence: held.sequence.toString(), blocksHash: keyOf(held.staple), why });
 }
 
+const OFFLINE_TIMEOUT_MILLISECONDS = 600_000;
+
+/**
+ * The offline ledger's storage in its database. Its every session commits
+ * synchronously: the follower's cluster commits without waiting for the
+ * disk, so a kill may lose its last commits, which a save of the standing
+ * after them would count as replayed. The offline ledger is the database's
+ * only client, and a vote on a staple of hundreds of operations computes
+ * its effects for many seconds inside one transaction, so its sessions are
+ * not ended for idling there, as a node's are to free locks for other
+ * writers.
+ */
+export function shadowLedgerStorage(connectionString: string): PostgresLedgerStorage {
+	let separator = '?';
+	if (connectionString.includes('?')) {
+		separator = '&';
+	}
+	return(new PostgresLedgerStorage({
+		kind: 'connection-string',
+		connectionString: `${connectionString}${separator}options=${encodeURIComponent('-c synchronous_commit=on')}`,
+		options: { statementTimeoutMillis: OFFLINE_TIMEOUT_MILLISECONDS, idleInTransactionTimeoutMillis: OFFLINE_TIMEOUT_MILLISECONDS }
+	}));
+}
+
+/**
+ * Whether the offline ledger holds every staple the standing counts as
+ * replayed of the batch it saved last, the batch's staples it lists as not
+ * applied apart: commits are made in order, so its holding those shows it
+ * holds every staple before them. One that commits without waiting for the
+ * disk, as an earlier build's did, may have lost them to a kill, and the
+ * run would go on from a ledger that is not the follower's.
+ */
+async function checkLastBatchHeld(run: ShadowRun, ledger: Ledger): Promise<void> {
+	const { base, reached, unapplied } = run.start;
+	const batchStaples = run.batchStaples ?? DEFAULT_BATCH_STAPLES;
+	const place = BigInt(reached.sequence);
+	let after = place - BigInt(batchStaples);
+	if (after < BigInt(base.sequence)) {
+		after = BigInt(base.sequence);
+	}
+	if (place <= after) {
+		return;
+	}
+	const listed = new Set(unapplied.map(function(staple): string {
+		return(staple.blocksHash);
+	}));
+	const batch = (await run.source.staplesAfter(after, place, batchStaples)).filter(function(held): boolean {
+		return(!listed.has(keyOf(held.staple)));
+	});
+	const applied = await appliedOf(ledger, batch.map(function(held): VoteStaple {
+		return(held.staple);
+	}));
+	const lost = batch.filter(function(held): boolean {
+		return(!applied.has(keyOf(held.staple)));
+	});
+	const [first] = lost;
+	if (first !== undefined) {
+		throw(new Error(`the offline ledger lacks ${String(lost.length)} staple${plural(lost.length)} of the batch saved last, the first ${keyOf(first.staple)} at ${first.sequence.toString()}; it lost them to a kill, so start again with --restart`));
+	}
+}
+
+function plural(count: number): string {
+	if (count === 1) {
+		return('');
+	}
+	return('s');
+}
+
 /**
  * Replays the follower's main staples into an offline ledger, a
  * representative's of its own that votes nowhere, in the order the
@@ -385,6 +454,7 @@ export async function runShadowVotes(run: ShadowRun): Promise<ShadowRunState> {
 	const recorded = await run.state.recordedSinceSaved();
 	let resuming = true;
 	try {
+		await checkLastBatchHeld(run, ledger);
 		for (const held of refusedBefore) {
 			await adds.add(held);
 		}
