@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { deflateSync, inflateSync } from 'node:zlib';
 import { describe, expect, onTestFinished, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account } from '@keetanetwork/keetanet-client/lib/account.js';
@@ -277,11 +278,39 @@ describe('a bootstrap client', function() {
 
 		expect(await clientOf(late.node).update()).toEqual({ complete: true });
 
-		expect(reading.pages.flatMap(function(page): readonly string[] {
-			return(page.served);
-		})).not.toContain(Buffer.from(lost.toBytes()).toString('base64'));
+		// No pass's page carried it: only the page the node then asked for its bytes, from its earliest vote.
+		const earliestVote = Math.min(...lost.votes.map(function(vote): number {
+			return(vote.validityFrom.getTime());
+		}));
+		expect(reading.pages.filter(function(page): boolean {
+			return(page.served.includes(Buffer.from(lost.toBytes()).toString('base64')));
+		}).map(function(page): string | null {
+			return(page.start);
+		})).toEqual([new Date(earliestVote).toISOString()]);
 		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([peer.network.genesis, before, lost, after]));
 		expect(reading.askedFor).toEqual([lostBlock]);
+	});
+
+	/*
+	 * The representative's bytes for the staple are another zlib stream of
+	 * the same encoding than the client makes, as on the main network
+	 * (schema/CONTRACT.md, section 1, "Staple bytes").
+	 */
+	test('adds a staple it fetched for a lacked block as the representative serves it in its pages, not as it rebuilt it', async function() {
+		const peer = await representative();
+		const reading = await startReadingPeer(ONE_VOTE_A_READ);
+		const late = await joiner({ bootstrapFrom: [reading.apiURL] });
+		const { before, lost, after, lostBlock } = await nearTiedHistory(peer.network);
+		const served = new lib.Vote.Staple(deflateSync(inflateSync(Buffer.from(lost.toBytes())), { level: 1 }));
+		expect(Buffer.from(served.toBytes()).equals(Buffer.from(lost.toBytes()))).toBe(false);
+		reading.apply([peer.network.genesis, before, served, after]);
+		advanceClock(BOOTSTRAP_MARGIN_MILLISECONDS + 1000);
+
+		expect(await clientOf(late.node).update()).toEqual({ complete: true });
+
+		expect(reading.askedFor).toEqual([lostBlock]);
+		const stored = await late.node.ledger.getVoteStaple(lost.blocksHash, 'main');
+		expect(Buffer.from(stored?.toBytes() ?? new ArrayBuffer(0)).equals(Buffer.from(served.toBytes()))).toBe(true);
 	});
 
 	test('asks the next peer for a lacked block when one holds no staple of it, or fails, after a pass over some peer completed', async function() {

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomInt } from 'node:crypto';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { BootstrapClient as DeclaredBootstrapClient, BootstrapConfig } from '@keetanetwork/keetanet-client/lib/bootstrap.js';
 import type { BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
@@ -27,7 +27,7 @@ import { StageFull, Staging, applyFrontier } from './bootstrap-stage.js';
 import type { Applied } from './bootstrap-stage.js';
 import { MOST_LACKED_PER_UPDATE, STRANDED_READ, awaitedOf, dueLackedBlocks, landedOn, weightSufficesOn } from './retry-signals.js';
 import type { Unanswered } from './retry-signals.js';
-import { BOOTSTRAP_MARGIN_MILLISECONDS, MAX_NAMED } from './bootstrap-window.js';
+import { BOOTSTRAP_MARGIN_MILLISECONDS, MAX_NAMED, NamedStaples } from './bootstrap-window.js';
 import type { NamedStaple } from './bootstrap-window.js';
 import type { Added, Offered, QueuedStaple, QueueUse } from './bootstrap-retry.js';
 import { nextUpdateDelay, updatePeers } from './bootstrap-update.js';
@@ -150,6 +150,13 @@ function describeNotApplied(added: Added): string {
 			return(assertNever(added));
 	}
 }
+
+/** The pages the node reads from a fetched staple's earliest vote for the bytes the peer serves of it, before it adds the staple as built; and the staples each asks for, a read's worth. */
+const SERVED_BYTES_PAGES = 3;
+const SERVED_BYTES_PAGE_LIMIT = 200;
+
+/** Seeds for the filters of those pages, as a pass draws its own (src/node/bootstrap-pass.ts). */
+const FILTER_SEED_LIMIT = 2 ** 31;
 
 /** The updates in a row a full retry queue blocks the adding of the stage for before the node says it is stalled. */
 const STALLED_AFTER_UPDATES = 3;
@@ -614,9 +621,13 @@ export class BootstrapClient {
 	/**
 	 * Asks each peer in turn for the staple holding the block, and adds the
 	 * first one found; answers whether the ledger then holds it. The staple
-	 * is built from its votes and blocks as the client builds it, so its
-	 * bytes need not be those a page carries, which a filter names: a later
-	 * page may send it again, and it is found held.
+	 * is built from its votes and blocks as the client builds it, whose bytes
+	 * are another zlib stream than the one the peer holds (schema/CONTRACT.md,
+	 * section 1, "Staple bytes"), so the node adds the peer's own bytes when
+	 * pages from its earliest vote show them (#asTheyAreServed): then its API
+	 * serves them as the peers do, and its filters name them, so that no pass
+	 * downloads the staple again. Otherwise it adds the rebuilt bytes
+	 * (conformance/API.md).
 	 */
 	async #fetchHolding(block: BlockHash, sources: readonly string[], fetcher: PageFetcher): Promise<boolean> {
 		const key = block.toString();
@@ -637,6 +648,7 @@ export class BootstrapClient {
 			if (staple === undefined) {
 				continue;
 			}
+			staple = await this.#asTheyAreServed(endpoint, staple, fetcher);
 			let added: Added;
 			try {
 				added = await this.#retries.add(staple, 'deep');
@@ -853,6 +865,42 @@ export class BootstrapClient {
 			this.#node.log.warn(LOG_SOURCE, 'Reading whether deferred staples await blocks the ledger lacks failed; the update counts as incomplete:', error);
 			return(false);
 		}
+	}
+
+	/**
+	 * The staple as the peer serves it in its pages, if it serves it: a peer
+	 * keyed by votes lists it for its earliest vote in the read from there,
+	 * which a page cut short may leave for the next, asked for with a filter
+	 * naming what came before. A peer that does not list it, or fails, leaves
+	 * the staple as it was built.
+	 */
+	async #asTheyAreServed(endpoint: string, built: VoteStaple, fetcher: PageFetcher): Promise<VoteStaple> {
+		const start = new Date(Math.min(...built.votes.map(function(vote): number {
+			return(vote.validityFrom.getTime());
+		})));
+		const named = new NamedStaples();
+		const key = built.blocksHash.toString();
+		try {
+			for (let page = 0; page < SERVED_BYTES_PAGES; page++) {
+				const bloomFilter = named.filter(randomInt(FILTER_SEED_LIMIT)).serialized;
+				const staples = await this.#pacer.paced(endpoint, this.#stopping.signal, () => {
+					return(fetcher.page({ endpoint, start, limit: SERVED_BYTES_PAGE_LIMIT, bloomFilter }, this.timeout, this.#stopping.signal));
+				});
+				const served = staples.find(function(listed): boolean {
+					return(listed.blocksHash.toString() === key);
+				});
+				if (served !== undefined) {
+					return(served);
+				}
+				if (staples.length === 0) {
+					break;
+				}
+				named.receive(staples);
+			}
+		} catch (error: unknown) {
+			this.#node.log.debug(LOG_SOURCE, `Asking ${endpoint} for the bytes it serves of staple ${key} failed; the node adds it as built from its votes and blocks:`, error);
+		}
+		return(built);
 	}
 
 	/** A peer that answered with a status asking the node to slow down is left alone for a while (PeerPacer). */
