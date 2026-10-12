@@ -29,7 +29,7 @@ function checksum(at: string, verdict: ChecksumVerdict, representative: string =
 	return({ kind: 'checksum', at, representative, gapMilliseconds: 10_000, completedPass: null, follower: READ, representativeWindow: READ, verdict });
 }
 
-const FAIL: ChecksumVerdict = { kind: 'fail', bisect: { followerBlockCount: 1, representativeBlockCount: 2, sweep: { cursor: null, firstDivergence: { account: ACCOUNT, field: 'balances[0].balance', staple: STAPLE } } } };
+const DIFFERS: ChecksumVerdict = { kind: 'differs' };
 
 function crossCheck(at: string, outcome: CrossCheckOutcome): CrossCheckRecord {
 	return({ kind: 'cross-check', at, stored: '0x1', folded: '0x1', mainBlocks: 1, outcome });
@@ -184,7 +184,7 @@ describe('the parity report', function() {
 	test('records the representatives\' checksums for information only', function() {
 		const at = '2026-10-09T02:00:00.000Z';
 		const other = { kind: 'read', first: { checksum: '0x2', blockCount: 2 }, second: { checksum: '0x02', blockCount: 2 } } as const;
-		const records = [checksum(at, FAIL), { ...checksum(at, FAIL, OTHER_REPRESENTATIVE), representativeWindow: other }, { ...checksum(at, FAIL, OTHER_REPRESENTATIVE), representativeWindow: READ }];
+		const records = [checksum(at, DIFFERS), { ...checksum(at, DIFFERS, OTHER_REPRESENTATIVE), representativeWindow: other }, { ...checksum(at, DIFFERS, OTHER_REPRESENTATIVE), representativeWindow: READ }];
 		expect(report(records).signals.checksum).toMatchObject({ verdict: 'not-comparable-yet', representativeChecksums: { comparisons: 3, agreeing: 2, distinctInLatestRun: 2 } });
 	});
 

@@ -20,7 +20,7 @@ import { ParityLog, parityLogPath } from './log.js';
 import type { ShadowBase, ShadowRunRecord, ShadowRunState, ShadowTarget, SweepCursor, SweepWalk } from './log.js';
 import { lockParity, PARITY_LOCK_FILE, parseParityCommand, SHADOW_LOCK_FILE } from './parity-command.js';
 import type { ParityCommand } from './parity-command.js';
-import { exitCodeOf, neverComparedAccountsOf, reportOnLog, runParity, sweepPointerOf, sweepPositionOf } from './report.js';
+import { exitCodeOf, neverComparedAccountsOf, reportOnLog, runParity, sweepPositionOf } from './report.js';
 import { DEFAULT_REPRESENTATIVE_PACING, RepresentativePacer } from './representative-pacer.js';
 import type { PacerClock, RepresentativePacing } from './representative-pacer.js';
 import { explainByRule, freshShadowRun, runShadowVotes, SHADOW_SCOPE, shadowLedgerStorage, shadowRunComplete } from './shadow-live.js';
@@ -360,10 +360,7 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 				representatives: tools.representatives,
 				progress: await tools.store.progress(),
 				gapMilliseconds: command.gapMilliseconds,
-				wait,
-				sweep() {
-					return(sweepPointerOf(tools.log, tools.cursorPaths));
-				}
+				wait
 			});
 			const records = [crossCheck, ...comparison.checksums, ...comparison.blockCounts];
 			await tools.log.append(records);

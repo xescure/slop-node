@@ -8,7 +8,7 @@ import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-s
 import { SHADOW_REFUSAL_REASONS, SHADOW_REFUSAL_RELEASES } from '../conformance/mainnet/shadow.js';
 import type { ShadowRefusalReason } from '../conformance/mainnet/shadow.js';
 import { standsDiverging, standsInPlaceOf, UNEXPLAINED_LISTED } from './log.js';
-import type { APIDiffExplainedRecord, APIDiffPlanRecord, APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, ShadowBase, ShadowExplainedRecord, ShadowRunCost, ShadowRunRecord, ShadowRunState, ShadowTarget, ShadowWindow, ShadowWindowTally, UnexplainedShadowRefusal, SweepBatchRecord, SweepCursor, SweepOutcome, SweepPointer, SweepRecord, SweepWalk } from './log.js';
+import type { APIDiffExplainedRecord, APIDiffPlanRecord, APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, ShadowBase, ShadowExplainedRecord, ShadowRunCost, ShadowRunRecord, ShadowRunState, ShadowTarget, ShadowWindow, ShadowWindowTally, UnexplainedShadowRefusal, SweepBatchRecord, SweepCursor, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
 import { shadowRunComplete } from './shadow-live.js';
 import { STRATA } from './strata.js';
 import type { Stratum } from './strata.js';
@@ -1244,18 +1244,6 @@ export function exitCodeOf(report: ParityReport): 0 | 1 {
 	return(1);
 }
 
-/** Where the sweep stands: the chain walk's cursor, and the first divergence it recorded. */
-export async function sweepPointerOf(log: ParityLog, cursorPaths: SweepCursorPaths): Promise<SweepPointer> {
-	const first = recordsOf((await log.read()).records, 'sweep').find(function(record): boolean {
-		return(followerDiverged(record.outcome));
-	});
-	let firstDivergence: Divergence | null = null;
-	if (first !== undefined && (first.outcome.kind === 'diverged' || first.outcome.kind === 'unresolved')) {
-		firstDivergence = first.outcome.divergence;
-	}
-	return({ cursor: await readSweepCursor(cursorPaths.chain), firstDivergence });
-}
-
 /** What reporting on the log reads beside it. */
 export type ReportSources = {
 	readonly store: FollowerStore;
@@ -1340,10 +1328,7 @@ export async function runParity(run: ParityRun): Promise<ParityReport> {
 		representatives: run.representatives,
 		progress,
 		gapMilliseconds: run.gapMilliseconds,
-		wait: run.wait,
-		sweep() {
-			return(sweepPointerOf(run.log, run.cursorPaths));
-		}
+		wait: run.wait
 	});
 	await run.log.append([await crossCheckChecksum({ store: run.store }), ...checksums.checksums, ...checksums.blockCounts]);
 	await sweepAccounts({

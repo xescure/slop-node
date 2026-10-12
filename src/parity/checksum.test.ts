@@ -5,7 +5,6 @@ import type { FakeAPI } from '../testing/fake-api.js';
 import { httpSource } from './api-source.js';
 import { BLOCK_COUNT_FLOOR, checksumsEqual, compareChecksums, crossCheckChecksum, crossCheckOutcomeOf } from './checksum.js';
 import type { ChecksumSnapshot, FollowerProgress, MismatchedStaple } from './follower-store.js';
-import type { SweepPointer } from './log.js';
 
 const GAP = 10_000;
 
@@ -16,7 +15,6 @@ const CATCHING_UP: FollowerProgress = { completedPass: undefined, heldBefore: ne
 /** A pass has completed, so the follower read everything, but it has not added all it read. */
 const APPLYING: FollowerProgress = { ...COMPLETED, staged: 339_533 };
 
-const POINTER: SweepPointer = { cursor: { lap: 0, afterRowID: '12' }, firstDivergence: null };
 
 function checksum(value: string): unknown {
 	return({ moment: '2026-10-09T06:00:00.000Z', momentRange: 1, checksum: value });
@@ -66,9 +64,6 @@ async function compareAll(running: Setup, progress: FollowerProgress) {
 		wait(milliseconds: number): Promise<void> {
 			running.waits.push(milliseconds);
 			return(Promise.resolve());
-		},
-		sweep(): Promise<SweepPointer> {
-			return(Promise.resolve(POINTER));
 		}
 	}));
 }
@@ -81,7 +76,7 @@ describe('the checksums of two ledgers', function() {
 });
 
 describe('comparing the follower\'s checksum with each representative\'s', function() {
-	test('passes when both held still across the window and agree', async function() {
+	test('records that the two agree when both held still across the window', async function() {
 		const running = await setup(2);
 		serveReadings(running.follower, [['0x0F', 100]]);
 		serveReadings(running.representatives[0] ?? running.follower, [['0xF', 100]]);
@@ -92,7 +87,7 @@ describe('comparing the follower\'s checksum with each representative\'s', funct
 		expect(records.map(function(record) {
 			return([record.representative, record.verdict]);
 		})).toEqual(running.representatives.map(function(api) {
-			return([api.endpoint, { kind: 'pass' }]);
+			return([api.endpoint, { kind: 'agrees' }]);
 		}));
 		expect(records[0]).toMatchObject({
 			kind: 'checksum',
@@ -108,14 +103,14 @@ describe('comparing the follower\'s checksum with each representative\'s', funct
 		}
 	});
 
-	test('fails when both held still and disagree, with the block counts and the sweep\'s pointer to bisect from', async function() {
+	test('records that the two differ when both held still, for information alone, reading nothing of the parity log', async function() {
 		const running = await setup(1);
 		serveReadings(running.follower, [['0x0F', 99]]);
 		serveReadings(running.representatives[0] ?? running.follower, [['0x1F', 100]]);
 
 		const [record] = await compare(running, COMPLETED);
 
-		expect(record?.verdict).toEqual({ kind: 'fail', bisect: { followerBlockCount: 99, representativeBlockCount: 100, sweep: POINTER } });
+		expect(record?.verdict).toEqual({ kind: 'differs' });
 	});
 
 	test('does not count before the follower has completed a bootstrap pass, even when the two agree', async function() {
@@ -166,7 +161,7 @@ describe('comparing the follower\'s checksum with each representative\'s', funct
 		expect(records[0]?.verdict).toEqual({ kind: 'not-comparable-yet', reasons: ['representative-unanswered'] });
 		expect(records[0]?.representativeWindow.kind).toBe('unanswered');
 		expect(JSON.stringify(records[0]?.representativeWindow)).toContain('answered 500');
-		expect(records[1]?.verdict).toEqual({ kind: 'pass' });
+		expect(records[1]?.verdict).toEqual({ kind: 'agrees' });
 	});
 });
 

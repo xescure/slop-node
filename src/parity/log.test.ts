@@ -22,14 +22,7 @@ const CHECKSUM: ChecksumRecord = {
 const FAILED_CHECKSUM: ChecksumRecord = {
 	...CHECKSUM,
 	completedPass: '2026-10-09T05:00:00.000Z',
-	verdict: {
-		kind: 'fail',
-		bisect: {
-			followerBlockCount: 7,
-			representativeBlockCount: 8,
-			sweep: { cursor: { lap: 0, afterRowID: '41' }, firstDivergence: { account: ACCOUNT, field: 'balances[0].balance', staple: 'AB'.repeat(32) } }
-		}
-	}
+	verdict: { kind: 'differs' }
 };
 
 const MATCHED: SweepRecord = { kind: 'sweep', at: CHECKSUM.at, representative: REPRESENTATIVE, account: ACCOUNT, lap: 0, walk: 'chain', outcome: { kind: 'match', head: 'CD'.repeat(32), staple: null } };
@@ -177,6 +170,14 @@ describe('the parity log', function() {
 		await appendFile(log.path, `${JSON.stringify({ ...MATCHED, outcome })}\n`);
 
 		expect(await log.read()).toEqual({ records: [{ ...MATCHED, outcome: { ...outcome, readings: [], selfCheck: null } }], unreadableLines: 0 });
+	});
+
+	test('reads a checksum comparison an earlier build recorded as a pass or a fail, with an aid to bisect it, as one that agrees or differs', async function() {
+		const log = await scratchLog();
+		const bisect = { followerBlockCount: 7, representativeBlockCount: 8, sweep: { cursor: { lap: 0, afterRowID: '41' }, firstDivergence: null } };
+		await appendFile(log.path, `${JSON.stringify({ ...CHECKSUM, verdict: { kind: 'fail', bisect } })}\n${JSON.stringify({ ...CHECKSUM, verdict: { kind: 'pass' } })}\n`);
+
+		expect(await log.read()).toEqual({ records: [{ ...CHECKSUM, verdict: { kind: 'differs' } }, { ...CHECKSUM, verdict: { kind: 'agrees' } }], unreadableLines: 0 });
 	});
 
 	test('reads an API divergence recorded before divergences were sent again as one with no other representative\'s reading, nor a check of the follower\'s balances', async function() {

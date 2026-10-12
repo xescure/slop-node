@@ -2,7 +2,7 @@ import { LIVE_QUEUE_BOUNDS } from '../node/bootstrap-retry.js';
 import { getOK } from './api-source.js';
 import type { APISource } from './api-source.js';
 import type { ChecksumSnapshot, FollowerProgress, FollowerStore } from './follower-store.js';
-import type { BlockCountNotComparableReason, BlockCountRecord, BlockCountVerdict, ChecksumReading, ChecksumRecord, ChecksumVerdict, ChecksumWindow, CrossCheckOutcome, CrossCheckRecord, MismatchedStapleRecord, NotComparableReason, SweepPointer } from './log.js';
+import type { BlockCountNotComparableReason, BlockCountRecord, BlockCountVerdict, ChecksumReading, ChecksumRecord, ChecksumVerdict, ChecksumWindow, CrossCheckOutcome, CrossCheckRecord, MismatchedStapleRecord, NotComparableReason } from './log.js';
 
 /**
  * How long a representative's checksum and block count must hold still to
@@ -28,8 +28,6 @@ export type ChecksumComparison = {
 	readonly gapMilliseconds: number;
 	/** Waits out the gap between the two ends of the window. */
 	readonly wait: (milliseconds: number) => Promise<void>;
-	/** Where the sweep stands, which a mismatch points to. */
-	readonly sweep: () => Promise<SweepPointer>;
 };
 
 type Reading = { readonly kind: 'read'; readonly reading: ChecksumReading } | { readonly kind: 'unanswered'; readonly error: string };
@@ -82,7 +80,7 @@ function heldStill(window: Extract<ChecksumWindow, { kind: 'read' }>): boolean {
 	return(window.first.blockCount === window.second.blockCount && checksumsEqual(window.first.checksum, window.second.checksum));
 }
 
-async function verdictOf(comparison: ChecksumComparison, follower: ChecksumWindow, representative: ChecksumWindow): Promise<ChecksumVerdict> {
+function verdictOf(comparison: ChecksumComparison, follower: ChecksumWindow, representative: ChecksumWindow): ChecksumVerdict {
 	const reasons: NotComparableReason[] = [];
 	if (comparison.progress.completedPass === undefined) {
 		reasons.push('no-completed-pass');
@@ -101,16 +99,9 @@ async function verdictOf(comparison: ChecksumComparison, follower: ChecksumWindo
 		return({ kind: 'not-comparable-yet', reasons });
 	}
 	if (checksumsEqual(follower.second.checksum, representative.second.checksum)) {
-		return({ kind: 'pass' });
+		return({ kind: 'agrees' });
 	}
-	return({
-		kind: 'fail',
-		bisect: {
-			followerBlockCount: follower.second.blockCount,
-			representativeBlockCount: representative.second.blockCount,
-			sweep: await comparison.sweep()
-		}
-	});
+	return({ kind: 'differs' });
 }
 
 /**
@@ -242,7 +233,7 @@ export async function compareChecksums(comparison: ChecksumComparison): Promise<
 			completedPass,
 			follower,
 			representativeWindow,
-			verdict: await verdictOf(comparison, follower, representativeWindow)
+			verdict: verdictOf(comparison, follower, representativeWindow)
 		});
 	}
 	return({ checksums, blockCounts });

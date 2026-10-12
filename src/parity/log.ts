@@ -34,23 +34,14 @@ export type NotComparableReason =
 	| 'follower-unanswered'
 	| 'representative-unanswered';
 
-/** Where the sweep stands, for a mismatch to be traced to the accounts it compared. */
-export type SweepPointer = {
-	readonly cursor: SweepCursor | null;
-	/** The first account the sweep found diverging, which a checksum mismatch most likely comes from. */
-	readonly firstDivergence: Divergence | null;
-};
-
-/** What a checksum mismatch gives to find its cause. */
-export type BisectAid = {
-	readonly followerBlockCount: number;
-	readonly representativeBlockCount: number;
-	readonly sweep: SweepPointer;
-};
-
+/**
+ * How the follower's checksum stands against a representative's, kept for
+ * information: each is a statistic of its own node (conformance/API.md,
+ * Differences), so a difference decides nothing.
+ */
 export type ChecksumVerdict =
-	| { readonly kind: 'pass' }
-	| { readonly kind: 'fail'; readonly bisect: BisectAid }
+	| { readonly kind: 'agrees' }
+	| { readonly kind: 'differs' }
 	| { readonly kind: 'not-comparable-yet'; readonly reasons: readonly NotComparableReason[] };
 
 export type ChecksumRecord = {
@@ -747,18 +738,6 @@ function nullable<Value>(value: unknown, read: (value: unknown) => Value | undef
 	return(read(value));
 }
 
-function bisectOf(value: unknown): BisectAid | undefined {
-	if (!isFields(value) || !isCount(value['followerBlockCount']) || !isCount(value['representativeBlockCount']) || !isFields(value['sweep'])) {
-		return(undefined);
-	}
-	const cursor = nullable(value['sweep']['cursor'], cursorOf);
-	const firstDivergence = nullable(value['sweep']['firstDivergence'], divergenceOf);
-	if (cursor === undefined || firstDivergence === undefined) {
-		return(undefined);
-	}
-	return({ followerBlockCount: value['followerBlockCount'], representativeBlockCount: value['representativeBlockCount'], sweep: { cursor, firstDivergence } });
-}
-
 /** Every element read, or nothing when the value is no list or one of its elements is unreadable. */
 export function listOf<Element>(value: unknown, read: (element: unknown) => Element | undefined): Element[] | undefined {
 	if (!Array.isArray(value)) {
@@ -779,16 +758,14 @@ function checksumVerdictOf(value: unknown): ChecksumVerdict | undefined {
 	if (!isFields(value)) {
 		return(undefined);
 	}
+	// Earlier builds recorded an agreement as a pass and a difference as a fail, with an aid to bisect it.
 	switch (value['kind']) {
+		case 'agrees':
 		case 'pass':
-			return({ kind: 'pass' });
-		case 'fail': {
-			const bisect = bisectOf(value['bisect']);
-			if (bisect === undefined) {
-				return(undefined);
-			}
-			return({ kind: 'fail', bisect });
-		}
+			return({ kind: 'agrees' });
+		case 'differs':
+		case 'fail':
+			return({ kind: 'differs' });
 		case 'not-comparable-yet': {
 			const listed = value['reasons'];
 			if (!Array.isArray(listed)) {
