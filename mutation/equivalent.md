@@ -38,22 +38,22 @@ Two kinds of mutant need no entry:
 - src/ledger/storage/base.ts:36:7-36:34 ConditionalExpression "true" equivalent: dropping every key drops only the ledger checksum, the one key upstream ever folds in [Keeta TS] index.js:69415.
 - src/ledger/storage/base.ts:39:3-39:26 CallExpression ";" equivalent: only a key other than the ledger checksum reaches super.xor, and upstream folds no other key [Keeta TS] index.js:69415.
 - src/ledger/storage/base.ts:57:7-57:33 ConditionalExpression "true" equivalent: assigning the absent node assigns undefined, which every reader sees as no node.
-- src/ledger/storage/base.ts:189:4-190:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both driver states is unreachable.
-- src/ledger/storage/base.ts:274:7-274:27 ConditionalExpression "false" equivalent: without the early return, getVoteStaples of no hashes answers an empty map, which maps to the same empty list.
-- src/ledger/storage/base.ts:274:29-276:4 BlockStatement "{}" equivalent: without the early return, getVoteStaples of no hashes answers an empty map, which maps to the same empty list.
-- src/ledger/storage/base.ts:280:8-280:47 ConditionalExpression "false" equivalent: listMainStaplesHolding names only staples whose blocks are stored, and a staple and its blocks are written in one persist, so the whole check is never true.
-- src/ledger/storage/base.ts:280:8-280:28 ConditionalExpression "false" equivalent: getVoteStaples answers every hash it is asked for, so the staple is never undefined.
-- src/ledger/storage/base.ts:280:8-280:47 LogicalOperator "staple === undefined && staple === null" equivalent: the staple holding a stored main block is always stored, so neither half of the check is ever true.
-- src/ledger/storage/base.ts:280:32-280:47 ConditionalExpression "false" equivalent: the staple holding a stored main block is never answered as null.
-- src/ledger/storage/base.ts:280:49-282:5 BlockStatement "{}" equivalent: the integrity error is unreachable while a staple and its blocks are written in one persist.
-- src/ledger/storage/base.ts:281:21-281:122 StringLiteral "``" equivalent: the message of the unreachable integrity error.
-- src/ledger/storage/base.ts:316:7-316:27 ConditionalExpression "false" equivalent: preAdjust defers a staple only for a previous it lacks [Keeta TS] index.js:67717-67728, so waitingOn is never empty here.
-- src/ledger/storage/base.ts:316:29-318:4 BlockStatement "{}" equivalent: the error for a deferral that waits on nothing is unreachable, as preAdjust defers only for a missing previous.
-- src/ledger/storage/base.ts:317:20-317:119 StringLiteral "``" equivalent: the message of the unreachable error for a deferral that waits on nothing.
-- src/ledger/storage/base.ts:361:105-363:3 BlockStatement "{}" equivalent: both drivers override runIsolated, so the default body never runs.
-- src/ledger/storage/base.ts:684:8-684:26 ConditionalExpression "false" equivalent: the driver's write refuses the same fork with the same code and message (the memory driver's #writeStaple, the Postgres driver's write).
-- src/ledger/storage/base.ts:684:28-686:5 BlockStatement "{}" equivalent: the driver's write refuses the same fork with the same code and message (the memory driver's #writeStaple, the Postgres driver's write).
-- src/ledger/storage/base.ts:758:3-759:37 ConditionalExpression "default:" equivalent: the default of a switch that has handled both ways a staple is applied is unreachable.
+- src/ledger/storage/base.ts:189:4-192:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both driver states is unreachable.
+- src/ledger/storage/base.ts:276:7-276:27 ConditionalExpression "false" equivalent: without the early return, getVoteStaples of no hashes answers an empty map, which maps to the same empty list.
+- src/ledger/storage/base.ts:276:29-278:4 BlockStatement "{}" equivalent: without the early return, getVoteStaples of no hashes answers an empty map, which maps to the same empty list.
+- src/ledger/storage/base.ts:282:8-282:47 ConditionalExpression "false" equivalent: listMainStaplesHolding names only staples whose blocks are stored, and a staple and its blocks are written in one persist, so the whole check is never true.
+- src/ledger/storage/base.ts:282:8-282:28 ConditionalExpression "false" equivalent: getVoteStaples answers every hash it is asked for, so the staple is never undefined.
+- src/ledger/storage/base.ts:282:8-282:47 LogicalOperator "staple === undefined && staple === null" equivalent: the staple holding a stored main block is always stored, so neither half of the check is ever true.
+- src/ledger/storage/base.ts:282:32-282:47 ConditionalExpression "false" equivalent: the staple holding a stored main block is never answered as null.
+- src/ledger/storage/base.ts:282:49-284:5 BlockStatement "{}" equivalent: the integrity error is unreachable while a staple and its blocks are written in one persist.
+- src/ledger/storage/base.ts:283:21-283:122 StringLiteral "``" equivalent: the message of the unreachable integrity error.
+- src/ledger/storage/base.ts:318:7-318:27 ConditionalExpression "false" equivalent: preAdjust defers a staple only for a previous it lacks [Keeta TS] index.js:67717-67728, so waitingOn is never empty here.
+- src/ledger/storage/base.ts:318:29-320:4 BlockStatement "{}" equivalent: the error for a deferral that waits on nothing is unreachable, as preAdjust defers only for a missing previous.
+- src/ledger/storage/base.ts:319:20-319:119 StringLiteral "``" equivalent: the message of the unreachable error for a deferral that waits on nothing.
+- src/ledger/storage/base.ts:363:105-365:3 BlockStatement "{}" equivalent: both drivers override runIsolated, so the default body never runs.
+- src/ledger/storage/base.ts:689:8-689:26 ConditionalExpression "false" equivalent: the driver's write refuses the same fork with the same code and message (the memory driver's #writeStaple, the Postgres driver's write).
+- src/ledger/storage/base.ts:689:28-691:5 BlockStatement "{}" equivalent: the driver's write refuses the same fork with the same code and message (the memory driver's #writeStaple, the Postgres driver's write).
+- src/ledger/storage/base.ts:766:3-767:37 ConditionalExpression "default:" equivalent: the default of a switch that has handled both ways a staple is applied is unreachable.
 - src/ledger/storage/confirmed.ts:72:6-72:29 ConditionalExpression "true" equivalent: copying an undefined name gives a field both drivers skip exactly as an absent one.
 - src/ledger/storage/confirmed.ts:75:6-75:36 ConditionalExpression "true" equivalent: copying an undefined description gives a field both drivers skip exactly as an absent one.
 - src/ledger/storage/confirmed.ts:78:6-78:33 ConditionalExpression "true" equivalent: copying an undefined metadata gives a field both drivers skip exactly as an absent one.

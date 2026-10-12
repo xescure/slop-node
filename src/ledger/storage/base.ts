@@ -187,6 +187,8 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	#failedRetriesSoFar = 0;
 	// Retryable failures in a row of each released deferred staple's gc retries.
 	readonly #retryableFailures = new Map<StapleKey, number>();
+	/** The gc transactions a retry failed in with an error that asks for the transaction to run again: on Postgres the conflict has doomed it, so whatever else it applied would be rolled back. */
+	readonly #doomed = new WeakSet<Transaction>();
 	// Staples this driver has applied to the main ledger in a transaction, committed or not, by an add or a gc retry with what each released: the one change that can make a failed retry succeed. A unit undone counts none.
 	#staplesApplied = 0;
 	// The tail of the work queued on each transaction that may open isolated units; it never rejects.
@@ -324,7 +326,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	override async gc(transaction: Transaction, timeLimitMS: number = DEFAULT_GC_TIME_LIMIT_MILLISECONDS): Promise<boolean> {
 		const startTime = Date.now();
 		let more = await this.gcBatch(transaction);
-		while (more && Date.now() - startTime < timeLimitMS) {
+		while (more && !this.#doomed.has(transaction) && Date.now() - startTime < timeLimitMS) {
 			more = await this.gcBatch(transaction);
 		}
 		return(more);
@@ -654,6 +656,9 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 		return(await this.#exclusively(transaction, async () => {
 			const moreDead = await this.#dropDeadDeferredStaples(transaction, limit);
 			const moreDeferred = await this.#retryReleasedDeferredStaples(transaction, limit);
+			if (this.#doomed.has(transaction)) {
+				return(true);
+			}
 			const moreSideVotes = await this.collectObsoleteSideVotes(transaction, limit);
 			return(moreDead || moreDeferred || moreSideVotes);
 		}));
@@ -704,7 +709,9 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * on the same ledger would fail the same way, so that it keeps no gc
 	 * reporting more left. Neither depends on the clock. A failure the
 	 * transaction is to run again for is not the staple's, and the next gc
-	 * retries it as one that never failed, but for the third in a row.
+	 * retries it as one that never failed, but for the third in a row; it
+	 * ends the gc, which reports more left, as nothing else the transaction
+	 * applies would survive its commit on Postgres.
 	 */
 	async #retryReleasedDeferredStaples(transaction: Transaction, limit: number): Promise<boolean> {
 		const { config } = this.initialized;
@@ -739,8 +746,9 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 				const inARow = (this.#retryableFailures.get(stapleKey) ?? 0) + 1;
 				if (await this.#asksToRunAgain(error) && inARow < RETRYABLE_FAILURES_LIMIT) {
 					this.#retryableFailures.set(stapleKey, inARow);
-					config.log?.warn(LOG_SOURCE, `retrying deferred staple ${stapleKey} met a failure the transaction is to run again for; it stays deferred, and the next gc retries it`, error);
-					continue;
+					this.#doomed.add(transaction);
+					config.log?.warn(LOG_SOURCE, `retrying deferred staple ${stapleKey} met a failure the transaction is to run again for; it stays deferred, the gc ends here, and the next gc retries it`, error);
+					return(true);
 				}
 				this.#retryableFailures.delete(stapleKey);
 				this.#failedRetries.set(stapleKey, { order: this.#failedRetriesSoFar++, appliedBefore: this.#staplesApplied });

@@ -557,12 +557,51 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			const restore = afterPersisting(storage, [secondStaple], function(blocksHash): void {
 				throw(createLedgerError('LEDGER_TRANSACTION_ABORTED', `injected conflict after persisting ${blocksHash}`, { retry: true }));
 			});
-			expect(await node.ledger.gc()).toBe(false);
+			// The gc ends at the failure, and says the staple remains.
+			expect(await node.ledger.gc()).toBe(true);
 			expect(await node.ledger.getBlock(second.hash, 'main')).toBeNull();
 			restore();
 
 			expect(await node.ledger.gc()).toBe(false);
 			expect(hashOf(await node.ledger.getBlock(second.hash, 'main'))).toBe(hashOf(second));
+		});
+
+		/*
+		 * On Postgres the conflict dooms the transaction, so every staple the
+		 * gc applied in it after the failure would be rolled back at its commit.
+		 */
+		test('a released staple whose retry fails with an error that asks for the transaction to run again ends the gc, which retries no other staple in that transaction', async function() {
+			const { network, startNode } = await startNetwork();
+			const { node, storage } = await startNode(0, { heapProcessWindowMs: 0 });
+			const firsts = [await sendFromGenesis(network, 0, 5n), await sendFromGenesis(network, 1, 5n)];
+			const seconds = [await sendFrom(network, 0, requireAt(firsts, 0).hash, 7n), await sendFrom(network, 1, requireAt(firsts, 1).hash, 7n)];
+			const waiting = await Promise.all(seconds.map(function(second) {
+				return(confirmedStaple([second], network.representatives));
+			}));
+			for (const staple of waiting) {
+				expect(await node.ledger.add(staple)).toEqual([]);
+			}
+			for (const first of firsts) {
+				await node.ledger.add(await confirmedStaple([first], network.representatives));
+			}
+			const retried: string[] = [];
+			afterPersisting(storage, waiting, function(blocksHash): void {
+				retried.push(blocksHash);
+				if (retried.length === 1) {
+					throw(createLedgerError('LEDGER_TRANSACTION_ABORTED', `injected conflict after persisting ${blocksHash}`, { retry: true }));
+				}
+			});
+
+			expect(await node.ledger.gc()).toBe(true);
+			expect(retried).toHaveLength(1);
+
+			expect(await node.ledger.gc()).toBe(false);
+			expect(new Set(retried)).toEqual(new Set(waiting.map(function(staple): string {
+				return(staple.blocksHash.toString());
+			})));
+			for (const second of seconds) {
+				expect(hashOf(await node.ledger.getBlock(second.hash, 'main'))).toBe(hashOf(second));
+			}
 		});
 
 		test('a released staple whose retry fails with an error that asks for the transaction to run again every time is recorded as failed after the third, and keeps no gc going', async function() {
@@ -579,15 +618,18 @@ export function defineGcCases(driver: DriverUnderTest): void {
 				throw(createLedgerError('LEDGER_TRANSACTION_ABORTED', `injected conflict after persisting ${blocksHash}`, { retry: true }));
 			});
 
+			const remaining: boolean[] = [];
 			for (let call = 0; call < 5; call++) {
-				expect(await node.ledger.gc()).toBe(false);
+				remaining.push(await node.ledger.gc());
 			}
 
-			// Retried by each of the first three gcs, then left until a staple is applied.
+			// Retried by each of the first three gcs, the first two of which end at it saying it remains, then left until a staple is applied.
+			expect(remaining).toEqual([true, true, false, false, false]);
 			expect(attempts).toBe(3);
 			expect(await node.ledger.getBlock(second.hash, 'main')).toBeNull();
 			await node.ledger.add(await confirmedStaple([await sendFromGenesis(network, 1, 5n)], network.representatives));
-			expect(await node.ledger.gc()).toBe(false);
+			// Due again, its retry fails again, which ends that gc.
+			expect(await node.ledger.gc()).toBe(true);
 			expect(attempts).toBe(4);
 		});
 
