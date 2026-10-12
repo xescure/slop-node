@@ -629,7 +629,7 @@ export const SIMULATED_BALANCE_REFUSAL = 'LEDGER_INVALID_BALANCE';
  * spend a balance they credit. It refuses for want of weight, too, a staple
  * once it holds one that moves weight away from the staple's voters, as the
  * ledger judges a staple by the weight it holds when it is added
- * [Keeta TS] index.js:69739-69757: a staple voted before a delegation moved
+ * [Keeta TS] index.js:69740-69759: a staple voted before a delegation moved
  * the weight is refused for good once the delegation is added before it.
  */
 export class SimulatedNode {
