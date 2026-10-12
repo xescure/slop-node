@@ -87,6 +87,18 @@ const MODULES = {
 		tests: ['src/node/bootstrap-ranges.test.ts', 'src/node/bootstrap-stage.test.ts', 'src/node/bootstrap-retry.test.ts', 'src/node/bootstrap-simulation.test.ts'],
 		ignorers: [],
 		selectedCases: PIPELINE_SIMULATION_CASES
+	},
+	/*
+	 * The API's parameters, errors and handlers, measured by the API's own
+	 * tests: the contract against the API document, the routes' answers, and
+	 * the mainnet captures a node holding the head replays. The peer-to-peer
+	 * routes are measured with the peer-to-peer safety code instead.
+	 */
+	api: {
+		mutate: ['src/api/*.ts', '!src/api/*.test.ts', '!src/api/p2p.ts'],
+		tests: ['src/api/*.test.ts'],
+		ignorers: [],
+		selectedCases: {}
 	}
 };
 

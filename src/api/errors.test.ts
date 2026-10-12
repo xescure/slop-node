@@ -84,6 +84,43 @@ describe('a KeetaNet error the node raises is answered as a refusal', function()
 	});
 });
 
+/** A KeetaNet error that writes the JSON given in place of its own. */
+function writingJSON(json: unknown): Error {
+	const error = lib.Error.fromJSON({ type: 'LEDGER', code: 'LEDGER_INVALID_BALANCE', message: 'Balance would go negative' });
+	return(Object.assign(error, {
+		toJSON: function(): unknown {
+			return(json);
+		}
+	}));
+}
+
+describe('a refusal names only what the error\'s JSON writes as the client reads it', function() {
+	const refused = { type: 'LEDGER', code: 'LEDGER_NOT_SUCCESSOR', message: 'Not a successor' };
+
+	test('a list of accounts that holds anything but strings is left out', function() {
+		expect(answer(writingJSON({ ...refused, accounts: ['keeta_a', 7] })).body).toStrictEqual({ error: true, ...refused });
+	});
+
+	test('a field that is not a string is left out, and no field is written that the JSON lacks', function() {
+		expect(answer(writingJSON({ ...refused, account: 7, idempotentKey: null, blockhash: 'AB', existingBlockhash: ['CD'] })).body).toStrictEqual({ error: true, ...refused, blockhash: 'AB' });
+		expect(answer(writingJSON(refused)).body).toStrictEqual({ error: true, ...refused });
+	});
+
+	test.each([
+		{ name: 'no object', json: 'LEDGER_NOT_SUCCESSOR' },
+		{ name: 'null', json: null },
+		{ name: 'no type', json: { code: refused.code, message: refused.message } },
+		{ name: 'no code', json: { type: refused.type, message: refused.message } },
+		{ name: 'no message', json: { type: refused.type, code: refused.code } }
+	])('an error whose JSON is $name is answered as an internal failure', function({ json }) {
+		expect(answer(writingJSON(json))).toEqual({
+			kind: 'internal',
+			errorID: FIXED_ERROR_ID,
+			body: { error: true, message: `Internal error occurred (error ID: ${FIXED_ERROR_ID})` }
+		});
+	});
+});
+
 describe('any other failure is answered with only an error ID', function() {
 	const internalFailures: readonly { readonly name: string; readonly error: unknown }[] = [
 		{ name: 'a ledger error a driver wrapped', error: createLedgerError('LEDGER_OTHER', `connect ECONNREFUSED ${SECRET}`) },
@@ -104,10 +141,13 @@ describe('any other failure is answered with only an error ID', function() {
 		expect(envelopeForm(result.body)).toBe('internal');
 	});
 
-	test('an error ID is a UUID', function() {
-		expect(function() {
-			return(parseErrorID('not-a-uuid'));
-		}).toThrow();
+	test('an error ID is a UUID, and nothing more', function() {
+		expect(parseErrorID(FIXED_ERROR_ID)).toBe(FIXED_ERROR_ID);
+		for (const text of ['not-a-uuid', `${FIXED_ERROR_ID}0`, `0${FIXED_ERROR_ID}`]) {
+			expect(function() {
+				return(parseErrorID(text));
+			}).toThrow(`not an error ID: ${text}`);
+		}
 	});
 
 	test('each failure gets an error ID of its own', function() {

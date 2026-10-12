@@ -535,3 +535,35 @@ or requests it takes, how much memory it keeps, or a count it logs.
 - src/node/bootstrap-stage.ts:427:7-427:26 ConditionalExpression "true" equivalent: with no batch read ahead, the batch to add next is undefined either way.
 - src/node/bootstrap-stage.ts:433:7-433:20 ConditionalExpression "true" harmless: the queue is then offered again after a round that added nothing, which offers only the staples due anyway.
 - src/node/bootstrap-stage.ts:436:40-436:61 ConditionalExpression "false" harmless: a queue with no room then ends the adding a round later, after the batch is read again and refused again.
+
+## api
+
+- src/api/account.ts:87:4-88:24 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of requested account is unreachable.
+- src/api/account.ts:88:5-88:24 CallExpression ";" equivalent: the default of a switch that has handled both kinds of requested account is unreachable.
+- src/api/account.ts:98:6-98:25 ConditionalExpression "false" equivalent: accountStates answers one state per account requested, so the one account requested always has a state.
+- src/api/account.ts:98:27-100:3 BlockStatement "{}" equivalent: accountStates answers one state per account requested, so the one account requested always has a state.
+- src/api/account.ts:99:19-99:80 StringLiteral "\"\"" equivalent: accountStates answers one state per account requested, so the one account requested always has a state.
+- src/api/account.ts:117:36-117:82 OptionalChaining "heights[account.publicKeyString.get()].height" equivalent: the block heights name every account asked for [Keeta TS] index.js:67647-67665, so the account's entry is always present.
+- src/api/ledger.ts:42:6-42:34 ConditionalExpression "false" equivalent: every node holds a key, as a node's ledger is always a representative's and refuses to exist without one [Keeta TS] index.js:71334-71346, 70245-70248.
+- src/api/ledger.ts:42:36-44:3 BlockStatement "{}" equivalent: every node holds a key, as a node's ledger is always a representative's and refuses to exist without one [Keeta TS] index.js:71334-71346, 70245-70248.
+- src/api/ledger.ts:43:18-43:35 StringLiteral "\"\"" equivalent: every node holds a key, as a node's ledger is always a representative's and refuses to exist without one [Keeta TS] index.js:71334-71346, 70245-70248.
+- src/api/ledger.ts:43:37-43:70 StringLiteral "\"\"" equivalent: every node holds a key, as a node's ledger is always a representative's and refuses to exist without one [Keeta TS] index.js:71334-71346, 70245-70248.
+- src/api/ledger.ts:65:6-65:36 ConditionalExpression "true" equivalent: every node holds a key, as a node's ledger is always a representative's and refuses to exist without one [Keeta TS] index.js:71334-71346, 70245-70248.
+- src/api/node.ts:47:3-48:30 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of peer is unreachable.
+- src/api/order.ts:14:22-14:65 EqualityOperator "index <= Math.min(left.length, right.length)" equivalent: every entry of one list is keyed by as many texts, so the extra index reads '' on both sides, which orders nothing.
+- src/api/order.ts:14:30-14:65 MethodExpression "Math.max(left.length, right.length)" equivalent: every entry of one list is keyed by as many texts, so the bound is the same.
+- src/api/order.ts:15:44-15:46 StringLiteral "\"Stryker was here!\"" equivalent: the index stays below the length of both keys, so the fallback is never read.
+- src/api/order.ts:15:64-15:66 StringLiteral "\"Stryker was here!\"" equivalent: the index stays below the length of both keys, so the fallback is never read.
+- src/api/order.ts:20:9-20:35 ArithmeticOperator "left.length + right.length" equivalent: no two entries of one list share every key (a balance per token, a permission row per principal, entity and target, a vote per ID), so the length comparison is never reached.
+- src/api/order.ts:54:3-55:29 ConditionalExpression "default:" equivalent: the default of a switch that has handled both principal types is unreachable.
+- src/api/route.ts:81:6-81:36 ConditionalExpression "false" equivalent: a route is invoked with one value per parameter name of the same path (parameterValues), so the counts always agree.
+- src/api/route.ts:81:38-83:3 BlockStatement "{}" equivalent: a route is invoked with one value per parameter name of the same path (parameterValues), so the counts always agree.
+- src/api/route.ts:82:19-82:99 StringLiteral "``" equivalent: a route is invoked with one value per parameter name of the same path (parameterValues), so the counts always agree.
+- src/api/route.ts:132:3-133:31 ConditionalExpression "default:" equivalent: the default of a switch that has handled both methods is unreachable.
+- src/api/route.ts:140:14-140:16 StringLiteral "\"Stryker was here!\"" equivalent: every parameter segment ranks with the same text either way, so no order or match key changes.
+- src/api/route.ts:153:17-153:68 MethodExpression "Math.max(leftSegments.length, rightSegments.length)" equivalent: a segment past the shorter path reads as the fixed segment '', which sorts at or before any segment, so the shorter path still comes first, as the length comparison orders it.
+- src/api/route.ts:154:22-154:36 EqualityOperator "index <= shared" equivalent: a segment past the shorter path reads as the fixed segment '', which sorts at or before any segment, so the shorter path still comes first, as the length comparison orders it.
+- src/api/route.ts:155:67-155:69 StringLiteral "\"Stryker was here!\"" equivalent: the index stays below the length of both paths, so the fallback is never read.
+- src/api/route.ts:156:70-156:72 StringLiteral "\"Stryker was here!\"" equivalent: the index stays below the length of both paths, so the fallback is never read.
+- src/api/route.ts:174:36-174:39 StringLiteral "\"\"" equivalent: a segment's rank is a one-digit kind, 0 only before a fixed text and 1 alone for a parameter, and the joined ranks are split by '/', which no segment holds, so the match keys stay distinct without the colon.
+- src/api/route.ts:175:10-175:13 StringLiteral "\"\"" equivalent: each segment's rank begins with its kind and a colon, so the joined ranks split apart again unless a fixed segment holds a colon, which no path does since a colon anywhere in a segment marks an Express parameter.

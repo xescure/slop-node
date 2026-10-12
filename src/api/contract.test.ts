@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { APIDocument, isJSONObject } from '../conformance/api/document.js';
-import { documentPathOf, routeOfRequest } from '../conformance/api/routes.js';
+import { routeOfRequest } from '../conformance/api/routes.js';
 import type { Route as DocumentRoute } from '../conformance/api/routes.js';
 import { driversUnderTest } from '../ledger/storage/suite/drivers.js';
 import { base64, keyOf, populate } from '../testing/api-network.js';
@@ -9,7 +9,6 @@ import { confirmedStaple, sendBlock } from '../testing/blocks.js';
 import { postJSON, request, useLocalNodes } from '../testing/local-node.js';
 import type { HTTPAnswer } from '../testing/local-node.js';
 import { assertNever } from '../util/assert-never.js';
-import { API_ROUTES } from './index.js';
 
 const api = new APIDocument();
 
@@ -164,14 +163,5 @@ describe.each(driversUnderTest)('a node on the $name driver, holding a populated
 			answered.add(spelled(route));
 		}
 		expect([...answered].sort()).toEqual(api.routes.map(spelled).sort());
-	});
-});
-
-describe('the routes served', function() {
-	test('are exactly the operations of the document', function() {
-		const served = API_ROUTES.map(function(route): string {
-			return(`${route.method} ${documentPathOf(route.path)}`);
-		});
-		expect(served.sort()).toEqual(api.routes.map(spelled).sort());
 	});
 });

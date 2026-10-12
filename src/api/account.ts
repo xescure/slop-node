@@ -37,26 +37,17 @@ export type RequestedAccount =
 	| { readonly kind: 'malformed'; readonly error: AccountStateError };
 
 /**
- * The text of an error as JavaScript writes it, its name and message, which
- * is how a representative reports an account it cannot parse.
- */
-function errorText(error: unknown): string {
-	if (error instanceof Error) {
-		return(error.toString());
-	}
-	return(String(error));
-}
-
-/**
  * A malformed account is not a failure of the request: the client reads the
  * error of an account state and throws it for that account alone
- * [Keeta TS] index.js:58241-58256, 60000-60008.
+ * [Keeta TS] index.js:58241-58256, 60000-60008. The error is written as
+ * String writes it, an Error by its name and message, which is how a
+ * representative reports an account it cannot parse.
  */
 export function requestedAccount(text: string): RequestedAccount {
 	try {
 		return({ kind: 'account', account: parseAccount(text) });
 	} catch (error) {
-		return({ kind: 'malformed', error: { account: text, error: errorText(error) } });
+		return({ kind: 'malformed', error: { account: text, error: String(error) } });
 	}
 }
 
@@ -174,7 +165,8 @@ function getAccountChain(request: APIRequest, text: string): Promise<ChainPage> 
 		const blocks: ChainPage['blocks'] = [];
 		for (let block = await chainStart(ledger, account, start); block !== null; block = await ledger.getBlock(block.previous, 'main')) {
 			blocks.push({ block });
-			if (block.$opening || (end !== undefined && block.hash.compare(end))) {
+			// A hash compares unequal to an absent end [Keeta TS] index.js:76878-76881.
+			if (block.$opening || block.hash.compare(end)) {
 				break;
 			}
 			if (blocks.length >= limit) {

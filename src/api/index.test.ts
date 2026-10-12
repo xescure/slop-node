@@ -1,10 +1,13 @@
 import { describe, expect, test } from 'vitest';
+import { APIDocument } from '../conformance/api/document.js';
 import { documentPathOf } from '../conformance/api/routes.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { DEFAULT_PEER_LIMITS } from '../node/peer-limits.js';
 import { createTestNetwork } from '../testing/network.js';
-import { defineGET, definePOST, invokeRoute, routeTable } from './index.js';
-import type { APIRequest, Route } from './index.js';
+import { defineGET, definePOST, invokeRoute, routeTable } from './route.js';
+import type { APIRequest, Route } from './route.js';
+
+const api = new APIDocument();
 
 async function requestWith(parts: Pick<APIRequest, 'params' | 'payload'>): Promise<APIRequest> {
 	const network = await createTestNetwork({ representativeWeights: [1n] });
@@ -75,6 +78,34 @@ describe('the route table', function() {
 		]);
 	});
 
+	test('orders paths segment by segment, then the shorter first, then GET before POST', function() {
+		const table = routeTable([[
+			definePOST('/node/publish', respond),
+			defineGET('/node/publish', respond),
+			defineGET('/node/peers/:peer/stats', respond),
+			defineGET('/node/peers/:peer', respond),
+			defineGET('/node/peers/all', respond),
+			defineGET('/node/:any', respond),
+			defineGET('/node/ledger', respond),
+			defineGET('/ledger/node', respond)
+		]]);
+
+		expect(table.map(spelled)).toEqual([
+			'GET /ledger/node',
+			'GET /node/ledger',
+			'GET /node/peers/all',
+			'GET /node/peers/:peer',
+			'GET /node/peers/:peer/stats',
+			'GET /node/publish',
+			'POST /node/publish',
+			'GET /node/:any'
+		]);
+	});
+
+	test('two routes that match different requests are both kept, whatever their segments spell together', function() {
+		expect(routeTable([[defineGET('/a/0b', respond)], [defineGET('/a0/b', respond)]]).map(spelled)).toEqual(['GET /a/0b', 'GET /a0/b']);
+	});
+
 	test('a route listed twice is refused', function() {
 		expect(function() {
 			return(routeTable([[defineGET('/node/version', respond)], [defineGET('/node/version', respond)]]));
@@ -89,5 +120,23 @@ describe('the route table', function() {
 
 	test('a route path is written in the document with its parameters in braces, below /api', function() {
 		expect(documentPathOf('/node/ledger/account/:account/balance/:token')).toBe('/api/node/ledger/account/{account}/balance/{token}');
+	});
+});
+
+describe('the routes served', function() {
+	/*
+	 * Imported by the case rather than by the file, so that a table that
+	 * cannot be built fails this case; a test file that fails to load runs no
+	 * case at all.
+	 */
+	test('build into a table that holds exactly the operations of the document', async function() {
+		const { API_ROUTES } = await import('./index.js');
+		const served = API_ROUTES.map(function(route): string {
+			return(`${route.method} ${documentPathOf(route.path)}`);
+		});
+
+		expect(served.sort()).toEqual(api.routes.map(function(route): string {
+			return(`${route.method} ${route.path}`);
+		}).sort());
 	});
 });

@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
+import type { Account } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
+import type { Vote } from '@keetanetwork/keetanet-client/lib/vote.js';
 import pg from 'pg';
 import { readCapture } from '../conformance/api/captures.js';
 import type { Capture } from '../conformance/api/captures.js';
@@ -10,11 +12,11 @@ import { APIDocument, isJSONObject } from '../conformance/api/document.js';
 import { routeOfRequest } from '../conformance/api/routes.js';
 import { CONFLICT_MESSAGE, mapDatabaseError } from '../ledger/storage/postgres/errors.js';
 import { driverUnderTestNamed } from '../ledger/storage/suite/drivers.js';
-import { requireAt } from '../ledger/storage/suite/support.js';
+import { certificateFor, requireAt } from '../ledger/storage/suite/support.js';
 import type { DriverUnderTest } from '../ledger/storage/suite/types.js';
 import { base64, keyOf, populate } from '../testing/api-network.js';
 import type { PopulatedNode } from '../testing/api-network.js';
-import { confirmedStaple, sendBlock } from '../testing/blocks.js';
+import { confirmedStaple, manageCertificateBlock, sendBlock } from '../testing/blocks.js';
 import { postJSON, request, useLocalNodes } from '../testing/local-node.js';
 import type { HTTPAnswer, LocalNodeOptions, RunningLocalNode } from '../testing/local-node.js';
 
@@ -715,5 +717,207 @@ describe('a transaction that keeps conflicting', function() {
 		expect(answer.text).not.toContain('hunter2');
 		expect(answer.text).not.toContain('serialize');
 		expectDocumented('GET', '/node/ledger/account/x', answer);
+	});
+});
+
+/** The path with the populated user's key and its keyed send's hash in place of {user} and {block}. */
+function pathFor(node: PopulatedNode, path: string): string {
+	return(path.replace('{user}', keyOf(node.user)).replace('{block}', node.keyedSend.hash.toString()));
+}
+
+describe('the reads of a request', function() {
+	test.each([
+		{ path: '/node/ledger/account/{user}', identifier: 'api-account-state' },
+		{ path: '/node/ledger/account/{user}/head', identifier: 'api-account-head' },
+		{ path: '/node/ledger/account/{user}/chain', identifier: 'api-account-chain' },
+		{ path: '/node/ledger/account/{user}/acl/additional', identifier: 'api-account-acl-additional' },
+		{ path: '/node/ledger/account/{user}/pending', identifier: 'api-account-pending' },
+		{ path: '/node/ledger/block/{block}', identifier: 'api-block' },
+		{ path: '/node/ledger/representatives', identifier: 'api-representatives' },
+		{ path: '/node/ledger/accounts/{user}', identifier: 'api-account-states' }
+	])('of $path run in one read transaction named $identifier', async function({ path, identifier }) {
+		const node = await populated();
+		const reads = vi.spyOn(lib.Ledger.prototype, 'runReadOnly');
+
+		expect((await request(node, pathFor(node, path))).status).toBe(200);
+		expect(reads.mock.calls.map(function([name]): unknown {
+			return(name);
+		})).toEqual([identifier]);
+	});
+});
+
+describe('one account', function() {
+	test('its head is its newest block, at the height its state gives it, and an account without blocks has none', async function() {
+		const node = await populated();
+		const user = keyOf(node.user);
+		const state = (await request(node, `/node/ledger/account/${user}`)).body;
+		const head = (await request(node, `/node/ledger/account/${user}/head`)).body;
+
+		expect(field(state, 'currentHeadBlockHeight')).not.toBeNull();
+		expect(text(field(head, 'block'), '$hash')).toBe(field(state, 'currentHeadBlock'));
+		expect(field(head, 'height')).toBe(field(state, 'currentHeadBlockHeight'));
+		expect((await request(node, `/node/ledger/account/${keyOf(node.stranger)}/head`)).body).toEqual({ account: keyOf(node.stranger), block: null, height: null });
+	});
+
+	test('a chain that starts at HEAD starts at the head, and one that starts at a block no ledger holds is empty', async function() {
+		const node = await populated();
+		const user = keyOf(node.user);
+		const fromHead = await request(node, `/node/ledger/account/${user}/chain?start=HEAD`);
+
+		expect(fromHead.status).toBe(200);
+		expect(fromHead.body).toEqual((await request(node, `/node/ledger/account/${user}/chain`)).body);
+		expect((await request(node, `/node/ledger/account/${user}/chain?start=E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855`)).body).toEqual({ account: user, blocks: [], nextKey: null });
+	});
+
+	test('the entities a request names narrow the permissions listed, and the entities described', async function() {
+		const node = await populated();
+		const user = keyOf(node.user);
+		const multisig = keyOf(node.multisig);
+		const every = list((await request(node, `/node/ledger/account/${user}/acl`)).body, 'permissions');
+		const named = list((await request(node, `/node/ledger/account/${user}/acl/${multisig}`)).body, 'permissions');
+		const described = list((await request(node, `/node/ledger/account/${user}/acl/additional/${multisig}`)).body, 'access');
+
+		expect(texts(every, 'entity')).toContain(keyOf(node.token));
+		expect(named).toEqual(every.filter(function(row): boolean {
+			return(text(row, 'entity') === multisig);
+		}));
+		expect(texts(described, 'entity')).toEqual([multisig]);
+	});
+
+	test('an entity the principal holds several permissions on is described once', async function() {
+		const node = await populated();
+		const rows = node.storage.listACLsByPrincipal.bind(node.storage);
+		vi.spyOn(node.storage, 'listACLsByPrincipal').mockImplementation(async function(...input) {
+			const found = await rows(...input);
+			return([...found, ...found.map(function(row) {
+				return({ ...row, target: node.stranger });
+			})]);
+		});
+
+		const access = list((await request(node, `/node/ledger/account/${keyOf(node.user)}/acl/additional`)).body, 'access');
+
+		expect(texts(access, 'entity')).toEqual([...new Set(texts(access, 'entity'))]);
+		expect(access.length).toBeGreaterThan(1);
+	});
+
+	test('a certificate is served with its intermediates, alone or by its hash, and one added without them with none', async function() {
+		const node = await populated();
+		const user = keyOf(node.user);
+		const stranger = keyOf(node.stranger);
+		const certificates = list((await request(node, `/node/ledger/account/${user}/certificates`)).body, 'certificates');
+		const [held] = certificates;
+		const alone = await certificateFor(node.stranger, 7);
+		const added = await manageCertificateBlock({ account: node.stranger, method: lib.Block.AdjustMethod.ADD, certificateOrHash: alone, previous: null, network: node.network.network });
+		expect((await postJSON(node, '/node/publish', { votesAndBlocks: base64((await confirmedStaple([added], [node.representative])).toBytes()) })).body).toEqual({ publish: true });
+
+		expect(certificates).toHaveLength(1);
+		expect(list(held, 'intermediates')).toHaveLength(2);
+		expect((await request(node, `/node/ledger/account/${user}/certificates/${node.certificateHash}`)).body).toEqual({ certificate: text(held, 'certificate'), intermediates: list(held, 'intermediates'), account: user });
+		expect((await request(node, `/node/ledger/account/${stranger}/certificates`)).body).toEqual({ account: stranger, certificates: [{ certificate: alone.toPEM(), intermediates: null }] });
+		expect((await request(node, `/node/ledger/account/${stranger}/certificates/${alone.hash().toString()}`)).body).toEqual({ certificate: alone.toPEM(), intermediates: null, account: stranger });
+	});
+});
+
+/** A peer mainnet's representative listed, as written and as a node holds it before it is signed. */
+function capturedPeer(index: number): { readonly written: unknown; readonly key: Account; readonly endpoints: { readonly api: string; readonly p2p: string }; readonly signature: string } {
+	const capture: unknown = JSON.parse(readFileSync(PEER_CAPTURE, 'utf8'));
+	const written = list(field(capture, 'body'), 'peers')[index];
+	const endpoints = field(written, 'endpoints');
+	expect(field(written, 'preferUpdates')).toBe('http');
+	return({
+		written,
+		key: lib.Account.fromPublicKeyString(text(written, 'key')).assertAccount(),
+		endpoints: { api: text(endpoints, 'api'), p2p: text(endpoints, 'p2p') },
+		signature: text(written, 'signature')
+	});
+}
+
+function signatureBytes(base64Text: string): ArrayBuffer {
+	return(new Uint8Array(Buffer.from(base64Text, 'base64')).buffer);
+}
+
+describe('the node itself', function() {
+	test('its peers are written as a representative writes them: a representative with its signature or certificate, a participant by its kind', async function() {
+		const node = await nodes.start();
+		const signed = capturedPeer(0);
+		const certified = capturedPeer(1);
+		vi.spyOn(node.node.switch, 'peers').mockResolvedValue([
+			{ kind: lib.Node.Kind.REPRESENTATIVE, key: signed.key, endpoints: signed.endpoints, preferUpdates: 'http', signature: signatureBytes(signed.signature) },
+			{ kind: lib.Node.Kind.REPRESENTATIVE, key: certified.key, endpoints: certified.endpoints, preferUpdates: 'http', certificate: null },
+			{ kind: lib.Node.Kind.PARTICIPANT, id: 'inbound' }
+		]);
+
+		const answer = await request(node, '/node/peers');
+
+		expect(answer.body).toEqual({ peers: [
+			signed.written,
+			{ kind: lib.Node.Kind.REPRESENTATIVE, key: keyOf(certified.key), endpoints: certified.endpoints, preferUpdates: 'http', certificate: null },
+			{ kind: lib.Node.Kind.PARTICIPANT }
+		] });
+		expectDocumented('GET', '/node/peers', answer);
+	});
+
+	test('a representative peer without a signature fails as an internal error', async function() {
+		const node = await nodes.start();
+		const signed = capturedPeer(0);
+		vi.spyOn(node.node.switch, 'peers').mockResolvedValue([{ kind: lib.Node.Kind.REPRESENTATIVE, key: signed.key, endpoints: signed.endpoints, preferUpdates: 'http', signature: new ArrayBuffer(0) }]);
+
+		expectInternal(await request(node, '/node/peers'));
+	});
+
+	test('the representatives it names are itself and its representative peers, each once, as first listed', async function() {
+		const node = await nodes.start();
+		const listed = capturedPeer(0);
+		const again = capturedPeer(1);
+		vi.spyOn(node.node.switch, 'peers').mockResolvedValue([
+			{ kind: lib.Node.Kind.PARTICIPANT, id: 'inbound' },
+			{ kind: lib.Node.Kind.REPRESENTATIVE, key: listed.key, endpoints: listed.endpoints, preferUpdates: 'http', signature: signatureBytes(listed.signature) },
+			{ kind: lib.Node.Kind.REPRESENTATIVE, key: listed.key, endpoints: again.endpoints, preferUpdates: 'http', signature: signatureBytes(again.signature) },
+			{ kind: lib.Node.Kind.REPRESENTATIVE, key: requireAt(node.network.representatives, 0), endpoints: again.endpoints, preferUpdates: 'http', certificate: null }
+		]);
+
+		const answer = await request(node, '/node/ledger/representatives');
+
+		expect(list(answer.body, 'representatives').map(function(entry): unknown {
+			return([field(entry, 'representative'), field(entry, 'endpoints')]);
+		})).toEqual([
+			[keyOf(requireAt(node.network.representatives, 0)), node.node.config.endpoints],
+			[keyOf(listed.key), listed.endpoints]
+		]);
+	});
+
+	test('clearing the statistics answers that nothing was cleared', async function() {
+		const node = await nodes.start();
+
+		expect((await request(node, '/node/ledger/clearstats')).body).toEqual({ clearStats: false });
+	});
+});
+
+/** The vote an answer carries under the name given. */
+function voteIn(answer: HTTPAnswer, name: string): Vote {
+	expect(answer.status).toBe(200);
+	return(new lib.Vote(Buffer.from(text(field(answer.body, name), '$binary'), 'base64')));
+}
+
+describe('a vote', function() {
+	test('is temporary, at the fee of the quote it carries, and permanent once the request carries the temporary votes; a quote is refused beside them', async function() {
+		const node = await nodes.start();
+		const user = requireAt(node.network.users, 0);
+		const previous = node.network.genesis.blocks.filter(function(block): boolean {
+			return(block.account.comparePublicKey(user));
+		}).at(-1);
+		const send = await sendBlock({ from: user, to: requireAt(node.network.representatives, 0), amount: 1n, token: node.network.baseToken, previous: previous?.hash ?? null, network: node.network.network });
+		const blocks = [base64(send.toBytes())];
+		const quote = text(field((await postJSON(node, '/vote/quote', { blocks })).body, 'quote'), '$binary');
+
+		const temporary = voteIn(await postJSON(node, '/vote', { blocks, quote }), 'vote');
+		const permanent = voteIn(await postJSON(node, '/vote', { blocks, votes: [base64(temporary.toBytes())] }), 'vote');
+		const quotedPermanent = await postJSON(node, '/vote', { blocks, votes: [base64(temporary.toBytes())], quote });
+
+		expect(temporary.$permanent).toBe(false);
+		expect(temporary.fee).toEqual(new lib.Vote.Quote(Buffer.from(quote, 'base64')).fee);
+		expect(permanent.$permanent).toBe(true);
+		expect(permanent.blocks).toEqual([send.hash]);
+		expectRefusal(quotedPermanent, 'LEDGER_VOTE_WITH_QUOTE');
 	});
 });
