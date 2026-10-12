@@ -411,6 +411,29 @@ describe('the parity report', function() {
 		});
 	});
 
+	test('states the builds of the follower its records were made against, in the order of the log', function() {
+		const at = '2026-10-09T02:00:00.000Z';
+		const later = '2026-10-09T03:00:00.000Z';
+		const built = function(when: string, build: string | null): ParityRecord {
+			return({ kind: 'follower-build', at: when, build });
+		};
+		const evidence = report([
+			crossCheck('2026-10-09T01:00:00.000Z', { kind: 'equal' }),
+			built(at, '/srv/dist/main.js@2026-10-09T00:00:00.000Z'),
+			crossCheck(at, { kind: 'equal' }),
+			swept(at, ACCOUNT, MATCH),
+			built(later, '/srv/dist/main.js@2026-10-09T00:00:00.000Z'),
+			swept(later, OTHER_ACCOUNT, MATCH),
+			built(later, '/srv/dist/main.js@2026-10-09T02:30:00.000Z'),
+			swept(later, ACCOUNT, MATCH)
+		]).evidence;
+		expect(evidence).toEqual([
+			{ build: null, records: 1, from: '2026-10-09T01:00:00.000Z', to: '2026-10-09T01:00:00.000Z' },
+			{ build: '/srv/dist/main.js@2026-10-09T00:00:00.000Z', records: 3, from: at, to: later },
+			{ build: '/srv/dist/main.js@2026-10-09T02:30:00.000Z', records: 1, from: later, to: later }
+		]);
+	});
+
 	test('fails the checksum on a staple the follower has refused for longer than the node waits to report it, or kept stranded across comparisons as long, with each staple and why', function() {
 		const NOW = Date.parse('2026-10-09T08:00:00.000Z');
 		const minutesAgo = function(minutes: number): string {

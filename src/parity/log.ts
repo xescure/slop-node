@@ -525,7 +525,18 @@ export type HeldBackRecord = HeldBack & {
 	readonly at: string;
 };
 
-export type ParityRecord = HeldBackRecord | ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | SweepBatchRecord | APIDiffRecord | APIDiffPlanRecord | APIDiffExplainedRecord | ShadowRunRecord | ShadowExplainedRecord;
+/**
+ * The build of the follower's node at the start of a tool's invocation
+ * (src/parity/follower-build.ts), or null when none could be read: every
+ * record after it, up to the next, was made against that build.
+ */
+export type FollowerBuildRecord = {
+	readonly kind: 'follower-build';
+	readonly at: string;
+	readonly build: string | null;
+};
+
+export type ParityRecord = FollowerBuildRecord | HeldBackRecord | ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | SweepBatchRecord | APIDiffRecord | APIDiffPlanRecord | APIDiffExplainedRecord | ShadowRunRecord | ShadowExplainedRecord;
 
 /** The records a log holds, and how many of its lines were not records, as the end of a line cut short by a crash. */
 export type ParityLogContents = {
@@ -1373,6 +1384,11 @@ export function parityRecordOf(line: string): ParityRecord | undefined {
 			return(shadowExplainedRecordOf(value));
 		case 'held-back':
 			return(heldBackRecordOf(value));
+		case 'follower-build':
+			if (!isString(value['at']) || !isStringOrNull(value['build'])) {
+				return(undefined);
+			}
+			return({ kind: 'follower-build', at: value['at'], build: value['build'] });
 		default:
 			return(undefined);
 	}

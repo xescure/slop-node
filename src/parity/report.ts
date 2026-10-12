@@ -328,9 +328,19 @@ export type APIDiffSignal = {
 	readonly firstDivergence: { readonly at: string; readonly representative: string; readonly stratum: Stratum; readonly path: string; readonly field: string } | null;
 };
 
+/** The records made against one build of the follower's node, in a run of invocations that found it, and when the first and last were made. */
+export type BuildEvidence = { readonly build: string | null; readonly records: number; readonly from: string; readonly to: string };
+
 export type ParityReport = {
 	readonly generatedAt: string;
 	readonly follower: { readonly completedPass: string | null; readonly heldBefore: string | null; readonly staged: number };
+	/**
+	 * The builds of the follower the records were made against, in the order
+	 * of the log: a match recorded against an earlier build is evidence about
+	 * that build, which a later one may not share. Records an earlier tool
+	 * made name no build (null).
+	 */
+	readonly evidence: readonly BuildEvidence[];
 	readonly logUnreadableLines: number;
 	readonly signals: {
 		readonly checksum: ChecksumSignal;
@@ -1324,11 +1334,32 @@ function withLogRead<Signal extends { readonly verdict: Verdict; readonly notCom
 	return({ ...signal, verdict: 'not-comparable-yet', notComparableReasons: [...signal.notComparableReasons, reason] });
 }
 
+/** The records of each run of invocations made against one build, each record by the build its invocation began with. */
+export function buildEvidenceOf(records: readonly ParityRecord[]): readonly BuildEvidence[] {
+	const evidence: { build: string | null; records: number; from: string; to: string }[] = [];
+	let build: string | null = null;
+	for (const record of records) {
+		if (record.kind === 'follower-build') {
+			build = record.build;
+			continue;
+		}
+		const current = evidence.at(-1);
+		if (current !== undefined && current.build === build) {
+			current.records++;
+			current.to = record.at;
+		} else {
+			evidence.push({ build, records: 1, from: record.at, to: record.at });
+		}
+	}
+	return(evidence);
+}
+
 export function parityReportOf(input: ReportInput): ParityReport {
 	const { records, unreadableLines } = input.log;
 	return({
 		generatedAt: input.generatedAt.toISOString(),
 		follower: { completedPass: isoOrNull(input.progress.completedPass), heldBefore: isoOrNull(input.progress.heldBefore), staged: input.progress.staged },
+		evidence: buildEvidenceOf(records),
 		logUnreadableLines: unreadableLines,
 		signals: {
 			checksum: withLogRead(checksumSignalOf(records, input.heldBack, input.generatedAt), unreadableLines, 'log-unreadable'),

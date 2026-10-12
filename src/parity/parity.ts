@@ -14,6 +14,7 @@ import { httpSource, pacedSource } from './api-source.js';
 import type { APISource } from './api-source.js';
 import { compareChecksums, crossCheckChecksum, heldBackRecordOf } from './checksum.js';
 import { FOLLOWER_DATABASE, FOLLOWER_LISTEN_IP, followerDatabaseURL, followerDatabaseURLOf, followerDirectory, MAINNET_REPRESENTATIVE_APIS, readFollowerSettings } from './follower-config.js';
+import { followerBuildOf } from './follower-build.js';
 import { caughtUp, openFollowerStore } from './follower-store.js';
 import type { FollowerStore } from './follower-store.js';
 import { ParityLog, parityLogPath } from './log.js';
@@ -469,7 +470,12 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
 				process.stderr.write(`${new Date().toISOString()} the follower's database failed read attempt ${String(attempt)}, ${String(Math.round(elapsedMilliseconds / 1000))} s into the read (${messageOf(error)}); reading again in ${String(waitMilliseconds)} ms\n`);
 			}
 		});
+		const log = new ParityLog(parityLogPath(directory));
 		try {
+			// Every record of the invocation is made against the build the follower runs now; a report on the log alone records nothing.
+			if (command.kind !== 'report' || !command.logOnly) {
+				await log.append([{ kind: 'follower-build', at: new Date().toISOString(), build: await followerBuildOf(directory) }]);
+			}
 			const pacer = new RepresentativePacer(pacingOf(command), WALL_CLOCK, function(endpoint, standing, waitMilliseconds, why) {
 				process.stderr.write(`${new Date().toISOString()} ${endpoint} ${why}: ${String(standing.concurrency)} in flight at most, next in ${String(waitMilliseconds)} ms, backed off ${String(standing.backedOff)} times\n`);
 			});
@@ -481,7 +487,7 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
 						return(pacedSource(endpoint, pacer, stopping.signal));
 					}),
 					store,
-					log: new ParityLog(parityLogPath(directory)),
+					log,
 					cursorPaths: sweepCursorPaths(directory),
 					stopped: stopping.signal,
 					shadowStanding() {
