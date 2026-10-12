@@ -208,6 +208,14 @@ describe('the parity log', function() {
 		expect(await log.read()).toEqual({ records: [{ ...older, retest: { kind: 'unrecorded' } }, { ...older, retest: { kind: 'forced', why: 'unrecorded' } }], unreadableLines: 0 });
 	});
 
+	test('starts a record on a line of its own after a line a crash cut short', async function() {
+		const log = await scratchLog();
+		await appendFile(log.path, JSON.stringify(CHECKSUM).slice(0, 40));
+		await log.append([FAILED_CHECKSUM]);
+
+		expect(await log.read()).toEqual({ records: [FAILED_CHECKSUM], unreadableLines: 1 });
+	});
+
 	test('counts a line cut short, or one it does not know, apart from the records', async function() {
 		const log = await scratchLog();
 		await log.append([CHECKSUM]);

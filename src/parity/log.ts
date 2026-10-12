@@ -1,4 +1,5 @@
-import { appendFile, readFile } from 'node:fs/promises';
+import { appendFile, open, readFile } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { SHADOW_REFUSAL_REASONS } from '../conformance/mainnet/shadow.js';
 import type { ShadowRefusalReason } from '../conformance/mainnet/shadow.js';
@@ -1323,6 +1324,32 @@ export function sweepCursorOf(value: unknown): SweepCursor | undefined {
 	return(cursorOf(value));
 }
 
+/** Whether the file ends a line, or holds nothing yet. */
+async function endsWithLine(path: string): Promise<boolean> {
+	let file: FileHandle;
+	try {
+		file = await open(path, 'r');
+	} catch (error: unknown) {
+		if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+			return(true);
+		}
+		throw(error);
+	}
+	try {
+		const { size } = await file.stat();
+		if (size === 0) {
+			return(true);
+		}
+		const last = Buffer.alloc(1);
+		await file.read(last, 0, 1, size - 1);
+		return(last[0] === LINE_FEED);
+	} finally {
+		await file.close();
+	}
+}
+
+const LINE_FEED = 0x0a;
+
 /** Appends whole lines only, so that a crash can cut short at most the last. */
 export class ParityLog {
 	readonly path: string;
@@ -1335,7 +1362,12 @@ export class ParityLog {
 		if (records.length === 0) {
 			return;
 		}
-		await appendFile(this.path, records.map(function(record): string {
+		// After a line a crash cut short, the records start on a line of their own rather than run on from it.
+		let separator = '';
+		if (!await endsWithLine(this.path)) {
+			separator = '\n';
+		}
+		await appendFile(this.path, separator + records.map(function(record): string {
 			return(`${JSON.stringify(record)}\n`);
 		}).join(''));
 	}

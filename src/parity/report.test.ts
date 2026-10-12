@@ -8,7 +8,7 @@ import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-s
 import { ParityLog } from './log.js';
 import type { APIDiffExplainedRecord, APIDiffOutcome, APIDiffPlanRecord, APIDiffRecord, BlockCountRecord, BlockCountVerdict, ChecksumRecord, ChecksumVerdict, CrossCheckOutcome, CrossCheckRecord, ParityRecord, SelfCheck, ShadowRunRecord, ShadowWindowTally, SweepBatchRecord, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
 import { answerDigest } from './api-diff.js';
-import { neverComparedAccountsOf, parityReportOf, runParity, neverComparedCandidatesOf } from './report.js';
+import { exitCodeOf, neverComparedAccountsOf, parityReportOf, runParity, neverComparedCandidatesOf } from './report.js';
 import type { SweepPosition } from './report.js';
 import { sweepCursorPaths } from './sweep.js';
 import type { Stratum } from './strata.js';
@@ -55,6 +55,11 @@ function chainAccount(account: string, newestStaple: Date = new Date('2025-06-01
 }
 
 const CURSORS = { chain: { lap: 1, afterRowID: '7' }, passive: { lap: 0, afterRowID: '40' } } as const;
+
+const COMPLETE_CURSORS = { chain: { lap: 1, afterRowID: '0' }, passive: { lap: 1, afterRowID: '0' } } as const;
+
+/** A sweep that has completed a lap of each walk with no account missed. */
+const COMPLETE: Partial<SweepPosition> = { cursors: COMPLETE_CURSORS };
 
 const MATCH: SweepOutcome = { kind: 'match', head: null, staple: STAPLE };
 const MOVING: SweepOutcome = { kind: 'skipped', reason: 'moving', side: 'representative', detail: 'recent' };
@@ -193,7 +198,7 @@ describe('the parity report', function() {
 			apiDiff('2026-10-09T01:00:04.000Z', 'operation:SEND', '/vote/AB', MATCHED, ['/api/vote/{blockhash} 200 error=-', 'operation=SEND'])
 		]).signals.apiDiff;
 		expect(signal).toMatchObject({
-			verdict: 'pass',
+			verdict: 'not-comparable-yet', notComparableReasons: ['strata-uncovered'],
 			counts: { requestsCompared: 3, matched: 3, diverged: 0, skippedMoving: 1, unanswered: 0, divergenceRecords: 1 },
 			newBehaviors: [{ behavior: '/api/vote/{blockhash} 200 error=-', path: '/vote/AB' }, { behavior: 'operation=SEND', path: '/vote/AB' }],
 			firstDivergence: null
@@ -220,7 +225,7 @@ describe('the parity report', function() {
 		const divergence = apiDiff('2026-10-09T08:40:25.000Z', 'token', path, DIVERGED_INFO);
 		const later = apiDiff('2026-10-11T15:00:00.000Z', 'token', path, MATCHED_INFO);
 		const signal = report([divergence, apiDiff('2026-10-10T00:00:00.000Z', 'token', path, { kind: 'skipped', reason: 'moving', side: 'representative', detail: 'recent' }), later]).signals.apiDiff;
-		expect(signal).toMatchObject({ verdict: 'pass', counts: { diverged: 0, superseded: 1, divergenceRecords: 1 }, superseded: [{ divergence, by: later }], retestedOnAnotherState: [], firstDivergence: null });
+		expect(signal).toMatchObject({ verdict: 'not-comparable-yet', notComparableReasons: ['strata-uncovered'], counts: { diverged: 0, superseded: 1, divergenceRecords: 1 }, superseded: [{ divergence, by: later }], retestedOnAnotherState: [], firstDivergence: null });
 	});
 
 	test('keeps a divergence failing that a later comparison retested only on a state either side reached since', function() {
@@ -237,7 +242,7 @@ describe('the parity report', function() {
 		const divergence = apiDiff('2026-10-09T08:40:25.000Z', 'token', path, DIVERGED_INFO);
 		const explanation: APIDiffExplainedRecord = { kind: 'api-diff-explained', at: '2026-10-11T17:00:00.000Z', stratum: 'token', path, divergenceAt: divergence.at, divergence: 'our-bug', reference: 'fixed by 0000000', retest: { kind: 'retested' } };
 		const signal = report([divergence, apiDiff('2026-10-11T15:00:00.000Z', 'token', path, MATCHED), explanation]).signals.apiDiff;
-		expect(signal).toMatchObject({ verdict: 'pass', counts: { diverged: 0, explained: 1, superseded: 0 }, explained: [{ divergence, explanation }], retestedOnAnotherState: [], firstDivergence: null });
+		expect(signal).toMatchObject({ verdict: 'not-comparable-yet', notComparableReasons: ['strata-uncovered'], counts: { diverged: 0, explained: 1, superseded: 0 }, explained: [{ divergence, explanation }], retestedOnAnotherState: [], firstDivergence: null });
 	});
 
 	test('counts a request whose latest comparison is the divergence a triage explains apart, neither as matched nor as a sample, nor toward its census', function() {
@@ -311,7 +316,7 @@ describe('the parity report', function() {
 		const path = `/node/ledger/account/${ACCOUNT}`;
 		const disputed = { field: 'body.info', follower: FOLLOWER_INFO, representative: REPRESENTATIVE_INFO, readings: [] };
 		const local = report([apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'representative-local', ...disputed })]).signals.apiDiff;
-		expect(local).toMatchObject({ verdict: 'pass', counts: { requestsCompared: 1, matched: 0, diverged: 0, representativeLocal: 1 }, representativeLocal: { [REPRESENTATIVE]: 1 } });
+		expect(local).toMatchObject({ verdict: 'not-comparable-yet', notComparableReasons: ['strata-uncovered'], counts: { requestsCompared: 1, matched: 0, diverged: 0, representativeLocal: 1 }, representativeLocal: { [REPRESENTATIVE]: 1 } });
 		const alsoApart = report([apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'representative-local', ...disputed, readings: [{ representative: OTHER_REPRESENTATIVE, kind: 'disagrees', answer: {} }] })]).signals.apiDiff;
 		expect(alsoApart.representativeLocal).toEqual({ [REPRESENTATIVE]: 1, [OTHER_REPRESENTATIVE]: 1 });
 		const unresolved = report([apiDiff('2026-10-11T15:00:00.000Z', 'token', path, { kind: 'unresolved', ...disputed })]).signals.apiDiff;
@@ -403,7 +408,7 @@ describe('the parity report', function() {
 			swept('2026-10-09T01:00:00.000Z', ACCOUNT, MATCH),
 			swept('2026-10-09T01:00:01.000Z', OTHER_ACCOUNT, MOVING),
 			swept('2026-10-09T01:00:02.000Z', OTHER_ACCOUNT, MATCH)
-		]).signals.sweep;
+		], COMPLETE).signals.sweep;
 		expect(sweep).toMatchObject({
 			verdict: 'pass',
 			counts: { accountsCompared: 2, matched: 2, diverged: 0, skippedMoving: 0, unanswered: 0 },
@@ -431,7 +436,7 @@ describe('the parity report', function() {
 			swept('2026-10-09T01:00:00.000Z', ACCOUNT, diverged(ACCOUNT, 'history')),
 			swept('2026-10-09T01:00:01.000Z', ACCOUNT, MOVING),
 			swept('2026-10-09T01:00:02.000Z', ACCOUNT, MATCH)
-		]).signals.sweep;
+		], COMPLETE).signals.sweep;
 		expect(sweep).toMatchObject({ verdict: 'pass', counts: { accountsCompared: 1, matched: 1, diverged: 0, resolvedDivergences: 1, divergenceRecords: 1 } });
 	});
 
@@ -441,7 +446,7 @@ describe('the parity report', function() {
 			batch('2026-10-09T01:00:01.000Z', 0, ['0', '20'], 10, [OTHER_ACCOUNT]),
 			batch('2026-10-09T01:00:02.000Z', 0, ['0', '20'], 10),
 			batch('2026-10-09T01:00:03.000Z', 0, ['20', '40'], 5)
-		]).signals.sweep;
+		], { ...COMPLETE, rowIDs: new Map([[OTHER_ACCOUNT, '5']]) }).signals.sweep;
 		expect(sweep).toMatchObject({ verdict: 'pass', confidence: { kind: 'rule-of-three', samples: 16 } });
 	});
 
@@ -520,7 +525,7 @@ describe('the parity report', function() {
 		const sweep = report([
 			swept('2026-10-09T01:00:00.000Z', OTHER_ACCOUNT, MATCH),
 			swept('2026-10-09T01:00:01.000Z', ACCOUNT, { kind: 'compared-chain', head: STAPLE, representativeHead: STAPLE, lacking: 2 })
-		], { chainAccounts: [chainAccount(ACCOUNT), chainAccount(OTHER_ACCOUNT)] }).signals.sweep;
+		], { ...COMPLETE, chainAccounts: [chainAccount(ACCOUNT), chainAccount(OTHER_ACCOUNT)] }).signals.sweep;
 		expect(sweep).toMatchObject({ verdict: 'pass', counts: { accountsCompared: 2, matched: 1, comparedByChain: 1 }, coverage: { neverCompared: 0 }, confidence: { samples: 1 } });
 	});
 
@@ -557,7 +562,7 @@ describe('the parity report', function() {
 			{ ...swept('2026-10-09T01:00:01.000Z', OTHER_ACCOUNT, diverged(OTHER_ACCOUNT, 'balances[0].balance')), representative: OTHER_REPRESENTATIVE },
 			{ ...swept('2026-10-09T01:00:02.000Z', OTHER_ACCOUNT, diverged(OTHER_ACCOUNT, 'balances[0].balance', 'representative-local')), representative: OTHER_REPRESENTATIVE },
 			{ ...swept('2026-10-09T01:00:03.000Z', THIRD_ACCOUNT, diverged(THIRD_ACCOUNT, 'balances[1].balance', 'representative-local')), representative: OTHER_REPRESENTATIVE }
-		]).signals.sweep;
+		], COMPLETE).signals.sweep;
 		expect(sweep).toMatchObject({
 			verdict: 'pass',
 			counts: { accountsCompared: 3, matched: 1, diverged: 0, resolvedDivergences: 1 },
@@ -594,7 +599,7 @@ describe('the parity report', function() {
 		for (const selfCheck of [null, { kind: 'unchecked', why: 'the follower failed' } as const]) {
 			expect(report([swept('2026-10-09T01:00:00.000Z', ACCOUNT, local(selfCheck))]).signals.sweep).toMatchObject({ verdict: 'fail', counts: { diverged: 1, unresolved: 1 }, representativeLocal: { accounts: 0 }, firstDivergence: { account: ACCOUNT } });
 		}
-		expect(report([swept('2026-10-09T01:00:00.000Z', ACCOUNT, local({ kind: 'consistent', tokens: 1 }))]).signals.sweep).toMatchObject({ verdict: 'pass', counts: { diverged: 0 }, representativeLocal: { accounts: 1 } });
+		expect(report([swept('2026-10-09T01:00:00.000Z', ACCOUNT, local({ kind: 'consistent', tokens: 1 }))], COMPLETE).signals.sweep).toMatchObject({ verdict: 'pass', counts: { diverged: 0 }, representativeLocal: { accounts: 1 } });
 	});
 
 	test('keeps a divergence of an account\'s state standing over a later comparison of its chain alone, which reads neither its state nor its history', function() {
@@ -610,6 +615,29 @@ describe('the parity report', function() {
 			swept('2026-10-09T02:00:00.000Z', ACCOUNT, chained, 1)
 		]).signals.sweep;
 		expect(byChain.counts).toMatchObject({ diverged: 0, resolvedDivergences: 1 });
+	});
+
+	test('does not pass the sweep, whatever it compared, until it has compared every account', function() {
+		const records = [swept('2026-10-09T01:00:00.000Z', ACCOUNT, MATCH)];
+		expect(report(records).signals.sweep).toMatchObject({ verdict: 'not-comparable-yet', notComparableReasons: ['coverage-incomplete'], coverage: { everyAccountCompared: false } });
+		expect(report(records, COMPLETE).signals.sweep).toMatchObject({ verdict: 'pass', notComparableReasons: [], coverage: { everyAccountCompared: true } });
+	});
+
+	test('does not pass the API diff, whatever it compared, until every stratum is covered', function() {
+		expect(report([apiDiff('2026-10-09T01:00:00.000Z', 'token', `/node/ledger/account/${ACCOUNT}`, MATCHED)]).signals.apiDiff).toMatchObject({ verdict: 'not-comparable-yet', notComparableReasons: ['strata-uncovered'], everyStratumCovered: false });
+	});
+
+	test('passes no signal while the log holds lines it cannot read, which may have been records, and fails one that fails', function() {
+		const at = '2026-10-09T02:00:00.000Z';
+		const signals = parityReportOf({ generatedAt: new Date(at), progress: PROGRESS, sweep: { knownAccounts: 10, chainAccounts: [], cursors: COMPLETE_CURSORS, rowIDs: new Map() }, log: { records: [crossCheck(at, { kind: 'equal' }), blockCount(at, { kind: 'pass' }), swept(at, ACCOUNT, MATCH), swept(at, OTHER_ACCOUNT, diverged(OTHER_ACCOUNT, 'balances[0].balance'))], unreadableLines: 1 }, knownBehaviors: new Set() }).signals;
+		expect(signals.checksum).toMatchObject({ verdict: 'not-comparable-yet', notComparableReasons: ['log-unreadable'] });
+		expect(signals.sweep).toMatchObject({ verdict: 'fail' });
+	});
+
+	test('exits 0 only when every signal passes', function() {
+		const passing = report([]);
+		expect(exitCodeOf({ ...passing, signals: { checksum: { ...passing.signals.checksum, verdict: 'pass' }, sweep: { ...passing.signals.sweep, verdict: 'pass' }, apiDiff: { ...passing.signals.apiDiff, verdict: 'pass' }, shadowVotes: { ...passing.signals.shadowVotes, verdict: 'pass' } } })).toBe(0);
+		expect(exitCodeOf({ ...passing, signals: { ...passing.signals, checksum: { ...passing.signals.checksum, verdict: 'pass' } } })).toBe(1);
 	});
 
 	test('fails the sweep on an account the representatives split on', function() {
@@ -701,7 +729,8 @@ describe('a parity run', function() {
 
 		expect(result.signals.checksum).toMatchObject({ verdict: 'not-comparable-yet', crossCheck: { verdict: 'pass', runs: 1 }, blockCount: { counts: { comparisons: 1 }, notComparableReasons: ['no-completed-pass'] } });
 		expect(result.signals.sweep).toMatchObject({
-			verdict: 'pass',
+			verdict: 'not-comparable-yet',
+			notComparableReasons: ['coverage-incomplete'],
 			counts: { accountsCompared: 2, matched: 2 },
 			coverage: { knownAccounts: 2, chainAccounts: 1, walks: { chain: { cursor: { lap: 0, afterRowID: '1' } }, passive: { cursor: { lap: 0, afterRowID: '2' }, laps: [{ lap: 0, walked: 1, compared: 1 }] } } }
 		});

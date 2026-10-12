@@ -19,10 +19,9 @@ import { ParityLog, parityLogPath } from './log.js';
 import type { ShadowBase, ShadowRunRecord, ShadowRunState, ShadowTarget, SweepCursor, SweepWalk } from './log.js';
 import { lockParity, PARITY_LOCK_FILE, parseParityCommand, SHADOW_LOCK_FILE } from './parity-command.js';
 import type { ParityCommand } from './parity-command.js';
-import { neverComparedAccountsOf, reportOnLog, runParity, sweepPointerOf, sweepPositionOf } from './report.js';
+import { exitCodeOf, neverComparedAccountsOf, reportOnLog, runParity, sweepPointerOf, sweepPositionOf } from './report.js';
 import { DEFAULT_REPRESENTATIVE_PACING, RepresentativePacer } from './representative-pacer.js';
 import type { PacerClock, RepresentativePacing } from './representative-pacer.js';
-import type { ParityReport } from './report.js';
 import { freshShadowRun, runShadowVotes, SHADOW_SCOPE, shadowRunComplete } from './shadow-live.js';
 import { fileShadowState, shadowDirectory } from './shadow-state.js';
 import { compareNeverCompared, recheckDivergences, sweepAccounts, sweepCursorPaths } from './sweep.js';
@@ -341,11 +340,6 @@ type Tools = {
 	readonly stopped: AbortSignal;
 };
 
-function anyFails(report: ParityReport): boolean {
-	return(Object.values(report.signals).some(function(signal): boolean {
-		return(signal.verdict === 'fail');
-	}));
-}
 
 /** The latest lap of a walk it has completed, or undefined, with why on the standard error, when it has completed none. */
 function latestCompleteLap(walk: SweepWalk, cursor: SweepCursor): number | undefined {
@@ -420,10 +414,7 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 			if (command.logOnly) {
 				const report = await reportOnLog({ ...tools, knownBehaviors: await capturedBehaviors(fileURLToPath(CAPTURE_DIRECTORY)) });
 				process.stdout.write(`${JSON.stringify(report, null, '\t')}\n`);
-				if (anyFails(report)) {
-					return(1);
-				}
-				return(0);
+				return(exitCodeOf(report));
 			}
 			const apiDiff = {
 				samplesPerStratum: command.apiSamples,
@@ -433,10 +424,7 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 			};
 			const report = await runParity({ ...tools, sampleAccounts: command.sampleAccounts, passiveSampleAccounts: command.passiveSampleAccounts, apiDiff, gapMilliseconds: command.gapMilliseconds, wait });
 			process.stdout.write(`${JSON.stringify(report, null, '\t')}\n`);
-			if (anyFails(report)) {
-				return(1);
-			}
-			return(0);
+			return(exitCodeOf(report));
 		}
 		default:
 			return(assertNever(command));

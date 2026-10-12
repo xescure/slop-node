@@ -17,6 +17,17 @@ import type { NeverCompared, SweepCursorPaths } from './sweep.js';
 /** A signal's verdict. */
 export type Verdict = 'pass' | 'fail' | 'not-comparable-yet';
 
+/** Why a signal whose comparisons found no divergence does not pass yet. */
+export type CoverageReason =
+	/** Nothing was compared. */
+	| 'no-sample'
+	/** The sweep has not compared every account the follower knows. */
+	| 'coverage-incomplete'
+	/** The API diff has not covered every stratum. */
+	| 'strata-uncovered'
+	/** The log holds lines it could not read, which may have been records. */
+	| 'log-unreadable';
+
 /** What the comparisons support about how often a signal diverges. */
 export type ConfidenceBound =
 	/**
@@ -70,6 +81,7 @@ export type RepresentativeChecksums = {
 
 export type ChecksumSignal = {
 	readonly verdict: Verdict;
+	readonly notComparableReasons: readonly CoverageReason[];
 	/** The follower's stored checksum against the XOR of its main blocks. */
 	readonly crossCheck: CrossCheckPart;
 	/** The follower's block count against the representatives'. */
@@ -139,6 +151,7 @@ export type RepresentativeLocal = {
 
 export type SweepSignal = {
 	readonly verdict: Verdict;
+	readonly notComparableReasons: readonly CoverageReason[];
 	readonly counts: {
 		/** Accounts compared by themselves at least once, each counted by its latest comparison; the passive walk's batch matches are in the coverage. */
 		readonly accountsCompared: number;
@@ -178,7 +191,9 @@ export type ShadowNotComparableReason =
 	/** The run started from a snapshot holding staples of the scoped window, which it cannot put to a vote. */
 	| 'base-within-window'
 	/** The run met no staple of the scoped window. */
-	| 'window-empty';
+	| 'window-empty'
+	/** The log holds lines it could not read, which may have been records. */
+	| 'log-unreadable';
 
 /** A window's refusals by the classified difference that explains them, with the release that changed the rule. */
 export type ShadowWindowSummary = Omit<ShadowWindowTally, 'explained' | 'firstUnexplained'> & {
@@ -249,6 +264,7 @@ export type { ExplainedDivergence, SupersededDivergence };
 
 export type APIDiffSignal = {
 	readonly verdict: Verdict;
+	readonly notComparableReasons: readonly CoverageReason[];
 	readonly strata: readonly APIDiffStratum[];
 	readonly counts: {
 		/** Requests whose latest comparison is no divergence a triage explains. */
@@ -413,6 +429,7 @@ function checksumSignalOf(records: readonly ParityRecord[]): ChecksumSignal {
 	}
 	return({
 		verdict: combined(crossCheck.verdict, blockCount.verdict),
+		notComparableReasons: [],
 		crossCheck,
 		blockCount,
 		representativeChecksums: representativeChecksumsOf(recordsOf(records, 'checksum')),
@@ -794,7 +811,7 @@ function sweepSignalOf(allRecords: readonly ParityRecord[], position: SweepPosit
 	const confidence = confidenceOf(samples, divergedNow.length, 'account');
 	const representativeLocal = representativeLocalOf(records, localNow);
 	if (samples === 0) {
-		return({ verdict: 'not-comparable-yet', counts, coverage, representativeLocal, confidence, firstDivergence: null });
+		return({ verdict: 'not-comparable-yet', notComparableReasons: ['no-sample'], counts, coverage, representativeLocal, confidence, firstDivergence: null });
 	}
 	const stillDiverging = new Set(divergedNow.map(function(record): string {
 		return(record.account);
@@ -803,9 +820,13 @@ function sweepSignalOf(allRecords: readonly ParityRecord[], position: SweepPosit
 		return(standsDiverging(record.outcome) && stillDiverging.has(record.account));
 	});
 	if (first === undefined || (first.outcome.kind !== 'diverged' && first.outcome.kind !== 'unresolved' && first.outcome.kind !== 'representative-local')) {
-		return({ verdict: 'pass', counts, coverage, representativeLocal, confidence, firstDivergence: null });
+		// Only every account compared shows the sweep passes; a sample shows only that it does not fail yet.
+		if (!coverage.everyAccountCompared) {
+			return({ verdict: 'not-comparable-yet', notComparableReasons: ['coverage-incomplete'], counts, coverage, representativeLocal, confidence, firstDivergence: null });
+		}
+		return({ verdict: 'pass', notComparableReasons: [], counts, coverage, representativeLocal, confidence, firstDivergence: null });
 	}
-	return({ verdict: 'fail', counts, coverage, representativeLocal, confidence, firstDivergence: { ...first.outcome.divergence, at: first.at, representative: first.representative } });
+	return({ verdict: 'fail', notComparableReasons: [], counts, coverage, representativeLocal, confidence, firstDivergence: { ...first.outcome.divergence, at: first.at, representative: first.representative } });
 }
 
 /** The records of one kind. */
@@ -1019,13 +1040,16 @@ function apiDiffSignalOf(records: readonly APIDiffRecord[], plans: readonly APID
 		return(left.at.localeCompare(right.at));
 	});
 	if (first !== undefined && first.outcome.kind !== 'match' && first.outcome.kind !== 'skipped') {
-		return({ verdict: 'fail', strata, counts, ...coverage, newBehaviors: behaviors, firstDivergence: { at: first.at, representative: first.representative, stratum: first.stratum, path: first.path, field: first.outcome.field } });
+		return({ verdict: 'fail', notComparableReasons: [], strata, counts, ...coverage, newBehaviors: behaviors, firstDivergence: { at: first.at, representative: first.representative, stratum: first.stratum, path: first.path, field: first.outcome.field } });
 	}
-	let verdict: Verdict = 'not-comparable-yet';
-	if (standings.length > 0) {
-		verdict = 'pass';
+	if (standings.length === 0) {
+		return({ verdict: 'not-comparable-yet', notComparableReasons: ['no-sample'], strata, counts, ...coverage, newBehaviors: behaviors, firstDivergence: null });
 	}
-	return({ verdict, strata, counts, ...coverage, newBehaviors: behaviors, firstDivergence: null });
+	// Only every stratum covered shows the API diff passes; fewer requests show only that it does not fail yet.
+	if (!coverage.everyStratumCovered) {
+		return({ verdict: 'not-comparable-yet', notComparableReasons: ['strata-uncovered'], strata, counts, ...coverage, newBehaviors: behaviors, firstDivergence: null });
+	}
+	return({ verdict: 'pass', notComparableReasons: [], strata, counts, ...coverage, newBehaviors: behaviors, firstDivergence: null });
 }
 
 function windowSummaryOf(tally: ShadowWindowTally): ShadowWindowSummary {
@@ -1117,19 +1141,41 @@ export type ReportInput = {
 	readonly knownBehaviors: ReadonlySet<string>;
 };
 
+/**
+ * A signal that passes on a log holding lines it could not read does not
+ * pass yet: a line cut short or unknown may have been a divergence. One
+ * that fails still fails.
+ */
+function withLogRead<Signal extends { readonly verdict: Verdict; readonly notComparableReasons: readonly Reason[] }, Reason>(signal: Signal, unreadableLines: number, reason: Reason): Signal {
+	if (unreadableLines === 0 || signal.verdict !== 'pass') {
+		return(signal);
+	}
+	return({ ...signal, verdict: 'not-comparable-yet', notComparableReasons: [...signal.notComparableReasons, reason] });
+}
+
 export function parityReportOf(input: ReportInput): ParityReport {
-	const { records } = input.log;
+	const { records, unreadableLines } = input.log;
 	return({
 		generatedAt: input.generatedAt.toISOString(),
 		follower: { completedPass: isoOrNull(input.progress.completedPass), heldBefore: isoOrNull(input.progress.heldBefore), staged: input.progress.staged },
-		logUnreadableLines: input.log.unreadableLines,
+		logUnreadableLines: unreadableLines,
 		signals: {
-			checksum: checksumSignalOf(records),
-			sweep: sweepSignalOf(records, input.sweep),
-			apiDiff: apiDiffSignalOf(recordsOf(records, 'api-diff'), recordsOf(records, 'api-diff-plan'), recordsOf(records, 'api-diff-explained'), input.knownBehaviors),
-			shadowVotes: shadowVotesSignalOf(recordsOf(records, 'shadow-run'))
+			checksum: withLogRead(checksumSignalOf(records), unreadableLines, 'log-unreadable'),
+			sweep: withLogRead(sweepSignalOf(records, input.sweep), unreadableLines, 'log-unreadable'),
+			apiDiff: withLogRead(apiDiffSignalOf(recordsOf(records, 'api-diff'), recordsOf(records, 'api-diff-plan'), recordsOf(records, 'api-diff-explained'), input.knownBehaviors), unreadableLines, 'log-unreadable'),
+			shadowVotes: withLogRead(shadowVotesSignalOf(recordsOf(records, 'shadow-run')), unreadableLines, 'log-unreadable')
 		}
 	});
+}
+
+/** The parity tool's exit code for a report: 0 only when every signal passes. */
+export function exitCodeOf(report: ParityReport): 0 | 1 {
+	if (Object.values(report.signals).every(function(signal): boolean {
+		return(signal.verdict === 'pass');
+	})) {
+		return(0);
+	}
+	return(1);
 }
 
 /** Where the sweep stands: the chain walk's cursor, and the first divergence it recorded. */
