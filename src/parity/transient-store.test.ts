@@ -69,6 +69,36 @@ describe('a read of the follower\'s database under load', function() {
 		expect(retry.failures.slice(-2)).toEqual([{ attempt: 6, elapsedMilliseconds: 31_000, waitMilliseconds: 30_000 }, { attempt: 7, elapsedMilliseconds: 61_000, waitMilliseconds: 30_000 }]);
 	});
 
+	test('gives a read up once its statement timed out ten times in a row, as one that always runs longer than its timeout', async function() {
+		const retry = recordedRetry(20);
+		let attempts = 0;
+		const store = retryingStore(followerStoreOf({
+			accountCount(): Promise<number> {
+				attempts++;
+				return(Promise.reject(statementTimeout()));
+			}
+		}), retry);
+
+		await expect(store.accountCount()).rejects.toThrow('the read ran past its statement timeout 10 times in a row, so it is too slow to finish rather than slowed by load');
+		expect(attempts).toBe(10);
+	});
+
+	test('counts only the statement timeouts in a row, a wait for a session between starting the count again', async function() {
+		const retry = recordedRetry();
+		const failures = [...Array.from({ length: 9 }, statementTimeout), new Error('timeout exceeded when trying to connect'), ...Array.from({ length: 9 }, statementTimeout)];
+		const store = retryingStore(followerStoreOf({
+			accountCount(): Promise<number> {
+				const failure = failures.shift();
+				if (failure !== undefined) {
+					return(Promise.reject(failure));
+				}
+				return(Promise.resolve(42));
+			}
+		}), retry);
+
+		expect(await store.accountCount()).toBe(42);
+	});
+
 	test('fails at once when the follower\'s database cannot be reached before any read of the command succeeded', async function() {
 		for (const code of ['ENOENT', 'ECONNREFUSED']) {
 			const retry = recordedRetry();

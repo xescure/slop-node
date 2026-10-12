@@ -12,6 +12,16 @@ const LOAD_MESSAGES: ReadonlySet<string> = new Set(['timeout exceeded when tryin
 /** SQLSTATEs of a statement canceled by its timeout (57014), and of a cluster with no connection left (53300). */
 const LOAD_CODES: ReadonlySet<string> = new Set(['57014', '53300']);
 
+/** The SQLSTATE of a statement canceled by its timeout. */
+const STATEMENT_TIMEOUT_CODE = '57014';
+
+/**
+ * Statement timeouts in a row after which a read is given up: load slows a
+ * read for a while, but one that runs past its timeout this often runs
+ * longer than it whatever the load, and would be read again forever.
+ */
+const STATEMENT_TIMEOUTS_LIMIT = 10;
+
 /** What pg raises for a session the server ended without a code, as a restart of the follower's cluster does. */
 const UNREACHABLE_MESSAGES: ReadonlySet<string> = new Set(['Connection terminated unexpectedly']);
 
@@ -71,6 +81,14 @@ function messageOf(error: unknown): string {
 	return(String(error));
 }
 
+/** The statement timeouts in a row once the failure is counted: one more for a timeout, none after any other failure. */
+function timeoutsAfter(error: unknown, before: number): number {
+	if (error instanceof Error && Reflect.get(error, 'code') === STATEMENT_TIMEOUT_CODE) {
+		return(before + 1);
+	}
+	return(0);
+}
+
 /**
  * Runs reads of the follower's database until each succeeds, waiting out
  * each failure the cluster's load caused, 1 s at first and doubled each
@@ -80,7 +98,8 @@ function messageOf(error: unknown): string {
  * out the same way, as through a restart of the follower, but only once a
  * read has succeeded, and for 15 minutes at most: before that, it is a
  * follower that is not running, or a directory that is not its, which no
- * wait mends. Any other failure, or one once stopped, is thrown.
+ * wait mends. A read whose statement timed out ten times in a row is given
+ * up. Any other failure, or one once stopped, is thrown.
  */
 class TransientReads {
 	readonly #retry: TransientRetry;
@@ -96,6 +115,7 @@ class TransientReads {
 		// From the read's first failure to reach the database: load failures between mend nothing of it.
 		let unreachableSince: number | undefined;
 		let waitMilliseconds = FIRST_WAIT_MILLISECONDS;
+		let timeoutsInARow = 0;
 		for (let attempt = 1; ; attempt++) {
 			try {
 				const result = await read();
@@ -105,6 +125,10 @@ class TransientReads {
 				const cause = transientCauseOf(error);
 				if (cause === undefined || stopped.aborted) {
 					throw(error);
+				}
+				timeoutsInARow = timeoutsAfter(error, timeoutsInARow);
+				if (timeoutsInARow >= STATEMENT_TIMEOUTS_LIMIT) {
+					throw(new Error(`the read ran past its statement timeout ${String(STATEMENT_TIMEOUTS_LIMIT)} times in a row, so it is too slow to finish rather than slowed by load`, { cause: error }));
 				}
 				if (cause === 'unreachable') {
 					if (!this.#reached) {
