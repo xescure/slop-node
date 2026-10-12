@@ -176,13 +176,33 @@ function matchKey(route: Route): string {
 }
 
 /**
+ * A colon that no backslash escapes, which the router Express uses reads as
+ * the start of a parameter wherever it stands in a segment.
+ */
+const UNESCAPED_COLON = /(?:^|[^\\])(?:\\\\)*:/;
+
+/** Whether a segment holds a parameter that does not start it, which the table could not rank as one. */
+function holdsInnerParameter(segment: string): boolean {
+	let rest = segment;
+	if (isParameterSegment(segment)) {
+		rest = segment.slice(1);
+	}
+	return(UNESCAPED_COLON.test(rest));
+}
+
+/**
  * The routes of every group, in the order they are to be added to the router,
- * refusing two routes that match the same requests.
+ * refusing a route with a parameter inside a segment, and two routes that
+ * match the same requests.
  */
 export function routeTable(groups: readonly (readonly Route[])[]): readonly Route[] {
 	const routes = groups.flat().sort(compareForMatching);
 	const seen = new Map<string, Route>();
 	for (const route of routes) {
+		const inner = route.path.split('/').find(holdsInnerParameter);
+		if (inner !== undefined) {
+			throw(new Error(`${route.method} ${route.path} has a parameter inside its segment "${inner}"`));
+		}
 		const key = matchKey(route);
 		const earlier = seen.get(key);
 		if (earlier !== undefined) {

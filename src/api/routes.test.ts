@@ -900,24 +900,44 @@ function voteIn(answer: HTTPAnswer, name: string): Vote {
 }
 
 describe('a vote', function() {
-	test('is temporary, at the fee of the quote it carries, and permanent once the request carries the temporary votes; a quote is refused beside them', async function() {
-		const node = await nodes.start();
+	/** A send of the network's first user, the next block of its chain. */
+	async function nextSend(node: RunningLocalNode): Promise<string> {
 		const user = requireAt(node.network.users, 0);
 		const previous = node.network.genesis.blocks.filter(function(block): boolean {
 			return(block.account.comparePublicKey(user));
 		}).at(-1);
 		const send = await sendBlock({ from: user, to: requireAt(node.network.representatives, 0), amount: 1n, token: node.network.baseToken, previous: previous?.hash ?? null, network: node.network.network });
-		const blocks = [base64(send.toBytes())];
+		return(base64(send.toBytes()));
+	}
+
+	test('is temporary, and permanent once the request carries the temporary votes; a quote is refused beside them', async function() {
+		const node = await nodes.start();
+		const blocks = [await nextSend(node)];
 		const quote = text(field((await postJSON(node, '/vote/quote', { blocks })).body, 'quote'), '$binary');
 
-		const temporary = voteIn(await postJSON(node, '/vote', { blocks, quote }), 'vote');
+		const temporary = voteIn(await postJSON(node, '/vote', { blocks }), 'vote');
 		const permanent = voteIn(await postJSON(node, '/vote', { blocks, votes: [base64(temporary.toBytes())] }), 'vote');
 		const quotedPermanent = await postJSON(node, '/vote', { blocks, votes: [base64(temporary.toBytes())], quote });
 
 		expect(temporary.$permanent).toBe(false);
-		expect(temporary.fee).toEqual(new lib.Vote.Quote(Buffer.from(quote, 'base64')).fee);
 		expect(permanent.$permanent).toBe(true);
-		expect(permanent.blocks).toEqual([send.hash]);
+		expect(permanent.blocks.map(String)).toEqual(temporary.blocks.map(String));
 		expectRefusal(quotedPermanent, 'LEDGER_VOTE_WITH_QUOTE');
+	});
+
+	test('a temporary vote charges the fee its quote states, not the fee charged since', async function() {
+		// The policy is read at each vote, so raising its amount raises the fee from then on.
+		const fee: { readonly kind: 'flat'; amount: bigint } = { kind: 'flat', amount: 2n };
+		const node = await nodes.start({ fee });
+		const blocks = [await nextSend(node)];
+		const quote = text(field((await postJSON(node, '/vote/quote', { blocks })).body, 'quote'), '$binary');
+		fee.amount = 5n;
+
+		const quoted = voteIn(await postJSON(node, '/vote', { blocks, quote }), 'vote');
+		const quotedSince = text(field((await postJSON(node, '/vote/quote', { blocks })).body, 'quote'), '$binary');
+
+		expect(new lib.Vote.Quote(Buffer.from(quote, 'base64')).fee).toEqual({ amount: 2n });
+		expect(new lib.Vote.Quote(Buffer.from(quotedSince, 'base64')).fee).toEqual({ amount: 5n });
+		expect(quoted.fee).toEqual({ amount: 2n });
 	});
 });

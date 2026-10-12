@@ -106,6 +106,21 @@ describe('the route table', function() {
 		expect(routeTable([[defineGET('/a/0b', respond)], [defineGET('/a0/b', respond)]]).map(spelled)).toEqual(['GET /a/0b', 'GET /a0/b']);
 	});
 
+	test.each([
+		{ path: '/a0:b', segment: 'a0:b' },
+		{ path: '/node/:account:stream', segment: ':account:stream' },
+		{ path: '/node/::stream', segment: '::stream' },
+		{ path: '/node/x\\\\:y', segment: 'x\\\\:y' }
+	])('a route with a parameter inside a segment, as $path has, is refused', function({ path, segment }) {
+		expect(function() {
+			return(routeTable([[defineGET('/a/b', respond)], [defineGET(`/${path.slice(1)}`, respond)]]));
+		}).toThrow(`GET ${path} has a parameter inside its segment "${segment}"`);
+	});
+
+	test('a colon a backslash escapes is part of a fixed segment, wherever it stands', function() {
+		expect(routeTable([[defineGET('/node/x\\:y', respond), defineGET('/node/x', respond), defineGET('/node/\\:y', respond)]]).map(spelled)).toEqual(['GET /node/\\:y', 'GET /node/x', 'GET /node/x\\:y']);
+	});
+
 	test('a route listed twice is refused', function() {
 		expect(function() {
 			return(routeTable([[defineGET('/node/version', respond)], [defineGET('/node/version', respond)]]));
