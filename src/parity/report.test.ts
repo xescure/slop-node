@@ -512,6 +512,21 @@ describe('the parity report', function() {
 		expect(sweep).toMatchObject({ verdict: 'pass', confidence: { kind: 'rule-of-three', samples: 16 } });
 	});
 
+	test('counts each account once among the samples, however a resume parted the rows again or another lap compared it by itself', function() {
+		const THIRD_ACCOUNT = 'keeta_aabtxaltbxvz2t6lzicmytyvhb7ox4gl4ocbbelyjvc7zqgc4xvsypqvkysmgai';
+		const sweep = report([
+			batch('2026-10-09T01:00:01.000Z', 0, ['0', '20'], 10),
+			// Resumed with batches parted otherwise, over rows the first went over too.
+			batch('2026-10-09T01:00:02.000Z', 0, ['10', '30'], 10),
+			batch('2026-10-09T01:00:03.000Z', 0, ['30', '40'], 5),
+			// Compared by itself in the next lap, its row among those the batches above matched.
+			swept('2026-10-09T02:00:00.000Z', OTHER_ACCOUNT, MATCH, 1, 'passive'),
+			// Compared by itself in the lap of the batches, which then did not match it.
+			swept('2026-10-09T01:00:04.000Z', THIRD_ACCOUNT, MATCH, 0, 'passive')
+		], { ...COMPLETE, rowIDs: new Map([[OTHER_ACCOUNT, '15'], [THIRD_ACCOUNT, '35']]) }).signals.sweep;
+		expect(sweep).toMatchObject({ confidence: { kind: 'rule-of-three', samples: 16 } });
+	});
+
 	test('reports each walk lap by lap against the accounts known', function() {
 		const sweep = report([
 			swept('2026-10-09T01:00:00.000Z', ACCOUNT, MATCH, 0),

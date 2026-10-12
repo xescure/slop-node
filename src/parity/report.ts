@@ -806,12 +806,59 @@ function representativeLocalOf(records: readonly SweepRecord[], localNow: readon
  * once, and of the laps the one that matched most, since every lap goes
  * over the same accounts.
  */
-function matchedInBatchesOf(batches: readonly SweepBatchRecord[]): number {
-	const laps = new Map<number, number>();
-	for (const batch of batches) {
-		laps.set(batch.lap, (laps.get(batch.lap) ?? 0) + batch.matched);
+type RowSpan = { readonly after: bigint; readonly through: bigint };
+
+/**
+ * The batches of each lap that count, the latest first: a batch over rows
+ * a batch recorded later went over too, as a resume parts the rows again,
+ * is left out, so that no account is counted twice.
+ */
+function distinctBatchesOf(batches: readonly SweepBatchRecord[]): ReadonlyMap<number, { readonly matched: number; readonly spans: readonly RowSpan[] }> {
+	const laps = new Map<number, { matched: number; spans: RowSpan[] }>();
+	for (const batch of [...batches].reverse()) {
+		const span = { after: BigInt(batch.afterRowID), through: BigInt(batch.throughRowID) };
+		const lap = laps.get(batch.lap) ?? { matched: 0, spans: [] };
+		const overlaps = lap.spans.some(function(other): boolean {
+			return(span.after < other.through && other.after < span.through);
+		});
+		if (!overlaps) {
+			lap.matched += batch.matched;
+			lap.spans.push(span);
+		}
+		laps.set(batch.lap, lap);
 	}
-	return(Math.max(0, ...laps.values()));
+	return(laps);
+}
+
+/**
+ * The accounts compared, each once: those compared by themselves, by their
+ * latest comparison, and those the batches of the lap that matched most
+ * matched, each batch counted as distinctBatchesOf counts it. An account
+ * of the passive walk compared by itself in another lap, whose row those
+ * batches went over, is left out, as one of them may have matched it; one
+ * compared by itself in the same lap was not among the batch's matches.
+ */
+function distinctSamplesOf(comparedByThemselves: readonly SweepRecord[], batches: readonly SweepBatchRecord[], rowIDs: ReadonlyMap<string, string>): number {
+	let chosen: { readonly lap: number; readonly matched: number; readonly spans: readonly RowSpan[] } | undefined;
+	for (const [lap, counted] of distinctBatchesOf(batches)) {
+		if (chosen === undefined || counted.matched > chosen.matched) {
+			chosen = { lap, ...counted };
+		}
+	}
+	if (chosen === undefined) {
+		return(comparedByThemselves.length);
+	}
+	const { lap, matched, spans } = chosen;
+	return(matched + comparedByThemselves.filter(function(record): boolean {
+		const rowID = rowIDs.get(record.account);
+		if (record.walk !== 'passive' || record.lap === lap || rowID === undefined) {
+			return(true);
+		}
+		const row = BigInt(rowID);
+		return(!spans.some(function(span): boolean {
+			return(span.after < row && row <= span.through);
+		}));
+	}).length);
 }
 
 function sweepSignalOf(allRecords: readonly ParityRecord[], position: SweepPosition): SweepSignal {
@@ -880,7 +927,9 @@ function sweepSignalOf(allRecords: readonly ParityRecord[], position: SweepPosit
 	 * An account compared by its chain had neither its state nor its history
 	 * compared, so it is no sample of how often those diverge.
 	 */
-	const samples = latest.length - byChain + matchedInBatchesOf(batches);
+	const samples = distinctSamplesOf(latest.filter(function(record): boolean {
+		return(record.outcome.kind !== 'compared-chain');
+	}), batches, position.rowIDs);
 	const confidence = confidenceOf(samples, divergedNow.length, 'account');
 	const representativeLocal = representativeLocalOf(records, localNow);
 	if (samples === 0) {
@@ -1257,7 +1306,7 @@ export type SweepPosition = {
 	/** The accounts with a chain now, which the chain walk must have compared by themselves. */
 	readonly chainAccounts: readonly KnownAccount[];
 	readonly cursors: Readonly<Record<SweepWalk, SweepCursor>>;
-	/** The row of each account the log names as not compared, by which a later batch of the passive walk may have compared it. */
+	/** The row of each account the log names as not compared, by which a later batch of the passive walk may have compared it, and of each the passive walk compared by itself, which a batch of another lap may have matched. */
 	readonly rowIDs: ReadonlyMap<string, string>;
 };
 
@@ -1331,7 +1380,13 @@ export async function sweepPositionOf(sources: Pick<ReportSources, 'store' | 'cu
 	const chainSet = new Set(chainAccounts.map(function(known): string {
 		return(known.account);
 	}));
-	const candidates = neverComparedCandidatesOf(records).filter(function(account): boolean {
+	// The accounts the log names as not compared, and those the passive walk compared by themselves, which a batch of another lap may have matched as well.
+	const comparedByThemselves = recordsOf(records, 'sweep').filter(function(record): boolean {
+		return(record.walk === 'passive');
+	}).map(function(record): string {
+		return(record.account);
+	});
+	const candidates = [...new Set([...neverComparedCandidatesOf(records), ...comparedByThemselves])].filter(function(account): boolean {
 		return(!chainSet.has(account));
 	});
 	const rowIDs = new Map<string, string>();
