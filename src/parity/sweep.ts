@@ -5,7 +5,7 @@ import { assertNever } from '../util/assert-never.js';
 import { getOK } from './api-source.js';
 import type { APIAnswer, APISource } from './api-source.js';
 import type { FollowerStore, KnownAccount } from './follower-store.js';
-import { standsDiverging, sweepCursorOf } from './log.js';
+import { standsDiverging, standsInPlaceOf, sweepCursorOf } from './log.js';
 import { balancesCheckOf, selfCheckOf } from './self-check.js';
 import type { Disputed, DisputedKind, ParityLog, RecordedWalk, RepresentativeReading, SelfCheck, SweepBatchRecord, SweepCursor, SweepOutcome, SweepRecord, SweepWalk } from './log.js';
 
@@ -1029,7 +1029,7 @@ export type RecheckSummary = Readonly<Partial<Record<SweepOutcome['kind'], numbe
 function latestReadings(records: readonly SweepRecord[]): readonly SweepRecord[] {
 	const latest = new Map<string, SweepRecord>();
 	for (const record of records) {
-		if (record.outcome.kind !== 'skipped') {
+		if (record.outcome.kind !== 'skipped' && standsInPlaceOf(record.outcome, latest.get(record.account)?.outcome)) {
 			latest.set(record.account, record);
 		}
 	}

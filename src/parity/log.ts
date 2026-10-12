@@ -144,6 +144,26 @@ export function standsDiverging(outcome: SweepOutcome): boolean {
 }
 
 /**
+ * Whether a later comparison of an account stands in place of the one
+ * before it: a comparison of the chain alone reads neither the account's
+ * state nor its history, so it settles no divergence of them, which stands
+ * until a comparison of the state settles it.
+ */
+export function standsInPlaceOf(later: SweepOutcome, standing: SweepOutcome | undefined): boolean {
+	if (later.kind !== 'compared-chain' || standing === undefined || !standsDiverging(standing)) {
+		return(true);
+	}
+	switch (standing.kind) {
+		case 'diverged':
+		case 'unresolved':
+		case 'representative-local':
+			return(standing.divergence.field === 'chain');
+		default:
+			return(true);
+	}
+}
+
+/**
  * Which of the follower's accounts a walk of the sweep goes over: those with
  * blocks on its main ledger, compared one at a time by their heads, or the
  * rest, compared in batches.

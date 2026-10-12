@@ -597,6 +597,21 @@ describe('the parity report', function() {
 		expect(report([swept('2026-10-09T01:00:00.000Z', ACCOUNT, local({ kind: 'consistent', tokens: 1 }))]).signals.sweep).toMatchObject({ verdict: 'pass', counts: { diverged: 0 }, representativeLocal: { accounts: 1 } });
 	});
 
+	test('keeps a divergence of an account\'s state standing over a later comparison of its chain alone, which reads neither its state nor its history', function() {
+		const chained: SweepOutcome = { kind: 'compared-chain', head: STAPLE, representativeHead: STAPLE, lacking: 0 };
+		const sweep = report([
+			swept('2026-10-09T01:00:00.000Z', ACCOUNT, diverged(ACCOUNT, 'balances[0].balance')),
+			swept('2026-10-09T02:00:00.000Z', ACCOUNT, chained, 1),
+			swept('2026-10-09T02:00:01.000Z', OTHER_ACCOUNT, MATCH, 1)
+		]).signals.sweep;
+		expect(sweep).toMatchObject({ verdict: 'fail', counts: { diverged: 1, resolvedDivergences: 0 }, firstDivergence: { account: ACCOUNT } });
+		const byChain = report([
+			swept('2026-10-09T01:00:00.000Z', ACCOUNT, diverged(ACCOUNT, 'chain')),
+			swept('2026-10-09T02:00:00.000Z', ACCOUNT, chained, 1)
+		]).signals.sweep;
+		expect(byChain.counts).toMatchObject({ diverged: 0, resolvedDivergences: 1 });
+	});
+
 	test('fails the sweep on an account the representatives split on', function() {
 		const sweep = report([
 			swept('2026-10-09T01:00:00.000Z', ACCOUNT, diverged(ACCOUNT, 'balances[0].balance', 'unresolved'))

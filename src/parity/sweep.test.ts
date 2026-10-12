@@ -820,6 +820,18 @@ describe('a difference of one representative\'s own recorded before', function()
 		}), store: memoryStore({ [account]: [STAPLE] }, undefined, {}, [], [], 0x12n, [], 0x12n), log: running.log, stopped: new AbortController().signal })).toEqual({ unresolved: 1 });
 	});
 
+	test('of an account\'s state is compared again on recheck though a later comparison of its chain alone stands after it', async function() {
+		const running = await setup(3);
+		const account = ACCOUNTS[0];
+		serveSplit(running, account, '0x10', ['0x10', '0x10', '0x10']);
+		const diverging: SweepRecord = { kind: 'sweep', at: '2026-10-11T12:34:11.610Z', representative: running.representatives[0]?.endpoint ?? '', account, lap: 0, walk: 'chain', outcome: { kind: 'diverged', divergence: { account, field: 'balances[0].balance', staple: STAPLE }, follower: {}, representative: {}, readings: [], selfCheck: null } };
+		await running.log.append([diverging, { ...diverging, at: '2026-10-11T13:34:11.610Z', lap: 1, outcome: { kind: 'compared-chain', head: FOLLOWER_HEAD, representativeHead: FOLLOWER_HEAD, lacking: 0 } }]);
+
+		expect(await recheckDivergences({ follower: httpSource(running.follower.endpoint), representatives: running.representatives.map(function(api) {
+			return(httpSource(api.endpoint));
+		}), store: memoryStore({ [account]: [STAPLE] }), log: running.log, stopped: new AbortController().signal })).toEqual({ match: 1 });
+	});
+
 	test('found by its chain is compared again by its chain', async function() {
 		const running = await setup(3);
 		const account = ACCOUNTS[0];

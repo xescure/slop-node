@@ -7,7 +7,7 @@ import { checksumsEqual, compareChecksums, crossCheckChecksum } from './checksum
 import type { FollowerProgress, FollowerStore, KnownAccount } from './follower-store.js';
 import { SHADOW_REFUSAL_REASONS, SHADOW_REFUSAL_RELEASES } from '../conformance/mainnet/shadow.js';
 import type { ShadowRefusalReason } from '../conformance/mainnet/shadow.js';
-import { standsDiverging } from './log.js';
+import { standsDiverging, standsInPlaceOf } from './log.js';
 import type { APIDiffExplainedRecord, APIDiffPlanRecord, APIDiffRecord, BlockCountNotComparableReason, BlockCountRecord, ChecksumRecord, ChecksumWindow, CrossCheckRecord, Divergence, ParityLog, ParityLogContents, ParityRecord, ShadowBase, ShadowRunCost, ShadowRunRecord, ShadowTarget, ShadowWindowTally, SweepBatchRecord, SweepCursor, SweepOutcome, SweepPointer, SweepRecord, SweepWalk } from './log.js';
 import { STRATA } from './strata.js';
 import type { Stratum } from './strata.js';
@@ -442,7 +442,7 @@ function latestByAccount(records: readonly SweepRecord[]): { readonly compared: 
 		if (followerDiverged(record.outcome)) {
 			everDiverged.add(record.account);
 		}
-		if (wasCompared(record.outcome)) {
+		if (wasCompared(record.outcome) && standsInPlaceOf(record.outcome, compared.get(record.account)?.outcome)) {
 			compared.set(record.account, record);
 		}
 	}
