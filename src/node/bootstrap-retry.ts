@@ -444,8 +444,16 @@ export class RetryQueue<Staple extends NamedStaple> {
 			}
 			throw(new RetryQueueFull(key, bounds));
 		}
-		this.#track({ entry, refusals: 1, lastOffered: now }, entries);
-		await this.#store.put(entry);
+		// Room is taken before the write, so that two passes cannot both take the last of it, and given back if the write fails: a staple not stored is not queued, and the next pass sent it offers it again.
+		const waiting = { entry, refusals: 1, lastOffered: now };
+		this.#track(waiting, entries);
+		try {
+			await this.#store.put(entry);
+		} catch (error: unknown) {
+			entries.delete(key);
+			this.#untrack(waiting);
+			throw(error);
+		}
 	}
 
 	/** Replaces an entry's record, keeping when it was last offered. */

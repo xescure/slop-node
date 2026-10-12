@@ -88,6 +88,25 @@ describe('a bootstrap retry queue', function() {
 		expect(idsOf(await queue.staples())).toEqual([refused.id]);
 	});
 
+	test('queues nothing of a staple whose record fails to be stored, so that the next pass sent it offers it again', async function() {
+		const [refused] = staples([[1]]);
+		if (refused === undefined) {
+			throw(new Error('no staple'));
+		}
+		const harness = new Harness();
+		vi.spyOn(harness.store, 'put').mockRejectedValueOnce(new Error('the write failed'));
+		const offer = vi.spyOn(harness.node, 'offer');
+		const queue = harness.queue({ staples: 1, bytes: 1024 * 1024 });
+
+		await expect(queue.add(refused, 'deep')).rejects.toThrow('the write failed');
+		expect(await queue.size()).toBe(0);
+
+		expect(await queue.add(refused, 'deep')).toBe('queued');
+		expect(offer).toHaveBeenCalledTimes(2);
+		expect(idsOf(await queue.staples())).toEqual([refused.id]);
+		expect((await harness.store.load()).length).toBe(1);
+	});
+
 	test('queues a staple two passes were sent at once only once', async function() {
 		const [refused] = staples([[1]]);
 		if (refused === undefined) {
