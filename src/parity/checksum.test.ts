@@ -8,9 +8,9 @@ import type { SweepPointer } from './log.js';
 
 const GAP = 10_000;
 
-const COMPLETED: FollowerProgress = { completedPass: new Date('2026-10-09T05:00:00.000Z'), heldBefore: new Date('2026-10-09T05:00:00.000Z'), staged: 0 };
+const COMPLETED: FollowerProgress = { completedPass: new Date('2026-10-09T05:00:00.000Z'), heldBefore: new Date('2026-10-09T05:00:00.000Z'), staged: 0, queued: 0, stranded: 0 };
 
-const CATCHING_UP: FollowerProgress = { completedPass: undefined, heldBefore: new Date('2025-12-31T00:00:00.000Z'), staged: 0 };
+const CATCHING_UP: FollowerProgress = { completedPass: undefined, heldBefore: new Date('2025-12-31T00:00:00.000Z'), staged: 0, queued: 0, stranded: 0 };
 
 /** A pass has completed, so the follower read everything, but it has not added all it read. */
 const APPLYING: FollowerProgress = { ...COMPLETED, staged: 339_533 };

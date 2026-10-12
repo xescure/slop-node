@@ -241,8 +241,11 @@ function pageLimit(limit: number): number {
  *
  * stats() counts the updates in a row that were complete: every peer's pass
  * completed, so the node held or queued all its peers had applied before
- * the margin before each pass began, and nothing was left staged. An incomplete update sets the count
- * back to 0, so a count above 0 says the node is caught up.
+ * the margin before each pass began, nothing was left staged, nothing was
+ * left queued for retry, and no staple deferred before that margin awaits a
+ * block the ledger lacks, so the ledger applied all of it. An incomplete
+ * update sets the count back to 0, so a count above 0 says the node is
+ * caught up.
  */
 export class BootstrapClient {
 	static isInstance: (obj: unknown, strict?: boolean) => obj is BootstrapClient = lib.Utils.Helper.checkableGenerator(BootstrapClient);
@@ -454,7 +457,7 @@ export class BootstrapClient {
 			}
 			await this.#collect();
 			const stageEmpty = await staging.isEmpty();
-			const complete = sources.every(function(endpoint): boolean {
+			const passesComplete = sources.every(function(endpoint): boolean {
 				return(results.get(endpoint) === 'completed');
 			}) && !this.#stopped() && stageEmpty;
 			// One peer that read the node up to the margin shows the deferred staples before it wait on what no pass brings; a peer failing meanwhile changes nothing of that.
@@ -464,6 +467,7 @@ export class BootstrapClient {
 			if (anyCompleted && stageEmpty && !this.#stopped()) {
 				await this.#fetchLacked(sources, fetcher, began);
 			}
+			const complete = passesComplete && await this.#appliedAllRead(began);
 			this.#record(complete);
 			return({ complete });
 		} finally {
@@ -789,6 +793,30 @@ export class BootstrapClient {
 				}
 			}
 			throw(error);
+		}
+	}
+
+	/**
+	 * Whether the ledger applied everything the passes read: no staple waits
+	 * in the retry queue, refused, and none deferred before the margin before
+	 * the update began awaits a block the main ledger lacks. Either leaves
+	 * the ledger without staples its peers hold, so the node is not caught
+	 * up while one does, though every pass completed. A driver of another
+	 * kind keeps no deferred staples apart to ask about.
+	 */
+	async #appliedAllRead(began: number): Promise<boolean> {
+		if (await this.#retries.size() > 0) {
+			return(false);
+		}
+		const storage = this.#node.config.ledger.storageDriver;
+		if (!(storage instanceof LedgerStorageDriverBase)) {
+			return(true);
+		}
+		try {
+			return((await storage.listStrandedDeferredStaples(new Date(began - BOOTSTRAP_MARGIN_MILLISECONDS), 1)).length === 0);
+		} catch (error: unknown) {
+			this.#node.log.warn(LOG_SOURCE, 'Reading whether deferred staples await blocks the ledger lacks failed; the update counts as incomplete:', error);
+			return(false);
 		}
 	}
 

@@ -321,10 +321,11 @@ describe('a bootstrap client', function() {
 		const warnings = warningsOf(late.node);
 		const client = clientOf(late.node);
 
-		expect(await client.update()).toEqual({ complete: true });
+		// Every pass completes, but the ledger lacks the refused staple and what waits on it.
+		expect(await client.update()).toEqual({ complete: false });
 		expect(reading.askedFor).toEqual([refused.lostBlock]);
 		expect(warnings()).toContainEqual(expect.stringContaining(`was queued for retry; it is asked for again later`));
-		expect(await client.update()).toEqual({ complete: true });
+		expect(await client.update()).toEqual({ complete: false });
 		expect(reading.askedFor).toEqual([refused.lostBlock]);
 		advanceClock(FIRST_BACKOFF_MILLISECONDS);
 		await client.update();
@@ -358,10 +359,10 @@ describe('a bootstrap client', function() {
 
 		await clientOf(late.node).update();
 
-		// Those voted before the margin before the update began, whose dependencies its passes read past.
+		// Those voted before the margin before the update began, whose dependencies its passes read past; then whether any is left, which makes the update incomplete.
 		expect(read.mock.calls.map(function([before, limit, after_]): [number, number, string | undefined] {
 			return([before.getTime(), limit, after_?.staple.blocksHash.toString()]);
-		})).toEqual([[began - BOOTSTRAP_MARGIN_MILLISECONDS, STRANDED_READ, undefined]]);
+		})).toEqual([[began - BOOTSTRAP_MARGIN_MILLISECONDS, STRANDED_READ, undefined], [began - BOOTSTRAP_MARGIN_MILLISECONDS, 1, undefined]]);
 	});
 
 	test('reads no stranded staple in an update in which no pass completed', async function() {
@@ -393,13 +394,56 @@ describe('a bootstrap client', function() {
 		const warnings = warningsOf(late.node);
 		const client = clientOf(late.node);
 
-		expect(await client.update()).toEqual({ complete: true });
+		// The staple after the lost one waits on it, so the update is incomplete.
+		expect(await client.update()).toEqual({ complete: false });
 
 		expect(reading.askedFor).toEqual([]);
 		expect(warnings()).toContainEqual(expect.stringContaining('Reading the deferred staples that await blocks the ledger lacks failed; it is read again after the next update: Error: the read failed'));
 		await client.update();
-		expect(read).toHaveBeenCalledTimes(2);
+		expect(read.mock.calls.filter(function([, limit]): boolean {
+			return(limit === STRANDED_READ);
+		})).toHaveLength(2);
 		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([peer.network.genesis, before, lost, after]));
+	});
+
+	test('counts an update incomplete, and warns, when it cannot read whether deferred staples await blocks the ledger lacks', async function() {
+		const peer = await representative();
+		const late = await joiner({ bootstrapFrom: [peer.apiURL] });
+		const storage = late.node.config.ledger.storageDriver;
+		if (!(storage instanceof LedgerStorageDriverBase)) {
+			throw(new Error('the node\'s storage is no driver of this node'));
+		}
+		vi.spyOn(storage, 'listStrandedDeferredStaples').mockImplementation(function(_before, limit): Promise<readonly StrandedDeferredStaple[]> {
+			if (limit === 1) {
+				return(Promise.reject(new Error('the read failed')));
+			}
+			return(Promise.resolve([]));
+		});
+		const warnings = warningsOf(late.node);
+		const client = clientOf(late.node);
+
+		expect(await client.update()).toEqual({ complete: false });
+
+		expect(warnings()).toContainEqual(expect.stringContaining('Reading whether deferred staples await blocks the ledger lacks failed; the update counts as incomplete: Error: the read failed'));
+		expect((await client.stats()).completeCount).toBe(0);
+	});
+
+	test('counts an update complete only once the ledger applied what it queued and nothing deferred awaits a block it lacks', async function() {
+		const peer = await representative();
+		const reading = await startReadingPeer(ONE_VOTE_A_READ);
+		const late = await joiner({ bootstrapFrom: [reading.apiURL] });
+		const { before, lost, after } = await nearTiedHistory(peer.network);
+		reading.apply([peer.network.genesis, before, lost, after]);
+		reading.holdsNot(lost.blocks[0]?.hash.toString() ?? '');
+		advanceClock(BOOTSTRAP_MARGIN_MILLISECONDS + 1000);
+		const client = clientOf(late.node);
+
+		// Every pass completes; the staple after the lost one waits on it.
+		expect(await client.update()).toEqual({ complete: false });
+		expect((await client.stats()).completeCount).toBe(0);
+		await late.node.ledger.add(lost);
+		expect(await client.update()).toEqual({ complete: true });
+		expect((await client.stats()).completeCount).toBe(1);
 	});
 
 	test('warns when adding the staple holding a lacked block fails, and asks for it again only once its wait has passed', async function() {
@@ -520,7 +564,11 @@ describe('a bootstrap client', function() {
 		if (!(storage instanceof LedgerStorageDriverBase)) {
 			throw(new Error('the node\'s storage is no driver of this node'));
 		}
-		const read = vi.spyOn(storage, 'listStrandedDeferredStaples').mockImplementation(function(): Promise<readonly StrandedDeferredStaple[]> {
+		const read = vi.spyOn(storage, 'listStrandedDeferredStaples').mockImplementation(function(_before, limit): Promise<readonly StrandedDeferredStaple[]> {
+			// Whether any is left, after the update, is no page of the round.
+			if (limit === 1) {
+				return(Promise.resolve([]));
+			}
 			return(Promise.resolve(pages.shift() ?? []));
 		});
 		const client = clientOf(late.node);
@@ -531,7 +579,9 @@ describe('a bootstrap client', function() {
 		expect(reading.askedFor).toEqual([]);
 		await client.update();
 
-		expect(read.mock.calls.map(function([, , after]): StrandedDeferredStaple | undefined {
+		expect(read.mock.calls.filter(function([, limit]): boolean {
+			return(limit === STRANDED_READ);
+		}).map(function([, , after]): StrandedDeferredStaple | undefined {
 			return(after);
 		})).toEqual([undefined, full.at(-1), undefined]);
 		expect(reading.askedFor).toEqual([carried.toString()]);
@@ -671,14 +721,15 @@ describe('a bootstrap client', function() {
 		})).toEqual([true, true]);
 	});
 
-	test('keeps the staples it queued across a restart, completing its passes meanwhile, and applies them once what they need arrives', async function() {
+	test('keeps the staples it queued across a restart, completing its passes meanwhile but not the update, and applies them once what they need arrives', async function() {
 		const peer = await representative();
 		const sends = await sendsFrom(peer.network, 0, 2);
 		const serving = await startServingPeer();
 		serving.apply(sends);
 		const late = await joiner({ bootstrapFrom: [serving.apiURL] });
 		const kv = new KVInternals.KVStorageProviderMemory();
-		expect(await clientOf(late.node, { kv }).update()).toEqual({ complete: true });
+		// Its passes complete, but what it queued is not applied.
+		expect(await clientOf(late.node, { kv }).update()).toEqual({ complete: false });
 		expect((await kv.list(BOOTSTRAP_RETRY_ARENA)).sort()).toEqual(blocksHashesOf(sends));
 		expect(await heldBlocksHashes(late.node)).toEqual([]);
 
@@ -1688,7 +1739,8 @@ describe('a bootstrap client at the edges of what it accepts and meets', functio
 		const late = await joiner({ bootstrapFrom: [serving.apiURL] });
 		const info = linesOf(late.node, 'info');
 
-		expect(await clientOf(late.node).update()).toEqual({ complete: true });
+		// The pass completed; the update did not, as the ledger applied none of it.
+		expect(await clientOf(late.node).update()).toEqual({ complete: false });
 
 		expect(info()).toEqual([expect.stringMatching(new RegExp(`^BOOTSTRAP Bootstrap pass over ${serving.apiURL}: drained after \\d+ requests, 0 staples added, 0 held already, 2 queued for retry, 0 staged \\(2 in the queue\\)$`, 'u'))]);
 	});

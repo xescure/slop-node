@@ -31,7 +31,7 @@ const OTHER = other.publicKeyString.get();
 
 const HELD_BEFORE = new Date('2025-12-31T00:00:00.000Z');
 
-const PROGRESS: FollowerProgress = { completedPass: undefined, heldBefore: HELD_BEFORE, staged: 0 };
+const PROGRESS: FollowerProgress = { completedPass: undefined, heldBefore: HELD_BEFORE, staged: 0, queued: 0, stranded: 0 };
 
 /** A send that names an idempotent key, as a held block. */
 async function heldSend(): Promise<HeldBlock> {

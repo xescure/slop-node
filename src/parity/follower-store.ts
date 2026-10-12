@@ -1,7 +1,7 @@
 import pg from 'pg';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
-import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RANGES_KEY, layoutOf, progressOf } from '../node/bootstrap-cursors.js';
+import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RANGES_KEY, BOOTSTRAP_RETRY_ARENA, layoutOf, progressOf } from '../node/bootstrap-cursors.js';
 import type { PeerProgress } from '../node/bootstrap-pass.js';
 import type { RangeLayout } from '../node/bootstrap-ranges.js';
 import { assertNever } from '../util/assert-never.js';
@@ -21,15 +21,21 @@ export type FollowerProgress = {
 	readonly heldBefore: Date | undefined;
 	/** Staples read and waiting in the bootstrap stage to be added in the order of their votes (schema/CONTRACT.md, section 4.3). */
 	readonly staged: number;
+	/** Staples the ledger refused, waiting in the retry queue (src/node/bootstrap-retry.ts) until it accepts them. */
+	readonly queued: number;
+	/** Deferred staples voted before the horizon of the latest completed pass, or any while none has completed, that await a block the main ledger lacks. */
+	readonly stranded: number;
 };
 
 /**
  * The follower holds what the representatives hold once a pass has
- * completed and it added everything it read; until then its ledger stands
- * at an earlier point of the history.
+ * completed and its ledger applied everything it read: nothing staged, nothing
+ * refused and queued, and nothing voted before that pass's horizon deferred
+ * behind a block it lacks. Until then its ledger stands at an earlier point
+ * of the history, or lacks staples the representatives hold.
  */
-export function caughtUp(progress: FollowerProgress): boolean {
-	return(progress.completedPass !== undefined && progress.staged === 0);
+export function caughtUp(progress: Pick<FollowerProgress, 'completedPass' | 'staged' | 'queued' | 'stranded'>): boolean {
+	return(progress.completedPass !== undefined && progress.staged === 0 && progress.queued === 0 && progress.stranded === 0);
 }
 
 /** An account the follower's ledger names, with the row that orders the sweep over them. */
@@ -406,6 +412,19 @@ const NEWEST_STAPLES = `
 
 const STAGED = 'SELECT count(*) AS count FROM bootstrap_stage';
 
+const QUEUED = 'SELECT count(*) AS count FROM kv_entries WHERE arena = $1';
+
+/** The deferred staples voted before the moment that await a block the main ledger lacks, as the node reads them (src/ledger/storage/postgres/side-statements.ts, strandedDeferredStaples). */
+export const STRANDED = `SELECT count(*) AS count FROM deferred_staples
+	WHERE deferred_staples.latest_vote_from < $1
+		AND EXISTS (
+			SELECT 1 FROM deferred_waits
+			WHERE deferred_waits.blocks_hash = deferred_staples.blocks_hash
+				AND NOT EXISTS (SELECT 1 FROM blocks WHERE blocks.hash = deferred_waits.block_hash AND blocks.ledger = 'main'))`;
+
+/** Later than any vote: the bound for the stranded staples while no pass has completed. */
+export const NO_HORIZON: Date = new Date(8.64e15);
+
 const LAST_SEQUENCE = 'SELECT max(sequence)::text AS place FROM staples';
 
 const STAPLE_AT = 'SELECT blocks_hash FROM staples WHERE sequence = $1';
@@ -584,7 +603,15 @@ export function openFollowerStore(connectionString: string, settings: FollowerSt
 				return(peer !== undefined);
 			});
 			const staged = await pool.query<{ count: string }>(STAGED);
-			return({ completedPass, heldBefore: heldBeforeOf(layoutOf(layout.rows[0]?.value), peers), staged: Number(staged.rows[0]?.count ?? 0) });
+			const queued = await pool.query<{ count: string }>(QUEUED, [BOOTSTRAP_RETRY_ARENA]);
+			const stranded = await pool.query<{ count: string }>(STRANDED, [completedPass ?? NO_HORIZON]);
+			return({
+				completedPass,
+				heldBefore: heldBeforeOf(layoutOf(layout.rows[0]?.value), peers),
+				staged: Number(staged.rows[0]?.count ?? 0),
+				queued: Number(queued.rows[0]?.count ?? 0),
+				stranded: Number(stranded.rows[0]?.count ?? 0)
+			});
 		},
 		chainAccountsAfter(rowID: string, count: number): Promise<readonly KnownAccount[]> {
 			return(knownAccountsWithin(pool, CHAIN_ACCOUNTS_STATEMENT_MILLISECONDS, CHAIN_ACCOUNTS_AFTER, rowID, count));

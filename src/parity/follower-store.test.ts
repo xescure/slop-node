@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, inject, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
-import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RANGES_KEY } from '../node/bootstrap-cursors.js';
+import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RANGES_KEY, BOOTSTRAP_RETRY_ARENA } from '../node/bootstrap-cursors.js';
 import type { PeerProgress } from '../node/bootstrap-pass.js';
 import type { RangeLayout } from '../node/bootstrap-ranges.js';
 import { confirmedStaple, sendBlock, setRepresentativeBlock } from '../testing/blocks.js';
 import { createDatabase } from '../testing/postgres.js';
 import type { TestDatabase } from '../testing/postgres.js';
-import { CHAIN_ACCOUNTS_AFTER, heldBeforeOf, openFollowerStore, readOnlyPool } from './follower-store.js';
+import { CHAIN_ACCOUNTS_AFTER, caughtUp, heldBeforeOf, openFollowerStore, readOnlyPool } from './follower-store.js';
 import type { FollowerStore, KnownAccount } from './follower-store.js';
 
 const lib = KeetaNet.lib;
@@ -175,12 +175,12 @@ describe('the follower\'s store, read from its database', function() {
 	test('reads the bootstrap progress the node stored', async function() {
 		const stored = { from: 1000, end: 9000, deepScanPeer: PEER, ranges: [{ reached: 2500, end: 4000, peer: PEER }], standings: {} };
 		const store = storeOf(await followerDatabase({ caughtUp: 7000, layout: stored, cursors: { [PEER]: storedProgress(8000), [OTHER_PEER]: storedProgress(3000) } }));
-		expect(await store.progress()).toEqual({ completedPass: new Date(7000), heldBefore: new Date(2500), staged: 0 });
+		expect(await store.progress()).toEqual({ completedPass: new Date(7000), heldBefore: new Date(2500), staged: 0, queued: 0, stranded: 0 });
 	});
 
 	test('reads no progress from a node that stored none', async function() {
 		const store = storeOf(await followerDatabase({ cursors: { [PEER]: storedProgress(4000), [OTHER_PEER]: { written: 'by another version' } } }));
-		expect(await store.progress()).toEqual({ completedPass: undefined, heldBefore: new Date(4000), staged: 0 });
+		expect(await store.progress()).toEqual({ completedPass: undefined, heldBefore: new Date(4000), staged: 0, queued: 0, stranded: 0 });
 	});
 
 	test('opens sessions that cannot write to the follower\'s database', async function() {
@@ -397,6 +397,33 @@ describe('the follower\'s store, read from its database', function() {
 			const staple = made[index];
 			return([staple?.blocksHash.toString(), staple?.timestamp().getTime(), PLACES[index]]);
 		}));
+	});
+
+	test('counts the staples queued for retry, and those deferred before the completed pass\'s horizon that await a block the main ledger lacks', async function() {
+		const database = await followerDatabase({ caughtUp: 7000 });
+		const pool = database.pool();
+		await pool.query('INSERT INTO kv_entries (arena, key, value) VALUES ($1, $2, $3), ($1, $4, $3)', [BOOTSTRAP_RETRY_ARENA, 'first', JSON.stringify({ code: 'LEDGER_OTHER' }), 'second']);
+		const deferred = function(hash: string, latestVote: number, awaits: string): Promise<unknown> {
+			return(pool.query('WITH staple AS (INSERT INTO deferred_staples (blocks_hash, bytes, latest_vote_from) VALUES ($1, $2, $3) RETURNING blocks_hash) INSERT INTO deferred_waits (block_hash, blocks_hash) SELECT $4, blocks_hash FROM staple', [Buffer.from(hash, 'hex'), Buffer.from([1]), new Date(latestVote), Buffer.from(awaits, 'hex')]));
+		};
+		const MAIN_BLOCK = '34'.repeat(32);
+		await pool.query(`INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position)
+			SELECT $1, 'main', id, $1, 1, '\\x0102', $3, 0 FROM accounts WHERE public_key = $2`, [Buffer.from(MAIN_BLOCK, 'hex'), ACCOUNTS[0], Buffer.from(STAPLE, 'hex')]);
+		// Stranded; voted at the horizon; awaiting a block the main ledger holds, so released.
+		await deferred('a1'.repeat(32), 6999, 'b1'.repeat(32));
+		await deferred('a2'.repeat(32), 7000, 'b2'.repeat(32));
+		await deferred('a3'.repeat(32), 1000, MAIN_BLOCK);
+		await database.endPools();
+
+		const progress = await storeOf(database).progress();
+
+		expect(progress).toMatchObject({ completedPass: new Date(7000), staged: 0, queued: 2, stranded: 1 });
+		expect(caughtUp(progress)).toBe(false);
+		expect(caughtUp({ ...progress, queued: 0 })).toBe(false);
+		expect(caughtUp({ ...progress, stranded: 0 })).toBe(false);
+		expect(caughtUp({ ...progress, queued: 0, stranded: 0 })).toBe(true);
+		expect(caughtUp({ ...progress, queued: 0, stranded: 0, staged: 1 })).toBe(false);
+		expect(caughtUp({ ...progress, queued: 0, stranded: 0, completedPass: undefined })).toBe(false);
 	});
 
 	test('counts the staples staged and not added yet', async function() {

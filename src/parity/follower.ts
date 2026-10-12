@@ -13,6 +13,7 @@ import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
 import type { HistoryReindex } from '../ledger/storage/postgres/driver.js';
 import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RETRY_ARENA } from '../node/bootstrap-cursors.js';
 import { assertNever } from '../util/assert-never.js';
+import { NO_HORIZON, STRANDED, caughtUp as caughtUpOf } from './follower-store.js';
 import { restage } from './restage.js';
 import type { Restaged } from './restage.js';
 import { checkFollowerEnvironment, FOLLOWER_DATABASE, FOLLOWER_LISTEN_IP, FOLLOWER_POSTGRES_USER, FOLLOWER_SETTINGS_FILE, followerDatabaseURL, followerDatabaseURLOf, followerDirectory, followerEnvironment, parseFollowerCommand, POSTGRES_PORT, POSTGRES_SOCKET_DIRECTORY, readFollowerSettings, readOrCreateSeed } from './follower-config.js';
@@ -813,12 +814,26 @@ async function ledgerProgress(directory: string): Promise<unknown> {
 		const queued = await client.query<{ code: string | null; count: string; oldest: string | null; reported: string }>(`
 			SELECT value->>'code' AS code, count(*) AS count, min((value->>'queuedAt')::bigint) AS oldest, count(*) FILTER (WHERE (value->>'reported')::boolean) AS reported
 			FROM kv_entries WHERE arena = $1 GROUP BY 1 ORDER BY 1`, [BOOTSTRAP_RETRY_ARENA]);
+		const horizon: unknown = caughtUp.rows[0]?.value;
+		let completedPass: Date | undefined;
+		if (typeof horizon === 'number') {
+			completedPass = new Date(horizon);
+		}
+		const stranded = await client.query<{ count: string }>(STRANDED, [completedPass ?? NO_HORIZON]);
+		const strandedCount = Number(stranded.rows[0]?.count ?? 0);
+		const stagedCount = Number(staged.rows[0]?.count ?? 0);
+		const queuedCount = queued.rows.reduce(function(sum, group): number {
+			return(sum + Number(group.count));
+		}, 0);
 		const row = staples.rows[0];
 		return({
+			// As the parity tools judge it (src/parity/follower-store.ts, caughtUp).
+			caughtUp: caughtUpOf({ completedPass, staged: stagedCount, queued: queuedCount, stranded: strandedCount }),
 			staples: Number(row?.count ?? 0),
 			deferredStaples: Number(deferred.rows[0]?.count ?? 0),
+			strandedDeferredStaples: strandedCount,
 			stage: {
-				staples: Number(staged.rows[0]?.count ?? 0),
+				staples: stagedCount,
 				MiB: Math.round(Number(staged.rows[0]?.bytes ?? 0) / KIB_PER_MIB / KIB_PER_MIB),
 				earliestVote: staged.rows[0]?.earliest ?? null
 			},

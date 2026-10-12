@@ -21,7 +21,7 @@ const THIRD_ACCOUNT = 'keeta_aabwip6zeo2fnzfxp5hssrrqtascs2277w2zk7vqd6d3k3m4dkt
 const FOURTH_ACCOUNT = 'keeta_aabvmwxttv4q56gbfveighwfwp3yvitlrdfsacic3ckqc7lqelsspvmhc7oldmq';
 const STAPLE = 'A0'.repeat(32);
 
-const PROGRESS: FollowerProgress = { completedPass: undefined, heldBefore: new Date('2025-12-31T00:00:00.000Z'), staged: 0 };
+const PROGRESS: FollowerProgress = { completedPass: undefined, heldBefore: new Date('2025-12-31T00:00:00.000Z'), staged: 0, queued: 0, stranded: 0 };
 
 const READ = { kind: 'read', first: { checksum: '0x1', blockCount: 1 }, second: { checksum: '0x1', blockCount: 1 } } as const;
 
