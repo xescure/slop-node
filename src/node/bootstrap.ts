@@ -14,7 +14,8 @@ import type { AssertNever } from '../util/assert-never.js';
 import type { ClassSurface } from '../util/class-surface.js';
 import { BootstrapCursors, KVRetryStore } from './bootstrap-cursors.js';
 import { PageError, PageFetcher } from './bootstrap-page.js';
-import { PeerPacer } from './bootstrap-pacing.js';
+import type { PageProblem } from './bootstrap-page.js';
+import { PeerPacer, PeerThrottled } from './bootstrap-pacing.js';
 import { VOTE_KEY_TOLERANCE_MILLISECONDS } from './bootstrap-evidence.js';
 import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, MAX_PASS_MILLISECONDS, PrimingWindow, bootstrapPeer, bootstrapRange, completes } from './bootstrap-pass.js';
 import type { PassAnswer, PassEvent, PassOutcome, PassRequest, PeerIO } from './bootstrap-pass.js';
@@ -187,6 +188,11 @@ function answerOf(error: PageError): PassAnswer<VoteStaple> | undefined {
 		default:
 			return(assertNever(problem));
 	}
+}
+
+/** Whether the failure is a peer's answer asking the node to slow down. */
+function isThrottling(error: unknown): error is PageError & { readonly problem: Extract<PageProblem, { readonly kind: 'status' }> } {
+	return(error instanceof PageError && error.problem.kind === 'status' && THROTTLING_STATUSES.includes(error.problem.status));
 }
 
 function resultOf(outcome: PassOutcome): PeerResult {
@@ -724,6 +730,11 @@ export class BootstrapClient {
 				this.#node.log.info(LOG_SOURCE, `Bootstrap pass over ${endpoint} waits for room, in the range from ${task.reached.toISOString()} to ${task.end().toISOString()}: ${error.message}`);
 				return('throttled');
 			}
+			// A peer that asked the node to slow down is waited for, and not benched for failing meanwhile.
+			if (error instanceof PeerThrottled || isThrottling(error)) {
+				this.#node.log.info(LOG_SOURCE, `Bootstrap pass over ${endpoint} waits, as the peer asked, in the range from ${task.reached.toISOString()} to ${task.end().toISOString()}: ${error.message}`);
+				return('throttled');
+			}
 			this.#node.log.warn(LOG_SOURCE, `Bootstrapping from ${endpoint} in the range from ${task.reached.toISOString()} to ${task.end().toISOString()} failed; it is tried again on the next update:`, error);
 			return('failed');
 		}
@@ -919,7 +930,7 @@ export class BootstrapClient {
 
 	/** A peer that answered with a status asking the node to slow down is left alone for a while (PeerPacer). */
 	#noteThrottling(endpoint: string, error: unknown): void {
-		if (error instanceof PageError && error.problem.kind === 'status' && THROTTLING_STATUSES.includes(error.problem.status)) {
+		if (isThrottling(error)) {
 			this.#pacer.throttled(endpoint, error.problem.retryAfterMilliseconds);
 		}
 	}

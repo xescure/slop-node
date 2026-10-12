@@ -124,7 +124,7 @@ export type RangeResult =
 	| 'bounded'
 	/** It failed, which counts against its peer. */
 	| 'failed'
-	/** The retry queue had no room for a staple it refused, so it stopped before it; it waits for room. */
+	/** The retry queue had no room for a staple it refused, so it stopped before it, or its peer asked the node to slow down; it waits, which counts against no one. */
 	| 'throttled'
 	/** The node stopped. */
 	| 'stopped';

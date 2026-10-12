@@ -1503,6 +1503,33 @@ describe('a bootstrap client at the edges of what it accepts and meets', functio
 		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
 	});
 
+	test('waits for a peer that asks it to slow down while it reads a range, neither benching it nor counting the failures against it', async function() {
+		const throttling = await startAnsweringPeer(429, JSON.stringify({ error: true, message: 'Slow down' }), { 'retry-after': '60' });
+		const late = await joiner({ bootstrapFrom: [throttling.apiURL] });
+		const kv = new KVInternals.KVStorageProviderMemory();
+		advanceClock(2 * 24 * 60 * 60_000);
+		const end = new Date(Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS);
+		const cursors = new BootstrapCursors(kv);
+		await cursors.writeLayout({ from: GENESIS_MOMENT, end, deepScanPeer: throttling.apiURL, ranges: [
+			{ id: 0, reached: GENESIS_MOMENT, end, peer: throttling.apiURL, pace: { spent: 0, advanced: 0 } }
+		], standings: { [throttling.apiURL]: { failures: 2, benchedUntil: undefined } }, fullQueueUpdates: 0, nextID: 1 });
+		const info = linesOf(late.node, 'info');
+		const client = clientOf(late.node, { kv });
+
+		await client.update();
+		await client.update();
+
+		// The 429, then a pass that sends nothing while the wait lasts.
+		expect(throttling.requests()).toBe(1);
+		expect((await cursors.readLayout())?.standings).toEqual({ [throttling.apiURL]: { failures: 2, benchedUntil: undefined } });
+		expect(info().filter(function(line): boolean {
+			return(line.includes('waits, as the peer asked'));
+		})).toEqual([
+			`BOOTSTRAP Bootstrap pass over ${throttling.apiURL} waits, as the peer asked, in the range from ${GENESIS_MOMENT.toISOString()} to ${end.toISOString()}: ${throttling.apiURL} answered 429: Slow down`,
+			`BOOTSTRAP Bootstrap pass over ${throttling.apiURL} waits, as the peer asked, in the range from ${GENESIS_MOMENT.toISOString()} to ${end.toISOString()}: the bootstrap asks ${throttling.apiURL} nothing for 60 s more, as it asked the node to slow down`
+		]);
+	});
+
 	test('logs a pass over a range that fails, naming the range, and one stopped only at debug level', async function() {
 		const failing = await startFailingPeer();
 		const silent = await startSilentAPIPeer();
