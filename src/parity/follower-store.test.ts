@@ -297,26 +297,39 @@ describe('the follower\'s store, read from its database', function() {
 		expect(await store.newestStaples([first, second, third])).toEqual(new Map([[first, quietTime], [second, recentTime]]));
 	});
 
-	test('reads in one view an account\'s stored balances and those its history leaves it with, the history in reads of so many staples', async function() {
+	test('reads in one view an account\'s stored balances and those its history leaves it with, the history in reads of so many staples, on the view\'s one session', async function() {
 		const database = await followerDatabase({});
 		const pool = database.pool();
 		const sender = lib.Account.fromSeed('5e'.repeat(32), 0);
 		const recipient = lib.Account.fromSeed('5e'.repeat(32), 1);
 		const token = sender.generateIdentifier(lib.Account.AccountKeyAlgorithm.TOKEN, undefined, 0);
 		const RECIPIENT = recipient.publicKeyString.get();
-		await pool.query('INSERT INTO accounts (public_key, key_type) VALUES ($1, 0)', [RECIPIENT]);
+		const SENDER = sender.publicKeyString.get();
+		await pool.query('INSERT INTO accounts (public_key, key_type) VALUES ($1, 0), ($2, 0)', [RECIPIENT, SENDER]);
 		let previous: VoteStaple | undefined;
 		for (const [day, amount] of [[1, 5n], [2, 7n]] as const) {
 			const block = await sendBlock({ from: sender, to: recipient, amount, token, previous: previous?.blocks[0]?.hash ?? null, network: 0x5382n, date: new Date(Date.UTC(2025, 10, day)) });
 			const staple = await confirmedStaple([block], [sender]);
 			previous = staple;
 			const key = Buffer.from(staple.blocksHash.toString(), 'hex');
-			await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, bytes, checksum) VALUES ($1, $2, $2, $3, repeat(\'0\', 256)::bit(256))', [key, staple.timestamp(), Buffer.from(staple.toBytes())]);
+			// The second staple was stored before staples kept their bytes, so it is rebuilt from its block and vote.
+			let bytes: Buffer | null = Buffer.from(staple.toBytes());
+			if (day === 2) {
+				bytes = null;
+			}
+			await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, bytes, checksum) VALUES ($1, $2, $2, $3, repeat(\'0\', 256)::bit(256))', [key, staple.timestamp(), bytes]);
+			await pool.query(`INSERT INTO blocks (hash, ledger, account_id, previous, operation_count, bytes, staple, staple_position)
+				SELECT $1, 'main', id, $2, 1, $3, $4, 0 FROM accounts WHERE public_key = $5`, [Buffer.from(block.hash.toString(), 'hex'), Buffer.from(block.previous.toString(), 'hex'), Buffer.from(block.toBytes()), key, SENDER]);
+			for (const vote of staple.votes) {
+				await pool.query(`INSERT INTO votes (ledger, uid, blocks_hash, issuer_id, validity_from, validity_to, permanent, bytes)
+					SELECT 'main', $1, $2, id, $3, $4, $5, $6 FROM accounts WHERE public_key = $7`, [vote.$uid, key, vote.validityFrom, vote.validityTo, vote.$permanent, Buffer.from(vote.toBytes()), SENDER]);
+			}
 			await pool.query('INSERT INTO history (account_id, blocks_hash, staple_time) SELECT id, $2, $3 FROM accounts WHERE public_key = $1', [RECIPIENT, key, staple.timestamp()]);
 		}
 		await pool.query('INSERT INTO balances (account_id, token_id, balance) SELECT a.id, t.id, 12 FROM accounts a, accounts t WHERE a.public_key = $1 AND t.public_key = $2', [RECIPIENT, ACCOUNTS[0]]);
 		await database.endPools();
-		const store = openFollowerStore(database.connectionString, { historyStaplesPerRead: 1 });
+		// One session only: a read that took a second would wait for it until the pool gave up.
+		const store = openFollowerStore(database.connectionString, { historyStaplesPerRead: 1, connections: 1 });
 		stores.push(store);
 
 		expect(await store.balancesSnapshot(RECIPIENT, function() {

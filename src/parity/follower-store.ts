@@ -200,10 +200,10 @@ const CHAIN_ACCOUNTS_STATEMENT_MILLISECONDS = 300_000;
  * A pool whose sessions cannot write: the follower's node owns its
  * database, and the parity tools only read it.
  */
-export function readOnlyPool(connectionString: string): pg.Pool {
+export function readOnlyPool(connectionString: string, connections: number = FOLLOWER_POOL_CONNECTIONS): pg.Pool {
 	const pool = new pg.Pool({
 		connectionString,
-		max: FOLLOWER_POOL_CONNECTIONS,
+		max: connections,
 		options: '-c default_transaction_read_only=on',
 		statement_timeout: 30_000,
 		connectionTimeoutMillis: 10_000
@@ -270,6 +270,8 @@ const HISTORY_STAPLES_PER_READ = 200;
 export type FollowerStoreSettings = {
 	/** Staples of an account's history one statement reads with their bytes. */
 	readonly historyStaplesPerRead: number;
+	/** Sessions the store's pool holds at most. */
+	readonly connections: number;
 };
 
 /** The history key is (account, staple time, blocks hash), and the staple's time is found from its hash. */
@@ -450,7 +452,7 @@ function groupedBy<Row>(rows: readonly Row[], keyOf: (row: Row) => Buffer): Map<
  * is decoded at its own validity, so a temporary one is not refused as
  * expired.
  */
-export async function heldStaplesOf(pool: pg.Pool, rows: readonly { blocks_hash: Buffer; staple_time: Date; bytes: Buffer | null }[]): Promise<HeldStaple[]> {
+export async function heldStaplesOf(pool: pg.Pool | pg.PoolClient, rows: readonly { blocks_hash: Buffer; staple_time: Date; bytes: Buffer | null }[]): Promise<HeldStaple[]> {
 	const missing = rows.filter(function(row): boolean {
 		return(row.bytes === null);
 	}).map(function(row): Buffer {
@@ -560,8 +562,8 @@ function isWholeNumber(value: unknown): value is number {
 }
 
 /** The follower's store, read through a pool of read-only sessions on its database. */
-export function openFollowerStore(connectionString: string, settings: FollowerStoreSettings = { historyStaplesPerRead: HISTORY_STAPLES_PER_READ }): FollowerStore {
-	const pool = readOnlyPool(connectionString);
+export function openFollowerStore(connectionString: string, settings: FollowerStoreSettings = { historyStaplesPerRead: HISTORY_STAPLES_PER_READ, connections: FOLLOWER_POOL_CONNECTIONS }): FollowerStore {
+	const pool = readOnlyPool(connectionString, settings.connections);
 	return({
 		async progress(): Promise<FollowerProgress> {
 			const caughtUp = await pool.query<{ value: unknown }>(KV_VALUE, [BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY]);
@@ -643,7 +645,7 @@ export function openFollowerStore(connectionString: string, settings: FollowerSt
 				const fromHistory = new Map<string, bigint>();
 				for (let start = 0; start < hashes.length; start += settings.historyStaplesPerRead) {
 					const rows = (await client.query<SequencedStapleRow>(STAPLES_OF, [hashes.slice(start, start + settings.historyStaplesPerRead)])).rows;
-					foldBalances(fromHistory, (await heldStaplesOf(pool, rows)).map(function({ staple }) {
+					foldBalances(fromHistory, (await heldStaplesOf(client, rows)).map(function({ staple }) {
 						return(staple);
 					}), account);
 				}
