@@ -692,6 +692,18 @@ describe('a divergence from one representative', function() {
 		expect(summary).toMatchObject({ diverged: 1, representativeLocal: 0 });
 	});
 
+	test('records no check of the follower\'s balances when those it stores are not those of the state compared, as the account moved since', async function() {
+		const running = await setup(3);
+		const account = ACCOUNTS[0];
+		serveSplit(running, account, '0x10', ['0x11', '0x10', '0x10']);
+		// Compared at 0x10, then served at 0x12 as the follower stores it when its balances are checked.
+		running.follower.serve(`/node/ledger/account/${account}`, state(account, '0x10'), state(account, '0x10'), state(account, '0x12'));
+
+		await sweep(running, memoryStore({ [account]: [STAPLE] }, undefined, {}, [], [], 0x12n, [], 0x12n), 1);
+
+		expect(await outcomes(running)).toMatchObject([{ kind: 'representative-local', selfCheck: { kind: 'unchecked', why: 'the balances the follower stores are not those of the state compared, as the account moved' } }]);
+	});
+
 	test('records no check of the follower\'s balances when the state it serves is not the one it stores, as the account moved', async function() {
 		const running = await setup(3);
 		const account = ACCOUNTS[0];

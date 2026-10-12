@@ -482,17 +482,22 @@ async function compareAdjudicated(setup: Comparing, representative: APISource, a
  * Whether the follower's balances of the account are those its own history
  * leaves it with, both read from one view of its database, so that a staple
  * added meanwhile cannot set them apart; and whether the state its API
- * serves, read while that view holds, is the one it stores, which it is not
+ * serves, read while that view holds, and the state the representatives
+ * judged, when it shows balances, are the one it stores, which they are not
  * when the account moved in between, and then nothing is checked of the
  * state compared.
  */
-async function selfCheckOfAccount(setup: Comparing, account: string): Promise<SelfCheck> {
+async function selfCheckOfAccount(setup: Comparing, account: string, compared: unknown): Promise<SelfCheck> {
 	try {
 		const { stored, fromHistory, during } = await setup.store.balancesSnapshot(account, function() {
 			return(getOK(setup.follower, `/node/ledger/account/${account}`));
 		});
 		if (selfCheckOf(during, stored).kind !== 'consistent') {
 			return({ kind: 'unchecked', why: 'the state the follower served is not the one it stored, as the account moved' });
+		}
+		// The check vouches for the state the representatives judged only when the follower still stores it.
+		if (selfCheckOf(compared, stored).kind === 'inconsistent') {
+			return({ kind: 'unchecked', why: 'the balances the follower stores are not those of the state compared, as the account moved' });
 		}
 		return(balancesCheckOf(stored, fromHistory));
 	} catch (error: unknown) {
@@ -510,7 +515,7 @@ async function withSelfCheck(setup: Comparing, outcome: { readonly kind: Dispute
 	if (outcome.kind === 'diverged') {
 		return(outcome);
 	}
-	const selfCheck = await selfCheckOfAccount(setup, outcome.divergence.account);
+	const selfCheck = await selfCheckOfAccount(setup, outcome.divergence.account, outcome.follower);
 	if (selfCheck.kind === 'inconsistent') {
 		return({ ...outcome, kind: 'diverged', selfCheck });
 	}
