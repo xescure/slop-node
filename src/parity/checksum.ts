@@ -2,7 +2,7 @@ import { LIVE_QUEUE_BOUNDS } from '../node/bootstrap-retry.js';
 import { getOK } from './api-source.js';
 import type { APISource } from './api-source.js';
 import type { ChecksumSnapshot, FollowerProgress, FollowerStore } from './follower-store.js';
-import type { BlockCountNotComparableReason, BlockCountRecord, BlockCountVerdict, ChecksumReading, ChecksumRecord, ChecksumVerdict, ChecksumWindow, CrossCheckOutcome, CrossCheckRecord, MismatchedStapleRecord, NotComparableReason } from './log.js';
+import type { BlockCountNotComparableReason, BlockCountRecord, BlockCountVerdict, ChecksumReading, ChecksumRecord, ChecksumVerdict, ChecksumWindow, CrossCheckOutcome, CrossCheckRecord, HeldBackRecord, MismatchedStapleRecord, NotComparableReason } from './log.js';
 
 /**
  * How long a representative's checksum and block count must hold still to
@@ -237,6 +237,12 @@ export async function compareChecksums(comparison: ChecksumComparison): Promise<
 		});
 	}
 	return({ checksums, blockCounts });
+}
+
+/** What keeps the follower from being caught up now, recorded so that a staple held back across comparisons shows for how long. */
+export async function heldBackRecordOf(store: Pick<FollowerStore, 'heldBack'>): Promise<HeldBackRecord> {
+	const at = new Date().toISOString();
+	return({ kind: 'held-back', at, ...await store.heldBack() });
 }
 
 export function hexOf(value: bigint): string {

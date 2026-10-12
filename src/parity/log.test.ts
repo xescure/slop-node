@@ -172,6 +172,14 @@ describe('the parity log', function() {
 		expect(await log.read()).toEqual({ records: [{ ...MATCHED, outcome: { ...outcome, readings: [], selfCheck: null } }], unreadableLines: 0 });
 	});
 
+	test('reads back what kept the follower from being caught up at a checksum comparison', async function() {
+		const log = await scratchLog();
+		const heldBack: ParityRecord = { kind: 'held-back', at: CHECKSUM.at, queued: [{ key: 'AB'.repeat(32), code: null, queuedAt: '2026-10-09T05:00:00.000Z' }], stranded: [{ blocksHash: 'CD'.repeat(32), latestVoteFrom: '2026-10-09T04:00:00.000Z', lacks: ['EF'.repeat(32)] }] };
+		await log.append([heldBack]);
+
+		expect(await log.read()).toEqual({ records: [heldBack], unreadableLines: 0 });
+	});
+
 	test('reads a checksum comparison an earlier build recorded as a pass or a fail, with an aid to bisect it, as one that agrees or differs', async function() {
 		const log = await scratchLog();
 		const bisect = { followerBlockCount: 7, representativeBlockCount: 8, sweep: { cursor: { lap: 0, afterRowID: '41' }, firstDivergence: null } };

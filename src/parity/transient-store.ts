@@ -169,6 +169,7 @@ export function retryingStore(store: FollowerStore, retry: TransientRetry): Foll
 	const chainAccountsAfter = retrying(store.chainAccountsAfter.bind(store));
 	return({
 		progress: retrying(store.progress.bind(store)),
+		heldBack: retrying(store.heldBack.bind(store)),
 		chainAccountsAfter,
 		passiveAccountsAfter: retrying(store.passiveAccountsAfter.bind(store)),
 		accountCount: retrying(store.accountCount.bind(store)),

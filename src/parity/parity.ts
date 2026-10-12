@@ -12,7 +12,7 @@ import { assertNever } from '../util/assert-never.js';
 import { capturedBehaviors, explainDivergence, recheckAPIDivergences, sampleAPI } from './api-diff.js';
 import { httpSource, pacedSource } from './api-source.js';
 import type { APISource } from './api-source.js';
-import { compareChecksums, crossCheckChecksum } from './checksum.js';
+import { compareChecksums, crossCheckChecksum, heldBackRecordOf } from './checksum.js';
 import { FOLLOWER_DATABASE, FOLLOWER_LISTEN_IP, followerDatabaseURL, followerDatabaseURLOf, followerDirectory, MAINNET_REPRESENTATIVE_APIS, readFollowerSettings } from './follower-config.js';
 import { caughtUp, openFollowerStore } from './follower-store.js';
 import type { FollowerStore } from './follower-store.js';
@@ -362,7 +362,7 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 				gapMilliseconds: command.gapMilliseconds,
 				wait
 			});
-			const records = [crossCheck, ...comparison.checksums, ...comparison.blockCounts];
+			const records = [crossCheck, await heldBackRecordOf(tools.store), ...comparison.checksums, ...comparison.blockCounts];
 			await tools.log.append(records);
 			process.stdout.write(`${JSON.stringify(records, null, '\t')}\n`);
 			return(0);

@@ -426,6 +426,29 @@ describe('the follower\'s store, read from its database', function() {
 		expect(caughtUp({ ...progress, queued: 0, stranded: 0, completedPass: undefined })).toBe(false);
 	});
 
+	test('lists the staples queued for retry with their refusal and when they were queued, and the stranded staples with the blocks they lack, the oldest first', async function() {
+		const database = await followerDatabase({ caughtUp: 7000 });
+		const pool = database.pool();
+		await pool.query('INSERT INTO kv_entries (arena, key, value) VALUES ($1, $2, $3), ($1, $4, $5)', [BOOTSTRAP_RETRY_ARENA, 'later', JSON.stringify({ code: 'LEDGER_OTHER', queuedAt: 5000 }), 'earlier', JSON.stringify({ code: 'LEDGER_INVALID_BALANCE', queuedAt: 3000 })]);
+		const deferred = function(hash: string, latestVote: number, awaits: readonly string[]): Promise<unknown> {
+			return(pool.query('WITH staple AS (INSERT INTO deferred_staples (blocks_hash, bytes, latest_vote_from) VALUES ($1, $2, $3) RETURNING blocks_hash) INSERT INTO deferred_waits (block_hash, blocks_hash) SELECT unnest($4::bytea[]), blocks_hash FROM staple', [Buffer.from(hash, 'hex'), Buffer.from([1]), new Date(latestVote), awaits.map(function(block) {
+				return(Buffer.from(block, 'hex'));
+			})]));
+		};
+		await deferred('a1'.repeat(32), 6999, ['b2'.repeat(32), 'b1'.repeat(32)]);
+		await deferred('a2'.repeat(32), 2000, ['b3'.repeat(32)]);
+		await deferred('a4'.repeat(32), 7000, ['b4'.repeat(32)]);
+		await database.endPools();
+
+		expect(await storeOf(database).heldBack()).toEqual({
+			queued: [{ key: 'earlier', code: 'LEDGER_INVALID_BALANCE', queuedAt: new Date(3000).toISOString() }, { key: 'later', code: 'LEDGER_OTHER', queuedAt: new Date(5000).toISOString() }],
+			stranded: [
+				{ blocksHash: 'A2'.repeat(32), latestVoteFrom: new Date(2000).toISOString(), lacks: ['B3'.repeat(32)] },
+				{ blocksHash: 'A1'.repeat(32), latestVoteFrom: new Date(6999).toISOString(), lacks: ['B1'.repeat(32), 'B2'.repeat(32)] }
+			]
+		});
+	});
+
 	test('counts the staples staged and not added yet', async function() {
 		const database = await followerDatabase({ caughtUp: 7000 });
 		const pool = database.pool();

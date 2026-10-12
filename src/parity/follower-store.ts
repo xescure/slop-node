@@ -119,8 +119,23 @@ export type SequencedStaple = HeldStaple & {
 };
 
 /** What the parity tools read of the follower's own storage. */
+/** A staple the ledger refused, waiting in the retry queue: its key, the code of its latest refusal, and when it was queued. */
+export type QueuedStaple = { readonly key: string; readonly code: string | null; readonly queuedAt: string };
+
+/** A deferred staple voted before the latest pass's horizon, by the hash of its blocks, with the blocks it awaits that the main ledger lacks. */
+export type StrandedStaple = { readonly blocksHash: string; readonly latestVoteFrom: string; readonly lacks: readonly string[] };
+
+/** What keeps the follower from being caught up once its stage is empty, the oldest first, at most HELD_BACK_LISTED of each. */
+export type HeldBack = {
+	readonly queued: readonly QueuedStaple[];
+	readonly stranded: readonly StrandedStaple[];
+};
+
+export const HELD_BACK_LISTED = 100;
+
 export type FollowerStore = {
 	progress(): Promise<FollowerProgress>;
+	heldBack(): Promise<HeldBack>;
 	/** The accounts with a chain on the main ledger after the row, in row order, at most the count of them. */
 	chainAccountsAfter(rowID: string, count: number): Promise<readonly KnownAccount[]>;
 	/** The accounts without a chain on the main ledger after the row, in row order, at most the count of them. */
@@ -414,6 +429,19 @@ const STAGED = 'SELECT count(*) AS count FROM bootstrap_stage';
 
 const QUEUED = 'SELECT count(*) AS count FROM kv_entries WHERE arena = $1';
 
+const QUEUED_STAPLES = `
+	SELECT key, value->>'code' AS code, (value->>'queuedAt')::bigint AS queued_at FROM kv_entries
+	WHERE arena = $1 ORDER BY queued_at, key LIMIT $2`;
+
+/** The stranded staples as STRANDED counts them, with the blocks each awaits that the main ledger lacks. */
+const STRANDED_STAPLES = `
+	SELECT deferred_staples.blocks_hash, deferred_staples.latest_vote_from, array_agg(upper(encode(deferred_waits.block_hash, 'hex')) ORDER BY deferred_waits.block_hash) AS lacks
+	FROM deferred_staples JOIN deferred_waits ON deferred_waits.blocks_hash = deferred_staples.blocks_hash
+	WHERE deferred_staples.latest_vote_from < $1
+		AND NOT EXISTS (SELECT 1 FROM blocks WHERE blocks.hash = deferred_waits.block_hash AND blocks.ledger = 'main')
+	GROUP BY deferred_staples.blocks_hash, deferred_staples.latest_vote_from
+	ORDER BY deferred_staples.latest_vote_from, deferred_staples.blocks_hash LIMIT $2`;
+
 /** The deferred staples voted before the moment that await a block the main ledger lacks, as the node reads them (src/ledger/storage/postgres/side-statements.ts, strandedDeferredStaples). */
 export const STRANDED = `SELECT count(*) AS count FROM deferred_staples
 	WHERE deferred_staples.latest_vote_from < $1
@@ -611,6 +639,24 @@ export function openFollowerStore(connectionString: string, settings: FollowerSt
 				staged: Number(staged.rows[0]?.count ?? 0),
 				queued: Number(queued.rows[0]?.count ?? 0),
 				stranded: Number(stranded.rows[0]?.count ?? 0)
+			});
+		},
+		async heldBack(): Promise<HeldBack> {
+			const caughtUp = await pool.query<{ value: unknown }>(KV_VALUE, [BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY]);
+			const horizon = caughtUp.rows[0]?.value;
+			let completedPass = NO_HORIZON;
+			if (isWholeNumber(horizon)) {
+				completedPass = new Date(horizon);
+			}
+			const queued = await pool.query<{ key: string; code: string | null; queued_at: string }>(QUEUED_STAPLES, [BOOTSTRAP_RETRY_ARENA, HELD_BACK_LISTED]);
+			const stranded = await pool.query<{ blocks_hash: Buffer; latest_vote_from: Date; lacks: string[] }>(STRANDED_STAPLES, [completedPass, HELD_BACK_LISTED]);
+			return({
+				queued: queued.rows.map(function(row): QueuedStaple {
+					return({ key: row.key, code: row.code, queuedAt: new Date(Number(row.queued_at)).toISOString() });
+				}),
+				stranded: stranded.rows.map(function(row): StrandedStaple {
+					return({ blocksHash: hexOfBytes(row.blocks_hash), latestVoteFrom: row.latest_vote_from.toISOString(), lacks: row.lacks });
+				})
 			});
 		},
 		chainAccountsAfter(rowID: string, count: number): Promise<readonly KnownAccount[]> {

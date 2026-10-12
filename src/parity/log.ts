@@ -3,6 +3,7 @@ import type { FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { SHADOW_REFUSAL_REASONS } from '../conformance/mainnet/shadow.js';
 import type { ShadowRefusalReason } from '../conformance/mainnet/shadow.js';
+import type { HeldBack, QueuedStaple, StrandedStaple } from './follower-store.js';
 import { stratumOf } from './strata.js';
 import type { Stratum } from './strata.js';
 
@@ -545,7 +546,13 @@ export type ShadowExplainedRecord = {
 	readonly replaces: string;
 };
 
-export type ParityRecord = ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | SweepBatchRecord | APIDiffRecord | APIDiffPlanRecord | APIDiffExplainedRecord | ShadowLiveRecord | ShadowRunRecord | ShadowExplainedRecord;
+/** What kept the follower from being caught up once its stage was empty, as read at a checksum comparison (src/parity/follower-store.ts, HeldBack). */
+export type HeldBackRecord = HeldBack & {
+	readonly kind: 'held-back';
+	readonly at: string;
+};
+
+export type ParityRecord = HeldBackRecord | ChecksumRecord | BlockCountRecord | CrossCheckRecord | SweepRecord | SweepBatchRecord | APIDiffRecord | APIDiffPlanRecord | APIDiffExplainedRecord | ShadowLiveRecord | ShadowRunRecord | ShadowExplainedRecord;
 
 /** The records a log holds, and how many of its lines were not records, as the end of a line cut short by a crash. */
 export type ParityLogContents = {
@@ -1300,6 +1307,33 @@ function shadowRunRecordOf(value: Fields): ShadowRunRecord | undefined {
 	return({ kind: 'shadow-run', at, ...state, complete, cost });
 }
 
+function queuedStapleOf(value: unknown): QueuedStaple | undefined {
+	if (!isFields(value) || !isString(value['key']) || !isStringOrNull(value['code']) || !isString(value['queuedAt'])) {
+		return(undefined);
+	}
+	return({ key: value['key'], code: value['code'], queuedAt: value['queuedAt'] });
+}
+
+function strandedStapleOf(value: unknown): StrandedStaple | undefined {
+	if (!isFields(value) || !isString(value['blocksHash']) || !isString(value['latestVoteFrom'])) {
+		return(undefined);
+	}
+	const lacks = listOf(value['lacks'], textOf);
+	if (lacks === undefined) {
+		return(undefined);
+	}
+	return({ blocksHash: value['blocksHash'], latestVoteFrom: value['latestVoteFrom'], lacks });
+}
+
+function heldBackRecordOf(value: Fields): HeldBackRecord | undefined {
+	const queued = listOf(value['queued'], queuedStapleOf);
+	const stranded = listOf(value['stranded'], strandedStapleOf);
+	if (!isString(value['at']) || queued === undefined || stranded === undefined) {
+		return(undefined);
+	}
+	return({ kind: 'held-back', at: value['at'], queued, stranded });
+}
+
 function shadowExplainedRecordOf(value: Fields): ShadowExplainedRecord | undefined {
 	const { at, blocksHash, code, replaces } = value;
 	const window = shadowWindowOf(value['window']);
@@ -1379,6 +1413,8 @@ export function parityRecordOf(line: string): ParityRecord | undefined {
 			return(shadowRunRecordOf(value));
 		case 'shadow-explained':
 			return(shadowExplainedRecordOf(value));
+		case 'held-back':
+			return(heldBackRecordOf(value));
 		default:
 			return(undefined);
 	}

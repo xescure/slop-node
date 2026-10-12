@@ -10,6 +10,7 @@ function unread(name: string): () => Promise<never> {
 export function followerStoreOf(reads: Partial<FollowerStore>): FollowerStore {
 	return({
 		progress: unread('progress'),
+		heldBack: unread('heldBack'),
 		chainAccountsAfter: unread('chainAccountsAfter'),
 		passiveAccountsAfter: unread('passiveAccountsAfter'),
 		accountCount: unread('accountCount'),
