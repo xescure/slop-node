@@ -5,6 +5,7 @@ import type { Node } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { nodeLedgerChecksum } from '../../ledger/storage/base.js';
 import { freezeClock } from '../../testing/network.js';
+import { compareText } from '../../util/compare-text.js';
 import { mainnetNodeConfig } from './fixture.js';
 
 const lib = KeetaNet.lib;
@@ -28,16 +29,6 @@ export type ReplayResult = {
 	/** What the node's statistics hold under ledgerChecksum: the XOR of the hash of every block applied. */
 	readonly ledgerChecksum: bigint;
 };
-
-export function compareText(left: string, right: string): number {
-	if (left < right) {
-		return(-1);
-	}
-	if (left > right) {
-		return(1);
-	}
-	return(0);
-}
 
 export type Orderable = {
 	timestamp(): Date;

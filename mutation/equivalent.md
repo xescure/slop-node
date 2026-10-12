@@ -65,91 +65,91 @@ Two kinds of mutant need no entry:
 - src/ledger/storage/confirmed.ts:212:7-212:27 ConditionalExpression "false" equivalent: preAdjust answers a height for every block of a staple it does not defer, so no height is missing.
 - src/ledger/storage/confirmed.ts:212:29-214:4 BlockStatement "{}" equivalent: the error for a missing height is unreachable, as preAdjust answers a height for every block it does not defer.
 - src/ledger/storage/confirmed.ts:213:20-213:64 StringLiteral "``" equivalent: the message of the unreachable error for a missing height.
-- src/ledger/storage/memory/driver.ts:115:29-118:5 BlockStatement "{}" equivalent: neither merge can throw (commitOverlay only sets and deletes map entries), so the failure branch never runs.
-- src/ledger/storage/memory/driver.ts:116:19-116:60 ObjectLiteral "{}" equivalent: the failed state is recorded only when a merge throws, which neither merge can.
-- src/ledger/storage/memory/driver.ts:116:29-116:39 StringLiteral "\"\"" equivalent: the failed state is recorded only when a merge throws, which neither merge can.
-- src/ledger/storage/memory/driver.ts:116:50-116:58 StringLiteral "\"\"" equivalent: the failed outcome is recorded only when a merge throws, which neither merge can.
-- src/ledger/storage/memory/driver.ts:126:38-128:4 BlockStatement "{}" equivalent: the base runs one unit at a time per transaction, so units always close innermost first.
-- src/ledger/storage/memory/driver.ts:127:20-127:106 StringLiteral "``" equivalent: the message of the unreachable error for units closed out of order.
-- src/ledger/storage/memory/driver.ts:138:4-139:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled both transaction states is unreachable.
-- src/ledger/storage/memory/driver.ts:164:3-165:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled both principal types is unreachable.
-- src/ledger/storage/memory/driver.ts:203:6-203:31 ConditionalExpression "true" equivalent: a name is absent only from a multisig's creation, whose row is new, and an undefined name reads as an absent one.
-- src/ledger/storage/memory/driver.ts:206:6-206:38 ConditionalExpression "true" equivalent: a description is absent only from a multisig's creation, whose row is new, and an undefined description reads as an absent one.
-- src/ledger/storage/memory/driver.ts:209:6-209:35 ConditionalExpression "true" equivalent: metadata is absent only from a multisig's creation, whose row is new, and undefined metadata reads as absent.
-- src/ledger/storage/memory/driver.ts:216:6-216:36 ConditionalExpression "false" equivalent: no info effect carries a null quorum; a quorum comes only from a multisig's creation [Keeta TS] index.js:68305-68309.
-- src/ledger/storage/memory/driver.ts:216:38-218:3 BlockStatement "{}" equivalent: no info effect carries a null quorum; a quorum comes only from a multisig's creation [Keeta TS] index.js:68305-68309.
-- src/ledger/storage/memory/driver.ts:218:13-218:48 ConditionalExpression "true" equivalent: a multisig has no blocks of its own [Keeta TS] index.js:63820, so its one info update is its creation, which carries the quorum.
-- src/ledger/storage/memory/driver.ts:237:6-237:24 ConditionalExpression "false" equivalent: an emptied inner map left in place reads, for every ACL and certificate read, as the deleted row.
-- src/ledger/storage/memory/driver.ts:237:26-240:3 BlockStatement "{}" equivalent: an emptied inner map left in place reads, for every ACL and certificate read, as the deleted row.
-- src/ledger/storage/memory/driver.ts:251:9-251:33 ConditionalExpression "true" harmless: the orphaned-row count is a test hook; taking every index entry as covering stops it seeing a block left with an empty one, which the driver's writes never leave.
-- src/ledger/storage/memory/driver.ts:251:9-251:33 EqualityOperator "(members?.size ?? 0) >= 0" harmless: the orphaned-row count is a test hook; taking an empty index entry as covering stops it seeing a block left with one, which the driver's writes never leave.
-- src/ledger/storage/memory/driver.ts:251:10-251:23 OptionalChaining "members.size" harmless: the orphaned-row count is a test hook; it throws only for a side block with no index entry at all, which the driver's writes never leave.
-- src/ledger/storage/memory/driver.ts:278:3-279:30 ConditionalExpression "default:" equivalent: the default of a switch that has handled every selector is unreachable.
-- src/ledger/storage/memory/driver.ts:291:10-291:43 EqualityOperator "candidate.issued >= current.issued" equivalent: the test before it has already returned for equal issue times, so >= and > agree.
-- src/ledger/storage/memory/driver.ts:293:9-293:82 EqualityOperator "toBlockHashKey(candidate.block.hash) >= toBlockHashKey(current.block.hash)" equivalent: two different pending successors never share a block hash, so >= and > agree.
-- src/ledger/storage/memory/driver.ts:630:7-630:25 ConditionalExpression "true" equivalent: a page takes at least one vote, so its last vote is undefined only when no vote remains and the key is omitted either way.
-- src/ledger/storage/memory/driver.ts:647:11-647:41 ConditionalExpression "true" equivalent: BlockHash.compare of undefined is false, so an absent exclusion excludes nothing either way.
-- src/ledger/storage/memory/driver.ts:656:66-656:68 ArrayDeclaration "[\"Stryker was here\"]" equivalent: the placeholder names no side block, so the read still finds no holder.
-- src/ledger/storage/memory/driver.ts:676:8-676:39 ConditionalExpression "false" equivalent: a certificate principal can hold only default permissions [Keeta TS] index.js:65535-65539, never OWNER, so the OWNER test alone decides.
-- src/ledger/storage/memory/driver.ts:787:75-787:77 ArrayDeclaration "[\"Stryker was here\"]" equivalent: the placeholder names no deferred staple, so nothing is found for a block nothing waits on.
-- src/ledger/storage/memory/driver.ts:789:9-789:26 ConditionalExpression "true" equivalent: forgetting a deferred staple clears its index entries, so the index names only stored staples.
-- src/ledger/storage/memory/driver.ts:845:58-850:4 BlockStatement "{}" harmless: the orphaned-row count is a test hook; it differs only once side rows leak, which the driver's writes never do.
-- src/ledger/storage/memory/driver.ts:847:8-847:105 ConditionalExpression "false" harmless: the orphaned-row count is a test hook; it differs only once side blocks leak, which the driver's writes never do.
-- src/ledger/storage/memory/driver.ts:847:8-847:50 ConditionalExpression "false" harmless: the orphaned-row count is a test hook; it differs only once a side block is also on main, which promotion never leaves.
-- src/ledger/storage/memory/driver.ts:847:8-847:105 LogicalOperator "overlay.blocks.get(blockKey) !== undefined && !hasMembers(overlay.sideVotesByBlock.get(blockKey))" harmless: the orphaned-row count is a test hook; it differs only once side blocks leak, which the driver's writes never do.
-- src/ledger/storage/memory/driver.ts:847:107-849:5 BlockStatement "{}" harmless: the orphaned-row count is a test hook; it differs only once side blocks leak, which the driver's writes never do.
-- src/ledger/storage/memory/driver.ts:848:5-848:29 CallExpression ";" harmless: the orphaned-row count is a test hook; it differs only once side blocks leak, which the driver's writes never do.
-- src/ledger/storage/memory/driver.ts:852:69-858:4 BlockStatement "{}" harmless: the orphaned-row count is a test hook; it differs only once idempotent claims leak, which the driver's writes never do.
-- src/ledger/storage/memory/driver.ts:853:38-857:5 BlockStatement "{}" harmless: the orphaned-row count is a test hook; it differs only once idempotent claims leak, which the driver's writes never do.
-- src/ledger/storage/memory/driver.ts:854:9-854:82 ConditionalExpression "false" harmless: the orphaned-row count is a test hook; it differs only once idempotent claims leak, which the driver's writes never do.
-- src/ledger/storage/memory/driver.ts:854:9-854:82 LogicalOperator "uncovered.has(blockKey) && overlay.sideBlocks.get(blockKey) === undefined" harmless: the orphaned-row count is a test hook; it differs only once idempotent claims leak, which the driver's writes never do.
-- src/ledger/storage/memory/driver.ts:854:36-854:82 ConditionalExpression "false" harmless: the orphaned-row count is a test hook; it differs only once a claim outlives its side block, which the driver's writes never allow.
-- src/ledger/storage/memory/driver.ts:854:84-856:6 BlockStatement "{}" harmless: the orphaned-row count is a test hook; it differs only once idempotent claims leak, which the driver's writes never do.
-- src/ledger/storage/memory/driver.ts:855:6-855:16 UpdateOperator "orphaned--" harmless: the orphaned-row count is a test hook; it differs only once idempotent claims leak, which the driver's writes never do.
-- src/ledger/storage/memory/driver.ts:898:3-898:38 CallExpression ";" equivalent: a vote's key is its identity, which fixes its blocks, so rewriting it indexes the same blocks again.
-- src/ledger/storage/memory/driver.ts:933:7-933:24 ConditionalExpression "false" equivalent: gc collects only keys it has just read from the side votes, so the row is always there.
-- src/ledger/storage/memory/driver.ts:933:26-935:4 BlockStatement "{}" equivalent: gc collects only keys it has just read from the side votes, so the early return never runs.
-- src/ledger/storage/memory/driver.ts:948:7-948:34 ConditionalExpression "true" equivalent: removing a member under an undefined key reads an absent row and deletes nothing.
-- src/ledger/storage/memory/driver.ts:979:8-979:25 ConditionalExpression "false" equivalent: a side vote and its index entries are written and forgotten together, so an indexed vote is always stored.
-- src/ledger/storage/memory/driver.ts:979:27-981:5 BlockStatement "{}" equivalent: a side vote and its index entries are written and forgotten together, so the error never fires.
-- src/ledger/storage/memory/driver.ts:980:21-980:84 StringLiteral "``" equivalent: the message of the unreachable error for an indexed vote that is not stored.
-- src/ledger/storage/memory/driver.ts:1026:7-1026:24 ConditionalExpression "false" equivalent: a successor entry and its block are written in one persist, so the block is always stored.
-- src/ledger/storage/memory/driver.ts:1026:26-1028:4 BlockStatement "{}" equivalent: a successor entry and its block are written in one persist, so the error never fires.
-- src/ledger/storage/memory/driver.ts:1027:20-1027:95 StringLiteral "``" equivalent: the message of the unreachable error for a successor whose block is not stored.
-- src/ledger/storage/memory/driver.ts:1070:4-1071:31 ConditionalExpression "default:" equivalent: the default of a switch that has handled every selector is unreachable.
-- src/ledger/storage/memory/driver.ts:1078:7-1078:25 ConditionalExpression "false" equivalent: blocks are written in chain order, so each is above its account's head even when every head is taken to have no height.
-- src/ledger/storage/memory/driver.ts:1078:7-1078:25 ConditionalExpression "true" equivalent: blocks are written in chain order, so each is above its account's head even when every account is taken to have none.
-- src/ledger/storage/memory/driver.ts:1078:7-1078:25 EqualityOperator "head !== undefined" equivalent: blocks are written in chain order, so each is above its account's head whatever height the head is taken to have.
-- src/ledger/storage/memory/driver.ts:1078:27-1080:4 BlockStatement "{}" equivalent: blocks are written in chain order, so each is above its account's head whatever height the head is taken to have.
-- src/ledger/storage/memory/driver.ts:1081:10-1081:49 LogicalOperator "overlay.blocks.get(head)?.height && -1n" equivalent: blocks are written in chain order, so a head of height -1 or 0 is below every block written after it.
-- src/ledger/storage/memory/driver.ts:1081:10-1081:42 OptionalChaining "overlay.blocks.get(head).height" equivalent: a head entry and its block are written in one persist, so the block is always there.
-- src/ledger/storage/memory/driver.ts:1081:46-1081:49 UnaryOperator "+1n" equivalent: the fallback is unreachable, as a head entry's block is always stored.
-- src/ledger/storage/memory/driver.ts:1086:7-1086:24 ConditionalExpression "false" equivalent: every block a head or successor names is written in the same persist, so it is always stored.
-- src/ledger/storage/memory/driver.ts:1086:26-1088:4 BlockStatement "{}" equivalent: every block a head or successor names is written in the same persist, so the error never fires.
-- src/ledger/storage/memory/driver.ts:1087:20-1087:90 StringLiteral "``" equivalent: the message of the unreachable error for a named block that is not stored.
-- src/ledger/storage/memory/driver.ts:1094:7-1094:24 ConditionalExpression "false" equivalent: a block's staple and the block are written in one persist, so the staple is always stored.
-- src/ledger/storage/memory/driver.ts:1094:26-1096:4 BlockStatement "{}" equivalent: a block's staple and the block are written in one persist, so the error never fires.
-- src/ledger/storage/memory/driver.ts:1095:20-1095:90 StringLiteral "``" equivalent: the message of the unreachable error for a named staple that is not stored.
-- src/ledger/storage/memory/driver.ts:1135:8-1135:28 ConditionalExpression "false" equivalent: blockHeightsOf has already required a height for every block of the staple.
-- src/ledger/storage/memory/driver.ts:1135:30-1137:5 BlockStatement "{}" equivalent: blockHeightsOf has already required a height for every block of the staple, so the error never fires.
-- src/ledger/storage/memory/driver.ts:1136:21-1136:70 StringLiteral "``" equivalent: the message of the unreachable error for a block without a height.
-- src/ledger/storage/memory/driver.ts:1150:8-1150:51 ConditionalExpression "true" equivalent: blocks are written in chain order, so each block is above its account's head and becomes the head anyway.
-- src/ledger/storage/memory/driver.ts:1150:8-1150:51 EqualityOperator "this.#headHeight(overlay, account) <= height" equivalent: blocks are written in chain order, so a block is never at its head's height.
-- src/ledger/storage/memory/driver.ts:1167:9-1167:29 ConditionalExpression "false" equivalent: a zero change writes the balance the account already had, and getAllBalances leaves zero balances out.
-- src/ledger/storage/memory/driver.ts:1167:31-1169:6 BlockStatement "{}" equivalent: a zero change writes the balance the account already had, and getAllBalances leaves zero balances out.
-- src/ledger/storage/memory/driver.ts:1175:8-1175:26 ConditionalExpression "true" equivalent: an overlay entry set to undefined reads through to the underlying row, which is absent too.
-- src/ledger/storage/memory/driver.ts:1217:8-1217:52 ConditionalExpression "false" equivalent: computeLedgerEffect resolves every permission update to a SET or a null [Keeta TS] index.js:67467-67486.
-- src/ledger/storage/memory/driver.ts:1217:54-1219:5 BlockStatement "{}" equivalent: computeLedgerEffect resolves every permission update to a SET or a null, so the error never fires.
-- src/ledger/storage/memory/driver.ts:1218:21-1218:104 StringLiteral "``" equivalent: the message of the unreachable error for an unresolved permission update.
-- src/ledger/storage/memory/driver.ts:1242:5-1243:26 ConditionalExpression "default:" equivalent: the default of a switch that has handled both certificate methods is unreachable.
-- src/ledger/storage/memory/driver.ts:1243:6-1243:26 CallExpression ";" equivalent: the assertNever of a switch that has handled both certificate methods is unreachable.
-- src/ledger/storage/memory/driver.ts:1259:33-1259:83 ArrayDeclaration "[]" equivalent: account rows are only written, and no storage member reads them (schema/CONTRACT.md).
-- src/ledger/storage/memory/driver.ts:1259:86-1263:4 BlockStatement "{}" equivalent: account rows are only written, and no storage member reads them (schema/CONTRACT.md).
-- src/ledger/storage/memory/driver.ts:1260:8-1260:51 ConditionalExpression "false" equivalent: account rows are only written, and no storage member reads them (schema/CONTRACT.md); never writing one is unseen.
-- src/ledger/storage/memory/driver.ts:1260:8-1260:51 ConditionalExpression "true" equivalent: account rows are only written, and no storage member reads them (schema/CONTRACT.md); rewriting one is unseen.
-- src/ledger/storage/memory/driver.ts:1260:8-1260:51 EqualityOperator "overlay.accounts.get(account) !== undefined" equivalent: account rows are only written, and no storage member reads them (schema/CONTRACT.md).
-- src/ledger/storage/memory/driver.ts:1260:53-1262:5 BlockStatement "{}" equivalent: account rows are only written, and no storage member reads them (schema/CONTRACT.md).
-- src/ledger/storage/memory/driver.ts:1261:35-1261:58 ObjectLiteral "{}" equivalent: account rows are only written, and no storage member reads them (schema/CONTRACT.md).
+- src/ledger/storage/memory/driver.ts:116:29-119:5 BlockStatement "{}" equivalent: neither merge can throw (commitOverlay only sets and deletes map entries), so the failure branch never runs.
+- src/ledger/storage/memory/driver.ts:117:19-117:60 ObjectLiteral "{}" equivalent: the failed state is recorded only when a merge throws, which neither merge can.
+- src/ledger/storage/memory/driver.ts:117:29-117:39 StringLiteral "\"\"" equivalent: the failed state is recorded only when a merge throws, which neither merge can.
+- src/ledger/storage/memory/driver.ts:117:50-117:58 StringLiteral "\"\"" equivalent: the failed outcome is recorded only when a merge throws, which neither merge can.
+- src/ledger/storage/memory/driver.ts:127:38-129:4 BlockStatement "{}" equivalent: the base runs one unit at a time per transaction, so units always close innermost first.
+- src/ledger/storage/memory/driver.ts:128:20-128:106 StringLiteral "``" equivalent: the message of the unreachable error for units closed out of order.
+- src/ledger/storage/memory/driver.ts:139:4-140:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled both transaction states is unreachable.
+- src/ledger/storage/memory/driver.ts:165:3-166:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled both principal types is unreachable.
+- src/ledger/storage/memory/driver.ts:204:6-204:31 ConditionalExpression "true" equivalent: a name is absent only from a multisig's creation, whose row is new, and an undefined name reads as an absent one.
+- src/ledger/storage/memory/driver.ts:207:6-207:38 ConditionalExpression "true" equivalent: a description is absent only from a multisig's creation, whose row is new, and an undefined description reads as an absent one.
+- src/ledger/storage/memory/driver.ts:210:6-210:35 ConditionalExpression "true" equivalent: metadata is absent only from a multisig's creation, whose row is new, and undefined metadata reads as absent.
+- src/ledger/storage/memory/driver.ts:217:6-217:36 ConditionalExpression "false" equivalent: no info effect carries a null quorum; a quorum comes only from a multisig's creation [Keeta TS] index.js:68305-68309.
+- src/ledger/storage/memory/driver.ts:217:38-219:3 BlockStatement "{}" equivalent: no info effect carries a null quorum; a quorum comes only from a multisig's creation [Keeta TS] index.js:68305-68309.
+- src/ledger/storage/memory/driver.ts:219:13-219:48 ConditionalExpression "true" equivalent: a multisig has no blocks of its own [Keeta TS] index.js:63820, so its one info update is its creation, which carries the quorum.
+- src/ledger/storage/memory/driver.ts:238:6-238:24 ConditionalExpression "false" equivalent: an emptied inner map left in place reads, for every ACL and certificate read, as the deleted row.
+- src/ledger/storage/memory/driver.ts:238:26-241:3 BlockStatement "{}" equivalent: an emptied inner map left in place reads, for every ACL and certificate read, as the deleted row.
+- src/ledger/storage/memory/driver.ts:252:9-252:33 ConditionalExpression "true" harmless: the orphaned-row count is a test hook; taking every index entry as covering stops it seeing a block left with an empty one, which the driver's writes never leave.
+- src/ledger/storage/memory/driver.ts:252:9-252:33 EqualityOperator "(members?.size ?? 0) >= 0" harmless: the orphaned-row count is a test hook; taking an empty index entry as covering stops it seeing a block left with one, which the driver's writes never leave.
+- src/ledger/storage/memory/driver.ts:252:10-252:23 OptionalChaining "members.size" harmless: the orphaned-row count is a test hook; it throws only for a side block with no index entry at all, which the driver's writes never leave.
+- src/ledger/storage/memory/driver.ts:279:3-280:30 ConditionalExpression "default:" equivalent: the default of a switch that has handled every selector is unreachable.
+- src/ledger/storage/memory/driver.ts:292:10-292:43 EqualityOperator "candidate.issued >= current.issued" equivalent: the test before it has already returned for equal issue times, so >= and > agree.
+- src/ledger/storage/memory/driver.ts:294:9-294:82 EqualityOperator "toBlockHashKey(candidate.block.hash) >= toBlockHashKey(current.block.hash)" equivalent: two different pending successors never share a block hash, so >= and > agree.
+- src/ledger/storage/memory/driver.ts:631:7-631:25 ConditionalExpression "true" equivalent: a page takes at least one vote, so its last vote is undefined only when no vote remains and the key is omitted either way.
+- src/ledger/storage/memory/driver.ts:648:11-648:41 ConditionalExpression "true" equivalent: BlockHash.compare of undefined is false, so an absent exclusion excludes nothing either way.
+- src/ledger/storage/memory/driver.ts:657:66-657:68 ArrayDeclaration "[\"Stryker was here\"]" equivalent: the placeholder names no side block, so the read still finds no holder.
+- src/ledger/storage/memory/driver.ts:677:8-677:39 ConditionalExpression "false" equivalent: a certificate principal can hold only default permissions [Keeta TS] index.js:65535-65539, never OWNER, so the OWNER test alone decides.
+- src/ledger/storage/memory/driver.ts:788:75-788:77 ArrayDeclaration "[\"Stryker was here\"]" equivalent: the placeholder names no deferred staple, so nothing is found for a block nothing waits on.
+- src/ledger/storage/memory/driver.ts:790:9-790:26 ConditionalExpression "true" equivalent: forgetting a deferred staple clears its index entries, so the index names only stored staples.
+- src/ledger/storage/memory/driver.ts:846:58-851:4 BlockStatement "{}" harmless: the orphaned-row count is a test hook; it differs only once side rows leak, which the driver's writes never do.
+- src/ledger/storage/memory/driver.ts:848:8-848:105 ConditionalExpression "false" harmless: the orphaned-row count is a test hook; it differs only once side blocks leak, which the driver's writes never do.
+- src/ledger/storage/memory/driver.ts:848:8-848:50 ConditionalExpression "false" harmless: the orphaned-row count is a test hook; it differs only once a side block is also on main, which promotion never leaves.
+- src/ledger/storage/memory/driver.ts:848:8-848:105 LogicalOperator "overlay.blocks.get(blockKey) !== undefined && !hasMembers(overlay.sideVotesByBlock.get(blockKey))" harmless: the orphaned-row count is a test hook; it differs only once side blocks leak, which the driver's writes never do.
+- src/ledger/storage/memory/driver.ts:848:107-850:5 BlockStatement "{}" harmless: the orphaned-row count is a test hook; it differs only once side blocks leak, which the driver's writes never do.
+- src/ledger/storage/memory/driver.ts:849:5-849:29 CallExpression ";" harmless: the orphaned-row count is a test hook; it differs only once side blocks leak, which the driver's writes never do.
+- src/ledger/storage/memory/driver.ts:853:69-859:4 BlockStatement "{}" harmless: the orphaned-row count is a test hook; it differs only once idempotent claims leak, which the driver's writes never do.
+- src/ledger/storage/memory/driver.ts:854:38-858:5 BlockStatement "{}" harmless: the orphaned-row count is a test hook; it differs only once idempotent claims leak, which the driver's writes never do.
+- src/ledger/storage/memory/driver.ts:855:9-855:82 ConditionalExpression "false" harmless: the orphaned-row count is a test hook; it differs only once idempotent claims leak, which the driver's writes never do.
+- src/ledger/storage/memory/driver.ts:855:9-855:82 LogicalOperator "uncovered.has(blockKey) && overlay.sideBlocks.get(blockKey) === undefined" harmless: the orphaned-row count is a test hook; it differs only once idempotent claims leak, which the driver's writes never do.
+- src/ledger/storage/memory/driver.ts:855:36-855:82 ConditionalExpression "false" harmless: the orphaned-row count is a test hook; it differs only once a claim outlives its side block, which the driver's writes never allow.
+- src/ledger/storage/memory/driver.ts:855:84-857:6 BlockStatement "{}" harmless: the orphaned-row count is a test hook; it differs only once idempotent claims leak, which the driver's writes never do.
+- src/ledger/storage/memory/driver.ts:856:6-856:16 UpdateOperator "orphaned--" harmless: the orphaned-row count is a test hook; it differs only once idempotent claims leak, which the driver's writes never do.
+- src/ledger/storage/memory/driver.ts:899:3-899:38 CallExpression ";" equivalent: a vote's key is its identity, which fixes its blocks, so rewriting it indexes the same blocks again.
+- src/ledger/storage/memory/driver.ts:934:7-934:24 ConditionalExpression "false" equivalent: gc collects only keys it has just read from the side votes, so the row is always there.
+- src/ledger/storage/memory/driver.ts:934:26-936:4 BlockStatement "{}" equivalent: gc collects only keys it has just read from the side votes, so the early return never runs.
+- src/ledger/storage/memory/driver.ts:949:7-949:34 ConditionalExpression "true" equivalent: removing a member under an undefined key reads an absent row and deletes nothing.
+- src/ledger/storage/memory/driver.ts:980:8-980:25 ConditionalExpression "false" equivalent: a side vote and its index entries are written and forgotten together, so an indexed vote is always stored.
+- src/ledger/storage/memory/driver.ts:980:27-982:5 BlockStatement "{}" equivalent: a side vote and its index entries are written and forgotten together, so the error never fires.
+- src/ledger/storage/memory/driver.ts:981:21-981:84 StringLiteral "``" equivalent: the message of the unreachable error for an indexed vote that is not stored.
+- src/ledger/storage/memory/driver.ts:1027:7-1027:24 ConditionalExpression "false" equivalent: a successor entry and its block are written in one persist, so the block is always stored.
+- src/ledger/storage/memory/driver.ts:1027:26-1029:4 BlockStatement "{}" equivalent: a successor entry and its block are written in one persist, so the error never fires.
+- src/ledger/storage/memory/driver.ts:1028:20-1028:95 StringLiteral "``" equivalent: the message of the unreachable error for a successor whose block is not stored.
+- src/ledger/storage/memory/driver.ts:1071:4-1072:31 ConditionalExpression "default:" equivalent: the default of a switch that has handled every selector is unreachable.
+- src/ledger/storage/memory/driver.ts:1079:7-1079:25 ConditionalExpression "false" equivalent: blocks are written in chain order, so each is above its account's head even when every head is taken to have no height.
+- src/ledger/storage/memory/driver.ts:1079:7-1079:25 ConditionalExpression "true" equivalent: blocks are written in chain order, so each is above its account's head even when every account is taken to have none.
+- src/ledger/storage/memory/driver.ts:1079:7-1079:25 EqualityOperator "head !== undefined" equivalent: blocks are written in chain order, so each is above its account's head whatever height the head is taken to have.
+- src/ledger/storage/memory/driver.ts:1079:27-1081:4 BlockStatement "{}" equivalent: blocks are written in chain order, so each is above its account's head whatever height the head is taken to have.
+- src/ledger/storage/memory/driver.ts:1082:10-1082:49 LogicalOperator "overlay.blocks.get(head)?.height && -1n" equivalent: blocks are written in chain order, so a head of height -1 or 0 is below every block written after it.
+- src/ledger/storage/memory/driver.ts:1082:10-1082:42 OptionalChaining "overlay.blocks.get(head).height" equivalent: a head entry and its block are written in one persist, so the block is always there.
+- src/ledger/storage/memory/driver.ts:1082:46-1082:49 UnaryOperator "+1n" equivalent: the fallback is unreachable, as a head entry's block is always stored.
+- src/ledger/storage/memory/driver.ts:1087:7-1087:24 ConditionalExpression "false" equivalent: every block a head or successor names is written in the same persist, so it is always stored.
+- src/ledger/storage/memory/driver.ts:1087:26-1089:4 BlockStatement "{}" equivalent: every block a head or successor names is written in the same persist, so the error never fires.
+- src/ledger/storage/memory/driver.ts:1088:20-1088:90 StringLiteral "``" equivalent: the message of the unreachable error for a named block that is not stored.
+- src/ledger/storage/memory/driver.ts:1095:7-1095:24 ConditionalExpression "false" equivalent: a block's staple and the block are written in one persist, so the staple is always stored.
+- src/ledger/storage/memory/driver.ts:1095:26-1097:4 BlockStatement "{}" equivalent: a block's staple and the block are written in one persist, so the error never fires.
+- src/ledger/storage/memory/driver.ts:1096:20-1096:90 StringLiteral "``" equivalent: the message of the unreachable error for a named staple that is not stored.
+- src/ledger/storage/memory/driver.ts:1136:8-1136:28 ConditionalExpression "false" equivalent: blockHeightsOf has already required a height for every block of the staple.
+- src/ledger/storage/memory/driver.ts:1136:30-1138:5 BlockStatement "{}" equivalent: blockHeightsOf has already required a height for every block of the staple, so the error never fires.
+- src/ledger/storage/memory/driver.ts:1137:21-1137:70 StringLiteral "``" equivalent: the message of the unreachable error for a block without a height.
+- src/ledger/storage/memory/driver.ts:1151:8-1151:51 ConditionalExpression "true" equivalent: blocks are written in chain order, so each block is above its account's head and becomes the head anyway.
+- src/ledger/storage/memory/driver.ts:1151:8-1151:51 EqualityOperator "this.#headHeight(overlay, account) <= height" equivalent: blocks are written in chain order, so a block is never at its head's height.
+- src/ledger/storage/memory/driver.ts:1168:9-1168:29 ConditionalExpression "false" equivalent: a zero change writes the balance the account already had, and getAllBalances leaves zero balances out.
+- src/ledger/storage/memory/driver.ts:1168:31-1170:6 BlockStatement "{}" equivalent: a zero change writes the balance the account already had, and getAllBalances leaves zero balances out.
+- src/ledger/storage/memory/driver.ts:1176:8-1176:26 ConditionalExpression "true" equivalent: an overlay entry set to undefined reads through to the underlying row, which is absent too.
+- src/ledger/storage/memory/driver.ts:1218:8-1218:52 ConditionalExpression "false" equivalent: computeLedgerEffect resolves every permission update to a SET or a null [Keeta TS] index.js:67467-67486.
+- src/ledger/storage/memory/driver.ts:1218:54-1220:5 BlockStatement "{}" equivalent: computeLedgerEffect resolves every permission update to a SET or a null, so the error never fires.
+- src/ledger/storage/memory/driver.ts:1219:21-1219:104 StringLiteral "``" equivalent: the message of the unreachable error for an unresolved permission update.
+- src/ledger/storage/memory/driver.ts:1243:5-1244:26 ConditionalExpression "default:" equivalent: the default of a switch that has handled both certificate methods is unreachable.
+- src/ledger/storage/memory/driver.ts:1244:6-1244:26 CallExpression ";" equivalent: the assertNever of a switch that has handled both certificate methods is unreachable.
+- src/ledger/storage/memory/driver.ts:1260:33-1260:83 ArrayDeclaration "[]" equivalent: account rows are only written, and no storage member reads them (schema/CONTRACT.md).
+- src/ledger/storage/memory/driver.ts:1260:86-1264:4 BlockStatement "{}" equivalent: account rows are only written, and no storage member reads them (schema/CONTRACT.md).
+- src/ledger/storage/memory/driver.ts:1261:8-1261:51 ConditionalExpression "false" equivalent: account rows are only written, and no storage member reads them (schema/CONTRACT.md); never writing one is unseen.
+- src/ledger/storage/memory/driver.ts:1261:8-1261:51 ConditionalExpression "true" equivalent: account rows are only written, and no storage member reads them (schema/CONTRACT.md); rewriting one is unseen.
+- src/ledger/storage/memory/driver.ts:1261:8-1261:51 EqualityOperator "overlay.accounts.get(account) !== undefined" equivalent: account rows are only written, and no storage member reads them (schema/CONTRACT.md).
+- src/ledger/storage/memory/driver.ts:1261:53-1263:5 BlockStatement "{}" equivalent: account rows are only written, and no storage member reads them (schema/CONTRACT.md).
+- src/ledger/storage/memory/driver.ts:1262:35-1262:58 ObjectLiteral "{}" equivalent: account rows are only written, and no storage member reads them (schema/CONTRACT.md).
 - src/ledger/storage/memory/state.ts:185:3-185:24 CallExpression ";" equivalent: every overlay is dropped once it has committed, so writes left in it are never read.
 - src/ledger/storage/stage.ts:49:6-49:26 ConditionalExpression "false" equivalent: placeOf asks only whether an entry comes first, and removal compares an entry with itself, so the sign of a later key never matters.
 - src/ledger/storage/stage.ts:49:28-51:3 BlockStatement "{}" equivalent: placeOf asks only whether an entry comes first, and removal compares an entry with itself, so the sign of a later key never matters.

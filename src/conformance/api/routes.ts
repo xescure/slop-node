@@ -1,4 +1,5 @@
 import ts from 'typescript';
+import { compareText } from '../../util/compare-text.js';
 
 /** The methods a handler mapping may name [Keeta TS] api/index.d.ts (HandlerMapping). */
 const HTTP_METHODS = ['GET', 'PUT', 'POST', 'DELETE'] as const;
@@ -28,17 +29,6 @@ function asHTTPMethod(name: string): HTTPMethod | undefined {
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 	return(typeof value === 'object' && value !== null && !Array.isArray(value));
-}
-
-/** Orders by UTF-16 code units, so the order does not depend on the locale. */
-function compareText(left: string, right: string): number {
-	if (left < right) {
-		return(-1);
-	}
-	if (left > right) {
-		return(1);
-	}
-	return(0);
 }
 
 function compareRoutes(left: Route, right: Route): number {

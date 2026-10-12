@@ -37,7 +37,7 @@ const FIRST_STEP_MILLISECONDS = 1000;
 export const DEEP_SCAN_PERIOD_MILLISECONDS: number = 60 * 60_000;
 
 /** How late a deep re-scan may begin after it is due for the bound below to hold: the node catches up on the peer by then. */
-export const DEEP_SCAN_DELAY_MILLISECONDS: number = 15 * 60_000;
+const DEEP_SCAN_DELAY_MILLISECONDS: number = 15 * 60_000;
 
 /**
  * How long after its moment a peer may commit a staple, or how far its clock
@@ -64,7 +64,7 @@ export const DEEP_SCAN_DELAY_MILLISECONDS: number = 15 * 60_000;
  * node reads staples only once, and those committed later than the margin
  * not at all, until they do again.
  */
-export const LATE_COMMIT_BOUND_MILLISECONDS: number = 30 * 60_000;
+const LATE_COMMIT_BOUND_MILLISECONDS: number = 30 * 60_000;
 
 /** How far before it begins a deep re-scan starts at least, for the bound above to hold. */
 export const DEEP_SCAN_DEPTH_MILLISECONDS: number = LATE_COMMIT_BOUND_MILLISECONDS + 2 * (DEEP_SCAN_PERIOD_MILLISECONDS + DEEP_SCAN_DELAY_MILLISECONDS);

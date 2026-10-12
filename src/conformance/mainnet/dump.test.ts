@@ -21,7 +21,7 @@ import { createTestNetwork, freezeClock } from '../../testing/network.js';
 import type { TestNetwork } from '../../testing/network.js';
 import { stateDumpViolations } from '../schema.js';
 import { STATE_DUMP_FORMAT, renderStateDump } from './dump.js';
-import { compareText } from './replay.js';
+import { compareText } from '../../util/compare-text.js';
 
 const lib = KeetaNet.lib;
 

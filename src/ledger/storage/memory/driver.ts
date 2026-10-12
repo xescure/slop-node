@@ -27,6 +27,7 @@ import type { CatchUpPosition } from '../paging.js';
 import type { AccountInfoRow } from '../rows.js';
 import { MemoryBootstrapStage } from '../stage.js';
 import type { BootstrapStage } from '../stage.js';
+import { compareText } from '../../../util/compare-text.js';
 import { commitOverlay, createCommittedLedger, openOverlay } from './state.js';
 import type { BalanceRow, CommittedLedger, LedgerOverlay, SideVoteRow, StapleRow, TableOverlay } from './state.js';
 
@@ -1325,16 +1326,6 @@ function resolveAccount<T extends AccountKeyAlgorithm>(account: Account<T> | str
 	}
 	// The caller's type parameter is the only key-type information a string carries.
 	return(lib.Account.fromPublicKeyString(account) as Account<T>);
-}
-
-function compareText(left: string, right: string): number {
-	if (left < right) {
-		return(-1);
-	}
-	if (left > right) {
-		return(1);
-	}
-	return(0);
 }
 
 function compareKeyed(left: readonly [string, unknown], right: readonly [string, unknown]): number {

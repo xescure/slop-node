@@ -195,7 +195,7 @@ function readersOf(layout: RangeLayout, peers: readonly string[], now: number): 
 }
 
 /** Where a range starts being read ahead of the earliest: FAR_AHEAD_MILLISECONDS past where the earliest reached. */
-export function frontOf(layout: RangeLayout): number {
+function frontOf(layout: RangeLayout): number {
 	return((layout.ranges[0]?.reached.getTime() ?? 0) + FAR_AHEAD_MILLISECONDS);
 }
 

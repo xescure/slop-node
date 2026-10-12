@@ -5,7 +5,8 @@ import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import type { LedgerStorageDriverBase } from '../../ledger/storage/base.js';
 import { deferredStaplesWaitingOnOf } from '../../ledger/storage/suite/support.js';
 import { assertNever } from '../../util/assert-never.js';
-import { addInReplayOrder, compareText, replayOrder } from './replay.js';
+import { compareText } from '../../util/compare-text.js';
+import { addInReplayOrder, replayOrder } from './replay.js';
 import { refusalOf } from './shadow.js';
 import type { LedgerRefusal } from './shadow.js';
 

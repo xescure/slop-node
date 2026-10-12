@@ -195,7 +195,7 @@ export async function computeConfirmedStapleChange(input: {
 }
 
 /** The XOR of the hashes of the staple's blocks, which upstream folds into the ledger checksum [Keeta TS] index.js:69413-69417. */
-export function stapleChecksumOf(staple: VoteStaple): bigint {
+function stapleChecksumOf(staple: VoteStaple): bigint {
 	let checksum = 0n;
 	for (const block of staple.blocks) {
 		checksum ^= block.hash.toBigInt();

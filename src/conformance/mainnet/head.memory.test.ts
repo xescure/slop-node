@@ -7,7 +7,7 @@ import type { StateDumpKind } from './dump.js';
 import { EDGE_CASE_OUTCOMES } from './edge-cases.js';
 import { loadMainnetFixture } from './fixture.js';
 import { REFERENCE_DRIVER_NAME, REPLAY_TIMEOUT_MILLISECONDS, describeHeadReplay } from './head-replay.js';
-import { compareText } from './replay.js';
+import { compareText } from '../../util/compare-text.js';
 import { SHADOW_REFUSAL_REASONS } from './shadow.js';
 
 /*
