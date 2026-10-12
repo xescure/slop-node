@@ -42,6 +42,7 @@ What a deployment usually sets:
 | `KEETANET_LOCAL_NODE_MAX_PEER_SOCKETS` | The most sockets open on `/p2p` at once (512). |
 | `KEETANET_LOCAL_NODE_MAX_POSTED_MESSAGES` | The most messages posted over HTTP that the node handles at once (256). |
 | `KEETANET_LOCAL_NODE_LOG_LEVEL`, `KEETANET_LOCAL_NODE_LOG_FILTER` | What the log records (`INFO`). |
+| `KEETANET_LOCAL_NODE_LOG_FORMAT` | `text` (default), or `json`: each log entry and the startup summary as one object per line, with `level`, `message` and `time`, which Railway reads as a structured log. |
 
 The fee variables and `KEETANET_LOCAL_NODE_PREFER_UPDATES` are described by `--help`. The `KEETANET_GENESIS_` variables are read by the `genesis` command only, so the trusted account's seed never needs to be in a running node's environment.
 

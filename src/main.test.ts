@@ -278,6 +278,69 @@ describe('slop-node when its surroundings fail', function() {
 	});
 });
 
+const JSON_LOG: Environment = { KEETANET_LOCAL_NODE_LOG_FORMAT: 'json' };
+
+/** The startup summary in the JSON format: one object at info, whose message names the build. */
+const SUMMARY_OBJECT = /^\{"level":"info","message":"slop-node [^"]+",.*\}$/m;
+
+/** Any time written as ISO 8601, as the format writes each line's. */
+const AN_ISO_TIME = expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/) as string;
+
+const A_STACK = expect.stringMatching(STACK_FRAME) as string;
+
+/** Each line written, read as JSON, which fails on any line that is not. */
+function jsonLines(written: string): unknown[] {
+	return(written.split('\n').filter(function(line): boolean {
+		return(line !== '');
+	}).map(function(line): unknown {
+		return(JSON.parse(line));
+	}));
+}
+
+describe('slop-node with the JSON log format', function() {
+	test('writes its startup summary as one object at info, and every line, its log\'s and its own, as an object', async function() {
+		const cli = startCLI(['run'], { ...NODE, ...JSON_LOG, KEETANET_LOCAL_NODE_LOG_LEVEL: 'DEBUG' });
+		const [summary = ''] = await cli.printed(SUMMARY_OBJECT);
+		const representative = lib.Account.fromSeed(TEST_NETWORK_SEEDS.representative, 0).publicKeyString.get();
+		expect(JSON.parse(summary)).toEqual({
+			level: 'info',
+			message: `slop-node ${NODE_VERSION}`,
+			time: AN_ISO_TIME,
+			representative,
+			network: 'local (0)',
+			ledgerWriteMode: 'read-write',
+			storage: 'memory',
+			manualPeers: 0,
+			bootstrapPeers: 0,
+			bootstrapMinIntervalMilliseconds: 0,
+			api: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/api$/) as string,
+			peer: expect.stringMatching(new RegExp(`^${representative}@http://`)) as string
+		});
+		cli.signal('SIGTERM');
+		expect(await cli.exited).toEqual({ code: 0, signal: null });
+
+		const out = jsonLines(cli.stdout());
+		expect(out).toContainEqual({ level: 'info', message: 'stopping on SIGTERM', time: AN_ISO_TIME });
+		expect(out).toContainEqual(expect.objectContaining({ level: 'debug', time: AN_ISO_TIME, from: expect.any(String) as string, message: expect.any(String) as string }));
+		expect(jsonLines(cli.stderr())).toContainEqual({ level: 'warn', message: 'the ledger is kept in memory, so it is lost when the node stops; set KEETANET_LOCAL_NODE_POSTGRES_URL to keep it', time: AN_ISO_TIME });
+	});
+
+	test('names a Postgres it cannot reach in one object at error, without the password, and with the stack at DEBUG', async function() {
+		const port = await closedPort();
+		const cli = startCLI(['run'], { ...NODE, ...JSON_LOG, KEETANET_LOCAL_NODE_LOG_LEVEL: 'DEBUG', KEETANET_LOCAL_NODE_POSTGRES_URL: `postgresql://slop:hunter2@127.0.0.1:${String(port)}/ledger` });
+		expect(await cli.exited).toEqual({ code: 1, signal: null });
+		expect(jsonLines(cli.stderr())).toEqual([{ level: 'error', message: `cannot reach Postgres at 127.0.0.1:${String(port)}`, time: AN_ISO_TIME, stack: A_STACK }]);
+		expect(cli.stderr()).not.toContain('hunter2');
+	});
+
+	test.each(['KEETANET_LOCAL_NODE_SEED', 'KEETANET_LOCAL_NODE_FEE_SEED'])('refuses %s without repeating it, even with the stack', async function(variable) {
+		const cli = startCLI(['run'], { ...NODE, ...JSON_LOG, KEETANET_LOCAL_NODE_LOG_LEVEL: 'DEBUG', [variable]: 'correct horse battery staple' });
+		expect(await cli.exited).toEqual({ code: 1, signal: null });
+		expect(jsonLines(cli.stderr())).toEqual([{ level: 'error', message: expect.stringContaining(variable) as string, time: AN_ISO_TIME, stack: A_STACK }]);
+		expect(cli.stderr()).not.toContain('correct horse');
+	});
+});
+
 /** A representative's manual peer that nothing listens for. */
 async function unreachablePeer(): Promise<string> {
 	const port = await closedPort();

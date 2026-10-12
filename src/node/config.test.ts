@@ -9,7 +9,7 @@ import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { requireAt } from '../ledger/storage/suite/support.js';
 import { deriveTestKeys, TEST_NETWORK_SEEDS } from '../testing/network.js';
 import { bootstrapEndpointsOf, bootstrapPacingOf } from './bootstrap-peers.js';
-import { ConfigError, DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, formatManualPeer, getConfigFromEnv, LEDGER_WRITE_MODES, localNodeConfig, MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, MAX_FEE_SEED_ACCOUNTS } from './config.js';
+import { ConfigError, DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, formatManualPeer, getConfigFromEnv, LEDGER_WRITE_MODES, localNodeConfig, LOG_FORMATS, MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, MAX_FEE_SEED_ACCOUNTS } from './config.js';
 import type { ConfigProblem, Environment, EnvironmentConfig, LedgerWriteMode } from './config.js';
 import { LocalNode } from './local.js';
 import { MAX_PEER_LIMIT } from './peer-limits.js';
@@ -83,7 +83,7 @@ describe('the defaults', function() {
 		expect(keyOf(config.initialTrustedAccount)).toBe(TRUSTED);
 		expect(config.network).toEqual({ kind: 'local', network: 0n });
 		expect(config.ledgerWriteMode).toBe('read-write');
-		expect(config.log).toEqual({ level: 'INFO', filter: undefined });
+		expect(config.log).toEqual({ level: 'INFO', filter: undefined, format: 'text' });
 		expect(config.storage).toEqual({ kind: 'memory' });
 		expect(config.listen).toEqual({ ip: '127.0.0.1', port: 0 });
 		expect(config.fee).toEqual({ kind: 'free' });
@@ -160,6 +160,16 @@ describe('KEETANET_LOCAL_NODE_LOG_LEVEL and KEETANET_LOCAL_NODE_LOG_FILTER', fun
 
 	test('refuses a filter that is not a pattern', function() {
 		expect(problemOf({ KEETANET_LOCAL_NODE_LOG_FILTER: '(' })).toMatchObject({ kind: 'invalid', variable: 'KEETANET_LOCAL_NODE_LOG_FILTER', value: '(' });
+	});
+});
+
+describe('KEETANET_LOCAL_NODE_LOG_FORMAT', function() {
+	test.each(LOG_FORMATS)('accepts %s', function(format) {
+		expect(parse({ KEETANET_LOCAL_NODE_LOG_FORMAT: format }).log.format).toBe(format);
+	});
+
+	test.each(['JSON', 'Text', 'yaml'])('refuses %j', function(format) {
+		expect(problemOf({ KEETANET_LOCAL_NODE_LOG_FORMAT: format })).toMatchObject({ kind: 'invalid', variable: 'KEETANET_LOCAL_NODE_LOG_FORMAT', expected: 'one of text, json', value: format });
 	});
 });
 

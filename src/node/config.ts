@@ -29,9 +29,9 @@ const NODE_PREFIX = 'KEETANET_LOCAL_NODE_';
 const GENESIS_PREFIX = 'KEETANET_GENESIS_';
 
 /**
- * Every variable of the node. The seed, log, write mode, trusted account and
- * fee account variables carry the names upstream's node reads; the rest are
- * this node's own.
+ * Every variable of the node. The seed, log level and filter, write mode,
+ * trusted account and fee account variables carry the names upstream's node
+ * reads; the rest are this node's own.
  * [node-lite] adapted from getConfigFromEnv and getFeeConfigFromEnv.
  */
 export const NODE_VARIABLES = [
@@ -39,6 +39,7 @@ export const NODE_VARIABLES = [
 	'KEETANET_LOCAL_NODE_SEED_INDEX',
 	'KEETANET_LOCAL_NODE_LOG_LEVEL',
 	'KEETANET_LOCAL_NODE_LOG_FILTER',
+	'KEETANET_LOCAL_NODE_LOG_FORMAT',
 	'KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE',
 	'KEETANET_LOCAL_NODE_FEE_SEED',
 	'KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX',
@@ -124,6 +125,11 @@ const LOG_LEVELS = ['ALL', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'NONE'] as const sa
 
 /** Fails to compile when upstream adds a log level that the list above does not offer. */
 type _EveryLogLevelListed = AssertNever<Exclude<LogTargetLevel, typeof LOG_LEVELS[number]>>;
+
+/** How each log line is written: as upstream's console target writes it, or as one JSON object. */
+export const LOG_FORMATS = ['text', 'json'] as const;
+
+export type LogFormat = typeof LOG_FORMATS[number];
 
 /** Why the environment does not describe a node this process may run. */
 export type ConfigProblem =
@@ -225,6 +231,7 @@ export type LogSettings = {
 	readonly level: LogTargetLevel;
 	/** Only entries matching it are written. */
 	readonly filter: RegExp | undefined;
+	readonly format: LogFormat;
 };
 
 export type StorageChoice =
@@ -271,6 +278,7 @@ export type EnvironmentConfig = {
 };
 
 const DEFAULT_LOG_LEVEL: LogTargetLevel = 'INFO';
+const DEFAULT_LOG_FORMAT: LogFormat = 'text';
 const DEFAULT_LEDGER_WRITE_MODE: LedgerWriteMode = 'read-write';
 const DEFAULT_LISTEN: ListenAddress = { ip: '127.0.0.1', port: 0 };
 /** Upstream's switch republishes over the WebSocket unless told otherwise [Keeta TS] index.js:71801. */
@@ -452,6 +460,16 @@ function parseLogFilter(text: string): RegExp {
 	} catch (error: unknown) {
 		throw(invalid('KEETANET_LOCAL_NODE_LOG_FILTER', 'a regular expression', text, { cause: error }));
 	}
+}
+
+function parseLogFormat(text: string): LogFormat {
+	const format = LOG_FORMATS.find(function(candidate): boolean {
+		return(candidate === text);
+	});
+	if (format === undefined) {
+		throw(invalid('KEETANET_LOCAL_NODE_LOG_FORMAT', `one of ${LOG_FORMATS.join(', ')}`, text));
+	}
+	return(format);
 }
 
 function parseLedgerWriteMode(text: string): LedgerWriteMode {
@@ -1028,7 +1046,8 @@ export function getConfigFromEnv(environment: Environment): EnvironmentConfig {
 		ledgerWriteMode,
 		log: {
 			level: reader.read('KEETANET_LOCAL_NODE_LOG_LEVEL', parseLogLevel, DEFAULT_LOG_LEVEL),
-			filter: reader.read<RegExp | undefined>('KEETANET_LOCAL_NODE_LOG_FILTER', parseLogFilter, undefined)
+			filter: reader.read<RegExp | undefined>('KEETANET_LOCAL_NODE_LOG_FILTER', parseLogFilter, undefined),
+			format: reader.read('KEETANET_LOCAL_NODE_LOG_FORMAT', parseLogFormat, DEFAULT_LOG_FORMAT)
 		},
 		storage: reader.read('KEETANET_LOCAL_NODE_POSTGRES_URL', parsePostgresURL, { kind: 'memory' }),
 		listen,

@@ -4,11 +4,13 @@ import { assertNever } from '../util/assert-never.js';
 import { NODE_VERSION } from '../version.js';
 import { logUnhandledRejections, noteRejectionsHandledLate } from './background-failures.js';
 import { ConfigError, DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, formatManualPeer, GENESIS_VARIABLES, getConfigFromEnv, localNodeConfig, MANUAL_PEER_FORM, manualPeerOf, MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, MAX_FEE_SEED_ACCOUNTS, NODE_VARIABLES, TRUSTED_ACCOUNT_VARIABLE } from './config.js';
-import type { ConfigVariable, Environment, EnvironmentConfig, LogSettings, NetworkSelection } from './config.js';
+import type { ConfigVariable, Environment, EnvironmentConfig, LedgerWriteMode, LogFormat, LogSettings, NetworkSelection } from './config.js';
 import { LocalNodeError } from './errors.js';
 import { describeOperationalFailure, operationalFailureOf } from './failure.js';
 import { addGenesis, GenesisError, getGenesisConfigFromEnv } from './genesis.js';
 import { LocalNode } from './local.js';
+import { jsonLogLine, logMessageOf, logTargetOf } from './log-format.js';
+import type { JSONLogAttributes, JSONLogLevel } from './log-format.js';
 import { DEFAULT_PEER_LIMITS, MAX_PEER_LIMIT } from './peer-limits.js';
 import { forgetPeers, PEER_ARENAS, refuseRememberedPeers } from './peer-store.js';
 import { P2P_PATH } from './peers.js';
@@ -18,7 +20,6 @@ import type { OpenedStorage } from './storage.js';
 const lib = KeetaNet.lib;
 
 type Log = InstanceType<typeof lib.Log>;
-type ConsoleTargetOptions = NonNullable<Parameters<Log['registerConsoleTarget']>[0]>;
 
 /** 2 marks a command line that names no command, as is usual for command-line tools. */
 export type ExitCode = 0 | 1 | 2;
@@ -46,6 +47,7 @@ const VARIABLE_HELP: Readonly<Record<ConfigVariable, string>> = {
 	KEETANET_LOCAL_NODE_SEED_INDEX: 'the index of its key under the seed (0)',
 	KEETANET_LOCAL_NODE_LOG_LEVEL: 'ALL, DEBUG, INFO, WARN, ERROR or NONE (INFO)',
 	KEETANET_LOCAL_NODE_LOG_FILTER: 'log only entries matching this regular expression',
+	KEETANET_LOCAL_NODE_LOG_FORMAT: 'text, or json: each log entry and line of its own as one JSON object with its level and message (text)',
 	KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-write, read-only, bootstrap-only or no-voting (read-write)',
 	KEETANET_INITIAL_TRUSTED_ACCOUNT: 'the public key of the network\'s trusted account (required on local)',
 	KEETANET_LOCAL_NODE_FEE_SCHEDULE: 'free, or flat:<base units per block> (free)',
@@ -117,13 +119,23 @@ function parseCommand(argv: readonly string[]): Command | undefined {
 }
 
 function consoleLog(settings: LogSettings): Log {
-	const options: ConsoleTargetOptions = { logLevel: settings.level };
-	if (settings.filter !== undefined) {
-		options.filter = settings.filter;
-	}
 	const log = new lib.Log();
-	log.registerConsoleTarget(options);
+	log.registerTarget(logTargetOf(settings, console, function(): Date {
+		return(new Date());
+	}));
 	return(log);
+}
+
+/** A line of the command's own, written in the log's format so that it reads as the log's entries do. */
+function ownLine(format: LogFormat, text: string, level: JSONLogLevel, message: string, attributes: JSONLogAttributes = {}): string {
+	switch (format) {
+		case 'text':
+			return(text);
+		case 'json':
+			return(`${jsonLogLine(level, message, new Date(), attributes)}\n`);
+		default:
+			return(assertNever(format));
+	}
 }
 
 type SignalWait = {
@@ -175,19 +187,48 @@ async function ownPeer(node: LocalNode): Promise<string> {
 	return(formatManualPeer(peer));
 }
 
-/** Nothing secret: the connection string may hold a password. */
-async function startupSummary(config: EnvironmentConfig, storage: OpenedStorage, node: LocalNode): Promise<string> {
-	return([
+/** What the node says once it serves; nothing secret, as the connection string may hold a password. */
+type StartupSummary = {
+	readonly representative: string;
+	readonly network: string;
+	readonly ledgerWriteMode: LedgerWriteMode;
+	readonly storage: OpenedStorage['kind'];
+	readonly manualPeers: number;
+	readonly bootstrapPeers: number;
+	readonly bootstrapMinIntervalMilliseconds: number;
+	/** Undefined when the node serves no API. */
+	readonly api: string | undefined;
+	readonly peer: string;
+};
+
+async function startupSummary(config: EnvironmentConfig, storage: OpenedStorage, node: LocalNode): Promise<StartupSummary> {
+	return({
+		representative: config.representative.publicKeyString.get(),
+		network: describeNetwork(config.network),
+		ledgerWriteMode: config.ledgerWriteMode,
+		storage: storage.kind,
+		manualPeers: config.manualPeers.length,
+		bootstrapPeers: config.bootstrapPeers.length,
+		bootstrapMinIntervalMilliseconds: config.bootstrapMinIntervalMilliseconds,
+		api: node.config.endpoints?.api,
+		peer: await ownPeer(node)
+	});
+}
+
+/** The summary as lines of text, or as one JSON line whose fields are the summary's. */
+function startupSummaryLines(format: LogFormat, summary: StartupSummary): string {
+	const text = [
 		`slop-node ${NODE_VERSION}\n`,
-		`representative: ${config.representative.publicKeyString.get()}\n`,
-		`network: ${describeNetwork(config.network)}\n`,
-		`ledger write mode: ${config.ledgerWriteMode}\n`,
-		`storage: ${storage.kind}\n`,
-		`manual peers: ${String(config.manualPeers.length)}\n`,
-		`bootstrap peers: ${String(config.bootstrapPeers.length)}, each left ${String(config.bootstrapMinIntervalMilliseconds)} ms between requests\n`,
-		`api: ${node.config.endpoints?.api ?? 'not served'}\n`,
-		`peer: ${await ownPeer(node)}\n`
-	].join(''));
+		`representative: ${summary.representative}\n`,
+		`network: ${summary.network}\n`,
+		`ledger write mode: ${summary.ledgerWriteMode}\n`,
+		`storage: ${summary.storage}\n`,
+		`manual peers: ${String(summary.manualPeers)}\n`,
+		`bootstrap peers: ${String(summary.bootstrapPeers)}, each left ${String(summary.bootstrapMinIntervalMilliseconds)} ms between requests\n`,
+		`api: ${summary.api ?? 'not served'}\n`,
+		`peer: ${summary.peer}\n`
+	].join('');
+	return(ownLine(format, text, 'info', `slop-node ${NODE_VERSION}`, { ...summary, api: summary.api ?? null }));
 }
 
 /** A store in memory starts empty, so it remembers no peer. */
@@ -217,7 +258,8 @@ async function run(config: EnvironmentConfig, output: Output): Promise<void> {
 	const storage = openStorage(config.storage);
 	try {
 		if (storage.kind === 'memory') {
-			output.error('warning: the ledger is kept in memory, so it is lost when the node stops; set KEETANET_LOCAL_NODE_POSTGRES_URL to keep it\n');
+			const warning = 'the ledger is kept in memory, so it is lost when the node stops; set KEETANET_LOCAL_NODE_POSTGRES_URL to keep it';
+			output.error(ownLine(config.log.format, `warning: ${warning}\n`, 'warn', warning));
 		}
 		await refuseRememberedPeersIn(config, storage);
 		const node = new LocalNode(localNodeConfig(config, nodeResourcesOf(storage, log)));
@@ -228,9 +270,9 @@ async function run(config: EnvironmentConfig, output: Output): Promise<void> {
 			await node.run();
 			const uninstall = logUnhandledRejections(log);
 			try {
-				output.out(await startupSummary(config, storage, node));
+				output.out(startupSummaryLines(config.log.format, await startupSummary(config, storage, node)));
 				const signal = await stopping.received;
-				output.out(`stopping on ${signal}\n`);
+				output.out(ownLine(config.log.format, `stopping on ${signal}\n`, 'info', `stopping on ${signal}`));
 			} finally {
 				uninstall();
 			}
@@ -339,19 +381,31 @@ function knownFailureLine(error: unknown, environment: Environment): string | un
 }
 
 /**
+ * The format the failure is written in. The configuration may be what
+ * failed, so the variable is read as it stands, as the level is below.
+ */
+function failureFormat(environment: Environment): LogFormat {
+	if (environment['KEETANET_LOCAL_NODE_LOG_FORMAT'] === 'json') {
+		return('json');
+	}
+	return('text');
+}
+
+/**
  * A known failure is one line, followed by its stack only at a log level of
  * DEBUG or below. Anything else is a bug, and is shown in full, for its stack.
  */
 function failureOutput(error: unknown, environment: Environment): string {
+	const format = failureFormat(environment);
 	const line = knownFailureLine(error, environment);
 	if (line === undefined) {
-		return(`slop-node: ${inspect(error)}\n`);
+		return(ownLine(format, `slop-node: ${inspect(error)}\n`, 'error', logMessageOf([error]), { stack: inspect(error) }));
 	}
 	const level = environment['KEETANET_LOCAL_NODE_LOG_LEVEL']?.toUpperCase();
 	if (level !== undefined && DETAILED_LOG_LEVELS.has(level)) {
-		return(`slop-node: ${line}\n${inspect(error)}\n`);
+		return(ownLine(format, `slop-node: ${line}\n${inspect(error)}\n`, 'error', line, { stack: inspect(error) }));
 	}
-	return(`slop-node: ${line}\n`);
+	return(ownLine(format, `slop-node: ${line}\n`, 'error', line));
 }
 
 async function runCommand(command: Command, environment: Environment, output: Output): Promise<void> {
