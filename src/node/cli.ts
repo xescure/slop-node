@@ -56,7 +56,7 @@ const VARIABLE_HELP: Readonly<Record<ConfigVariable, string>> = {
 	KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX: `the last index of the fee accounts; the range holds at most ${String(MAX_FEE_SEED_ACCOUNTS)}`,
 	KEETANET_LOCAL_NODE_FEE_ACCOUNTS: 'or: the public keys fees are paid to, separated by commas (the representative)',
 	KEETANET_LOCAL_NODE_FEE_TOKEN: 'the public key of the token fees are paid in (the base token)',
-	KEETANET_LOCAL_NODE_NETWORK: 'local, dev, staging, test, main, or a network ID (local); test and main only read-only or bootstrap-only, and with peers dev and staging too',
+	KEETANET_LOCAL_NODE_NETWORK: 'local, dev, staging, test, main, or a network ID (local); never read-write on test and main, nor with peers on dev and staging',
 	KEETANET_LOCAL_NODE_POSTGRES_URL: 'keep the ledger in this Postgres database (in memory, lost on stop)',
 	KEETANET_LOCAL_NODE_LISTEN_IP: 'the address to serve on (127.0.0.1); 0.0.0.0 or :: needs both endpoints below',
 	KEETANET_LOCAL_NODE_LISTEN_PORT: 'the port to serve on (0: any free port)',

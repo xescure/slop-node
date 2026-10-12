@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { describe, expect, test, vi } from 'vitest';
+import { describe, expect, onTestFinished, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { NodeConfig } from '@keetanetwork/keetanet-client/lib/node/index.js';
@@ -15,7 +15,7 @@ import { postJSON, useLocalNodes } from '../testing/local-node.js';
 import type { RunningLocalNode } from '../testing/local-node.js';
 import type { TestNetwork } from '../testing/network.js';
 import { watchOpenHandles } from '../testing/open-handles.js';
-import { NODE_ENVIRONMENT, useSDKNodes } from '../testing/sdk.js';
+import { NODE_ENVIRONMENT, RECEIVER, useSDKNodes } from '../testing/sdk.js';
 import type { ServingNode } from '../testing/sdk.js';
 import { P2PInternals } from '../upstream/internals.js';
 import type { LedgerWriteMode } from './config.js';
@@ -900,7 +900,11 @@ describe('a node configured from its environment', function() {
 	test.each([
 		{ network: 'local', mode: 'read-write' },
 		{ network: 'dev', mode: 'read-only' },
-		{ network: 'staging', mode: 'bootstrap-only' }
+		{ network: 'staging', mode: 'bootstrap-only' },
+		{ network: 'main', mode: 'no-voting' },
+		{ network: 'test', mode: 'no-voting' },
+		{ network: 'dev', mode: 'no-voting' },
+		{ network: 'staging', mode: 'no-voting' }
 	] as const)('serves peers over /p2p and HTTP on $network in $mode mode, which the network is open to', async function({ network, mode }) {
 		const serving = await startConfigured(network, mode);
 		const greeting = await senderGreeting();
@@ -915,6 +919,40 @@ describe('a node configured from its environment', function() {
 		await greeted;
 		expect(await serving.node.switch.peers({ includeUnverified: true })).toHaveLength(1);
 		expect(await rememberedPeerArenas(serving.node.switch.config.kv)).toContain('potentialPeers');
+	});
+});
+
+/*
+ * Open to peers, a node on main in no-voting mode still votes and quotes
+ * nothing: the ledger refuses both in any mode but read-write
+ * [Keeta TS] index.js:69022-69024, 70172-70174, before a vote is built.
+ */
+describe('a node configured to mirror main', function() {
+	test('refuses to vote on or quote a block of main, signing nothing', async function() {
+		const serving = await startConfigured('main', 'no-voting');
+		const { baseToken } = lib.Account.generateBaseAddresses(KeetaNet.Client.Config.NetworkIDs.main);
+		const block = await sendBlock({ from: STRANGER, to: RECEIVER, amount: 1n, token: baseToken, previous: null, network: KeetaNet.Client.Config.NetworkIDs.main });
+		const blocks = [Buffer.from(block.toBytes()).toString('base64')];
+		// Each request runs on a copy of the node with a ledger of its own, so the spies watch every ledger.
+		const vote = vi.spyOn(lib.Ledger.prototype, 'vote');
+		const quote = vi.spyOn(lib.Ledger.prototype, 'quote');
+		const sealVote = vi.spyOn(lib.Vote.Builder.prototype, 'seal');
+		const sealQuote = vi.spyOn(lib.Vote.Quote.Builder.prototype, 'seal');
+		onTestFinished(function() {
+			for (const spy of [vote, quote, sealVote, sealQuote]) {
+				spy.mockRestore();
+			}
+		});
+
+		const voted = await postJSON(apiOf(serving), '/vote', { blocks });
+		const quoted = await postJSON(apiOf(serving), '/vote/quote', { blocks });
+
+		expect(voted.status).toBe(500);
+		expect(quoted.status).toBe(500);
+		await expect(vote.mock.results[0]?.value).rejects.toThrow('May not issue votes in read-only mode, in no-voting mode');
+		await expect(quote.mock.results[0]?.value).rejects.toThrow('May not issue votes in read-only mode, in no-voting mode');
+		expect(sealVote).not.toHaveBeenCalled();
+		expect(sealQuote).not.toHaveBeenCalled();
 	});
 });
 
