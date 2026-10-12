@@ -124,6 +124,8 @@ export type Applied = {
 	/** The staples that left the stage, added, held already or queued. */
 	readonly left: number;
 	readonly backlog: boolean;
+	/** The adding stopped because the retry queue had no room for a staple the ledger refused, and offering its staples again let none in. */
+	readonly blocked: boolean;
 };
 
 /**
@@ -318,7 +320,7 @@ export class Staging<Staple extends PassStaple> {
 		}
 		await this.#settle();
 		const result = await finished;
-		return({ result, applied: { left, backlog: full || await this.#backlog(frontier()) } });
+		return({ result, applied: { left, backlog: full || await this.#backlog(frontier()), blocked: full } });
 	}
 
 	async #backlog(frontier: number): Promise<boolean> {

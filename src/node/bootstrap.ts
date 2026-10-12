@@ -151,6 +151,9 @@ function describeNotApplied(added: Added): string {
 	}
 }
 
+/** The updates in a row a full retry queue blocks the adding of the stage for before the node says it is stalled. */
+const STALLED_AFTER_UPDATES = 3;
+
 /** A gateway's answer when what stands behind it took too long to answer. */
 const GATEWAY_TIMEOUT_STATUS = 504;
 
@@ -267,6 +270,8 @@ export class BootstrapClient {
 	#timer: NodeJS.Timeout | undefined;
 	#lastUpdate: Date | undefined;
 	#completeCount = 0;
+	/** The updates in a row whose adding a full retry queue blocked (Applied). */
+	#blockedUpdates = 0;
 	/** How the last update's passes ended, which says whether the next starts at once. */
 	#lastResults: readonly PeerResult[] = [];
 	/** Where a pass over each peer last ended for naming too many staples from one start, to tell a peer it stays stuck on. */
@@ -450,6 +455,7 @@ export class BootstrapClient {
 				return(this.#stopped());
 			});
 			await this.#logApplied(applied);
+			await this.#logBlocked(applied);
 			this.#lastResults = [...results.values()];
 			if (applied.backlog) {
 				// What is left to add makes the update incomplete, and the next begins at once to add it.
@@ -491,6 +497,35 @@ export class BootstrapClient {
 			left = '; more of those are left to add';
 		}
 		this.#node.log.info(LOG_SOURCE, `Bootstrap: added ${String(applied.left)} staged staples, by their votes, of ${frontier}${left}; ${String(staged.staples)} staples (${String(Math.round(staged.bytes / BYTES_PER_MIB))} MiB) remain staged`);
+	}
+
+	/**
+	 * Says when a retry queue full of staples the ledger keeps refusing has
+	 * blocked the adding of the stage for STALLED_AFTER_UPDATES updates in a
+	 * row, and when it no longer does: until then the node adds nothing it
+	 * staged, and no update completes.
+	 */
+	async #logBlocked(applied: Applied): Promise<void> {
+		if (!applied.blocked) {
+			if (this.#blockedUpdates >= STALLED_AFTER_UPDATES) {
+				this.#node.log.info(LOG_SOURCE, 'Bootstrap is no longer stalled: the node adds what it staged again');
+			}
+			this.#blockedUpdates = 0;
+			return;
+		}
+		this.#blockedUpdates++;
+		if (this.#blockedUpdates !== STALLED_AFTER_UPDATES) {
+			return;
+		}
+		const staged = await this.#staging.counts();
+		const codes = new Map<string, number>();
+		for (const entry of await this.#retries.entries()) {
+			codes.set(entry.code, (codes.get(entry.code) ?? 0) + 1);
+		}
+		const refusals = [...codes].map(function([code, count]): string {
+			return(`${String(count)} ${code}`);
+		}).join(', ');
+		this.#node.log.error(LOG_SOURCE, `Bootstrap is stalled: the retry queue is full of staples the ledger keeps refusing (${refusals}), so none of the ${String(staged.staples)} staged staples is added and no update completes, for ${String(STALLED_AFTER_UPDATES)} updates now; it goes on once one of those staples applies`);
 	}
 
 	/**

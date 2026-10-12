@@ -122,6 +122,14 @@ export type QueueBounds = {
 
 const DEFAULT_BOUNDS: QueueBounds = { staples: MAX_QUEUED_STAPLES, bytes: MAX_QUEUED_BYTES };
 
+/** What a queue of those bounds leaves a pass from where the last reached, and the stage's adding: all but the deep re-scans' share. */
+function liveBoundsOf(bounds: QueueBounds): QueueBounds {
+	return({ staples: bounds.staples - Math.ceil(bounds.staples * DEEP_SCAN_SHARE), bytes: bounds.bytes - Math.ceil(bounds.bytes * DEEP_SCAN_SHARE) });
+}
+
+/** The live share of a queue of the default bounds: a node whose queue holds as many has no room for what its passes from where the last reached, or its stage, are refused. */
+export const LIVE_QUEUE_BOUNDS: QueueBounds = liveBoundsOf(DEFAULT_BOUNDS);
+
 /** Whether a staple a pass was sent was new to the node, one it held already, perhaps with other votes, or one the ledger refused and the queue holds. */
 export type Added = 'added' | 'held' | 'queued';
 
@@ -237,7 +245,7 @@ export class RetryQueue<Staple extends NamedStaple> {
 		this.#store = store;
 		this.#report = report;
 		this.#bounds = bounds;
-		this.#liveBounds = { staples: bounds.staples - Math.ceil(bounds.staples * DEEP_SCAN_SHARE), bytes: bounds.bytes - Math.ceil(bounds.bytes * DEEP_SCAN_SHARE) };
+		this.#liveBounds = liveBoundsOf(bounds);
 		this.#aheadBounds = { staples: Math.floor(bounds.staples * AHEAD_SHARE), bytes: Math.floor(bounds.bytes * AHEAD_SHARE) };
 	}
 

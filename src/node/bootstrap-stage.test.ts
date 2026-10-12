@@ -154,7 +154,7 @@ describe('staging what the ranges read', function() {
 			await harness.staging.take(at(list, index), 'live');
 		}
 
-		expect(await harness.addBefore(8.64e15)).toEqual({ left: 200, backlog: false });
+		expect(await harness.addBefore(8.64e15)).toEqual({ left: 200, backlog: false, blocked: false });
 
 		expect(harness.node.size).toBe(200);
 		expect(harness.node.refused).toBe(0);
@@ -210,7 +210,7 @@ describe('staging what the ranges read', function() {
 			return(false);
 		});
 
-		expect(applied).toEqual({ left: 100, backlog: false });
+		expect(applied).toEqual({ left: 100, backlog: false, blocked: false });
 		expect(events.slice(0, 3)).toEqual(['read leaving out 0', 'read leaving out 64', 'add 0']);
 		expect(events.slice(events.indexOf('add 63'), events.indexOf('add 64') + 1)).toEqual(['add 63', 'remove 64', 'add 64']);
 		expect(events.slice(events.indexOf('add 99'), events.indexOf('add 99') + 2)).toEqual(['add 99', 'remove 36']);
@@ -259,7 +259,7 @@ describe('staging what the ranges read', function() {
 		});
 
 		expect(await Promise.all(stagedLate)).toEqual(['added']);
-		expect(applied).toEqual({ left: 200, backlog: false });
+		expect(applied).toEqual({ left: 200, backlog: false, blocked: false });
 		expect(node.size).toBe(200);
 		expect(node.refused).toBe(0);
 		expect(await staging.isEmpty()).toBe(true);
@@ -315,9 +315,9 @@ describe('staging what the ranges read', function() {
 			await harness.staging.take(staple, 'live');
 		}
 
-		expect(await harness.addBefore(NOW + 2 * SECOND - 900)).toEqual({ left: 2, backlog: false });
+		expect(await harness.addBefore(NOW + 2 * SECOND - 900)).toEqual({ left: 2, backlog: false, blocked: false });
 		expect(await harness.stagedIDs()).toEqual([2, 3]);
-		expect(await harness.addBefore(NOW + 3 * SECOND - 900)).toEqual({ left: 1, backlog: false });
+		expect(await harness.addBefore(NOW + 3 * SECOND - 900)).toEqual({ left: 1, backlog: false, blocked: false });
 		expect(await harness.stagedIDs()).toEqual([3]);
 		expect(harness.node.size).toBe(3);
 	});
@@ -330,14 +330,14 @@ describe('staging what the ranges read', function() {
 			await harness.staging.take(staple, 'live');
 		}
 
-		expect(await harness.addBefore(8.64e15)).toEqual({ left: 3, backlog: false });
+		expect(await harness.addBefore(8.64e15)).toEqual({ left: 3, backlog: false, blocked: false });
 
 		expect(harness.node.size).toBe(3);
 		expect(await harness.retries.size()).toBe(0);
 		expect(await harness.staging.isEmpty()).toBe(true);
 	});
 
-	test('leaves staged a staple the ledger refuses while the queue has no room, and says some are left to add', async function() {
+	test('leaves staged a staple the ledger refuses while the queue has no room, and says some are left to add, the queue having blocked the adding', async function() {
 		const list = staples([[9], [9], []]);
 		// The queue's share for the node adding is one staple.
 		const harness = new Harness({ bounds: { staples: 2, bytes: 1024 } });
@@ -345,7 +345,7 @@ describe('staging what the ranges read', function() {
 			await harness.staging.take(staple, 'live');
 		}
 
-		expect(await harness.addBefore(8.64e15)).toEqual({ left: 1, backlog: true });
+		expect(await harness.addBefore(8.64e15)).toEqual({ left: 1, backlog: true, blocked: true });
 
 		expect(await harness.retries.size()).toBe(1);
 		expect(await harness.stagedIDs()).toEqual([1, 2]);
@@ -376,7 +376,7 @@ describe('staging what the ranges read', function() {
 		});
 
 		expect(result).toBe('read');
-		expect(applied).toEqual({ left: 4, backlog: false });
+		expect(applied).toEqual({ left: 4, backlog: false, blocked: false });
 		expect(harness.node.size).toBe(4);
 		expect(harness.node.refused).toBe(0);
 	});
@@ -482,7 +482,7 @@ describe('staging what the ranges read', function() {
 		expect(harness.node.holds(second)).toBe(true);
 
 		finish?.();
-		expect((await adding).applied).toEqual({ left: 2, backlog: false });
+		expect((await adding).applied).toEqual({ left: 2, backlog: false, blocked: false });
 	});
 
 	test('adds nothing once stopped, and says nothing is left when nothing was staged', async function() {
@@ -510,7 +510,7 @@ describe('staging what the ranges read', function() {
 			return(offered > 0);
 		});
 
-		expect(applied).toEqual({ left: 1, backlog: true });
+		expect(applied).toEqual({ left: 1, backlog: true, blocked: false });
 		expect(await harness.stagedIDs()).toEqual([1, 2]);
 
 		const empty = new Harness();
@@ -518,7 +518,7 @@ describe('staging what the ranges read', function() {
 			return(8.64e15);
 		}, Number.POSITIVE_INFINITY, function(): boolean {
 			return(true);
-		})).applied).toEqual({ left: 0, backlog: false });
+		})).applied).toEqual({ left: 0, backlog: false, blocked: false });
 	});
 
 	test('stops adding once the work is done and its time is up, and says what is left', async function() {
@@ -537,7 +537,7 @@ describe('staging what the ranges read', function() {
 			return(false);
 		});
 
-		expect(applied).toEqual({ left: 64, backlog: true });
+		expect(applied).toEqual({ left: 64, backlog: true, blocked: false });
 		expect((await harness.stagedIDs()).length).toBe(36);
 	});
 

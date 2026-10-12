@@ -12,6 +12,7 @@ import pg from 'pg';
 import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
 import type { HistoryReindex } from '../ledger/storage/postgres/driver.js';
 import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CURSOR_ARENA, BOOTSTRAP_RANGES_ARENA, BOOTSTRAP_RETRY_ARENA } from '../node/bootstrap-cursors.js';
+import { LIVE_QUEUE_BOUNDS } from '../node/bootstrap-retry.js';
 import { assertNever } from '../util/assert-never.js';
 import { NO_HORIZON, STRANDED, caughtUp as caughtUpOf } from './follower-store.js';
 import { restage } from './restage.js';
@@ -845,6 +846,8 @@ async function ledgerProgress(directory: string): Promise<unknown> {
 			})),
 			caughtUpHorizon: caughtUp.rows[0]?.value ?? null,
 			ranges: rangesOf(ranges.rows[0]?.value),
+			// So full that the node adds nothing more it is refused, nor anything staged after it: stalled until one of these applies (src/node/bootstrap.ts, #logBlocked).
+			retryQueueFull: queuedCount >= LIVE_QUEUE_BOUNDS.staples,
 			retryQueue: queued.rows.map(function(group) {
 				let oldestQueuedAt: string | null = null;
 				if (group.oldest !== null) {

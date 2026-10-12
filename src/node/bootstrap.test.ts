@@ -1577,6 +1577,45 @@ describe('a bootstrap client at the edges of what it accepts and meets', functio
 		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([peer.network.genesis]));
 	});
 
+	test('says it is stalled once a retry queue full of staples the ledger keeps refusing blocks the adding of the stage for three updates in a row, and once it adds again', async function() {
+		const peer = await representative();
+		const late = await joiner({ bootstrapFrom: [] });
+		const sends = await sendsFrom(peer.network, 0, 2);
+		const storage = late.node.config.ledger.storageDriver;
+		if (!(storage instanceof LedgerStorageDriverBase)) {
+			throw(new Error('the node\'s storage is no driver of this node'));
+		}
+		// Without genesis, which gives their voters weight, the ledger refuses them.
+		await storage.bootstrapStage().put(sends.map(stagedOf));
+		const kv = new KVInternals.KVStorageProviderMemory();
+		for (let index = 0; index < 900; index++) {
+			await kv.set(BOOTSTRAP_RETRY_ARENA, `queued-${String(index)}`, { staple: 'AA==', queuedAt: Date.now(), code: 'LEDGER_OTHER', reported: false });
+		}
+		const errors = linesOf(late.node, 'error');
+		const info = linesOf(late.node, 'info');
+		const client = clientOf(late.node, { kv });
+		const stalled = function(): string[] {
+			return(errors().filter(function(line): boolean {
+				return(line.includes('Bootstrap is stalled'));
+			}));
+		};
+
+		await client.update();
+		await client.update();
+		expect(stalled()).toEqual([]);
+		await client.update();
+		expect(stalled()).toEqual(['BOOTSTRAP Bootstrap is stalled: the retry queue is full of staples the ledger keeps refusing (900 LEDGER_OTHER), so none of the 2 staged staples is added and no update completes, for 3 updates now; it goes on once one of those staples applies']);
+		await client.update();
+		expect(stalled()).toHaveLength(1);
+
+		// Genesis gives the staged staples' voters weight, so the ledger takes them, full as the queue still is.
+		await late.node.ledger.add(peer.network.genesis);
+		expect(info()).not.toContainEqual(expect.stringContaining('no longer stalled'));
+		await client.update();
+		expect(info()).toContainEqual('BOOTSTRAP Bootstrap is no longer stalled: the node adds what it staged again');
+		expect(stalled()).toHaveLength(1);
+	});
+
 	describe('adding what it staged', function() {
 		/** A node joining late whose stage holds what a restage leaves of the peer's genesis and sends, and the peer, which holds them. */
 		async function stagedJoiner(sends: number): Promise<{ readonly late: CreatedLocalNode; readonly stage: ReturnType<LedgerStorageDriverBase['bootstrapStage']>; readonly staples: number }> {
