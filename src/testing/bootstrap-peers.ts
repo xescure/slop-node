@@ -339,6 +339,8 @@ export type ReadingPeer = ServingPeer & {
 	readonly throttlesPages: (picks: (start: string | null, limit: string | null) => boolean) => void;
 	/** Leaves the staple of those blocks out of every page whose start and limit the test picks, as if it held none. */
 	readonly leavesOut: (blocksHash: string, picks: (start: string | null, limit: string | null) => boolean) => void;
+	/** Answers 429, asking for a minute's wait, every request for the votes on a block. */
+	readonly throttlesVotes: () => void;
 };
 
 /**
@@ -347,9 +349,10 @@ export type ReadingPeer = ServingPeer & {
  * first beginning past the key of the read before's last vote by
  * resumesPast, so that a vote keyed that close after it is in no read. It
  * keys each vote keyOffset after the moment it was made, 0 unless given, as
- * a representative may key one a little off.
+ * a representative may key one a little off, and answers at most
+ * answersAtMost staples a page, as one whose time for a request runs out.
  */
-export type ReadingRule = { readonly votesPerRead: number; readonly resumesPast: number; readonly keyOffset?: number };
+export type ReadingRule = { readonly votesPerRead: number; readonly resumesPast: number; readonly keyOffset?: number; readonly answersAtMost?: number };
 
 /**
  * A representative keyed by votes that reads them as the rule says, lists
@@ -367,6 +370,7 @@ export async function startReadingPeer(rule: ReadingRule): Promise<ReadingPeer> 
 		return(false);
 	};
 	const leftOut = new Map<string, (start: string | null, limit: string | null) => boolean>();
+	let votesThrottled = false;
 	let served = 0;
 	const holding = function(block: string): VoteStaple | undefined {
 		if (heldNot.has(block)) {
@@ -390,6 +394,11 @@ export async function startReadingPeer(rule: ReadingRule): Promise<ReadingPeer> 
 		if (path.startsWith('vote/')) {
 			const block = path.slice('vote/'.length).toUpperCase();
 			askedFor.push(block);
+			if (votesThrottled) {
+				response.writeHead(429, { 'content-type': 'application/json', 'retry-after': '60' });
+				response.end(JSON.stringify({ error: true, message: 'Too many requests' }));
+				return;
+			}
 			const staple = holding(block);
 			answer(response, { blockhash: block, votes: staple?.votes.map(function(vote): { readonly $binary: string } {
 				return({ $binary: Buffer.from(vote.toBytes()).toString('base64') });
@@ -416,7 +425,7 @@ export async function startReadingPeer(rule: ReadingRule): Promise<ReadingPeer> 
 			return;
 		}
 		const start = Date.parse(query.get('start') ?? '');
-		const limit = Number(query.get('limit') ?? '1000');
+		const limit = Math.min(Number(query.get('limit') ?? '1000'), rule.answersAtMost ?? Number.POSITIVE_INFINITY);
 		const filter = bloomFilterOf(query);
 		const votes = applied.flatMap(function(staple): { readonly staple: VoteStaple; readonly made: number }[] {
 			return(staple.votes.map(function(vote): { readonly staple: VoteStaple; readonly made: number } {
@@ -466,6 +475,9 @@ export async function startReadingPeer(rule: ReadingRule): Promise<ReadingPeer> 
 		},
 		leavesOut: function(blocksHash, picks): void {
 			leftOut.set(blocksHash, picks);
+		},
+		throttlesVotes: function(): void {
+			votesThrottled = true;
 		},
 		apply: function(staples: readonly ServedStaple[]): void {
 			for (const staple of staples) {

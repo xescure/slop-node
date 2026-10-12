@@ -464,7 +464,9 @@ describe('the wait a Retry-After header asks for', function() {
 		['0', 0],
 		[new Date(now + 30_000).toUTCString(), 30_000],
 		[new Date(now - 30_000).toUTCString(), 0],
-		['soon', undefined]
+		['soon', undefined],
+		['x7', undefined],
+		['7x', undefined]
 	])('of %s is %s ms', function(header: string | undefined, milliseconds: number | undefined) {
 		expect(retryAfterMillisecondsOf(header, now)).toBe(milliseconds);
 	});

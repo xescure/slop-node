@@ -299,10 +299,10 @@ keeps, or the text of a line it logs.
 - src/node/bootstrap-cursors.ts:40:9-40:34 ConditionalExpression "true" equivalent: Number.isSafeInteger is false for every value that is no number, so the conjunction answers the same without the typeof test.
 - src/node/bootstrap-cursors.ts:288:3-289:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of Awaited is unreachable.
 - src/node/bootstrap-pacing.ts:44:51-44:55 BooleanLiteral "false" equivalent: the listener is removed once the wait ends, and a signal is aborted at most once, so it runs at most once either way.
-- src/node/bootstrap-pacing.ts:103:8-103:16 EqualityOperator "wait >= 0" harmless: a wait of exactly 0 ms takes one timer tick before the same request is sent; a stop in that tick is reported as a stop while waiting, as the error the signal's reason wraps, rather than as the reason itself.
-- src/node/bootstrap-pacing.ts:114:8-114:42 ConditionalExpression "false" equivalent: a peer's last turn left in place is settled, so the next request to the peer waits on a settled promise, as on none; the map keeps one turn per peer the node bootstraps from.
-- src/node/bootstrap-pacing.ts:114:44-116:5 BlockStatement "{}" equivalent: a peer's last turn left in place is settled, so the next request to the peer waits on a settled promise, as on none; the map keeps one turn per peer the node bootstraps from.
-- src/node/bootstrap-pacing.ts:115:5-115:34 CallExpression ";" equivalent: a peer's last turn left in place is settled, so the next request to the peer waits on a settled promise, as on none; the map keeps one turn per peer the node bootstraps from.
+- src/node/bootstrap-pacing.ts:104:8-104:16 EqualityOperator "wait >= 0" harmless: a wait of exactly 0 ms takes one timer tick before the same request is sent; a stop in that tick is reported as a stop while waiting, as the error the signal's reason wraps, rather than as the reason itself.
+- src/node/bootstrap-pacing.ts:115:8-115:42 ConditionalExpression "false" equivalent: a peer's last turn left in place is settled, so the next request to the peer waits on a settled promise, as on none; the map keeps one turn per peer the node bootstraps from.
+- src/node/bootstrap-pacing.ts:115:44-117:5 BlockStatement "{}" equivalent: a peer's last turn left in place is settled, so the next request to the peer waits on a settled promise, as on none; the map keeps one turn per peer the node bootstraps from.
+- src/node/bootstrap-pacing.ts:116:5-116:34 CallExpression ";" equivalent: a peer's last turn left in place is settled, so the next request to the peer waits on a settled promise, as on none; the map keeps one turn per peer the node bootstraps from.
 - src/node/bootstrap-page.ts:80:3-81:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of PageProblem is unreachable.
 - src/node/bootstrap-page.ts:96:9-96:34 ConditionalExpression "true" equivalent: the callers read only the properties message, voteStaples and $binary, which no JSON value but an object has: a number, string, boolean or array answers undefined for each, as a value that is no record.
 - src/node/bootstrap-page.ts:125:7-125:64 ConditionalExpression "true" equivalent: a value with no string message throws as its message is sliced, inside the try whose catch answers undefined, as the guard does.
@@ -348,7 +348,7 @@ keeps, or the text of a line it logs.
 - src/node/bootstrap.ts:717:11-717:20 StringLiteral "\"\"" harmless: a pass over a range begun after the stop fails at its first request, which the pacer refuses once stopped, and is logged as stopped all the same, having written the peer's first progress if it had none.
 - src/node/bootstrap.ts:729:8-729:69 ConditionalExpression "false" harmless: only a stage at its 4 GiB bound throws here, since a pass over a range stages and never queues; its peer is then counted as failing instead of waiting for room.
 - src/node/bootstrap.ts:729:8-729:69 LogicalOperator "error instanceof RetryQueueFull && error instanceof StageFull" harmless: only a stage at its 4 GiB bound throws here, since a pass over a range stages and never queues; its peer is then counted as failing instead of waiting for room.
-- src/node/bootstrap.ts:729:71-737:5 BlockStatement "{}" harmless: only a stage at its 4 GiB bound throws here, since a pass over a range stages and never queues; its peer is then counted as failing instead of waiting for room.
+- src/node/bootstrap.ts:729:71-732:5 BlockStatement "{}" harmless: only a stage at its 4 GiB bound throws here, since a pass over a range stages and never queues; its peer is then counted as failing instead of waiting for room.
 - src/node/bootstrap.ts:730:37-730:183 StringLiteral "``" harmless: only a stage at its 4 GiB bound throws here; the text of its log line changes.
 - src/node/bootstrap.ts:731:12-731:23 StringLiteral "\"\"" harmless: only a stage at its 4 GiB bound throws here, since a pass over a range stages and never queues; its peer is then counted as failing instead of waiting for room.
 - src/node/bootstrap.ts:767:5-767:44 CallExpression ";" harmless: a pass that asks what the node holds after the stop reads the ledger once more, bounded by HELD_READ_MILLISECONDS, before its next request fails.
@@ -384,6 +384,10 @@ keeps, or the text of a line it logs.
 - src/node/bootstrap.ts:662:9-662:25 ConditionalExpression "true" harmless: a client stopped while it adds a lacked block's staple then also warns that the add failed.
 - src/node/bootstrap.ts:668:5-668:34 CallExpression ";" harmless: a block the ledger now holds then keeps its count of unanswered asks, which nothing reads again, as no deferred staple awaits a held block.
 - src/node/bootstrap.ts:670:12-670:16 BooleanLiteral "false" harmless: a block the ledger now holds is then counted as asked once more, which nothing reads again, as no deferred staple awaits a held block.
+- src/node/bootstrap.ts:195:39-195:70 ConditionalExpression "true" equivalent: only a PageError of kind status has a status, so for any other kind the status list finds none, as the kind check does.
+- src/node/bootstrap.ts:894:20-896:6 MethodExpression "Math.max(...built.votes.map(function (vote): number {\n  return vote.validityFrom.getTime();\n}))" harmless: the lookup then starts at the staple's latest vote, and a peer keyed by votes begins the read from there at that vote, so it lists the staple for that vote as it would for its earliest.
+- src/node/bootstrap-pacing.ts:44:43-44:57 ObjectLiteral "{}" equivalent: the listener is removed once the wait ends, and a signal is aborted at most once, so it runs at most once either way.
+- src/node/bootstrap-page.ts:257:54-257:58 BooleanLiteral "false" harmless: an https peer's pages then each open a connection of their own instead of reusing one; the pages read are the same.
 
 ## bootstrap-pass
 

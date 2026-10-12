@@ -13,7 +13,7 @@ import type { StrandedDeferredStaple } from '../ledger/storage/base.js';
 import { GENESIS_MOMENT, ChainCursor, requireAt } from '../ledger/storage/suite/support.js';
 import { confirmedStaple, sendBlock } from '../testing/blocks.js';
 import { VOTES_PER_READ, listedByVotes, pageFrom, startAnsweringPeer, startFailingPeer, startReadingPeer, startRecordingPeer, startServingPeer, startSilentAPIPeer, unreachableEndpoint } from '../testing/bootstrap-peers.js';
-import type { ReadingRule, RecordedPage } from '../testing/bootstrap-peers.js';
+import type { ReadingPeer, ReadingRule, RecordedPage } from '../testing/bootstrap-peers.js';
 import { request, useLocalNodes } from '../testing/local-node.js';
 import type { CreatedLocalNode, LocalNodeOptions, RunningLocalNode } from '../testing/local-node.js';
 import { advanceClock, freezeClock } from '../testing/network.js';
@@ -362,15 +362,90 @@ describe('a bootstrap client', function() {
 			return(limit === '200');
 		});
 		const warnings = warningsOf(late.node);
+		const debug = linesOf(late.node, 'debug');
 		const client = clientOf(late.node);
 
 		expect(await client.update()).toEqual({ complete: true });
 		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([peer.network.genesis, before, lost, after]));
+		expect(debug()).toContainEqual(expect.stringContaining(`Asking ${reading.apiURL} for the bytes it serves of staple ${lost.blocksHash.toString()} failed; the node adds it as built from its votes and blocks: PageError: ${reading.apiURL} answered 429: Too many requests`));
 		const asked = reading.pages.length;
 		await client.update();
 
 		expect(reading.pages).toHaveLength(asked);
 		expect(warnings()).toContainEqual(expect.stringContaining(`the bootstrap asks ${reading.apiURL} nothing for 60 s more, as it asked the node to slow down`));
+	});
+
+	test('leaves alone a representative that asks it to slow down when asked for the votes on a lacked block', async function() {
+		const peer = await representative();
+		const reading = await startReadingPeer(ONE_VOTE_A_READ);
+		const late = await joiner({ bootstrapFrom: [reading.apiURL] });
+		const { before, lost, after, lostBlock } = await nearTiedHistory(peer.network);
+		reading.apply([peer.network.genesis, before, lost, after]);
+		reading.throttlesVotes();
+		advanceClock(BOOTSTRAP_MARGIN_MILLISECONDS + 1000);
+		const client = clientOf(late.node);
+
+		await client.update();
+		expect(reading.askedFor).toEqual([lostBlock]);
+		const asked = reading.pages.length;
+		await client.update();
+
+		expect(reading.pages).toHaveLength(asked);
+		expect(reading.askedFor).toEqual([lostBlock]);
+	});
+
+	/** A peer keyed by votes that answers at most so many staples a page and leaves out of every page the first of a user's chain of sends, which the rest await. */
+	async function chainLeftOut(answersAtMost: number, sends: number): Promise<{ readonly late: CreatedLocalNode; readonly reading: ReadingPeer; readonly staples: readonly VoteStaple[]; readonly genesis: VoteStaple }> {
+		const peer = await representative();
+		const reading = await startReadingPeer({ ...ONE_VOTE_A_READ, answersAtMost });
+		const late = await joiner({ bootstrapFrom: [reading.apiURL] });
+		const staples = await sendsFrom(peer.network, 0, sends);
+		const [first] = staples;
+		if (first === undefined) {
+			throw(new Error('no staples were made'));
+		}
+		reading.apply([peer.network.genesis, ...staples]);
+		reading.leavesOut(first.blocksHash.toString(), function(): boolean {
+			return(true);
+		});
+		advanceClock(BOOTSTRAP_MARGIN_MILLISECONDS + 1000);
+		return({ late, reading, staples, genesis: peer.network.genesis });
+	}
+
+	/** The pages asked for while looking for a staple's served bytes: those of 200. */
+	function lookupPages(reading: ReadingPeer): RecordedPage[] {
+		return(reading.pages.filter(function(page): boolean {
+			return(page.limit === '200');
+		}));
+	}
+
+	test('looks for a fetched staple\'s served bytes from each start until a page is empty, then adds it as built', async function() {
+		const { late, reading, staples, genesis } = await chainLeftOut(1000, 2);
+
+		expect(await clientOf(late.node).update()).toEqual({ complete: true });
+
+		// From each start a page holding what follows it, then an empty one.
+		expect(lookupPages(reading).map(function(page): boolean {
+			return(page.served.length > 0);
+		})).toEqual([true, false, true, false]);
+		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([genesis, ...staples]));
+	});
+
+	test('looks for a fetched staple\'s served bytes in at most three pages from each start, each naming what the pages before it sent', async function() {
+		const { late, reading, staples, genesis } = await chainLeftOut(1, 5);
+
+		expect(await clientOf(late.node).update()).toEqual({ complete: true });
+
+		const pages = lookupPages(reading);
+		expect(pages).toHaveLength(6);
+		for (const fromStart of [pages.slice(0, 3), pages.slice(3)]) {
+			const served = fromStart.flatMap(function(page): readonly string[] {
+				return(page.served);
+			});
+			expect(served).toHaveLength(3);
+			expect(new Set(served).size).toBe(3);
+		}
+		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([genesis, ...staples]));
 	});
 
 	test('asks the next peer for a lacked block when one holds no staple of it, or fails, after a pass over some peer completed', async function() {
@@ -1693,7 +1768,8 @@ describe('a bootstrap client at the edges of what it accepts and meets', functio
 		expect(await heldBlocksHashes(late.node)).toEqual(blocksHashesOf([peer.network.genesis]));
 	});
 
-	test('says it is stalled once a retry queue full of staples the ledger keeps refusing blocks the adding of the stage for three updates in a row, and once it adds again', async function() {
+	/** A node with two sends staged and no genesis, which the ledger refuses, and a retry queue already full of staples refused for two reasons. */
+	async function stalledJoiner(): Promise<{ readonly late: CreatedLocalNode; readonly genesis: VoteStaple; readonly client: BootstrapClient; readonly stalled: () => string[]; readonly info: () => string[] }> {
 		const peer = await representative();
 		const late = await joiner({ bootstrapFrom: [] });
 		const sends = await sendsFrom(peer.network, 0, 2);
@@ -1701,33 +1777,48 @@ describe('a bootstrap client at the edges of what it accepts and meets', functio
 		if (!(storage instanceof LedgerStorageDriverBase)) {
 			throw(new Error('the node\'s storage is no driver of this node'));
 		}
-		// Without genesis, which gives their voters weight, the ledger refuses them.
 		await storage.bootstrapStage().put(sends.map(stagedOf));
 		const kv = new KVInternals.KVStorageProviderMemory();
 		for (let index = 0; index < 900; index++) {
-			await kv.set(BOOTSTRAP_RETRY_ARENA, `queued-${String(index)}`, { staple: 'AA==', queuedAt: Date.now(), code: 'LEDGER_OTHER', reported: false });
+			let code = 'LEDGER_OTHER';
+			if (index % 2 === 1) {
+				code = 'LEDGER_SECOND';
+			}
+			await kv.set(BOOTSTRAP_RETRY_ARENA, `queued-${String(index)}`, { staple: 'AA==', queuedAt: Date.now(), code, reported: false });
 		}
 		const errors = linesOf(late.node, 'error');
-		const info = linesOf(late.node, 'info');
-		const client = clientOf(late.node, { kv });
-		const stalled = function(): string[] {
+		return({ late, genesis: peer.network.genesis, client: clientOf(late.node, { kv }), info: linesOf(late.node, 'info'), stalled: function(): string[] {
 			return(errors().filter(function(line): boolean {
 				return(line.includes('Bootstrap is stalled'));
 			}));
-		};
+		} });
+	}
+
+	test('says it is stalled once a retry queue full of staples the ledger keeps refusing blocks the adding of the stage for three updates in a row, once only', async function() {
+		const { client, stalled } = await stalledJoiner();
 
 		await client.update();
 		await client.update();
 		expect(stalled()).toEqual([]);
 		await client.update();
-		expect(stalled()).toEqual(['BOOTSTRAP Bootstrap is stalled: the retry queue is full of staples the ledger keeps refusing (900 LEDGER_OTHER), so none of the 2 staged staples is added and no update completes, for 3 updates now; it goes on once one of those staples applies']);
+		expect(stalled()).toHaveLength(1);
+		expect(stalled()[0]).toMatch(/^BOOTSTRAP Bootstrap is stalled: the retry queue is full of staples the ledger keeps refusing \((450 LEDGER_OTHER, 450 LEDGER_SECOND|450 LEDGER_SECOND, 450 LEDGER_OTHER)\), so none of the 2 staged staples is added and no update completes, for 3 updates now; it goes on once one of those staples applies$/u);
 		await client.update();
+		expect(stalled()).toHaveLength(1);
+	});
+
+	test('says it is no longer stalled once it adds what it staged again', async function() {
+		const { late, genesis, client, stalled, info } = await stalledJoiner();
+		for (let update = 0; update < 3; update++) {
+			await client.update();
+		}
 		expect(stalled()).toHaveLength(1);
 
 		// Genesis gives the staged staples' voters weight, so the ledger takes them, full as the queue still is.
-		await late.node.ledger.add(peer.network.genesis);
+		await late.node.ledger.add(genesis);
 		expect(info()).not.toContainEqual(expect.stringContaining('no longer stalled'));
 		await client.update();
+
 		expect(info()).toContainEqual('BOOTSTRAP Bootstrap is no longer stalled: the node adds what it staged again');
 		expect(stalled()).toHaveLength(1);
 	});

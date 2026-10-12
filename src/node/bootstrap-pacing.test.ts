@@ -297,5 +297,26 @@ describe('a peer that asks the node to slow down', function() {
 		pacer.throttled(PEER, undefined);
 		expect(await leftFor()).toBe(FIRST_THROTTLE_MILLISECONDS);
 		expect(new PeerThrottled(PEER, 4500).message).toBe(`the bootstrap asks ${PEER} nothing for 5 s more, as it asked the node to slow down`);
+		expect(new PeerThrottled(PEER, 4500).name).toBe('PeerThrottled');
+	});
+
+	test('sends no request that waited for its turn while the peer asked the node to slow down', async function() {
+		useFakeClock();
+		const pacer = new PeerPacer(INTERVAL);
+		const stopped = new AbortController().signal;
+		const first = new HeldRequest();
+		const second = new HeldRequest();
+		const firstAnswer = pacer.paced(PEER, stopped, first.run);
+		const secondAnswer = pacer.paced(PEER, stopped, second.run);
+		await vi.advanceTimersByTimeAsync(0);
+
+		pacer.throttled(PEER, 60_000);
+		first.end('first');
+		await expect(firstAnswer).resolves.toBe('first');
+		const refused = expect(secondAnswer).rejects.toThrow(PeerThrottled);
+		await vi.advanceTimersByTimeAsync(INTERVAL);
+
+		await refused;
+		expect(second.startedAt).toBeUndefined();
 	});
 });

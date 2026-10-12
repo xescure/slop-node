@@ -65,8 +65,8 @@ export class PeerPacer {
 	/** For each peer, what the next request to it waits for: the end of the one before. */
 	readonly #turns = new Map<string, Promise<void>>();
 	readonly #lastEnded = new Map<string, number>();
-	/** For each peer that asked the node to slow down, how often it has in a row, and until when it is sent nothing. */
-	readonly #throttles = new Map<string, { readonly times: number; readonly until: number }>();
+	/** For each peer that asked the node to slow down, how often it has in a row, when it last did, and until when it is sent nothing. */
+	readonly #throttles = new Map<string, { readonly times: number; readonly since: number; readonly until: number }>();
 
 	constructor(minIntervalMilliseconds: number) {
 		this.#interval = minIntervalMilliseconds;
@@ -77,7 +77,8 @@ export class PeerPacer {
 		const times = (this.#throttles.get(endpoint)?.times ?? 0) + 1;
 		const doubled = FIRST_THROTTLE_MILLISECONDS * 2 ** (times - 1);
 		const wait = Math.min(Math.max(retryAfterMilliseconds ?? 0, doubled), LAST_THROTTLE_MILLISECONDS);
-		this.#throttles.set(endpoint, { times, until: performance.now() + wait });
+		const now = performance.now();
+		this.#throttles.set(endpoint, { times, since: now, until: now + wait });
 	}
 
 	/** The request's answer, once its turn has come; stopping while it waits rejects without sending it, and so does a peer still to be left alone (PeerThrottled). */
@@ -124,11 +125,14 @@ export class PeerPacer {
 		}
 	}
 
-	/** The request sent, unless the peer asked meanwhile to be left alone; one that succeeds ends the peer's doubling. */
+	/** The request sent, unless the peer asked meanwhile to be left alone; one that succeeds ends the peer's doubling, but for a wait the peer asked for while it was in flight. */
 	async #sent<Answer>(endpoint: string, request: () => Promise<Answer>): Promise<Answer> {
 		this.#refuseWhileThrottled(endpoint);
+		const sent = performance.now();
 		const answer = await request();
-		this.#throttles.delete(endpoint);
+		if ((this.#throttles.get(endpoint)?.since ?? Number.POSITIVE_INFINITY) < sent) {
+			this.#throttles.delete(endpoint);
+		}
 		return(answer);
 	}
 }
