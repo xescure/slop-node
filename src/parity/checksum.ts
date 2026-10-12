@@ -1,3 +1,4 @@
+import { LIVE_QUEUE_BOUNDS } from '../node/bootstrap-retry.js';
 import { getOK } from './api-source.js';
 import type { APISource } from './api-source.js';
 import type { ChecksumSnapshot, FollowerProgress, FollowerStore } from './follower-store.js';
@@ -169,6 +170,17 @@ function blockCountRecordOf(at: string, progress: FollowerProgress, follower: Ch
 	if (progress.staged > 0) {
 		reasons.push('stage-not-empty');
 	}
+	// Staples the ledger refused, or deferred behind a block it lacks, are held by the representatives and not counted by the follower, as for its being caught up (src/parity/follower-store.ts, caughtUp).
+	if (progress.queued > 0) {
+		reasons.push('retry-queued');
+	}
+	// A full queue stalls the adding of the stage as well (src/node/bootstrap.ts), as the follower's status shows.
+	if (progress.queued >= LIVE_QUEUE_BOUNDS.staples) {
+		reasons.push('retry-queue-full');
+	}
+	if (progress.stranded > 0) {
+		reasons.push('deferred-stranded');
+	}
 	if (follower.kind === 'unanswered') {
 		reasons.push('follower-unanswered');
 	}
@@ -188,7 +200,7 @@ function blockCountRecordOf(at: string, progress: FollowerProgress, follower: Ch
 			verdict = { kind: 'fail', difference };
 		}
 	}
-	return({ kind: 'block-count', at, representative, completedPass, staged: progress.staged, follower, representativeWindow, toleranceBlocks, verdict });
+	return({ kind: 'block-count', at, representative, completedPass, staged: progress.staged, queued: progress.queued, stranded: progress.stranded, follower, representativeWindow, toleranceBlocks, verdict });
 }
 
 export type ChecksumComparisonRecords = {

@@ -61,10 +61,12 @@ const BLOCK_COUNT: BlockCountRecord = {
 	representative: REPRESENTATIVE,
 	completedPass: '2026-10-09T05:00:00.000Z',
 	staged: 339_533,
+	queued: 4,
+	stranded: 0,
 	follower: { kind: 'read', first: { checksum: '0xAB', blockCount: 207_002 }, second: { checksum: '0xAB', blockCount: 207_002 } },
 	representativeWindow: { kind: 'read', first: { checksum: '0xCD', blockCount: 935_782 }, second: { checksum: '0xCD', blockCount: 935_782 } },
 	toleranceBlocks: 120,
-	verdict: { kind: 'not-comparable-yet', reasons: ['stage-not-empty'] }
+	verdict: { kind: 'not-comparable-yet', reasons: ['stage-not-empty', 'retry-queued'] }
 };
 
 const SHADOW_RUN: ShadowRunRecord = {

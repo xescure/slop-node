@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { LIVE_QUEUE_BOUNDS } from '../node/bootstrap-retry.js';
 import { startFakeAPI } from '../testing/fake-api.js';
 import type { FakeAPI } from '../testing/fake-api.js';
 import { httpSource } from './api-source.js';
@@ -225,6 +226,23 @@ describe('comparing the follower\'s block count with each representative\'s', fu
 		const { blockCounts } = await compareAll(running, APPLYING);
 
 		expect(blockCounts[0]).toMatchObject({ staged: 339_533, completedPass: '2026-10-09T05:00:00.000Z', verdict: { kind: 'not-comparable-yet', reasons: ['stage-not-empty'] } });
+	});
+
+	test('does not count while the follower has staples queued for retry, a full queue named apart, or deferred behind a block it lacks', async function() {
+		const cases: readonly [Partial<FollowerProgress>, readonly string[]][] = [
+			[{ queued: 3 }, ['retry-queued']],
+			[{ queued: LIVE_QUEUE_BOUNDS.staples }, ['retry-queued', 'retry-queue-full']],
+			[{ stranded: 2 }, ['deferred-stranded']]
+		];
+		for (const [progress, reasons] of cases) {
+			const running = await setup(1);
+			serveReadings(running.follower, [['0x1', 935_700]]);
+			serveReadings(running.representatives[0] ?? running.follower, [['0x2', 935_782]]);
+
+			const { blockCounts } = await compareAll(running, { ...COMPLETED, ...progress });
+
+			expect(blockCounts[0]).toMatchObject({ queued: progress.queued ?? 0, stranded: progress.stranded ?? 0, verdict: { kind: 'not-comparable-yet', reasons } });
+		}
 	});
 
 	test('counts once the follower has completed a pass and added everything it staged', async function() {

@@ -36,7 +36,7 @@ function crossCheck(at: string, outcome: CrossCheckOutcome): CrossCheckRecord {
 }
 
 function blockCount(at: string, verdict: BlockCountVerdict, representative: string = REPRESENTATIVE): BlockCountRecord {
-	return({ kind: 'block-count', at, representative, completedPass: null, staged: 0, follower: READ, representativeWindow: READ, toleranceBlocks: 100, verdict });
+	return({ kind: 'block-count', at, representative, completedPass: null, staged: 0, queued: 0, stranded: 0, follower: READ, representativeWindow: READ, toleranceBlocks: 100, verdict });
 }
 
 function swept(at: string, account: string, outcome: SweepOutcome, lap = 0, walk: SweepWalk = 'chain'): SweepRecord {

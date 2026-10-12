@@ -214,6 +214,12 @@ export type SweepBatchRecord = {
  * fewer blocks for that alone.
  */
 export type BlockCountNotComparableReason = Extract<NotComparableReason, 'no-completed-pass' | 'follower-unanswered' | 'representative-unanswered'> | 'stage-not-empty'
+	/** The ledger refused staples it read, which wait in the retry queue. */
+	| 'retry-queued'
+	/** The retry queue is full, which stalls the adding of the stage too. */
+	| 'retry-queue-full'
+	/** Staples voted before the latest pass's horizon wait deferred behind a block the main ledger lacks. */
+	| 'deferred-stranded'
 	/** The representative counts farther than the floor from the others' median, a count of its own. */
 	| 'representative-outlier';
 
@@ -230,6 +236,9 @@ export type BlockCountRecord = {
 	readonly completedPass: string | null;
 	/** Staples the follower had staged and not added yet, or null in a record of a build that did not read them. */
 	readonly staged: number | null;
+	/** Staples queued for retry, and deferred staples stranded behind a lacked block, or null in a record of a build that did not read them. */
+	readonly queued: number | null;
+	readonly stranded: number | null;
 	readonly follower: ChecksumWindow;
 	readonly representativeWindow: ChecksumWindow;
 	/** How far apart the two counts may be and still describe the same ledger, as reckoned for this comparison. */
@@ -609,7 +618,7 @@ function reasonOf(value: unknown): NotComparableReason | undefined {
 	}));
 }
 
-const BLOCK_COUNT_REASONS: readonly BlockCountNotComparableReason[] = ['no-completed-pass', 'stage-not-empty', 'follower-unanswered', 'representative-unanswered', 'representative-outlier'];
+const BLOCK_COUNT_REASONS: readonly BlockCountNotComparableReason[] = ['no-completed-pass', 'stage-not-empty', 'retry-queued', 'retry-queue-full', 'deferred-stranded', 'follower-unanswered', 'representative-unanswered', 'representative-outlier'];
 
 function blockCountVerdictOf(value: unknown): BlockCountVerdict | undefined {
 	if (!isFields(value)) {
@@ -642,13 +651,15 @@ function blockCountVerdictOf(value: unknown): BlockCountVerdict | undefined {
 function blockCountRecordOf(value: Fields): BlockCountRecord | undefined {
 	const { at, representative, completedPass, toleranceBlocks } = value;
 	const staged = value['staged'] ?? null;
+	const queued = value['queued'] ?? null;
+	const stranded = value['stranded'] ?? null;
 	const follower = windowOf(value['follower']);
 	const representativeWindow = windowOf(value['representativeWindow']);
 	const verdict = blockCountVerdictOf(value['verdict']);
-	if (!isString(at) || !isString(representative) || !isStringOrNull(completedPass) || !(staged === null || isCount(staged)) || !isCount(toleranceBlocks) || follower === undefined || representativeWindow === undefined || verdict === undefined) {
+	if (!isString(at) || !isString(representative) || !isStringOrNull(completedPass) || !(staged === null || isCount(staged)) || !(queued === null || isCount(queued)) || !(stranded === null || isCount(stranded)) || !isCount(toleranceBlocks) || follower === undefined || representativeWindow === undefined || verdict === undefined) {
 		return(undefined);
 	}
-	return({ kind: 'block-count', at, representative, completedPass, staged, follower, representativeWindow, toleranceBlocks, verdict });
+	return({ kind: 'block-count', at, representative, completedPass, staged, queued, stranded, follower, representativeWindow, toleranceBlocks, verdict });
 }
 
 function mismatchedStapleOf(value: unknown): MismatchedStapleRecord | undefined {
