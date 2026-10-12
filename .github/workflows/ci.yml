@@ -51,28 +51,3 @@ jobs:
           skopeo copy "docker-archive:$(readlink -f result)" "docker://$IMAGE:sha-$GITHUB_SHA"
           skopeo copy "docker://$IMAGE:sha-$GITHUB_SHA" "docker://$IMAGE:latest"
           echo "pushed $IMAGE@$(skopeo inspect --format '{{.Digest}}' "docker://$IMAGE:latest") as sha-$GITHUB_SHA and latest"
-      # Railway's own watch of a tag may take hours to notice a new digest, so
-      # the service is redeployed from :latest once it moved. Until the project
-      # token and the service's IDs are set, the image only waits in the registry.
-      - name: Redeploy on Railway
-        if: github.event_name == 'push'
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
-          RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
-        run: |
-          if [ -z "$RAILWAY_TOKEN" ] || [ -z "$RAILWAY_SERVICE_ID" ] || [ -z "$RAILWAY_ENVIRONMENT_ID" ]; then
-            echo "::notice::no RAILWAY_TOKEN secret or RAILWAY_SERVICE_ID / RAILWAY_ENVIRONMENT_ID variable; not redeploying"
-            exit 0
-          fi
-          header=$(mktemp)
-          trap 'rm -f "$header"' EXIT
-          echo "Project-Access-Token: $RAILWAY_TOKEN" >"$header"
-          jq -n --arg s "$RAILWAY_SERVICE_ID" --arg e "$RAILWAY_ENVIRONMENT_ID" \
-            '{query: "mutation($s:String!,$e:String!){ serviceInstanceDeployV2(serviceId:$s, environmentId:$e) }", variables: {s: $s, e: $e}}' |
-            curl -fsS https://backboard.railway.com/graphql/v2 -H 'Content-Type: application/json' -H @"$header" --data-binary @- >response.json
-          if ! jq -e '.data.serviceInstanceDeployV2 // empty' response.json >/dev/null; then
-            echo "::error::Railway did not deploy: $(jq -c '.errors // .' response.json)"
-            exit 1
-          fi
-          echo "Railway deployment $(jq -r '.data.serviceInstanceDeployV2' response.json)"
