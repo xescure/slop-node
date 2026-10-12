@@ -73,9 +73,9 @@ const HISTORY_BALANCE = 0x10n;
  * given or, by default, quiet since long before the follower's reach; the
  * accounts named passive have no chain, the rest have one. Its main ledger
  * holds the blocks given, and of each account it stores the balance of
- * TOKEN given, and its history leaves it the one given.
+ * TOKEN and the head given, and its history leaves it the balance given.
  */
-function memoryStore(histories: Readonly<Record<string, readonly string[]>>, progress: FollowerProgress = { completedPass: undefined, heldBefore: HELD_BEFORE, staged: 0 }, newest: Readonly<Record<string, Date>> = {}, passive: readonly string[] = [], late: readonly KnownAccount[] = [], historyBalance: bigint = HISTORY_BALANCE, blocks: readonly string[] = [], storedBalance: bigint = HISTORY_BALANCE): SweepStore {
+function memoryStore(histories: Readonly<Record<string, readonly string[]>>, progress: FollowerProgress = { completedPass: undefined, heldBefore: HELD_BEFORE, staged: 0 }, newest: Readonly<Record<string, Date>> = {}, passive: readonly string[] = [], late: readonly KnownAccount[] = [], historyBalance: bigint = HISTORY_BALANCE, blocks: readonly string[] = [], storedBalance: bigint = HISTORY_BALANCE, storedHead: string | null = FOLLOWER_HEAD): SweepStore {
 	const known: KnownAccount[] = Object.entries(histories).map(function([account, staples], index): KnownAccount {
 		let newestStaple: Date | undefined;
 		if (staples.length > 0) {
@@ -114,7 +114,7 @@ function memoryStore(histories: Readonly<Record<string, readonly string[]>>, pro
 			return(Promise.resolve(blocks.includes(hash)));
 		},
 		async balancesSnapshot(_account: string, during: () => Promise<unknown>): Promise<BalancesSnapshot> {
-			return({ stored: new Map([[TOKEN, storedBalance]]), fromHistory: new Map([[TOKEN, historyBalance]]), during: await during() });
+			return({ stored: new Map([[TOKEN, storedBalance]]), head: storedHead, fromHistory: new Map([[TOKEN, historyBalance]]), during: await during() });
 		}
 	});
 }
@@ -692,6 +692,16 @@ describe('a divergence from one representative', function() {
 		expect(summary).toMatchObject({ diverged: 1, representativeLocal: 0 });
 	});
 
+	test('is the follower\'s when the balances it stores are not those of its history, however the account moved', async function() {
+		const running = await setup(3);
+		const account = ACCOUNTS[0];
+		serveSplit(running, account, '0x10', ['0x11', '0x10', '0x10']);
+
+		await sweep(running, memoryStore({ [account]: [STAPLE] }, undefined, {}, [], [], 0x11n, [], 0x12n), 1);
+
+		expect(await outcomes(running)).toMatchObject([{ kind: 'diverged', selfCheck: { kind: 'inconsistent', served: '0x12', fromHistory: '0x11' } }]);
+	});
+
 	test('records no check of the follower\'s balances when those it stores are not those of the state compared, as the account moved since', async function() {
 		const running = await setup(3);
 		const account = ACCOUNTS[0];
@@ -807,7 +817,7 @@ describe('a difference of one representative\'s own recorded before', function()
 
 		expect(await recheckDivergences({ follower: httpSource(running.follower.endpoint), representatives: running.representatives.map(function(api) {
 			return(httpSource(api.endpoint));
-		}), store: memoryStore({ [account]: [STAPLE] }, undefined, {}, [], [], HISTORY_BALANCE, [], 0x12n), log: running.log, stopped: new AbortController().signal })).toEqual({ unresolved: 1 });
+		}), store: memoryStore({ [account]: [STAPLE] }, undefined, {}, [], [], 0x12n, [], 0x12n), log: running.log, stopped: new AbortController().signal })).toEqual({ unresolved: 1 });
 	});
 
 	test('found by its chain is compared again by its chain', async function() {
@@ -922,6 +932,17 @@ describe('a chain account moving on every attempt', function() {
 		await sweep(running, memoryStore({ [account]: [STAPLE] }, undefined, {}, [], [], HISTORY_BALANCE, [OLDER_BLOCK]), 1);
 
 		expect(await outcomes(running)).toMatchObject([{ kind: 'representative-local', divergence: { field: 'chain' }, readings: [{ kind: 'agrees' }, { kind: 'agrees' }] }]);
+	});
+
+	test('records no check of the follower\'s balances when the head it stores is not the head compared, as the account moved since', async function() {
+		const running = await setup(3);
+		const account = ACCOUNTS[0];
+		const holding = [chainBlock(FOLLOWER_HEAD, STAPLE, QUIET_VOTE)];
+		await serveMovingChain(running, account, [[chainBlock(OLDER_BLOCK, STAPLE, QUIET_VOTE)], holding, holding]);
+
+		await sweep(running, memoryStore({ [account]: [STAPLE] }, undefined, {}, [], [], HISTORY_BALANCE, [OLDER_BLOCK], HISTORY_BALANCE, NEWER_BLOCK), 1);
+
+		expect(await outcomes(running)).toMatchObject([{ kind: 'representative-local', divergence: { field: 'chain' }, selfCheck: { kind: 'unchecked', why: 'the head the follower stores is not the head compared, as the account moved' } }]);
 	});
 
 	test('is never one representative\'s own when its chain holds a head the follower lacks', async function() {

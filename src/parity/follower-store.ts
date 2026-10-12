@@ -70,6 +70,8 @@ export const MISMATCHES_LISTED = 20;
 /** An account's balances, by token, as the follower stores them and as its history leaves them, read in one view, with what was read while that view held. */
 export type BalancesSnapshot = {
 	readonly stored: ReadonlyMap<string, bigint>;
+	/** The block at the head of the account's chain as stored, in uppercase hexadecimal, or null for an account without one. */
+	readonly head: string | null;
 	readonly fromHistory: ReadonlyMap<string, bigint>;
 	readonly during: unknown;
 };
@@ -127,8 +129,8 @@ export type FollowerStore = {
 	/** Whether the block, by its hash, is on the follower's main ledger. */
 	holdsBlock(hash: string): Promise<boolean>;
 	/**
-	 * In one view of the database: the account's balances as the follower
-	 * stores them, and those the staples of its history leave it with, read
+	 * In one view of the database: the account's balances and head as the
+	 * follower stores them, and the balances the staples of its history leave it with, read
 	 * in the order the ledger added them; and what the call given returns,
 	 * made once that view is fixed.
 	 */
@@ -258,6 +260,8 @@ const HISTORY_STAPLE_HASHES = `
 	SELECT s.blocks_hash FROM history h JOIN staples s ON s.blocks_hash = h.blocks_hash
 	WHERE h.account_id = (SELECT id FROM accounts WHERE public_key = $1)
 	ORDER BY s.sequence`;
+
+const STORED_HEAD = 'SELECT block_hash FROM heads WHERE account_id = (SELECT id FROM accounts WHERE public_key = $1)';
 
 const STORED_BALANCES = `
 	SELECT t.public_key AS token, b.balance::text AS balance FROM balances b JOIN accounts t ON t.id = b.token_id
@@ -638,6 +642,7 @@ export function openFollowerStore(connectionString: string, settings: FollowerSt
 				const stored = new Map((await client.query<{ token: string; balance: string }>(STORED_BALANCES, [account])).rows.map(function(row): [string, bigint] {
 					return([row.token, BigInt(row.balance)]);
 				}));
+				const head = (await client.query<{ block_hash: Buffer }>(STORED_HEAD, [account])).rows[0]?.block_hash.toString('hex').toUpperCase() ?? null;
 				const seen = await during();
 				const hashes = (await client.query<{ blocks_hash: Buffer }>(HISTORY_STAPLE_HASHES, [account])).rows.map(function(row): Buffer {
 					return(row.blocks_hash);
@@ -649,7 +654,7 @@ export function openFollowerStore(connectionString: string, settings: FollowerSt
 						return(staple);
 					}), account);
 				}
-				return({ stored, fromHistory, during: seen });
+				return({ stored, head, fromHistory, during: seen });
 			}));
 		},
 		async blockPages(): Promise<number> {

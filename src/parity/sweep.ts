@@ -483,15 +483,25 @@ async function compareAdjudicated(setup: Comparing, representative: APISource, a
  * leaves it with, both read from one view of its database, so that a staple
  * added meanwhile cannot set them apart; and whether the state its API
  * serves, read while that view holds, and the state the representatives
- * judged, when it shows balances, are the one it stores, which they are not
- * when the account moved in between, and then nothing is checked of the
- * state compared.
+ * judged, by its balances or, for a chain, its head, are the one it stores,
+ * which they are not when the account moved in between, and then nothing
+ * is checked of the state compared. Stored balances apart from the history
+ * are the follower's divergence whatever moved.
  */
 async function selfCheckOfAccount(setup: Comparing, account: string, compared: unknown): Promise<SelfCheck> {
 	try {
-		const { stored, fromHistory, during } = await setup.store.balancesSnapshot(account, function() {
+		const { stored, head, fromHistory, during } = await setup.store.balancesSnapshot(account, function() {
 			return(getOK(setup.follower, `/node/ledger/account/${account}`));
 		});
+		// Balances one view stores apart from its own history are the follower's divergence, whatever moved since.
+		const ownHistory = balancesCheckOf(stored, fromHistory);
+		if (ownHistory.kind !== 'consistent') {
+			return(ownHistory);
+		}
+		const comparedHead = chainHeadOf(compared);
+		if (comparedHead !== null && comparedHead !== head) {
+			return({ kind: 'unchecked', why: 'the head the follower stores is not the head compared, as the account moved' });
+		}
 		if (selfCheckOf(during, stored).kind !== 'consistent') {
 			return({ kind: 'unchecked', why: 'the state the follower served is not the one it stored, as the account moved' });
 		}
@@ -499,7 +509,7 @@ async function selfCheckOfAccount(setup: Comparing, account: string, compared: u
 		if (selfCheckOf(compared, stored).kind === 'inconsistent') {
 			return({ kind: 'unchecked', why: 'the balances the follower stores are not those of the state compared, as the account moved' });
 		}
-		return(balancesCheckOf(stored, fromHistory));
+		return(ownHistory);
 	} catch (error: unknown) {
 		return({ kind: 'unchecked', why: messageOf(error) });
 	}

@@ -495,6 +495,20 @@ describe('a divergence of the API', function() {
 		expect(summary).toEqual({ unresolved: 1 });
 	});
 
+	test('counts the newest staple a representative answering apart holds as no evidence when it was voted within the margin, the follower holding it or not', async function() {
+		const setup = await runningWith(4);
+		servingBalances(setup, '0x1', ['0x2', '0x1', '0x1', '0x3']);
+		const held = 'CD'.repeat(32);
+		const page = function(validityFrom: string): unknown {
+			return({ history: [{ $id: held, voteStaple: { votes: [{ validityFrom }] } }], nextKey: held });
+		};
+		setup.representatives[0]?.serve(`/node/ledger/account/${TOKEN}/history?limit=1`, page('2025-01-01T00:00:00.000Z'), page('2026-01-01T00:00:00.000Z'));
+
+		const { summary } = await recheck(setup, memoryStore({ held: [held] }));
+
+		expect(summary).toEqual({ unresolved: 1 });
+	});
+
 	test('is unresolved when two answer as the follower and two answer one failure, told apart only by its error ID', async function() {
 		const setup = await runningWith(4);
 		servingBalances(setup, '0x1', ['0x2', '0x1', '0x1', '0x2']);

@@ -334,10 +334,10 @@ describe('the follower\'s store, read from its database', function() {
 
 		expect(await store.balancesSnapshot(RECIPIENT, function() {
 			return(Promise.resolve('seen'));
-		})).toEqual({ stored: new Map([[ACCOUNTS[0], 12n]]), fromHistory: new Map([[token.publicKeyString.get(), 12n]]), during: 'seen' });
+		})).toEqual({ stored: new Map([[ACCOUNTS[0], 12n]]), head: null, fromHistory: new Map([[token.publicKeyString.get(), 12n]]), during: 'seen' });
 		expect(await store.balancesSnapshot(ACCOUNTS[2] ?? '', function() {
 			return(Promise.resolve(null));
-		})).toEqual({ stored: new Map(), fromHistory: new Map(), during: null });
+		})).toEqual({ stored: new Map(), head: null, fromHistory: new Map(), during: null });
 	});
 
 	test('reads the staples in the order the ledger added them, rebuilding one stored without its bytes', async function() {
