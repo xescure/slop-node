@@ -1,6 +1,6 @@
 import { getEventListeners } from 'node:events';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { PeerPacer } from './bootstrap-pacing.js';
+import { FIRST_THROTTLE_MILLISECONDS, LAST_THROTTLE_MILLISECONDS, PeerPacer, PeerThrottled } from './bootstrap-pacing.js';
 
 const PEER = 'https://rep1.example/api';
 const OTHER_PEER = 'https://rep2.example/api';
@@ -236,5 +236,66 @@ describe('a peer pacer', function() {
 		expect(fourth.startedAt).toBeDefined();
 		fourth.end('fourth');
 		expect(await Promise.all(answers)).toEqual(['first', 'second', 'third', 'fourth']);
+	});
+});
+
+describe('a peer that asks the node to slow down', function() {
+	test('is sent nothing until the wait it asked for has passed, each request failing at once meanwhile, and again after one succeeds', async function() {
+		useFakeClock();
+		const pacer = new PeerPacer(INTERVAL);
+		const stopped = new AbortController().signal;
+		let sent = 0;
+		const request = function(): Promise<string> {
+			sent++;
+			return(Promise.resolve('answer'));
+		};
+
+		pacer.throttled(PEER, 60_000);
+
+		await expect(pacer.paced(PEER, stopped, request)).rejects.toThrow(new PeerThrottled(PEER, 60_000));
+		await vi.advanceTimersByTimeAsync(60_000 - 1);
+		await expect(pacer.paced(PEER, stopped, request)).rejects.toThrow(PeerThrottled);
+		await expect(pacer.paced(OTHER_PEER, stopped, request)).resolves.toBe('answer');
+		expect(sent).toBe(1);
+		await vi.advanceTimersByTimeAsync(1);
+		await expect(pacer.paced(PEER, stopped, request)).resolves.toBe('answer');
+		expect(sent).toBe(2);
+	});
+
+	test('is left alone twice as long each time it asks again before a request succeeds, and no longer than the longest wait', async function() {
+		useFakeClock();
+		const pacer = new PeerPacer(0);
+		const stopped = new AbortController().signal;
+		const request = function(): Promise<string> {
+			return(Promise.resolve('answer'));
+		};
+		const leftFor = async function(): Promise<number> {
+			const failure: unknown = await pacer.paced(PEER, stopped, request).then(function(): unknown {
+				return(undefined);
+			}, function(error: unknown): unknown {
+				return(error);
+			});
+			if (!(failure instanceof PeerThrottled)) {
+				throw(new Error('expected the request not to be sent'));
+			}
+			return(failure.milliseconds);
+		};
+
+		pacer.throttled(PEER, undefined);
+		expect(await leftFor()).toBe(FIRST_THROTTLE_MILLISECONDS);
+		pacer.throttled(PEER, 1000);
+		expect(await leftFor()).toBe(2 * FIRST_THROTTLE_MILLISECONDS);
+		for (let time = 0; time < 10; time++) {
+			pacer.throttled(PEER, undefined);
+		}
+		expect(await leftFor()).toBe(LAST_THROTTLE_MILLISECONDS);
+		pacer.throttled(PEER, 10 * LAST_THROTTLE_MILLISECONDS);
+		expect(await leftFor()).toBe(LAST_THROTTLE_MILLISECONDS);
+
+		await vi.advanceTimersByTimeAsync(LAST_THROTTLE_MILLISECONDS);
+		await expect(pacer.paced(PEER, stopped, request)).resolves.toBe('answer');
+		pacer.throttled(PEER, undefined);
+		expect(await leftFor()).toBe(FIRST_THROTTLE_MILLISECONDS);
+		expect(new PeerThrottled(PEER, 4500).message).toBe(`the bootstrap asks ${PEER} nothing for 5 s more, as it asked the node to slow down`);
 	});
 });

@@ -214,13 +214,17 @@ export async function startFailingPeer(): Promise<TestPeer & { readonly requests
 	} });
 }
 
-/** A peer that answers every request with the status and body given. */
-export async function startAnsweringPeer(status: number, body: string): Promise<TestPeer> {
+/** A peer that answers every request with the status, body and headers given, counting the requests. */
+export async function startAnsweringPeer(status: number, body: string, headers: Readonly<Record<string, string>> = {}): Promise<TestPeer & { readonly requests: () => number }> {
+	let requests = 0;
 	const server = http.createServer(function(_ignoredRequest, response): void {
-		response.writeHead(status, { 'content-type': 'application/json' });
+		requests++;
+		response.writeHead(status, { 'content-type': 'application/json', ...headers });
 		response.end(body);
 	});
-	return({ apiURL: await listenUntilTestEnds(server) });
+	return({ apiURL: await listenUntilTestEnds(server), requests: function(): number {
+		return(requests);
+	} });
 }
 
 /** A representative that accepts each request and never answers it. */

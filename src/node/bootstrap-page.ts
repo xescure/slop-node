@@ -52,7 +52,8 @@ export type PageRequest = {
 
 /** Why a page of a peer's staples could not be had. */
 export type PageProblem =
-	| { readonly kind: 'status'; readonly status: number; readonly message: string | undefined }
+	/** With how long the peer asked the node to wait before asking again, when it answered so (statusErrorOf). */
+	| { readonly kind: 'status'; readonly status: number; readonly message: string | undefined; readonly retryAfterMilliseconds?: number }
 	| { readonly kind: 'protocol' }
 	| { readonly kind: 'malformed'; readonly detail: string }
 	| { readonly kind: 'too-large'; readonly limitBytes: number }
@@ -104,7 +105,7 @@ export function pageURL(request: PageRequest): URL {
 	return(new URL(`${request.endpoint}${BOOTSTRAP_ROUTE}?${query.toString()}`));
 }
 
-type Answer = { readonly status: number; readonly body: string };
+type Answer = { readonly status: number; readonly body: string; readonly retryAfter: string | undefined };
 
 function parseJSON(endpoint: string, body: string): unknown {
 	try {
@@ -131,6 +132,36 @@ function errorMessageOf(body: string): string | undefined {
 }
 
 /**
+ * How long a Retry-After header asks the client to wait: a number of seconds,
+ * or the moment to wait until (RFC 9110, section 10.2.3); nothing when it
+ * says neither.
+ */
+export function retryAfterMillisecondsOf(header: string | undefined, now: number): number | undefined {
+	if (header === undefined) {
+		return(undefined);
+	}
+	const text = header.trim();
+	if (/^\d+$/u.test(text)) {
+		return(Number(text) * 1000);
+	}
+	const until = Date.parse(text);
+	if (Number.isNaN(until)) {
+		return(undefined);
+	}
+	return(Math.max(0, until - now));
+}
+
+/** The failure an answer of a status other than success is, with the wait the peer asked for, if it did. */
+function statusErrorOf(endpoint: string, answer: Answer): PageError {
+	const problem: PageProblem = { kind: 'status', status: answer.status, message: errorMessageOf(answer.body) };
+	const retryAfterMilliseconds = retryAfterMillisecondsOf(answer.retryAfter, Date.now());
+	if (retryAfterMilliseconds === undefined) {
+		return(new PageError(endpoint, problem));
+	}
+	return(new PageError(endpoint, { ...problem, retryAfterMilliseconds }));
+}
+
+/**
  * A staple's bytes in base64: a representative writes each staple as JSON
  * with its bytes beside it [Keeta TS] index.js:81088-81092, which the
  * node reads rather than rebuild the staple from the JSON as the client does
@@ -150,7 +181,7 @@ function stapleBytesOf(written: unknown): string | undefined {
 /** The staples of an answer, read as the client reads them [Keeta TS] index.js:59175-59182. */
 function staplesOf(endpoint: string, answer: Answer): VoteStaple[] {
 	if (answer.status !== SUCCESS_STATUS) {
-		throw(new PageError(endpoint, { kind: 'status', status: answer.status, message: errorMessageOf(answer.body) }));
+		throw(statusErrorOf(endpoint, answer));
 	}
 	const parsed = parseJSON(endpoint, answer.body);
 	if (!isRecord(parsed) || !Array.isArray(parsed['voteStaples'])) {
@@ -300,7 +331,7 @@ export class PageFetcher {
 		try {
 			const answer = await this.#get(endpoint, url, MAX_SINGLE_STAPLE_PAGE_BYTES, AbortSignal.any([stopped, timer.signal]));
 			if (answer.status !== SUCCESS_STATUS) {
-				throw(new PageError(endpoint, { kind: 'status', status: answer.status, message: errorMessageOf(answer.body) }));
+				throw(statusErrorOf(endpoint, answer));
 			}
 			return(parseJSON(endpoint, answer.body));
 		} catch (error: unknown) {
@@ -342,7 +373,7 @@ export class PageFetcher {
 					}
 				});
 				response.on('end', function(): void {
-					resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') });
+					resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8'), retryAfter: response.headers['retry-after'] });
 				});
 			};
 			let request: http.ClientRequest;

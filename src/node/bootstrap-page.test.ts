@@ -2,11 +2,11 @@ import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
-import { describe, expect, onTestFinished, test } from 'vitest';
+import { describe, expect, onTestFinished, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { P2PInternals } from '../upstream/internals.js';
 import { NODE_VERSION } from '../version.js';
-import { MAX_PAGE_BYTES, MAX_SINGLE_STAPLE_PAGE_BYTES, PageError, PageFetcher } from './bootstrap-page.js';
+import { MAX_PAGE_BYTES, MAX_SINGLE_STAPLE_PAGE_BYTES, PageError, PageFetcher, retryAfterMillisecondsOf } from './bootstrap-page.js';
 import type { PageProblem, PageRequest } from './bootstrap-page.js';
 
 const lib = KeetaNet.lib;
@@ -165,6 +165,26 @@ describe('a page of a peer\'s staples', function() {
 		expect(error.problem).toEqual(problem);
 		expect(error.message).toBe(`${peer.endpoint} ${message}`);
 		expect(error.name).toBe('PageError');
+	});
+
+	test.each([429, 503])('fails on a %i answer with the wait its Retry-After header asks for', async function(status: number) {
+		const peer = await peerAnswering(function(response): void {
+			response.writeHead(status, { 'content-type': 'application/json', 'retry-after': '7' });
+			response.end(JSON.stringify({ error: true, message: 'Slow down' }));
+		});
+
+		const error = await problemOf(fetcher().page(requestOf(peer.endpoint), 30_000, NOT_STOPPED));
+
+		expect(error.problem).toStrictEqual({ kind: 'status', status, message: 'Slow down', retryAfterMilliseconds: 7000 });
+		expect(error.message).toBe(`${peer.endpoint} answered ${String(status)}: Slow down`);
+	});
+
+	test('says no wait for an answer with no Retry-After header', async function() {
+		const peer = await peerAnswering(answerWith(429, JSON.stringify({ message: 'Slow down' })));
+
+		const error = await problemOf(fetcher().page(requestOf(peer.endpoint), 30_000, NOT_STOPPED));
+
+		expect(error.problem).toStrictEqual({ kind: 'status', status: 429, message: 'Slow down' });
 	});
 
 	test('keeps what made a staple or a body unreadable as the cause', async function() {
@@ -344,22 +364,34 @@ describe('the staple holding a block, as a peer holds it', function() {
 		expect(stopped.cause).toBeInstanceOf(Error);
 	});
 
-	test('leaves no timer running once it has its answers', async function() {
+	test('clears the timer of each request once it has its answer', async function() {
 		const { endpoint, staple } = await holder();
 		const [block] = staple.blocks;
 		if (block === undefined) {
 			throw(new Error('the fixture staple holds no block'));
 		}
-		const timers = function(): number {
-			return(process.getActiveResourcesInfo().filter(function(resource): boolean {
-				return(resource === 'Timeout');
-			}).length);
-		};
-		const before = timers();
+		const set = vi.spyOn(globalThis, 'setTimeout');
+		const clear = vi.spyOn(globalThis, 'clearTimeout');
+		onTestFinished(function() {
+			set.mockRestore();
+			clear.mockRestore();
+		});
 
 		await fetcher().stapleHolding(endpoint, block.hash, 30_000, NOT_STOPPED, counting().pace);
 
-		expect(timers()).toBe(before);
+		// Its own timers are those set for the timeout it was given.
+		const timers = set.mock.results.filter(function(_result, index): boolean {
+			return(set.mock.calls[index]?.[1] === 30_000);
+		}).map(function(result): unknown {
+			return(result.value);
+		});
+		expect(timers).toHaveLength(1 + staple.blocks.length);
+		const cleared = clear.mock.calls.map(function([timer]): unknown {
+			return(timer);
+		});
+		expect(timers.every(function(timer): boolean {
+			return(cleared.includes(timer));
+		})).toBe(true);
 	});
 
 	/** A peer answering the votes route and the block route with the bodies given, and otherwise as the fixture's staple's holder does. */
@@ -419,5 +451,21 @@ describe('the staple holding a block, as a peer holds it', function() {
 
 		expect(failed.problem).toEqual(problem);
 		expect(failed.cause instanceof Error).toBe(caused);
+	});
+});
+
+describe('the wait a Retry-After header asks for', function() {
+	const now = Date.UTC(2026, 9, 12, 12);
+
+	test.each<[string | undefined, number | undefined]>([
+		[undefined, undefined],
+		['7', 7000],
+		[' 12 ', 12000],
+		['0', 0],
+		[new Date(now + 30_000).toUTCString(), 30_000],
+		[new Date(now - 30_000).toUTCString(), 0],
+		['soon', undefined]
+	])('of %s is %s ms', function(header: string | undefined, milliseconds: number | undefined) {
+		expect(retryAfterMillisecondsOf(header, now)).toBe(milliseconds);
 	});
 });

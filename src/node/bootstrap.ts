@@ -154,6 +154,9 @@ function describeNotApplied(added: Added): string {
 /** A gateway's answer when what stands behind it took too long to answer. */
 const GATEWAY_TIMEOUT_STATUS = 504;
 
+/** The statuses a peer asks the node to slow down with: too many requests, and a service unavailable for now (RFC 9110, sections 15.6.4; RFC 6585, section 4). */
+const THROTTLING_STATUSES: readonly number[] = [429, 503];
+
 /** What a failed request tells a pass of the peer, or nothing when it only fails the pass. */
 function answerOf(error: PageError): PassAnswer<VoteStaple> | undefined {
 	const problem = error.problem;
@@ -588,6 +591,7 @@ export class BootstrapClient {
 				if (this.#stopped()) {
 					return(false);
 				}
+				this.#noteThrottling(endpoint, error);
 				this.#node.log.warn(LOG_SOURCE, `Asking ${endpoint} for the staple holding block ${key}, which deferred staples await, failed:`, error);
 				continue;
 			}
@@ -777,6 +781,7 @@ export class BootstrapClient {
 			});
 			return({ kind: 'page', staples });
 		} catch (error: unknown) {
+			this.#noteThrottling(endpoint, error);
 			if (error instanceof PageError) {
 				const answer = answerOf(error);
 				if (answer !== undefined) {
@@ -784,6 +789,13 @@ export class BootstrapClient {
 				}
 			}
 			throw(error);
+		}
+	}
+
+	/** A peer that answered with a status asking the node to slow down is left alone for a while (PeerPacer). */
+	#noteThrottling(endpoint: string, error: unknown): void {
+		if (error instanceof PageError && error.problem.kind === 'status' && THROTTLING_STATUSES.includes(error.problem.status)) {
+			this.#pacer.throttled(endpoint, error.problem.retryAfterMilliseconds);
 		}
 	}
 

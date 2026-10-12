@@ -1470,6 +1470,35 @@ describe('a bootstrap client at the edges of what it accepts and meets', functio
 		expect(await heldBlocksHashes(holder.node)).toEqual(await heldBlocksHashes(peer.node));
 	});
 
+	test.each([429, 503])('leaves a peer that answers %i alone for the wait its Retry-After header asks, sending it nothing meanwhile', async function(status: number) {
+		const throttling = await startAnsweringPeer(status, JSON.stringify({ error: true, message: 'Slow down' }), { 'retry-after': '60' });
+		const late = await joiner({ bootstrapFrom: [throttling.apiURL] });
+		const warnings = warningsOf(late.node);
+		const client = clientOf(late.node);
+
+		expect(await client.update()).toEqual({ complete: false });
+		expect(throttling.requests()).toBe(1);
+		expect(await client.update()).toEqual({ complete: false });
+
+		expect(throttling.requests()).toBe(1);
+		expect(warnings()).toContainEqual(expect.stringContaining(`the bootstrap asks ${throttling.apiURL} nothing for 60 s more, as it asked the node to slow down`));
+		const now = performance.now();
+		vi.spyOn(performance, 'now').mockReturnValue(now + 60_000);
+		await client.update();
+		expect(throttling.requests()).toBe(2);
+	});
+
+	test('asks a peer that answers 500 again in the next update', async function() {
+		const failing = await startAnsweringPeer(500, JSON.stringify({ error: true, message: 'Broken' }), { 'retry-after': '60' });
+		const late = await joiner({ bootstrapFrom: [failing.apiURL] });
+		const client = clientOf(late.node);
+
+		await client.update();
+		await client.update();
+
+		expect(failing.requests()).toBe(2);
+	});
+
 	test('keeps what it stages in memory on a ledger whose driver is not of this node, and reads no stranded staple there', async function() {
 		const peer = await representative();
 		const late = await joiner();
