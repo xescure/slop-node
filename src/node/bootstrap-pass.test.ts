@@ -1549,6 +1549,38 @@ describe('a pass checking what it concludes', function() {
 		expect(harness.pages().at(-1)?.limit).toBe(500);
 	});
 
+	/*
+	 * A main network representative lists about forty staples of its dense
+	 * history for a request, written as more than 4 MiB of JSON: the page from
+	 * where the page before shows it reached is the one most often too large.
+	 */
+	test('asks again with fewer staples for the page from where a peer keyed by votes is shown to have reached, when it is too large, rather than probe one staple at a time', async function() {
+		freezeClock(new Date(NOW));
+		const peer = new SimulatedPeer({ keying: { kind: 'votes', votesPerRead: 20, readsAtMost: 2, readMilliseconds: 0 } });
+		for (let index = 0; index < 2000; index++) {
+			const at = NOW - HOUR + index * 100;
+			peer.applyVoted(at, at, [], [at - 300, at - 200, at - 100, at]);
+		}
+		const first = NOW - 2 * HOUR;
+		let refused: number | undefined;
+		const harness = new Harness(function(request) {
+			if (refused === undefined && request.limit > 1 && request.start.getTime() > first) {
+				refused = harness.requests.length;
+				return(Promise.resolve({ kind: 'too-large' }));
+			}
+			return(peer.page(request));
+		});
+		harness.progress = { ...firstProgress(NOW, 0, new Date(first)), keying: 'votes' };
+
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(completes(live)).toBe(true);
+		expect(harness.node.size).toBe(2000);
+		const tooLarge = harness.requests[refused ?? -1];
+		expect(tooLarge).toMatchObject({ limit: 1000 });
+		expect(harness.requests[(refused ?? -1) + 1]).toMatchObject({ start: tooLarge?.start, limit: 500 });
+	});
+
 	test('learns over a range how the peer keys, and reports it, though the peer\'s progress is gone meanwhile', async function() {
 		freezeClock(new Date(NOW));
 		const twice = new SimulatedPeer().apply(NOW - HOUR, NOW - HOUR);

@@ -767,12 +767,13 @@ class Pass<Staple extends PassStaple> {
 
 	/**
 	 * Moves the start to the latest moment the page's votes say it read up
-	 * to, if that is later, once the next page, asked for from there, lists
-	 * the staple that says so, and answers that page; nothing when it does
-	 * not, and the answer is set aside. The next page's filter names the
-	 * page's staples the peer may list from there but that one, and, as far
-	 * as there is room, when the page repeated staples the node held, those
-	 * it holds from there, and those named for the start.
+	 * to, if that is later, once the next page, asked for from there with
+	 * fewer staples for as long as it is too large, lists the staple that
+	 * says so, and answers that page; nothing when it does not, and the
+	 * answer is set aside. The next page's filter names the page's staples
+	 * the peer may list from there but that one, and, as far as there is
+	 * room, when the page repeated staples the node held, those it holds
+	 * from there, and those named for the start.
 	 */
 	async #moveAsShown(evidence: Evidence<Staple>, held: boolean): Promise<Listed<Staple> | undefined> {
 		const target = shownTarget(evidence);
@@ -801,7 +802,11 @@ class Pass<Staple extends PassStaple> {
 		});
 		named.forget(shownStaple);
 		const filter = this.#filterOf(named);
-		const answer = await this.#request(target.at, this.#limit, filter.serialized);
+		// Set aside for being too large, the answer would leave the move to probes, which gallop from the start one staple at a time.
+		let answer = await this.#request(target.at, this.#limit, filter.serialized);
+		while (answer === undefined && !this.#exhausted()) {
+			answer = await this.#request(target.at, this.#limit, filter.serialized);
+		}
 		if (answer === undefined) {
 			return(undefined);
 		}
