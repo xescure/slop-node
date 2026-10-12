@@ -15,6 +15,7 @@ import { BootstrapClient } from './bootstrap.js';
 import { nodeNetworkClosedToP2P } from './config.js';
 import { SwitchConnections } from './connections.js';
 import { LocalNodeError } from './errors.js';
+import { rememberedPeerArenas } from './peer-store.js';
 import { SwitchMessages } from './messages.js';
 import { DEFAULT_PEER_LIMITS } from './peer-limits.js';
 import type { PeerLimits } from './peer-limits.js';
@@ -376,6 +377,7 @@ export class LocalNode extends ClientNode {
 		this.#connections.open();
 		this.#messages.open();
 		try {
+			await this.#refusePeersWhereClosed();
 			await super.run();
 			const target = listenTarget(this.config);
 			if (target !== undefined && needsAdvertising(this.config) && isUnspecifiedAddress(target.host)) {
@@ -398,6 +400,29 @@ export class LocalNode extends ClientNode {
 		} catch (error) {
 			this.#running = false;
 			throw(error);
+		}
+	}
+
+	/**
+	 * A node whose network is closed to its peer-to-peer surface starts with
+	 * no peer to dial, however it was built: the environment and the command
+	 * refuse them first (getConfigFromEnv, refuseRememberedPeers), but a node
+	 * built in code reaches here with whatever it was given, and the switch
+	 * dials both its manual peers and those its store remembers as it runs
+	 * [Keeta TS] index.js:72519-72620, 72622-72658.
+	 */
+	async #refusePeersWhereClosed(): Promise<void> {
+		const network = nodeNetworkClosedToP2P(this.config.network, this.ledger.ledgerWriteMode);
+		if (network === undefined) {
+			return;
+		}
+		const peers = this.config.manualPeers?.length ?? 0;
+		if (peers > 0) {
+			throw(new LocalNodeError({ kind: 'manual-peers-on-closed-network', network, peers }));
+		}
+		const arenas = await rememberedPeerArenas(this.switch.config.kv);
+		if (arenas.length > 0) {
+			throw(new LocalNodeError({ kind: 'remembered-peers-on-closed-network', network, arenas }));
 		}
 	}
 
