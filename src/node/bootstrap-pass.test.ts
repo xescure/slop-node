@@ -8,7 +8,7 @@ import { advanceClock, freezeClock } from '../testing/network.js';
 import { assertNever } from '../util/assert-never.js';
 import { VOTE_KEY_TOLERANCE_MILLISECONDS } from './bootstrap-evidence.js';
 import type { PeerKeying } from './bootstrap-evidence.js';
-import { DEEP_SCAN_DEPTH_MILLISECONDS, DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PrimingWindow, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, bootstrapPeer, bootstrapRange, completes, firstProgress } from './bootstrap-pass.js';
+import { DEEP_SCAN_DEPTH_MILLISECONDS, DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PageLimit, PrimingWindow, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, bootstrapPeer, bootstrapRange, completes, firstProgress } from './bootstrap-pass.js';
 import type { PassAnswer, PassEvent, PassOptions, PassOutcome, PassRequest, PeerIO, PeerOutcome, PeerProgress, RangeSetup } from './bootstrap-pass.js';
 import type { QueueUse } from './bootstrap-retry.js';
 import { BLOOM_CAPACITY, BLOOM_ERROR_RATE, BOOTSTRAP_MARGIN_MILLISECONDS, MAX_NAMED } from './bootstrap-window.js';
@@ -77,6 +77,7 @@ class Harness {
 	readonly answers = new LongestAnswer();
 	/** As wide as a filter, so that what a pass names of what the node holds is not cut short by the window the peer is read with. */
 	priming = new PrimingWindow(BLOOM_CAPACITY);
+	readonly pageLimit = new PageLimit(1000);
 	progress: PeerProgress | undefined;
 	readonly #answer: (request: PassRequest) => Promise<PassAnswer<SimulatedStaple>>;
 
@@ -88,6 +89,7 @@ class Harness {
 		return({
 			answers: this.answers,
 			priming: this.priming,
+			pageLimit: this.pageLimit,
 			page: async (request) => {
 				const answer = await this.#answer(request);
 				let served = 0;
@@ -193,6 +195,21 @@ function shortVotedPeer(): SimulatedPeer {
 		peer.applyVoted(at, at, [], [at - 300, at]);
 	}
 	return(peer);
+}
+
+/**
+ * A peer keyed by votes that lists 40 votes a request, with 2000 staples from
+ * an hour ago, 100 ms apart, each voted on four times within the 300 ms before
+ * it, as a main network representative's dense history is; passes start
+ * from an hour before them, from a peer known to key votes.
+ */
+function denseVotedPeer(): { peer: SimulatedPeer; first: number } {
+	const peer = new SimulatedPeer({ keying: { kind: 'votes', votesPerRead: 20, readsAtMost: 2, readMilliseconds: 0 } });
+	for (let index = 0; index < 2000; index++) {
+		const at = NOW - HOUR + index * 100;
+		peer.applyVoted(at, at, [], [at - 300, at - 200, at - 100, at]);
+	}
+	return({ peer, first: NOW - 2 * HOUR });
 }
 
 function pageOf(staples: readonly SimulatedStaple[]): Promise<PassAnswer<SimulatedStaple>> {
@@ -571,6 +588,68 @@ describe('the staples a pass names ahead of its start', function() {
 			window.passed(false);
 		}
 		expect(window.size).toBe(128);
+	});
+});
+
+describe('the staples a pass asks for in a page', function() {
+	test('start where answers last fitted after one was too large, and grow by passes none was too large in, up to the cap', function() {
+		const limit = new PageLimit(1000);
+		limit.tooLarge();
+		limit.answered(1);
+		expect(limit.size).toBe(1000);
+		limit.answered(32);
+		limit.answered(500);
+		expect(limit.size).toBe(32);
+		limit.passed();
+		expect(limit.size).toBe(32);
+		limit.passed();
+		limit.passed();
+		expect(limit.size).toBe(96);
+		limit.answered(64);
+		expect(limit.size).toBe(96);
+		for (let pass = 0; pass < 40; pass++) {
+			limit.passed();
+		}
+		expect(limit.size).toBe(1000);
+	});
+
+	/*
+	 * Every answer of more than 100 staples is too large. The first pass ends
+	 * at its time bound within the history; the second reads the rest of it.
+	 */
+	test('start, after a pass that asked for fewer, where that pass found pages fit, and regrow after passes that found none too large', async function() {
+		freezeClock(new Date(NOW));
+		const { peer, first } = denseVotedPeer();
+		let pass = 0;
+		const limits: number[][] = [];
+		const harness = new Harness(function(request) {
+			if (request.limit > 1) {
+				limits[pass]?.push(request.limit);
+			}
+			if (pass === 0 && harness.requests.length === 30) {
+				advanceClock(MAX_PASS_MILLISECONDS);
+			}
+			if (request.limit > 100) {
+				return(Promise.resolve({ kind: 'too-large' }));
+			}
+			return(peer.page(request));
+		});
+		harness.progress = { ...firstProgress(NOW, 0, new Date(first)), keying: 'votes' };
+		const outcomes: PassOutcome[] = [];
+		for (; pass < 4; pass++) {
+			limits.push([]);
+			outcomes.push((await bootstrapPeer(harness.io, passOptions(1000))).live);
+		}
+
+		expect(outcomes[0]?.kind).toBe('bounded');
+		expect(limits[0]?.slice(0, 5)).toEqual([1000, 500, 250, 125, 63]);
+		// The second reads on through the history, its moves included, at the limit the first ended at.
+		expect(completes(outcomes[1] ?? { kind: 'bounded', reached: EPOCH })).toBe(true);
+		expect(new Set(limits[1])).toEqual(new Set([63]));
+		expect(limits[1]?.length).toBeGreaterThan(10);
+		expect(harness.node.size).toBe(2000);
+		expect(limits[2]?.[0]).toBe(95);
+		expect(limits[3]?.slice(0, 2)).toEqual([127, 64]);
 	});
 });
 
@@ -1280,21 +1359,6 @@ function hidingFrom(peer: SimulatedPeer, staple: SimulatedStaple, mistakes: (req
 	});
 	harness.progress = { reached: new Date(staple.moment), caughtUp: true, deepScanFrom: new Date(staple.moment), nextDeepScan: new Date(NOW + HOUR), deepScan: undefined, keying };
 	return(harness);
-}
-
-/**
- * A peer keyed by votes that lists 40 votes a request, with 2000 staples from
- * an hour ago, 100 ms apart, each voted on four times within the 300 ms before
- * it, as a main network representative's dense history is; passes start
- * from an hour before them, from a peer known to key votes.
- */
-function denseVotedPeer(): { peer: SimulatedPeer; first: number } {
-	const peer = new SimulatedPeer({ keying: { kind: 'votes', votesPerRead: 20, readsAtMost: 2, readMilliseconds: 0 } });
-	for (let index = 0; index < 2000; index++) {
-		const at = NOW - HOUR + index * 100;
-		peer.applyVoted(at, at, [], [at - 300, at - 200, at - 100, at]);
-	}
-	return({ peer, first: NOW - 2 * HOUR });
 }
 
 describe('a pass checking what it concludes', function() {
@@ -2126,5 +2190,20 @@ describe('a pass over a range of a peer\'s history', function() {
 		await bootstrapRange(harness.io, rangeOf(NOW, []), passOptions(10));
 
 		expect(harness.priming.size).toBe(40);
+	});
+
+	test('asks for as many staples as pages last fitted, and for more after a pass with no answer too large', async function() {
+		freezeClock(new Date(NOW));
+		const harness = new Harness(function(request) {
+			return(peerWith(2).page(request));
+		});
+		harness.pageLimit.tooLarge();
+		harness.pageLimit.answered(4);
+		harness.pageLimit.passed();
+
+		await bootstrapRange(harness.io, rangeOf(NOW, []), passOptions(10));
+
+		expect(harness.requests[0]?.limit).toBe(4);
+		expect(harness.pageLimit.size).toBe(36);
 	});
 });

@@ -4,7 +4,7 @@ import { ConcurrentClock, SIMULATED_STAPLE_BYTES, SimulatedNode, SimulatedPeer, 
 import type { LiveTraffic, RefusalReport, SimulatedKeying, SimulatedPeerOptions, SimulatedStaple, VoteKey } from '../testing/simulated-peer.js';
 import { advanceClock, freezeClock } from '../testing/network.js';
 import { VOTE_KEY_TOLERANCE_MILLISECONDS } from './bootstrap-evidence.js';
-import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PrimingWindow, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, bootstrapPeer, bootstrapRange, completes } from './bootstrap-pass.js';
+import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PageLimit, PrimingWindow, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, bootstrapPeer, bootstrapRange, completes } from './bootstrap-pass.js';
 import type { PassEvent, PassOptions, PassOutcome, PeerIO, PeerOutcome, PeerProgress } from './bootstrap-pass.js';
 import { RANGE_OVERLAP_MILLISECONDS, rangeResultOf, updateRanges } from './bootstrap-ranges.js';
 import type { RangeEvent, RangeLayout, RangeResult } from './bootstrap-ranges.js';
@@ -91,6 +91,7 @@ class Follower {
 	readonly #stageBound: number | undefined;
 	readonly #answers = new Map<SimulatedPeer, LongestAnswer>();
 	readonly #priming = new Map<SimulatedPeer, PrimingWindow>();
+	readonly #pageLimits = new Map<SimulatedPeer, PageLimit>();
 	readonly #seed = seeds();
 
 	/** A follower whose stage holds at most that many bytes for the ranges read ahead, unless the client's bound. */
@@ -137,6 +138,7 @@ class Follower {
 		return({
 			answers,
 			priming: this.priming(peer),
+			pageLimit: this.#pageLimit(peer),
 			page: function(request) {
 				return(peer.page(request));
 			},
@@ -181,6 +183,16 @@ class Follower {
 			this.#priming.set(peer, priming);
 		}
 		return(priming);
+	}
+
+	/** How many staples passes over the peer ask for in a page, kept across them. */
+	#pageLimit(peer: SimulatedPeer): PageLimit {
+		let pageLimit = this.#pageLimits.get(peer);
+		if (pageLimit === undefined) {
+			pageLimit = new PageLimit(LIMIT);
+			this.#pageLimits.set(peer, pageLimit);
+		}
+		return(pageLimit);
 	}
 
 	options(from: Date = new Date(0)): PassOptions {

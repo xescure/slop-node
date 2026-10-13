@@ -151,6 +151,59 @@ export class PrimingWindow {
 	}
 }
 
+/**
+ * How many staples passes over the peer ask for in a page, learned from its
+ * answers, as the priming window is (PrimingWindow). A pass halves its own
+ * limit whenever an answer is too large; the next pass starts at the limit
+ * of the pages that then fitted, so that it does not halve its way down
+ * again, and once a pass over the peer gets no answer too large the passes
+ * after it ask for PAGE_LIMIT_STEP more, up to the cap.
+ */
+export class PageLimit {
+	readonly #cap: number;
+	#size: number;
+	#tooLarge = false;
+
+	/** Opens at the cap, which a pass lowers further to the limit it is given (PassOptions.limit). */
+	constructor(cap: number) {
+		this.#cap = cap;
+		this.#size = cap;
+	}
+
+	/** Where the next pass over the peer starts. */
+	get size(): number {
+		return(this.#size);
+	}
+
+	/** An answer was too large. */
+	tooLarge(): void {
+		this.#tooLarge = true;
+	}
+
+	/** A page of that many staples came back; one of a single staple says nothing of how many fit. */
+	answered(limit: number): void {
+		if (this.#tooLarge && limit > 1) {
+			this.#size = Math.min(this.#size, limit);
+		}
+	}
+
+	/** A pass over the peer ended, at its bound or complete. */
+	passed(): void {
+		if (!this.#tooLarge) {
+			this.#size = Math.min(this.#cap, this.#size + PAGE_LIMIT_STEP);
+		}
+		this.#tooLarge = false;
+	}
+}
+
+/**
+ * About as many staples as MAX_PAGE_BYTES holds of the main network's
+ * densest history, where about 36 of 115 KB fit: there a pass asks for a
+ * page too large about every other pass, rather than five times in each,
+ * and elsewhere the limit regrows to its cap within about thirty passes.
+ */
+const PAGE_LIMIT_STEP = 32;
+
 /** What a pass reports of a peer, for the node to log. */
 export type PassEvent =
 	/** The peer was first seen to key votes later than VOTE_KEY_TOLERANCE_MILLISECONDS after they were made, listing this staple from the start given. */
@@ -236,12 +289,14 @@ export type PeerIO<Staple extends PassStaple> = {
 	readonly answers: LongestAnswer;
 	/** Kept for as long as the node reads the peer. */
 	readonly priming: PrimingWindow;
+	/** Kept for as long as the node reads the peer. */
+	readonly pageLimit: PageLimit;
 	readProgress(): Promise<PeerProgress | undefined>;
 	writeProgress(progress: PeerProgress): Promise<void>;
 };
 
 export type PassOptions = {
-	/** The most staples a page holds; halved for the rest of the pass whenever an answer is too large. */
+	/** The most staples a page holds; a pass starts lower as the peer's PageLimit has it, and halves its own for the rest of the pass whenever an answer is too large. */
 	readonly limit: number;
 	/**
 	 * How much later than a period after the node first reads a peer its
@@ -526,7 +581,7 @@ class Pass<Staple extends PassStaple> {
 		this.#horizon = setup.horizon;
 		this.#end = setup.end;
 		this.#until = setup.until;
-		this.#limit = options.limit;
+		this.#limit = Math.min(options.limit, io.pageLimit.size);
 		this.#seed = options.seed ?? function(): number {
 			return(randomInt(SEED_LIMIT));
 		};
@@ -677,6 +732,7 @@ class Pass<Staple extends PassStaple> {
 			case 'page':
 				break;
 			case 'too-large':
+				this.#io.pageLimit.tooLarge();
 				if (limit === 1) {
 					throw(new Error('the peer holds a staple larger than a page may be'));
 				}
@@ -687,6 +743,7 @@ class Pass<Staple extends PassStaple> {
 			default:
 				return(assertNever(answer));
 		}
+		this.#io.pageLimit.answered(limit);
 		const staples = answer.staples;
 		await this.#keying.observe(staples, start);
 		this.#known.learn(staples);
@@ -1189,6 +1246,7 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 	const liveOutcome = outcomeOf(liveResult);
 	if (liveOutcome !== undefined) {
 		io.priming.passed(completes(liveOutcome));
+		io.pageLimit.passed();
 	}
 	const deepOutcome = outcomeOf(deepResult);
 	await record(function(current) {
@@ -1262,6 +1320,7 @@ export async function bootstrapRange<Staple extends PassStaple>(io: PeerIO<Stapl
 		throw(failureOf(result));
 	}
 	io.priming.passed(completes(result.value));
+	io.pageLimit.passed();
 	if (retried.status === 'rejected') {
 		throw(failureOf(retried));
 	}
