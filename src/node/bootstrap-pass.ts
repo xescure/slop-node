@@ -360,6 +360,9 @@ type Reach = { readonly start: number; readonly from: number };
 /** What the node made of each staple of a page, and whether it held any before the page and added any. */
 type Taken = { readonly outcomes: readonly Added[]; readonly held: boolean; readonly added: boolean };
 
+/** A page the peer answered, what it shows, and the filter the request that drew it carried: none once the peer gave up on one (PrimingWindow). */
+type Answered<Staple extends PassStaple> = { readonly staples: readonly Staple[]; readonly evidence: Evidence<Staple>; readonly bloomFilter: string | undefined };
+
 /** A page asked for from the start, what it shows, and the filter it was asked with, which the node has taken. */
 type Listed<Staple extends PassStaple> = { readonly staples: readonly Staple[]; readonly evidence: Evidence<Staple>; readonly filter: Filter; readonly taken: Taken };
 
@@ -667,7 +670,7 @@ class Pass<Staple extends PassStaple> {
 	 * for it, which the pass learns how the peer keys from first; nothing when
 	 * it was too large, and fewer staples are asked for from then on.
 	 */
-	async #request(start: number, limit: number, bloomFilter: string | undefined): Promise<{ readonly staples: readonly Staple[]; readonly evidence: Evidence<Staple> } | undefined> {
+	async #request(start: number, limit: number, bloomFilter: string | undefined): Promise<Answered<Staple> | undefined> {
 		this.#requests++;
 		const answer = await this.#io.page({ start: new Date(start), limit, bloomFilter });
 		switch (answer.kind) {
@@ -699,7 +702,7 @@ class Pass<Staple extends PassStaple> {
 			case 'unknown':
 			case 'votes':
 				if (evidence.wholeBelow < staples.length) {
-					return({ staples, evidence: { ...evidence, countedTo: countedReach(staples, start, this.#known) } });
+					return({ staples, evidence: { ...evidence, countedTo: countedReach(staples, start, this.#known) }, bloomFilter });
 				}
 				break;
 			case 'applied':
@@ -708,11 +711,11 @@ class Pass<Staple extends PassStaple> {
 			default:
 				return(assertNever(this.#keying.current));
 		}
-		return({ staples, evidence });
+		return({ staples, evidence, bloomFilter });
 	}
 
 	/** Sends the request again with no filter once the window is at its floor (PrimingWindow); otherwise the pass fails, having halved it. */
-	async #afterGivingUp(reason: string, start: number, limit: number, bloomFilter: string | undefined): Promise<{ readonly staples: readonly Staple[]; readonly evidence: Evidence<Staple> } | undefined> {
+	async #afterGivingUp(reason: string, start: number, limit: number, bloomFilter: string | undefined): Promise<Answered<Staple> | undefined> {
 		if (bloomFilter === undefined) {
 			throw(new Error(`${reason}, though it carried no filter`));
 		}
@@ -805,7 +808,12 @@ class Pass<Staple extends PassStaple> {
 		// Set aside for being too large, the answer would leave the move to probes, which gallop from the start one staple at a time.
 		let answer = await this.#request(target.at, this.#limit, filter.serialized);
 		while (answer === undefined && !this.#exhausted()) {
-			answer = await this.#request(target.at, this.#limit, filter.serialized);
+			// The request before may have been sent again with no filter, the peer having given up on it (PrimingWindow), as are all after it.
+			let bloomFilter = filter.serialized;
+			if (this.#io.priming.unfiltered) {
+				bloomFilter = undefined;
+			}
+			answer = await this.#request(target.at, this.#limit, bloomFilter);
 		}
 		if (answer === undefined) {
 			return(undefined);
@@ -820,7 +828,11 @@ class Pass<Staple extends PassStaple> {
 		named.receive(answer.staples);
 		this.#named = named;
 		await this.#advance(target.at);
-		return({ ...answer, filter, taken });
+		let sent = filter;
+		if (answer.bloomFilter === undefined) {
+			sent = UNFILTERED;
+		}
+		return({ staples: answer.staples, evidence: answer.evidence, filter: sent, taken });
 	}
 
 	async #advance(start: number): Promise<void> {

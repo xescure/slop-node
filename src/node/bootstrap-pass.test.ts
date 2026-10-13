@@ -1728,6 +1728,48 @@ describe('a pass checking what it concludes', function() {
 		expect(harness.pages().at(-1)?.limit).toBe(63);
 	});
 
+	/*
+	 * With the window at its floor, the peer gives up on the page from the
+	 * second start the pass moves to, which is the fourth short page in a row,
+	 * after which the pass probes its horizon; the page asked for again with
+	 * no filter is too large.
+	 */
+	test('asks again with no filter for the page from where a page is shown to have read up to, when it is too large after the peer gave up on its filter', async function() {
+		freezeClock(new Date(NOW));
+		const { peer, first } = denseVotedPeer();
+		const moves = new Set<number>();
+		let gaveUp: number | undefined;
+		const harness = new Harness(function(request) {
+			if (request.limit > 1 && request.start.getTime() > first) {
+				moves.add(request.start.getTime());
+			}
+			if (gaveUp === undefined && moves.size === 2 && request.bloomFilter !== undefined) {
+				gaveUp = harness.requests.length;
+				return(Promise.resolve({ kind: 'gave-up', reason: 'the gateway gave up' }));
+			}
+			if (gaveUp !== undefined && harness.requests.length === gaveUp + 1) {
+				return(Promise.resolve({ kind: 'too-large' }));
+			}
+			return(peer.page(request));
+		});
+		harness.priming = new PrimingWindow(8);
+		harness.progress = { ...firstProgress(NOW, 0, new Date(first)), keying: 'votes' };
+
+		await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(harness.node.size).toBe(2000);
+		const since = harness.requests.slice(gaveUp ?? -1);
+		expect(since.slice(0, 3).map(function(request): [number, number, boolean] {
+			return([request.start.getTime(), request.limit, request.bloomFilter !== undefined]);
+		})).toEqual([[1000, true], [1000, false], [500, false]].map(function([limit, filtered]): [number, number, boolean] {
+			return([since[0]?.start.getTime() ?? first, Number(limit), Boolean(filtered)]);
+		}));
+		// The peer is read with no filter from then on, until a pass completes.
+		expect(since.slice(1).filter(function(request): boolean {
+			return(request.bloomFilter !== undefined);
+		})).toEqual([]);
+	});
+
 	test('fails when the page from where a page is shown to have read up to is too large down to a single staple', async function() {
 		freezeClock(new Date(NOW));
 		const { peer, first } = denseVotedPeer();
