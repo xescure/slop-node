@@ -1,6 +1,6 @@
 {
   "format": "slop-node/vote-cases@1",
-  "keetanetClient": "0.18.7",
+  "keetanetClient": "0.18.8",
   "cases": [
     {
       "id": "V1",
