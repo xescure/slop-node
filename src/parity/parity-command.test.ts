@@ -23,6 +23,7 @@ describe('the parity command line', function() {
 		expect(parseParityCommand(['shadow', '--informational-every', '0'], HOME)).toBeUndefined();
 		expect(parseParityCommand(['api-diff'], HOME)).toEqual({ kind: 'api-diff', directory: DIRECTORY, samplesPerStratum: 300, seed: undefined, pacing: PACING });
 		expect(parseParityCommand(['report'], HOME)).toEqual({ kind: 'report', directory: DIRECTORY, sampleAccounts: 16, passiveSampleAccounts: 400, apiSamples: 2, gapMilliseconds: 10_000, logOnly: false, pacing: PACING });
+		expect(parseParityCommand(['keying'], HOME)).toEqual({ kind: 'keying', directory: DIRECTORY, staples: 8, pacing: PACING });
 	});
 
 	test('takes the options each command has', function() {
@@ -33,6 +34,7 @@ describe('the parity command line', function() {
 		expect(parseParityCommand(['sweep', '--lap', '--rep-concurrency', '2', '--rep-gap-ms', '1000'], HOME)).toMatchObject({ kind: 'sweep', pacing: { concurrency: 2, gapMilliseconds: 1000 } });
 		expect(parseParityCommand(['recheck', '--rep-gap-ms', '0'], HOME)).toMatchObject({ pacing: PACING });
 		expect(parseParityCommand(['api-diff', '--samples', '300', '--seed', 'run-1'], HOME)).toEqual({ kind: 'api-diff', directory: DIRECTORY, samplesPerStratum: 300, seed: 'run-1', pacing: PACING });
+		expect(parseParityCommand(['keying', '--staples', '3', '--rep-concurrency', '1', '--rep-gap-ms', '500'], HOME)).toEqual({ kind: 'keying', directory: DIRECTORY, staples: 3, pacing: { concurrency: 1, gapMilliseconds: 500 } });
 	});
 
 	test('names a triage of an API divergence with every part of it', function() {
@@ -57,6 +59,8 @@ describe('the parity command line', function() {
 		expect(parseParityCommand(['sweep', '--rep-concurrency', '65'], HOME)).toBeUndefined();
 		expect(parseParityCommand(['sweep', '--rep-gap-ms', '-1'], HOME)).toBeUndefined();
 		expect(parseParityCommand(['shadow', '--rep-concurrency', '2'], HOME)).toBeUndefined();
+		expect(parseParityCommand(['keying', '--staples', '0'], HOME)).toBeUndefined();
+		expect(parseParityCommand(['keying', '--staples', '101'], HOME)).toBeUndefined();
 	});
 });
 

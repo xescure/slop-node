@@ -151,6 +151,139 @@ export class PrimingWindow {
 	}
 }
 
+/**
+ * Which of a peer's passes a page limit is kept for: the pass from where the
+ * last reached, the deep re-scan, or the passes over one range, each of which
+ * reads on where the last of its kind stopped, through history of its own.
+ */
+export type PassIdentity =
+	| { readonly kind: 'live' }
+	| { readonly kind: 'deep' }
+	/** Range IDs start again from 0 with each layout, which its start names (src/node/bootstrap-ranges.ts, RangeLayout). */
+	| { readonly kind: 'range'; readonly layout: Date; readonly id: number };
+
+/**
+ * How many staples a pass asks for in a page, kept for the next pass of the
+ * same identity (PassIdentity), which reads on through the same history: in
+ * the main network's densest stretch, 4 MiB (MAX_PAGE_BYTES) holds about 36
+ * staples, and a pass that started at the cap each time halved its way down
+ * to them first, each too large an answer downloaded in full.
+ *
+ * It halves whenever an answer is too large, and doubles, up to the cap,
+ * after each full page while it stays below the size an answer was last too
+ * large at. Only a full page shows that the limit fits: in that stretch a
+ * representative ends a page by its own time after 20 to 50 staples,
+ * whatever the limit, so a page shorter than the limit says nothing of a
+ * larger one, and leaves the limit, and the count below, as they are.
+ * Doubling to that size or past it asks again for an answer as large as one
+ * that did not fit, so it waits for so many full pages in a row:
+ * FIRST_PROBE_AFTER, then twice as many each time such an answer is too
+ * large again, up to MAX_PROBE_AFTER. A full page at that size shows the
+ * history has thinned, and the limit doubles after each full page, back to
+ * the cap within a handful of requests.
+ */
+export class PageLimit {
+	readonly #cap: number;
+	#size: number;
+	/** The fewest staples an answer was too large for since an answer that large last fitted. */
+	#tooLargeAt: number | undefined;
+	#probeAfter = FIRST_PROBE_AFTER;
+	/** Full pages in a row at the size. */
+	#fitted = 0;
+
+	constructor(cap: number) {
+		this.#cap = cap;
+		this.#size = cap;
+	}
+
+	get size(): number {
+		return(this.#size);
+	}
+
+	/** An answer for that many staples was too large. */
+	tooLarge(limit: number): void {
+		if (this.#tooLargeAt !== undefined && limit >= this.#tooLargeAt) {
+			this.#probeAfter = Math.min(MAX_PROBE_AFTER, this.#probeAfter * 2);
+		}
+		this.#tooLargeAt = Math.min(this.#tooLargeAt ?? limit, limit);
+		this.#size = Math.min(this.#size, Math.ceil(limit / 2));
+		this.#fitted = 0;
+	}
+
+	/**
+	 * An answer for that many staples fitted, listing so many. One for fewer
+	 * than the size, as a probe for a single staple, or one the peer ended
+	 * before the limit, says nothing of how many fit.
+	 */
+	fitted(limit: number, listed: number): void {
+		if (limit !== this.#size || listed < limit) {
+			return;
+		}
+		if (this.#tooLargeAt !== undefined && limit >= this.#tooLargeAt) {
+			this.#tooLargeAt = undefined;
+			this.#probeAfter = FIRST_PROBE_AFTER;
+		}
+		this.#fitted++;
+		const doubled = Math.min(this.#cap, this.#size * 2);
+		if (this.#tooLargeAt !== undefined && doubled >= this.#tooLargeAt && this.#fitted < this.#probeAfter) {
+			return;
+		}
+		this.#size = doubled;
+		this.#fitted = 0;
+	}
+}
+
+/** Full pages in a row before a page limit doubles to where an answer was too large, at first. */
+const FIRST_PROBE_AFTER = 2;
+
+/** The most full pages in a row a page limit waits for before it doubles to where an answer was too large. */
+const MAX_PROBE_AFTER = 16;
+
+const RANGE_KEY_PREFIX = 'range ';
+
+function identityKey(pass: PassIdentity): string {
+	switch (pass.kind) {
+		case 'live':
+		case 'deep':
+			return(pass.kind);
+		case 'range':
+			return(`${RANGE_KEY_PREFIX}${String(pass.id)}`);
+		default:
+			return(assertNever(pass));
+	}
+}
+
+/** The page limits of a peer's passes, by their identity, kept for as long as the node reads the peer. */
+export class PageLimits {
+	readonly #kept = new Map<string, PageLimit>();
+	/** The layout whose ranges the limits kept for ranges are of. */
+	#layout: number | undefined;
+
+	/** The page limit of the passes of that identity, opening at the cap; those of the ranges of another layout are let go first. */
+	of(pass: PassIdentity, cap: number): PageLimit {
+		if (pass.kind === 'range' && pass.layout.getTime() !== this.#layout) {
+			this.#layout = pass.layout.getTime();
+			for (const key of this.#kept.keys()) {
+				if (key.startsWith(RANGE_KEY_PREFIX)) {
+					this.#kept.delete(key);
+				}
+			}
+		}
+		const key = identityKey(pass);
+		let limit = this.#kept.get(key);
+		if (limit === undefined) {
+			limit = new PageLimit(cap);
+			this.#kept.set(key, limit);
+		}
+		return(limit);
+	}
+
+	/** No pass of that identity reads on from where the last stopped: a deep re-scan or a range that completed. */
+	forget(pass: PassIdentity): void {
+		this.#kept.delete(identityKey(pass));
+	}
+}
+
 /** What a pass reports of a peer, for the node to log. */
 export type PassEvent =
 	/** The peer was first seen to key votes later than VOTE_KEY_TOLERANCE_MILLISECONDS after they were made, listing this staple from the start given. */
@@ -236,12 +369,14 @@ export type PeerIO<Staple extends PassStaple> = {
 	readonly answers: LongestAnswer;
 	/** Kept for as long as the node reads the peer. */
 	readonly priming: PrimingWindow;
+	/** Kept for as long as the node reads the peer. */
+	readonly pageLimits: PageLimits;
 	readProgress(): Promise<PeerProgress | undefined>;
 	writeProgress(progress: PeerProgress): Promise<void>;
 };
 
 export type PassOptions = {
-	/** The most staples a page holds; halved for the rest of the pass whenever an answer is too large. */
+	/** The most staples a page holds; a pass asks for fewer as its PageLimit has it. */
 	readonly limit: number;
 	/**
 	 * How much later than a period after the node first reads a peer its
@@ -360,8 +495,19 @@ type Reach = { readonly start: number; readonly from: number };
 /** What the node made of each staple of a page, and whether it held any before the page and added any. */
 type Taken = { readonly outcomes: readonly Added[]; readonly held: boolean; readonly added: boolean };
 
-/** A page asked for from the start, what it shows, and the filter it was asked with, which the node has taken. */
-type Listed<Staple extends PassStaple> = { readonly staples: readonly Staple[]; readonly evidence: Evidence<Staple>; readonly filter: Filter; readonly taken: Taken };
+/** A page the peer answered, what it shows, and the filter the request that drew it carried: none once the peer gave up on one (PrimingWindow). */
+type Answered<Staple extends PassStaple> = { readonly staples: readonly Staple[]; readonly evidence: Evidence<Staple>; readonly limit: number; readonly bloomFilter: string | undefined };
+
+/** The filter the answer was asked with: the one given, unless the request was sent again with none, the peer having given up on it. */
+function sentWith<Staple extends PassStaple>(filter: Filter, answer: Answered<Staple>): Filter {
+	if (answer.bloomFilter === undefined) {
+		return(UNFILTERED);
+	}
+	return(filter);
+}
+
+/** A page asked for from the start, what it shows, and the limit and filter it was asked with, which the node has taken. */
+type Listed<Staple extends PassStaple> = { readonly staples: readonly Staple[]; readonly evidence: Evidence<Staple>; readonly limit: number; readonly filter: Filter; readonly taken: Taken };
 
 /**
  * One pass over a peer's staples, from a start up to a horizon.
@@ -512,7 +658,8 @@ class Pass<Staple extends PassStaple> {
 	readonly #known = new KnownVotes();
 	#named = new NamedStaples();
 	#start: number;
-	#limit: number;
+	readonly #cap: number;
+	readonly #pageLimit: PageLimit;
 	#requests = 0;
 	/** How far the start last moved, from which probes look next. */
 	#step = FIRST_STEP_MILLISECONDS;
@@ -523,13 +670,19 @@ class Pass<Staple extends PassStaple> {
 		this.#horizon = setup.horizon;
 		this.#end = setup.end;
 		this.#until = setup.until;
-		this.#limit = options.limit;
+		this.#cap = options.limit;
+		this.#pageLimit = setup.pageLimit;
 		this.#seed = options.seed ?? function(): number {
 			return(randomInt(SEED_LIMIT));
 		};
 		this.#use = setup.use;
 		this.#keying = setup.keying;
 		this.#moved = setup.moved;
+	}
+
+	/** How many staples the next page is asked for. */
+	get #limit(): number {
+		return(Math.min(this.#cap, this.#pageLimit.size));
 	}
 
 	async run(): Promise<PassOutcome> {
@@ -559,7 +712,7 @@ class Pass<Staple extends PassStaple> {
 				}
 				continue;
 			}
-			const short = page.length < this.#limit;
+			const short = page.length < listed.limit;
 			if (short) {
 				shortPages++;
 			} else {
@@ -626,7 +779,7 @@ class Pass<Staple extends PassStaple> {
 		if (answer === undefined) {
 			return(undefined);
 		}
-		return({ ...answer, filter, taken: await this.#takeAll(answer.staples) });
+		return({ staples: answer.staples, evidence: answer.evidence, limit: answer.limit, filter: sentWith(filter, answer), taken: await this.#takeAll(answer.staples) });
 	}
 
 	/**
@@ -667,7 +820,7 @@ class Pass<Staple extends PassStaple> {
 	 * for it, which the pass learns how the peer keys from first; nothing when
 	 * it was too large, and fewer staples are asked for from then on.
 	 */
-	async #request(start: number, limit: number, bloomFilter: string | undefined): Promise<{ readonly staples: readonly Staple[]; readonly evidence: Evidence<Staple> } | undefined> {
+	async #request(start: number, limit: number, bloomFilter: string | undefined): Promise<Answered<Staple> | undefined> {
 		this.#requests++;
 		const answer = await this.#io.page({ start: new Date(start), limit, bloomFilter });
 		switch (answer.kind) {
@@ -677,13 +830,14 @@ class Pass<Staple extends PassStaple> {
 				if (limit === 1) {
 					throw(new Error('the peer holds a staple larger than a page may be'));
 				}
-				this.#limit = Math.min(this.#limit, Math.ceil(limit / 2));
+				this.#pageLimit.tooLarge(limit);
 				return(undefined);
 			case 'gave-up':
 				return(await this.#afterGivingUp(answer.reason, start, limit, bloomFilter));
 			default:
 				return(assertNever(answer));
 		}
+		this.#pageLimit.fitted(limit, answer.staples.length);
 		const staples = answer.staples;
 		await this.#keying.observe(staples, start);
 		this.#known.learn(staples);
@@ -699,7 +853,7 @@ class Pass<Staple extends PassStaple> {
 			case 'unknown':
 			case 'votes':
 				if (evidence.wholeBelow < staples.length) {
-					return({ staples, evidence: { ...evidence, countedTo: countedReach(staples, start, this.#known) } });
+					return({ staples, evidence: { ...evidence, countedTo: countedReach(staples, start, this.#known) }, limit, bloomFilter });
 				}
 				break;
 			case 'applied':
@@ -708,11 +862,11 @@ class Pass<Staple extends PassStaple> {
 			default:
 				return(assertNever(this.#keying.current));
 		}
-		return({ staples, evidence });
+		return({ staples, evidence, limit, bloomFilter });
 	}
 
 	/** Sends the request again with no filter once the window is at its floor (PrimingWindow); otherwise the pass fails, having halved it. */
-	async #afterGivingUp(reason: string, start: number, limit: number, bloomFilter: string | undefined): Promise<{ readonly staples: readonly Staple[]; readonly evidence: Evidence<Staple> } | undefined> {
+	async #afterGivingUp(reason: string, start: number, limit: number, bloomFilter: string | undefined): Promise<Answered<Staple> | undefined> {
 		if (bloomFilter === undefined) {
 			throw(new Error(`${reason}, though it carried no filter`));
 		}
@@ -805,7 +959,12 @@ class Pass<Staple extends PassStaple> {
 		// Set aside for being too large, the answer would leave the move to probes, which gallop from the start one staple at a time.
 		let answer = await this.#request(target.at, this.#limit, filter.serialized);
 		while (answer === undefined && !this.#exhausted()) {
-			answer = await this.#request(target.at, this.#limit, filter.serialized);
+			// The request before may have been sent again with no filter, the peer having given up on it (PrimingWindow), as are all after it.
+			let bloomFilter = filter.serialized;
+			if (this.#io.priming.unfiltered) {
+				bloomFilter = undefined;
+			}
+			answer = await this.#request(target.at, this.#limit, bloomFilter);
 		}
 		if (answer === undefined) {
 			return(undefined);
@@ -820,7 +979,7 @@ class Pass<Staple extends PassStaple> {
 		named.receive(answer.staples);
 		this.#named = named;
 		await this.#advance(target.at);
-		return({ ...answer, filter, taken });
+		return({ staples: answer.staples, evidence: answer.evidence, limit: answer.limit, filter: sentWith(filter, answer), taken });
 	}
 
 	async #advance(start: number): Promise<void> {
@@ -1071,6 +1230,7 @@ type PassSetup = {
 	readonly use: QueueUse;
 	readonly keying: KeyingRecord;
 	readonly moved: (start: Date) => Promise<void>;
+	readonly pageLimit: PageLimit;
 };
 
 /**
@@ -1148,6 +1308,7 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 		until: Number.POSITIVE_INFINITY,
 		use: 'live',
 		keying,
+		pageLimit: io.pageLimits.of({ kind: 'live' }, options.limit),
 		moved: function(start) {
 			return(record(function(current) {
 				return({ ...current, reached: earlier(start, floor) });
@@ -1164,6 +1325,7 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 			until: Number.POSITIVE_INFINITY,
 			use: 'deep',
 			keying,
+			pageLimit: io.pageLimits.of({ kind: 'deep' }, options.limit),
 			moved: function(start) {
 				return(record(function(current) {
 					return({ ...current, deepScan: { reached: start, horizon: deepScan.horizon } });
@@ -1186,6 +1348,7 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 		}
 		if (deepOutcome !== undefined && completes(deepOutcome)) {
 			next = { ...next, deepScan: undefined };
+			io.pageLimits.forget({ kind: 'deep' });
 		}
 		return(next);
 	});
@@ -1203,6 +1366,10 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 
 /** A range of a peer's history a pass reads (src/node/bootstrap-ranges.ts). */
 export type RangeSetup = {
+	/** Names the range (src/node/bootstrap-ranges.ts, BootstrapRange) within its layout, whose passes keep their page limit. */
+	readonly id: number;
+	/** Where the layout the range is part of begins, which names it. */
+	readonly layout: Date;
 	/** Where the node holds or has queued every staple the range's peers keyed from where it began. */
 	readonly reached: Date;
 	/** The range's end as it stands, which moves earlier when another peer takes on the later part of what is left of it. */
@@ -1242,7 +1409,8 @@ export async function bootstrapRange<Staple extends PassStaple>(io: PeerIO<Stapl
 	const end = function(): number {
 		return(range.end().getTime());
 	};
-	const pass = new Pass(io, { start: range.reached, horizon: end, end, until: range.until.getTime(), use: range.use, keying, moved: range.moved }, options);
+	const identity: PassIdentity = { kind: 'range', layout: range.layout, id: range.id };
+	const pass = new Pass(io, { start: range.reached, horizon: end, end, until: range.until.getTime(), use: range.use, keying, moved: range.moved, pageLimit: io.pageLimits.of(identity, options.limit) }, options);
 	const [result] = await Promise.allSettled([pass.run()]);
 	// As after the passes over a peer, the staples queued are offered again whatever the pass did.
 	const [retried] = await Promise.allSettled([io.retry()]);
@@ -1250,6 +1418,9 @@ export async function bootstrapRange<Staple extends PassStaple>(io: PeerIO<Stapl
 		throw(failureOf(result));
 	}
 	io.priming.passed(completes(result.value));
+	if (completes(result.value)) {
+		io.pageLimits.forget(identity);
+	}
 	if (retried.status === 'rejected') {
 		throw(failureOf(retried));
 	}

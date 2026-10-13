@@ -96,13 +96,18 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 	return(typeof value === 'object' && value !== null && !Array.isArray(value));
 }
 
-/** The URL the client requests a page at [Keeta TS] index.js:59584-59613. */
-export function pageURL(request: PageRequest): URL {
+/** The path below a peer's API endpoint the client requests a page at [Keeta TS] index.js:59584-59613. */
+export function pagePath(request: Omit<PageRequest, 'endpoint'>): string {
 	const query = new URLSearchParams({ start: request.start.toISOString(), limit: String(request.limit) });
 	if (request.bloomFilter !== undefined) {
 		query.set('bloomFilter', request.bloomFilter);
 	}
-	return(new URL(`${request.endpoint}${BOOTSTRAP_ROUTE}?${query.toString()}`));
+	return(`${BOOTSTRAP_ROUTE}?${query.toString()}`);
+}
+
+/** The URL the client requests a page at. */
+export function pageURL(request: PageRequest): URL {
+	return(new URL(`${request.endpoint}${pagePath(request)}`));
 }
 
 type Answer = { readonly status: number; readonly body: string; readonly retryAfter: string | undefined };
@@ -183,7 +188,11 @@ function staplesOf(endpoint: string, answer: Answer): VoteStaple[] {
 	if (answer.status !== SUCCESS_STATUS) {
 		throw(statusErrorOf(endpoint, answer));
 	}
-	const parsed = parseJSON(endpoint, answer.body);
+	return(staplesOfPage(endpoint, parseJSON(endpoint, answer.body)));
+}
+
+/** The staples of a page, its body parsed as JSON. */
+export function staplesOfPage(endpoint: string, parsed: unknown): VoteStaple[] {
 	if (!isRecord(parsed) || !Array.isArray(parsed['voteStaples'])) {
 		throw(new PageError(endpoint, { kind: 'malformed', detail: 'it holds no voteStaples list' }));
 	}

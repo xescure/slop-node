@@ -1257,7 +1257,7 @@ describe('a bootstrap client', function() {
 		expect(recording.pages[before]?.start).toBe(EPOCH);
 	});
 
-	test('asks for half as many staples whenever a page is larger than it accepts', async function() {
+	test('asks for half as many staples whenever a page is larger than it accepts, and for twice as many again once pages fit', async function() {
 		const peer = await representative();
 		const padded = await startRecordingPeer(peer.apiURL, { padAboveLimit: 2 });
 		const late = await joiner({ bootstrapFrom: [padded.apiURL] });
@@ -1267,7 +1267,7 @@ describe('a bootstrap client', function() {
 
 		expect(padded.pages.map(function(page): string | null {
 			return(page.limit);
-		})).toEqual(['8', '4', '2', '2', '2', '2']);
+		})).toEqual(['8', '4', '2', '2', '4', '2', '2']);
 		expect(await heldBlocksHashes(late.node)).toEqual(await heldBlocksHashes(peer.node));
 	});
 
