@@ -6,6 +6,7 @@ import { RetryQueue } from '../node/bootstrap-retry.js';
 import type { Added, Awaited, Offered, QueuedStaple, QueueBounds, RetryStore } from '../node/bootstrap-retry.js';
 import { assertNever } from '../util/assert-never.js';
 import { advanceClock, freezeClock } from './network.js';
+import { testLifetime } from './test-lifetime.js';
 
 const lib = KeetaNet.lib;
 
@@ -155,7 +156,9 @@ const SETTLING_TURNS = 8;
  */
 export class ConcurrentClock {
 	readonly #free = new Map<SimulatedPeer, number>();
-	readonly #due: { readonly at: number; readonly order: number; readonly answer: () => void }[] = [];
+	readonly #due: { readonly at: number; readonly order: number; readonly answer: () => void; readonly refuse: (reason: unknown) => void }[] = [];
+	/** The test that made the clock: once it has ended, the answers due are refused, and the clock moves no more. */
+	readonly #lifetime: AbortSignal = testLifetime();
 	#order = 0;
 	#moving = false;
 
@@ -167,8 +170,8 @@ export class ConcurrentClock {
 		const ends = Date.now();
 		freezeClock(new Date(arrived));
 		this.#free.set(peer, ends);
-		await new Promise<void>((resolve) => {
-			this.#due.push({ at: ends, order: this.#order++, answer: resolve });
+		await new Promise<void>((resolve, reject) => {
+			this.#due.push({ at: ends, order: this.#order++, answer: resolve, refuse: reject });
 			this.#moveOn();
 		});
 		return(result);
@@ -193,6 +196,10 @@ export class ConcurrentClock {
 			const next = this.#due.shift();
 			if (next === undefined) {
 				break;
+			}
+			if (this.#lifetime.aborted) {
+				next.refuse(this.#lifetime.reason);
+				continue;
 			}
 			if (next.at > Date.now()) {
 				freezeClock(new Date(next.at));
@@ -308,6 +315,8 @@ export class SimulatedPeer {
 	readonly #failsFrom: number;
 	readonly #filters = new Map<string, BloomFilter>();
 	readonly #random = deterministicRandom(7);
+	/** The test that made the peer: once it has ended, the peer answers nothing, and so moves the clock no more. */
+	readonly #lifetime: AbortSignal = testLifetime();
 	#nextID = 0;
 	#nextSequence = 0;
 	#live: LiveState | undefined;
@@ -418,6 +427,7 @@ export class SimulatedPeer {
 	async page(request: PassRequest): Promise<PassAnswer<SimulatedStaple>> {
 		// Answering on a later turn of the event loop, as over a network, lets the test runner's own timers run.
 		await new Promise(setImmediate);
+		this.#lifetime.throwIfAborted();
 		let answer: PassAnswer<SimulatedStaple> | Error;
 		const clock = this.#clock;
 		if (clock === undefined) {
@@ -484,10 +494,14 @@ export class SimulatedPeer {
 			const vary = keying.readsVaryBy ?? 0;
 			const size = Math.min(keying.votesPerRead + scrambled(at, reads) % (2 * vary + 1) - vary, (limit - staples.length) * 32);
 			const read = this.#votes.slice(at, at + size);
-			const listed = [...new Set(read.map(function(vote): SimulatedStaple {
-				return(vote.staple);
-			}))].sort(function(left, right): number {
-				return(scrambled(left.id, at) - scrambled(right.id, at));
+			const order = new Map<SimulatedStaple, number>();
+			for (const vote of read) {
+				if (!order.has(vote.staple)) {
+					order.set(vote.staple, scrambled(vote.staple.id, at));
+				}
+			}
+			const listed = [...order.keys()].sort(function(left, right): number {
+				return((order.get(left) ?? 0) - (order.get(right) ?? 0));
 			});
 			at += size;
 			const resumesPast = keying.resumesPast;

@@ -1156,6 +1156,40 @@ describe.each(ORDERINGS)('bootstrapping against a simulated peer that %s', { tim
 });
 
 /*
+ * A test that times out fails, but the runner cannot stop its body, which
+ * goes on reading its peer, and moving the clock every test shares, under
+ * the tests after it: the late-commit test timing out under load ended the
+ * passes of the next three at their bound.
+ */
+describe('a simulation whose test timed out', function() {
+	afterEach(function() {
+		vi.useRealTimers();
+	});
+
+	let outlived: Promise<void> | undefined;
+
+	test.fails('runs on past the timeout', { timeout: 50 }, async function() {
+		freezeClock(new Date(NOW));
+		const scenario = new Scenario();
+		liveHistory(scenario.peer, 3000, 10, NOW - HOUR);
+		// Far more updates than the timeout leaves time for, each a turn of the event loop at least.
+		outlived = scenario.periodically(100 * DAY);
+		await outlived;
+	});
+
+	test('leaves the clock to the tests after it', async function() {
+		freezeClock(new Date(NOW));
+		for (let turn = 0; turn < 100; turn++) {
+			await new Promise(setImmediate);
+		}
+
+		expect(Date.now()).toBe(NOW);
+		await expect(outlived).rejects.toThrow('the test that made this has ended');
+		expect(Date.now()).toBe(NOW);
+	});
+});
+
+/*
  * A main network representative keys each vote at the moment it was made,
  * reads about 20 at a time, from 15 to 25 as its storage returns them,
  * lists a staple once per read that holds one of its votes, and runs out of
