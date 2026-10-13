@@ -4,7 +4,7 @@
 
 ## Sources
 
-The document describes version 0.18.7 of `@keetanetwork/keetanet-client`:
+The document describes version 0.18.8 of `@keetanetwork/keetanet-client`:
 
 - **Routes** come from the package's API typings. `api/index.d.ts` declares the route tree `rootTree`: each key is a path segment, `_root` stands for the subtree's own path, a `:name` key is a path parameter, and the methods are the leaves. Every route is served below `/api` [Keeta TS] index.js:62380. `api/node.d.ts`, `api/vote.d.ts` and `api/p2p.d.ts` type the handlers' arguments and results.
 - **Shapes** come from the package's bundle, `client/index.js`. A response body is the handler's result passed through the package's JSON conversion: integers become `0x` and uppercase hexadecimal [Keeta TS] index.js:79568-79581, dates ISO 8601 strings [Keeta TS] index.js:79584-79585, bytes uppercase hexadecimal [Keeta TS] index.js:79587-79591, and library values their own `toJSON` [Keeta TS] index.js:79602-79605. Blocks, votes, quotes and staples at the top of a response also carry their binary encoding in `$binary`, which the client decodes [Keeta TS] index.js:59743, 59790, 59887, 59968, 60170, 60212, 60253, 60535, 60801, 60806, 60914. The document cites the bundle by line wherever it states behavior, and the typings by file where a shape is known only from them.

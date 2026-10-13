@@ -1,12 +1,12 @@
 # Vote-decision cases
 
-`conformance/vote-cases/` holds situations that a Keeta node decides, each with the outcome that `lib.Ledger` from `@keetanetwork/keetanet-client` 0.18.7 produces for it: a temporary vote, a permanent vote, a quote, an added staple, or a specific refusal. A node implementation conforms when it reproduces every case.
+`conformance/vote-cases/` holds situations that a Keeta node decides, each with the outcome that `lib.Ledger` from `@keetanetwork/keetanet-client` 0.18.8 produces for it: a temporary vote, a permanent vote, a quote, an added staple, or a specific refusal. A node implementation conforms when it reproduces every case.
 
 The expectations are recorded by running Keeta's own `Ledger`, never written by hand. Each case carries everything needed to run it again: key seeds, node settings, and every block, vote and staple as bytes. This document defines the format and the replay, so that a replay can be written in any language from the JSON alone.
 
 ## Conventions
 
-- `[Keeta TS] index.js:N` is line N of `client/index.js` in the published `@keetanetwork/keetanet-client` 0.18.7 package.
+- `[Keeta TS] index.js:N` is line N of `client/index.js` in the published `@keetanetwork/keetanet-client` 0.18.8 package.
 - "Must" states a requirement on a replay.
 - Case IDs follow a catalog of the decisions that `Ledger.vote`, `Ledger.quote` and `Ledger.add` make, grouped as the files are. The catalog itself is not published; section 10.1 lists its rows and the cases that cover each.
 - `CONTRACT.md` means `schema/CONTRACT.md`, the storage driver contract, whose rules are cited as D4, D6 and so on.
@@ -30,7 +30,7 @@ Each group of cases is one file, `conformance/vote-cases/<group>.json`:
 A file is one JSON object:
 
 ```json
-{ "format": "slop-node/vote-cases@1", "keetanetClient": "0.18.7", "cases": [ ... ] }
+{ "format": "slop-node/vote-cases@1", "keetanetClient": "0.18.8", "cases": [ ... ] }
 ```
 
 - `format` is always `slop-node/vote-cases@1`.
@@ -338,7 +338,7 @@ C11 itself is an upstream case: it pins only the bounds that every storage must 
 
 ## 6. Upstream behavior the cases pin
 
-These are the decisions an implementation is most likely to get wrong. Each is upstream behavior in 0.18.7, and the cases named pin it.
+These are the decisions an implementation is most likely to get wrong. Each is upstream behavior in 0.18.8, and the cases named pin it.
 
 ### 6.1 Permanence is decided when a vote is parsed
 
@@ -485,7 +485,7 @@ The ledger is Keeta's, but the storage under it during generation is this reposi
 
 ## 9. Upstream version
 
-The corpus pins `@keetanetwork/keetanet-client` 0.18.7, the version in `package.json`, and every file's `keetanetClient` field names it. When the dependency changes, `make test` fails until `make conformance` regenerates the corpus, and the changed decisions show up as a reviewable diff of the files.
+The corpus pins `@keetanetwork/keetanet-client` 0.18.8, the version in `package.json`, and every file's `keetanetClient` field names it. When the dependency changes, `make test` fails until `make conformance` regenerates the corpus, and the changed decisions show up as a reviewable diff of the files.
 
 ## 10. Catalog coverage
 

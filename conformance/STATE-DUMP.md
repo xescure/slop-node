@@ -1,12 +1,12 @@
 # Canonical state dump
 
-A state dump writes the confirmed state that a Keeta ledger holds for a set of accounts as text with one fixed byte form, so that two ledgers in the same state produce the same bytes whatever their storage and whatever language they are written in. `conformance/mainnet/head.state.jsonl` is the dump of the state that `lib.Ledger` from `@keetanetwork/keetanet-client` 0.18.7 reaches after replaying the mainnet head (`MAINNET.md`). A node implementation conforms when its replay of the same staples dumps the same bytes.
+A state dump writes the confirmed state that a Keeta ledger holds for a set of accounts as text with one fixed byte form, so that two ledgers in the same state produce the same bytes whatever their storage and whatever language they are written in. `conformance/mainnet/head.state.jsonl` is the dump of the state that `lib.Ledger` from `@keetanetwork/keetanet-client` 0.18.8 reaches after replaying the mainnet head (`MAINNET.md`). A node implementation conforms when its replay of the same staples dumps the same bytes.
 
 This document defines the format, `slop-node/state-dump@1`, and how a dump is produced from the storage interface alone.
 
 ## Conventions
 
-- `[Keeta TS] index.js:N` is line N of `client/index.js` in the published `@keetanetwork/keetanet-client` 0.18.7 package.
+- `[Keeta TS] index.js:N` is line N of `client/index.js` in the published `@keetanetwork/keetanet-client` 0.18.8 package.
 - "Must" states a requirement on a producer of a dump.
 - The storage interface is upstream's `LedgerStorageAPI`. `schema/CONTRACT.md` specifies each of its members.
 
@@ -206,4 +206,4 @@ The file is generated, never edited. `make conformance` writes it from the repla
 - each line of the file is valid under the schema, the records are in the order of section 4, and no two share a key
 - the record counts of section 3 are those of the file
 
-The file pins 0.18.7, the version in `package.json`. When the dependency changes, `make test` fails if the state it reaches changes, until `make conformance` regenerates the file and the difference shows up as a reviewable diff.
+The file pins 0.18.8, the version in `package.json`. When the dependency changes, `make test` fails if the state it reaches changes, until `make conformance` regenerates the file and the difference shows up as a reviewable diff.

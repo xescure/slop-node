@@ -4,7 +4,7 @@
 
 ## Conventions
 
-- `[Keeta TS] index.js:N` is line N of `client/index.js` in the published `@keetanetwork/keetanet-client` 0.18.7 package.
+- `[Keeta TS] index.js:N` is line N of `client/index.js` in the published `@keetanetwork/keetanet-client` 0.18.8 package.
 - `[Keeta TS 0.18.4] index.js:N` is line N of the same file in the published 0.18.4 package, and likewise for `[Keeta TS 0.18.5]`, `[Keeta TS 0.18.0]` and `[Keeta TS 0.16.2]`.
 - A staple is a `VoteStaple`: the votes of a quorum of representatives together with the blocks they confirm.
 
@@ -33,7 +33,7 @@ The edge-case file holds staples from later in the chain, which a node that repl
 
 A replay that decodes and verifies every staple, as Keeta's `Vote.Staple` does, must accept all of them.
 
-The recipient-access file holds three staples of the same bootstrap endpoint, as the representatives serve them, from an airdrop that mainnet confirmed on 2025-12-30. Each has two blocks of one account: one sends one unit of a token to each of 500 accounts, the other sends the base token to a few. None of the 500 holds a permission on the token, and the token sets no default permission. Section 6.4 explains why a 0.18.7 ledger refuses to vote on them.
+The recipient-access file holds three staples of the same bootstrap endpoint, as the representatives serve them, from an airdrop that mainnet confirmed on 2025-12-30. Each has two blocks of one account: one sends one unit of a token to each of 500 accounts, the other sends the base token to a few. None of the 500 holds a permission on the token, and the token sets no default permission. Section 6.4 explains why a ledger of 0.18.7 or later refuses to vote on them.
 
 ## 3. Capture
 
@@ -73,7 +73,7 @@ The edge-case staples follow the head chronologically but not directly: the bloc
 
 A representative that follows mainnet is also asked to vote on what it follows. Before each staple of the head is added, the replay's representative ledger is asked for a vote on the staple's blocks, `Ledger.vote(staple.blocks)`, with the clock at the staple's timestamp. A vote it gives is a temporary vote over exactly those blocks. Adding the staple next confirms the same blocks, which removes the vote's side-ledger write.
 
-The rules a staple was voted under are those of the release its representatives ran when they voted, and the head was voted in September 2025, before any 0.18 release. The 0.18.7 ledger refuses 466 of the 2,037 staples, every one with `LEDGER_INVALID_PERMISSIONS`. `mainnet/shadow-vote-exceptions.json` lists each refused staple by blocks hash, with its reason, the error code and the refused requirement: its principal, entity, target when it has one, and its base flags and external offsets. A refusal is assigned a reason from the requirement it names: the refusal message gives the principal, entity, target and flags of the first requirement not met [Keeta TS] index.js:70909-70915, and that requirement is found among those `computeEffectOfBlocks` records for the staple. A refusal that no reason explains, or that more than one explains, is a failure, not an exception.
+The rules a staple was voted under are those of the release its representatives ran when they voted, and the head was voted in September 2025, before any 0.18 release. A ledger of 0.18.7 or later refuses 466 of the 2,037 staples, every one with `LEDGER_INVALID_PERMISSIONS`. `mainnet/shadow-vote-exceptions.json` lists each refused staple by blocks hash, with its reason, the error code and the refused requirement: its principal, entity, target when it has one, and its base flags and external offsets. A refusal is assigned a reason from the requirement it names: the refusal message gives the principal, entity, target and flags of the first requirement not met [Keeta TS] index.js:70909-70915, and that requirement is found among those `computeEffectOfBlocks` records for the staple. A refusal that no reason explains, or that more than one explains, is a failure, not an exception.
 
 | Reason | Staples |
 |---|---|
@@ -87,7 +87,7 @@ Two of the reasons are permission fixes between 0.18.4 and 0.18.7. Both fixed fo
 
 ### 6.1 `self-requirement-return`
 
-The permission requirements of an operation are computed as a list, and a requirement whose entity is its own principal, an account acting on itself, needs no check. At such a requirement 0.18.4 returns from the whole list [Keeta TS 0.18.4] index.js:68490-68492, so the requirements after it are never recorded. 0.18.7 skips only that requirement [Keeta TS] index.js:69682-69684.
+The permission requirements of an operation are computed as a list, and a requirement whose entity is its own principal, an account acting on itself, needs no check. At such a requirement 0.18.4 returns from the whole list [Keeta TS 0.18.4] index.js:68490-68492, so the requirements after it are never recorded. 0.18.7 and later skip only that requirement [Keeta TS] index.js:69682-69684.
 
 A `SEND` lists, in order, the sender's `ACCESS` on the token and the recipient's `ACCESS` on the token. When the recipient is a storage account, it then lists the token's `STORAGE_CAN_HOLD` on the storage account and the sender's `STORAGE_DEPOSIT` on it for the token [Keeta TS] index.js:69497-69528. When a token account sends its own token, the first requirement is a self requirement, so 0.18.4 records none of the others. A refusal has this reason when every `SEND` of the staple that lists the refused requirement lists it after a self requirement, and those `SEND`s account for all of its flags.
 
@@ -95,7 +95,7 @@ In the head, 464 of these staples hold a token block that mints and sends to a s
 
 ### 6.2 `same-staple-grant-scope`
 
-A requirement is not recorded when an earlier operation of the staple already granted the principal a permission that meets it. 0.18.4 accepts any such grant that holds the flags, whatever its entity, target or method [Keeta TS 0.18.4] index.js:67901-67906. 0.18.7 accepts only an `ADD` or `SET` grant on the requirement's entity, targeted at the requirement's target or at the whole entity [Keeta TS] index.js:69071-69093. A refusal has this reason when a block before the first one that records the refused requirement granted the principal a permission holding all of its flags. No staple of the head has it.
+A requirement is not recorded when an earlier operation of the staple already granted the principal a permission that meets it. 0.18.4 accepts any such grant that holds the flags, whatever its entity, target or method [Keeta TS 0.18.4] index.js:67901-67906. 0.18.7 and later accept only an `ADD` or `SET` grant on the requirement's entity, targeted at the requirement's target or at the whole entity [Keeta TS] index.js:69071-69093. A refusal has this reason when a block before the first one that records the refused requirement granted the principal a permission holding all of its flags. No staple of the head has it.
 
 ### 6.3 `trusted-account-genesis`
 
@@ -103,7 +103,7 @@ The first staple of the chain opens the network address and the base token, and 
 
 ### 6.4 `send-recipient-access`
 
-Every release from 0.10.5 through 0.16.2, the last before 0.18.0, lists a single requirement for a `SEND` to an account that is not a storage account: the sender's `ACCESS` on the token [Keeta TS 0.16.2] index.js:68008-68015. 0.18.0 also lists the recipient's `ACCESS` on the token [Keeta TS 0.18.0] index.js:68263-68279, as 0.18.4 and 0.18.7 do [Keeta TS] index.js:69497-69510. The npm registry published 0.18.0 at 2026-05-23T16:44:23.024Z, so no representative ran it for a vote older than that, and a staple whose every vote is older was voted without the recipient's requirement.
+Every release from 0.10.5 through 0.16.2, the last before 0.18.0, lists a single requirement for a `SEND` to an account that is not a storage account: the sender's `ACCESS` on the token [Keeta TS 0.16.2] index.js:68008-68015. 0.18.0 also lists the recipient's `ACCESS` on the token [Keeta TS 0.18.0] index.js:68263-68279, as 0.18.4, 0.18.7 and 0.18.8 do [Keeta TS] index.js:69497-69510. The npm registry published 0.18.0 at 2026-05-23T16:44:23.024Z, so no representative ran it for a vote older than that, and a staple whose every vote is older was voted without the recipient's requirement.
 
 Every requirement of an operation has the block's account or its signer as its principal, except two that a `SEND` lists: the recipient's `ACCESS` on the token, and the token's `STORAGE_CAN_HOLD` on a storage account [Keeta TS] index.js:69494-69639, 69656-69667. A requirement on a token whose principal is neither the account nor the signer of any block of the staple was therefore recorded only for recipients. A refusal has this reason when every vote of the staple is older than 0.18.0's publication, the refused requirement is `ACCESS` alone with no target, its principal is neither the account nor the signer of any block of the staple, and a `SEND` of the staple lists it as its recipient's after a requirement that is not a self requirement. When every `SEND` that lists it does so after a self requirement, the refusal is `self-requirement-return`'s instead.
 
@@ -119,7 +119,7 @@ On the main network, staple `1BE261B781FE0DF70EAC7FA5F6076197416F0A5AB01D42FD5D4
 
 ### 6.6 Following is unaffected
 
-`Ledger.add` checks the voting weight of a staple's votes, computes its effects and applies them [Keeta TS] index.js:70397-70444. It does not check permission requirements: only a vote does [Keeta TS] index.js:71207-71215, 71025-71058. The fixes and the added requirement change only which requirements are recorded, so a 0.18.7 node follows mainnet as before: every staple of the head is added, with and without the shadow votes, and both replays reach the same state.
+`Ledger.add` checks the voting weight of a staple's votes, computes its effects and applies them [Keeta TS] index.js:70397-70444. It does not check permission requirements: only a vote does [Keeta TS] index.js:71207-71215, 71025-71058. The fixes and the added requirement change only which requirements are recorded, so a node of 0.18.7 or later follows mainnet as before: every staple of the head is added, with and without the shadow votes, and both replays reach the same state.
 
 ## 7. Edge cases
 
@@ -160,7 +160,7 @@ The file equals `mainnet/head.state.jsonl` without its `idempotent` records, byt
 The replay shows three things about the head file:
 
 - **Following.** Every staple applies and none stays deferred. A ledger on the in-memory driver and one on the Postgres driver end in byte-identical state, and that state, the ledger checksum included, equals `mainnet/head.state.jsonl`.
-- **Voting.** The 0.18.7 ledger votes for every staple except 466, and each of those has one named reason (section 6). The 465 of `self-requirement-return` are refused because of the change between 0.18.4 and 0.18.7 that section 6.1 cites; the genesis staple is refused by a ledger of either version, and on mainnet no representative was asked to vote on it, since its only vote is the initial trusted account's (section 6.3).
+- **Voting.** A ledger of 0.18.7 or later votes for every staple except 466, and each of those has one named reason (section 6). The 465 of `self-requirement-return` are refused because of the change between 0.18.4 and 0.18.7 that section 6.1 cites; the genesis staple is refused by a ledger of either version, and on mainnet no representative was asked to vote on it, since its only vote is the initial trusted account's (section 6.3).
 - **A second implementation.** The independent implementation of section 8 reaches the same state for every record kind except `idempotent`, which it does not store.
 
 It does not show:

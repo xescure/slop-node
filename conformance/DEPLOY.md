@@ -1,6 +1,6 @@
 # Deploying the node
 
-This document states what an operator needs to run `slop-node` as a service: the image, its configuration, the database, the network in front of it, and the rules that keep a node off networks it must not vote on. `[Keeta TS] index.js:N` is line N of `client/index.js` in the published `@keetanetwork/keetanet-client` 0.18.7 package.
+This document states what an operator needs to run `slop-node` as a service: the image, its configuration, the database, the network in front of it, and the rules that keep a node off networks it must not vote on. `[Keeta TS] index.js:N` is line N of `client/index.js` in the published `@keetanetwork/keetanet-client` 0.18.8 package.
 
 ## 1. The image
 

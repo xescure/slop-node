@@ -1,13 +1,13 @@
 # Storage driver contract
 
-`lib.Ledger` from `@keetanetwork/keetanet-client` 0.18.7 keeps all of a node's ledger state in a storage driver that implements `LedgerStorageAPI`. The ledger checks quorum, permissions, balances and vote safety itself, but each of those checks reads through the driver, so a driver that answers one read wrongly can make the ledger sign a conflicting vote, refuse a valid staple or apply one twice.
+`lib.Ledger` from `@keetanetwork/keetanet-client` 0.18.8 keeps all of a node's ledger state in a storage driver that implements `LedgerStorageAPI`. The ledger checks quorum, permissions, balances and vote safety itself, but each of those checks reads through the driver, so a driver that answers one read wrongly can make the ledger sign a conflicting vote, refuse a valid staple or apply one twice.
 
 `LedgerStorageDriverBase` (`src/ledger/storage/base.ts`) implements the members whose logic is shared by every driver. `MemoryLedgerStorage` (`src/ledger/storage/memory/driver.ts`) is the reference driver. `PostgresLedgerStorage` (`src/ledger/storage/postgres/driver.ts`) keeps the ledger in the Postgres schema of section 6, which any other implementation of that schema shares. The shared suite (`src/ledger/storage/drivers.test.ts`, cases in `src/ledger/storage/suite/`) runs one body against every driver, and the vote-decision corpus (`src/conformance/corpus.test.ts`) replays every case on each of them.
 
 ## Conventions
 
 - "Must" states a requirement on every driver.
-- `[Keeta TS] index.js:N` is line N of `client/index.js` in the published `@keetanetwork/keetanet-client` 0.18.7 package.
+- `[Keeta TS] index.js:N` is line N of `client/index.js` in the published `@keetanetwork/keetanet-client` 0.18.8 package.
 - "Tested by" names the suite cases that check a rule, as `file: "case name"`. Files are in `src/ledger/storage/suite/` unless a path is given.
 - "Untested" marks a requirement that no case checks. A driver can break it and still pass the suite, so it is not guaranteed by passing.
 - "(provisional: confirmed by the live parity checks)" marks a choice the upstream code leaves open. Comparison with a node of the live network can change it.

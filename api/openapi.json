@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "KeetaNet node HTTP API",
-    "version": "0.18.7",
-    "description": "The HTTP API of a KeetaNet node as described by version 0.18.7 of @keetanetwork/keetanet-client. The routes are those of the \"rootTree\" in the package's API typings (api/index.d.ts); the request and response shapes are the typed values as the package serializes them. Citations name the package's bundle, client/index.js, by line ([Keeta TS] index.js:N), or its typings by file. A response body is the handler's result passed through the package's JSON conversion with binary encodings added, which is why blocks, votes, quotes and staples at the top of a response carry \"$binary\" (the client decodes them from it, [Keeta TS] index.js:59743, 59790, 59887, 59968, 60170, 60212, 60253, 60535, 60801, 60806, 60914). Every route is served below /api [Keeta TS] index.js:62380."
+    "version": "0.18.8",
+    "description": "The HTTP API of a KeetaNet node as described by version 0.18.8 of @keetanetwork/keetanet-client. The routes are those of the \"rootTree\" in the package's API typings (api/index.d.ts); the request and response shapes are the typed values as the package serializes them. Citations name the package's bundle, client/index.js, by line ([Keeta TS] index.js:N), or its typings by file. A response body is the handler's result passed through the package's JSON conversion with binary encodings added, which is why blocks, votes, quotes and staples at the top of a response carry \"$binary\" (the client decodes them from it, [Keeta TS] index.js:59743, 59790, 59887, 59968, 60170, 60212, 60253, 60535, 60801, 60806, 60914). Every route is served below /api [Keeta TS] index.js:62380."
   },
   "jsonSchemaDialect": "https://spec.openapis.org/oas/3.1/dialect/base",
   "paths": {
