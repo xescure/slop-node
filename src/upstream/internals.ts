@@ -57,7 +57,7 @@ export const KVInternals: KVInternalsAPI = KeetaNet.lib.KVInternals;
 
 /** The parts of a socket of the bundled "ws" server that the node and its tests use. */
 export type BundledWebSocket = {
-	once(event: 'close' | 'message', listener: () => void): unknown;
+	once(event: 'message', listener: () => void): unknown;
 	terminate(): void;
 };
 

@@ -561,3 +561,26 @@ or requests it takes, how much memory it keeps, or a count it logs.
 - src/api/route.ts:156:70-156:72 StringLiteral "\"Stryker was here!\"" equivalent: the index stays below the length of both paths, so the fallback is never read.
 - src/api/route.ts:174:36-174:39 StringLiteral "\"\"" equivalent: a segment's rank is a one-digit kind, 0 only before a fixed text and 1 alone for a parameter, and the joined ranks are split by '/', which no segment holds, so the match keys stay distinct without the colon.
 - src/api/route.ts:175:10-175:13 StringLiteral "\"\"" equivalent: routeTable refuses a segment holding a colon that no backslash escapes before it reads a match key, so each colon that joins ranks follows a kind digit and each colon of a text follows a backslash, and the joined ranks split apart again without the slash.
+
+## p2p
+
+The peer-to-peer surface and what keeps it closed. No entry weakens the
+closure: every mutant of the closure, the write mode that votes, and the
+networks a node's ID names is killed, and those left are the unreachable
+defaults of its switches and the wording of its refusals.
+
+- src/api/p2p.ts:79:6-79:17 ConditionalExpression "false" equivalent: a refusal of the parser carries no type [Keeta TS] index.js:72764-72775, so the message read from it has none, which republishedMessage refuses as a type it does not act on.
+- src/api/p2p.ts:79:19-81:3 BlockStatement "{}" equivalent: a refusal of the parser carries no type [Keeta TS] index.js:72764-72775, so the message read from it has none, which republishedMessage refuses as a type it does not act on.
+- src/api/p2p.ts:88:9-88:34 ConditionalExpression "true" equivalent: an absent TTL is not at least 1, so the message is not relayed either way.
+- src/api/p2p.ts:131:3-132:22 ConditionalExpression "default:" equivalent: without its return the default falls out of the switch, and the function answers undefined all the same.
+- src/node/config.ts:110:3-111:30 ConditionalExpression "default:" equivalent: the default of a switch that has handled every write mode is unreachable.
+- src/node/config.ts:535:3-536:22 ConditionalExpression "case 'local':" equivalent: a local selection falling through to the case of the known networks names no alias, which no public network matches, so it still names none.
+- src/node/config.ts:541:3-542:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
+- src/node/config.ts:971:3-972:41 ConditionalExpression "default:" equivalent: the default of a switch that has handled every write mode is unreachable.
+- src/node/config.ts:1003:6-1003:22 EqualityOperator "words.length <= 2" equivalent: alternatives is given one word or three, never two: the write modes that do not vote, and those open on a network, which are no-voting alone on main and test and three on dev and staging.
+- src/node/config.ts:1004:21-1004:23 StringLiteral "\"Stryker was here!\"" equivalent: a list of fewer than two words places no separator.
+- src/node/config.ts:1006:69-1006:71 StringLiteral "\"Stryker was here!\"" equivalent: the last word alone places no separator.
+- src/node/config.ts:1039:3-1040:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both reasons for a closure is unreachable.
+- src/node/peer-store.ts:57:44-57:158 ObjectLiteral "{}" equivalent: the loop below sets the count of every arena of PEER_ARENAS, so no starting zero is ever read.
+- src/node/peers.ts:60:26-62:4 BlockStatement "{}" harmless: the set keeps each socket's attachment once settled, which close() then waits for at once; only the memory held differs.
+- src/node/peers.ts:61:4-61:38 CallExpression ";" harmless: the set keeps each socket's attachment once settled, which close() then waits for at once; only the memory held differs.

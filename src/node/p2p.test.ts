@@ -237,6 +237,12 @@ async function advertisementOfAnotherAccount(node: LocalNode): Promise<JSONSeria
 	return({ ...genuine, key: keyOf(STRANGER) });
 }
 
+/** The node's advertisement naming a key that is no account's, which the advertisement parser throws on [Keeta TS] index.js:71945. */
+async function advertisementOfNoAccount(node: LocalNode): Promise<JSONSerializableObject> {
+	const genuine = await node.switch.getOutgoingGreetingInfo();
+	return({ ...genuine, key: 'keeta_no_account' });
+}
+
 function endpointsOf(node: LocalNode): { readonly api: string; readonly p2p: string } {
 	const endpoints = node.config.endpoints;
 	if (endpoints?.api === undefined || endpoints.p2p === undefined) {
@@ -286,6 +292,11 @@ function relayedTestMessage(): Promise<string> {
 
 function unknownMessage(): Promise<string> {
 	return(Promise.resolve(JSON.stringify({ id: 'unknown', unknown: 'hello', ttl: 0 })));
+}
+
+/** A message the switch's parser throws on, as it reads a field of a JSON null [Keeta TS] index.js:72759-72760. */
+function nullMessage(): Promise<string> {
+	return(Promise.resolve('null'));
 }
 
 async function relayedPeerMessage(node: LocalNode): Promise<string> {
@@ -521,6 +532,28 @@ describe('peers over the /p2p WebSocket', function() {
 		await expect(opened(socket)).rejects.toThrow('did not open');
 	});
 
+	/*
+	 * The switch registers a socket that closes before its greeting only after
+	 * unregistering it [Keeta TS] index.js:72324-72329, 72708-72731; were it to
+	 * keep the connection, the timer that idles its connections out would stay
+	 * until it let go of its last [Keeta TS] index.js:72726-72730, 72743-72748.
+	 */
+	test('lets go of a socket that closes before its greeting once the switch has taken it', async function() {
+		// Read-only, the node starts no bootstrap, whose timer would stay too, and can hold no genesis.
+		const running = await nodes.start({ ledgerWriteMode: 'read-only', genesis: 'absent' });
+		const handles = watchOpenHandles();
+		const register = vi.spyOn(running.node.switch, 'registerConnection');
+		const socket = await rawPeerSocket(running.node);
+		const closing = closed(socket);
+
+		socket.close();
+		await closing;
+		await register.mock.results[0]?.value;
+
+		expect(register).toHaveBeenCalledTimes(1);
+		expect(await handles.open()).toEqual([]);
+	});
+
 	test('refuses a frame over 16 MiB, and hands one of exactly 16 MiB to the switch', async function() {
 		const { second } = await startPair();
 		const socket = await rawPeerSocket(second.node);
@@ -676,7 +709,8 @@ describe('peers over HTTP republish', function() {
 
 	test.each([
 		{ forgery: 'an advertisement altered after signing', advertise: alteredAdvertisement },
-		{ forgery: 'an advertisement for an account without its key', advertise: advertisementOfAnotherAccount }
+		{ forgery: 'an advertisement for an account without its key', advertise: advertisementOfAnotherAccount },
+		{ forgery: 'an advertisement naming a key that is no account', advertise: advertisementOfNoAccount }
 	])('refuses a message whose greeting is $forgery, and never makes a peer of it', async function({ advertise }) {
 		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
 		const handle = vi.spyOn(second.node.switch, 'recvMessageFromPeer');
@@ -728,6 +762,21 @@ describe('peers over HTTP republish', function() {
 		await messages.settled();
 
 		expect(recorded).toEqual([await first.node.switch.getOutgoingGreetingInfo()]);
+	});
+
+	test('handles the greeting of each representative that posts to it', async function() {
+		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
+		const stranger = await startStranger();
+		const recorded = recordedPotentialPeers(second.node);
+		const messages = trackedMessages(second.node);
+		const greetings = [await first.node.switch.getOutgoingGreetingInfo(), await stranger.node.switch.getOutgoingGreetingInfo()];
+
+		for (const greeting of greetings) {
+			await postJSON(second, '/p2p/message', { message: await unknownMessage(), greeting });
+			await messages.settled();
+		}
+
+		expect(recorded).toEqual(greetings);
 	});
 
 	test('handles the staples one representative posts in the order they arrive, while the node still answers its greeting', async function() {
@@ -801,7 +850,8 @@ describe('peers over HTTP republish', function() {
 		{ refused: 'a message of a type the node does not act on', message: unknownMessage },
 		{ refused: 'a peer to pass on to every peer', message: relayedPeerMessage },
 		{ refused: 'a peer whose advertisement was altered after signing', message: alteredPeerMessage },
-		{ refused: 'a peer that is no representative', message: listenerPeerMessage }
+		{ refused: 'a peer that is no representative', message: listenerPeerMessage },
+		{ refused: 'a message the switch cannot read', message: nullMessage }
 	])('refuses $refused', async function({ message }) {
 		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
 		const delivered = deliveredTypes(second.node);
@@ -1051,6 +1101,20 @@ describe('stopping', function() {
 		expect(await first.node.addToLedger(await sendStaple(first.network, 10n))).toBe(true);
 
 		expect(await logged).toEqual(['P2P', 'Handling a message from a peer failed:', failure]);
+	});
+
+	test('logs a message posted over HTTP that the node fails to handle, rather than leaving the failure to end the process', async function() {
+		const { first, second } = await startPair({ p2p: { useHTTPRepublish: true } });
+		const greeting = await first.node.switch.getOutgoingGreetingInfo();
+		const failure = new Error('the switch failed to handle the message');
+		vi.spyOn(second.node.switch, 'recvMessageFromPeer').mockRejectedValue(failure);
+		const logged = vi.spyOn(second.node.log, 'error');
+
+		expect((await postJSON(second, '/p2p/message', { message: peerMessage('failing', greeting, 0), greeting })).body).toEqual({ success: true });
+
+		await vi.waitFor(function() {
+			expect(logged).toHaveBeenCalledWith('P2P', 'Handling a message posted over HTTP failed:', failure);
+		});
 	});
 
 	test('stops waiting for the messages peers sent after a bound, and says so', async function() {

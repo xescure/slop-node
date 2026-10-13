@@ -9,7 +9,7 @@ import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { requireAt } from '../ledger/storage/suite/support.js';
 import { deriveTestKeys, TEST_NETWORK_SEEDS } from '../testing/network.js';
 import { bootstrapEndpointsOf, bootstrapPacingOf } from './bootstrap-peers.js';
-import { ConfigError, DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, formatManualPeer, getConfigFromEnv, LEDGER_WRITE_MODES, localNodeConfig, LOG_FORMATS, MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, MAX_FEE_SEED_ACCOUNTS } from './config.js';
+import { ConfigError, DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, formatManualPeer, getConfigFromEnv, LEDGER_WRITE_MODES, localNodeConfig, LOG_FORMATS, MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, MAX_FEE_SEED_ACCOUNTS, nodeNetworkClosedToP2P, publicNetworkOf } from './config.js';
 import type { ConfigProblem, Environment, EnvironmentConfig, LedgerWriteMode } from './config.js';
 import { LocalNode } from './local.js';
 import { MAX_PEER_LIMIT } from './peer-limits.js';
@@ -357,6 +357,44 @@ describe('the safety rule', function() {
 
 	test('says why', function() {
 		expect(messageOf({ KEETANET_LOCAL_NODE_NETWORK: 'test' })).toBe('the test network is public, so the node may not vote on it: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to read-only, bootstrap-only or no-voting (it is read-write)');
+	});
+});
+
+/*
+ * A node built in code is closed by its network ID (src/node/local.ts,
+ * src/api/p2p.ts): main and test to every mode but no-voting, dev and staging
+ * to the one that votes, and the operator's own network, or one the client
+ * does not know, to none.
+ */
+describe('the closure of a node\'s network to its peers', function() {
+	const closures: Record<Networks, readonly LedgerWriteMode[]> = {
+		main: ['read-write', 'read-only', 'bootstrap-only'],
+		test: ['read-write', 'read-only', 'bootstrap-only'],
+		dev: ['read-write'],
+		staging: ['read-write']
+	};
+
+	const matrix = NetworkConfig.networksArray.flatMap(function(network) {
+		return(LEDGER_WRITE_MODES.map(function(mode) {
+			return({ network, mode, closed: closures[network].includes(mode) });
+		}));
+	});
+
+	test.each(matrix)('closes $network in $mode mode: $closed', function({ network, mode, closed }) {
+		let expected: Networks | undefined;
+		if (closed) {
+			expected = network;
+		}
+		expect(nodeNetworkClosedToP2P(NetworkConfig.NetworkIDs[network], mode)).toBe(expected);
+	});
+
+	test.each(LEDGER_WRITE_MODES)('closes neither the local network nor one the client does not know in %s mode', function(mode) {
+		expect(nodeNetworkClosedToP2P(0n, mode)).toBeUndefined();
+		expect(nodeNetworkClosedToP2P(12345n, mode)).toBeUndefined();
+	});
+
+	test('names no public network for the local one', function() {
+		expect(publicNetworkOf({ kind: 'local', network: 0n })).toBeUndefined();
 	});
 });
 

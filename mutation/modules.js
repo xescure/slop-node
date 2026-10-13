@@ -99,6 +99,40 @@ const MODULES = {
 		tests: ['src/api/*.test.ts'],
 		ignorers: [],
 		selectedCases: {}
+	},
+	/*
+	 * The peer-to-peer surface and what keeps it closed: the routes peers
+	 * post to, the /p2p WebSocket, the peers the store remembers and the
+	 * bounds on what peers send, with the closure of a network to them in
+	 * config.ts, which is mutated by its lines, so an edit above them moves
+	 * the ranges: the write mode that votes, the networks a selection names,
+	 * and the closure itself and its refusals. The rest of config.ts is its
+	 * own module. The API's route-table case imports the table as it runs,
+	 * so that a route of p2p.ts broken as it loads fails that case rather
+	 * than every file that loads the node.
+	 */
+	p2p: {
+		mutate: [
+			'src/api/p2p.ts',
+			'src/node/peers.ts',
+			'src/node/peer-store.ts',
+			'src/node/peer-limits.ts',
+			'src/node/config.ts:95-117',
+			'src/node/config.ts:498-509',
+			'src/node/config.ts:533-544',
+			'src/node/config.ts:936-1042'
+		],
+		tests: [
+			'src/node/p2p.test.ts',
+			'src/node/peers.test.ts',
+			'src/node/peer-store.test.ts',
+			'src/node/configured-peers.test.ts',
+			'src/node/config.test.ts',
+			'src/node/local.test.ts',
+			'src/api/index.test.ts'
+		],
+		ignorers: [],
+		selectedCases: {}
 	}
 };
 

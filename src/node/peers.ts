@@ -25,7 +25,7 @@ export class PeerServer {
 	readonly #switch: P2PSwitch;
 	readonly #log: Logger;
 	/** Sockets the switch has not yet taken: it waits for each one's greeting first [Keeta TS] index.js:72708. */
-	readonly #attaching = new Set<Promise<void>>();
+	readonly #attaching = new Set<Promise<unknown>>();
 
 	constructor(server: http.Server, p2pSwitch: P2PSwitch, log: Logger, maxSockets: number) {
 		this.#switch = p2pSwitch;
@@ -50,20 +50,12 @@ export class PeerServer {
 	/**
 	 * A socket that closes before its greeting is unregistered by the switch
 	 * before the switch has registered it, which it then does
-	 * [Keeta TS] index.js:72324-72329, 72708-72731, so the closed connection
-	 * would stay among the switch's connections, with the timer that idles
-	 * them out; it is unregistered again once registered.
+	 * [Keeta TS] index.js:72324-72329, 72708-72731; the node's SwitchConnections
+	 * unregisters it once registered (src/node/connections.ts), as it does the
+	 * sockets the switch dials.
 	 */
 	#attach(socket: BundledWebSocket, request: http.IncomingMessage): void {
-		let closed = false;
-		socket.once('close', function(): void {
-			closed = true;
-		});
-		const attaching = P2PInternals.P2PWebSocket.connectToSwitch(socket, this.#switch, request.socket).then(async (connection): Promise<void> => {
-			if (closed) {
-				await this.#switch.unregisterConnection(connection);
-			}
-		}).catch((error: unknown): void => {
+		const attaching = P2PInternals.P2PWebSocket.connectToSwitch(socket, this.#switch, request.socket).catch((error: unknown): void => {
 			this.#log.error(LOG_SOURCE, 'Attaching a peer\'s socket to the switch failed:', error);
 		}).finally((): void => {
 			this.#attaching.delete(attaching);
