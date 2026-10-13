@@ -90,6 +90,15 @@ describe('the JSON log format', function() {
 		})).toEqual([{ level: 'info', message: 'listening', time: NOW.toISOString(), from: 'API' }]);
 	});
 
+	test('leaves out the request ID of an entry logged with a null request', async function() {
+		const { log, written } = capture({ format: 'json' });
+		log.info({ currentRequestInfo: null }, 'API', 'listening');
+		await log.sync();
+		expect(written.map(function(line): unknown {
+			return(JSON.parse(line.printed));
+		})).toEqual([{ level: 'info', message: 'listening', time: NOW.toISOString(), from: 'API' }]);
+	});
+
 	test('keeps an error\'s message in the message, and its stack and error ID in fields of their own', async function() {
 		const { log, written } = capture({ format: 'json' });
 		const failure = new Error('check-ins are refused', { cause: new Error('the trigger raised') });

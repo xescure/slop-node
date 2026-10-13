@@ -1,6 +1,6 @@
 import { inspect } from 'node:util';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import type { LogEntry, LogTarget } from '@keetanetwork/keetanet-client/lib/log/common.js';
+import type { LogEntry, LogEntryFilled, LogTarget } from '@keetanetwork/keetanet-client/lib/log/common.js';
 import type { LogLevel, LogTargetLevel } from '@keetanetwork/keetanet-client/lib/log/index.js';
 import { assertNever } from '../util/assert-never.js';
 import type { LogSettings } from './config.js';
@@ -139,7 +139,7 @@ export class JSONLogTarget implements LogTarget {
 		this.#now = config.now;
 	}
 
-	emitLogs(logs: LogEntry[]): Promise<void> {
+	emitLogs(logs: (LogEntry | LogEntryFilled)[]): Promise<void> {
 		for (const entry of logs) {
 			if (!writesLevel(this.logLevel, entry.level) || (this.filter !== null && !this.filter.test(entry.from))) {
 				continue;

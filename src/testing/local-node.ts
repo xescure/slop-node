@@ -1,6 +1,6 @@
 import { afterEach, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import type { LogEntry, LogTarget } from '@keetanetwork/keetanet-client/lib/log/common.js';
+import type { LogEntry, LogEntryFilled, LogTarget } from '@keetanetwork/keetanet-client/lib/log/common.js';
 import type { NodeConfig } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { LocalNode as DeclaredLocalNode, LocalNodeConfig } from '@keetanetwork/keetanet-client/lib/node/local.js';
 import type { LedgerStorageDriverBase } from '../ledger/storage/base.js';
@@ -66,7 +66,7 @@ function capturingTarget(logs: LogEntry[]): LogTarget {
 	return({
 		logLevel: 'ALL',
 		filter: null,
-		emitLogs: function(entries: LogEntry[]): Promise<void> {
+		emitLogs: function(entries: (LogEntry | LogEntryFilled)[]): Promise<void> {
 			logs.push(...entries);
 			return(Promise.resolve());
 		}
