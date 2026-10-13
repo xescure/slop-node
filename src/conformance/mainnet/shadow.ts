@@ -314,8 +314,8 @@ const RECIPIENT_ACCESS_RELEASE = new Date('2026-05-23T16:44:23.024Z');
 /*
  * Every release from 0.10.5 through 0.16.2 lists only the sender's access on
  * the token for a SEND [Keeta TS 0.16.2] index.js:68008-68015; 0.18.0 adds the
- * recipient's [Keeta TS 0.18.0] index.js:68263-68279, as 0.18.7 does
- * [Keeta TS] index.js:69497-69510. No representative can have run 0.18.0
+ * recipient's [Keeta TS 0.18.0] index.js:68263-68279, as 0.18.4, 0.18.7 and
+ * 0.18.8 do [Keeta TS] index.js:69497-69510. No representative can have run 0.18.0
  * before it was published, so a staple whose every vote is older was voted
  * without it. Only a
  * SEND names an account other than a block's own or its signer as the

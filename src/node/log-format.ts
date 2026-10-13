@@ -125,7 +125,7 @@ type JSONLogTargetConfig = {
 	readonly now: () => Date;
 };
 
-/** Writes each entry as one JSON object, filtered by level and source as upstream's console target filters them [Keeta TS] index.js:71691-71716. */
+/** Writes each entry as one JSON object, filtered by level and by its `from` as upstream's console target filters it [Keeta TS] index.js:71691-71716; upstream's filter also tests the entry's `fromString`, which differs from `from` only for an entry logged with `detailedFrom`, and none of the bundle's code sets one. */
 export class JSONLogTarget implements LogTarget {
 	readonly logLevel: LogTargetLevel;
 	readonly filter: RegExp | null;

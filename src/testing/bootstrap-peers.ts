@@ -359,7 +359,7 @@ export type ReadingRule = { readonly votesPerRead: number; readonly resumesPast:
  * each read's staples but those the filter names, up to the limit, and
  * answers for a block the votes on it and each block they cover, as the
  * client asks for a block's staple [Keeta TS] index.js:59799-59839,
- * 60878-60923, 59775-59793.
+ * 60878-60923, 59775-59792.
  */
 export async function startReadingPeer(rule: ReadingRule): Promise<ReadingPeer> {
 	const applied: VoteStaple[] = [];

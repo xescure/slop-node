@@ -187,7 +187,7 @@ export async function request(running: Pick<RunningLocalNode, 'apiURL'>, path: s
 	return({ status: response.status, contentType: response.headers.get('content-type'), text, body });
 }
 
-/** A POST of a JSON body, as the client sends one [Keeta TS] index.js:60582-60585, 60609-60617. */
+/** A POST of a JSON body, as the client sends one [Keeta TS] index.js:60582-60585, 60610-60618; upstream's client also sends `accept: application/vnd.keeta.binary+json`, which our node does not negotiate. */
 export function postJSON(running: Pick<RunningLocalNode, 'apiURL'>, path: string, body: unknown): Promise<HTTPAnswer> {
 	return(request(running, path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }));
 }

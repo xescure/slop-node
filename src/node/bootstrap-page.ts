@@ -237,7 +237,7 @@ function votesOf(endpoint: string, parsed: unknown): Vote[] {
 	}));
 }
 
-/** The block a representative answers it holds, nothing when it holds none [Keeta TS] index.js:59775-59793. */
+/** The block a representative answers it holds, nothing when it holds none [Keeta TS] index.js:59775-59792. */
 function blockOf(endpoint: string, parsed: unknown): Block | undefined {
 	if (!isRecord(parsed) || !('block' in parsed)) {
 		throw(new PageError(endpoint, { kind: 'malformed', detail: 'it holds no block' }));
@@ -294,7 +294,7 @@ export class PageFetcher {
 	 * The staple on the main ledger that holds the block, as the peer holds
 	 * it, or nothing when the peer holds no such staple: its votes on the
 	 * block, then each block they cover, as the client builds a staple
-	 * [Keeta TS] index.js:59799-59839, 60878-60923, 59775-59793, each request
+	 * [Keeta TS] index.js:59799-59839, 60878-60923, 59775-59792, each request
 	 * sent as the pacing lets it. A PageError
 	 * as for a page: a timeout once that many milliseconds have passed for a
 	 * request, or a stop once the signal is aborted.

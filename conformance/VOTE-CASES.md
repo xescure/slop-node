@@ -400,7 +400,7 @@ When a request fails several checks, the first check decides the outcome. The or
 
 ### 7.1 `Ledger.vote`
 
-[Keeta TS] index.js:70048-70391, with the issuing of temporary votes at 70171-70230:
+[Keeta TS] index.js:70048-70391, with the issuing of temporary votes at [Keeta TS] index.js:71207-71266:
 
 1. **Blocks.** An empty list, or a fee block first: `LEDGER_MISSING_BLOCKS`.
 2. **Key.** A node without a key: plain `Cannot vote on block, no private key loaded`.
