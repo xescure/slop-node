@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { assertNever } from '../util/assert-never.js';
 import { DEFAULT_CHECKSUM_GAP_MILLISECONDS } from './checksum.js';
 import { defaultFollowerDirectory, optionsOf, setting } from './follower-config.js';
+import { DEFAULT_KEYING_STAPLES } from './keying.js';
 import { DIVERGENCE_CLASSES } from './log.js';
 import type { DivergenceClass } from './log.js';
 import { DEFAULT_REPRESENTATIVE_PACING } from './representative-pacer.js';
@@ -20,6 +21,8 @@ export type ParityCommand =
 	| { readonly kind: 'shadow'; readonly directory: string; readonly base: string | undefined; readonly informationalEvery: number; readonly batchStaples: number; readonly restart: boolean }
 	/** Records, for the refusals the latest shadow-vote run left unexplained, those a classified difference's rule alone explains. */
 	| { readonly kind: 'explain-shadow'; readonly directory: string }
+	/** Checks how each representative keys the votes of its staples, recording nothing. */
+	| { readonly kind: 'keying'; readonly directory: string; readonly staples: number; readonly pacing: RepresentativePacing }
 	| {
 		readonly kind: 'report';
 		readonly directory: string;
@@ -53,6 +56,9 @@ export const DEFAULT_INFORMATIONAL_EVERY = 10;
 
 /** Staples replayed between two saves of a shadow-vote run's standing. */
 export const DEFAULT_SHADOW_BATCH = 500;
+
+/** The most staples of each representative a keying check takes: each costs two requests. */
+const MAX_KEYING_STAPLES = 100;
 
 /** A database of the follower's cluster, as Postgres names one without quotes. */
 const DATABASE_NAME = /^[a-z_][a-z0-9_]{0,62}$/;
@@ -115,6 +121,9 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 		case 'explain-shadow':
 			valued = ['--directory'];
 			break;
+		case 'keying':
+			valued = ['--directory', '--staples', ...PACING_OPTIONS];
+			break;
 		case 'report':
 			valued = ['--directory', '--sample', '--passive-sample', '--api-samples', '--gap-ms', ...PACING_OPTIONS];
 			flags = ['--log-only'];
@@ -154,6 +163,13 @@ export function parseParityCommand(argv: readonly string[], home: string): Parit
 			return({ kind: name, directory, pacing });
 		case 'explain-shadow':
 			return({ kind: name, directory });
+		case 'keying': {
+			const staples = setting(options, '--staples', MAX_KEYING_STAPLES, DEFAULT_KEYING_STAPLES);
+			if (staples === undefined) {
+				return(undefined);
+			}
+			return({ kind: name, directory, staples, pacing });
+		}
 		case 'explain': {
 			const stratum = stratumOf(options.get('--stratum'));
 			const divergence = DIVERGENCE_CLASSES.find(function(known): boolean {

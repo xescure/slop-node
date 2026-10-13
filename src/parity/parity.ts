@@ -19,6 +19,7 @@ import { caughtUp, openFollowerStore } from './follower-store.js';
 import type { FollowerStore } from './follower-store.js';
 import { ParityLog, parityLogPath } from './log.js';
 import type { ShadowBase, ShadowRunRecord, ShadowRunState, ShadowTarget, SweepCursor, SweepWalk } from './log.js';
+import { checkKeying, keyingExitCodeOf } from './keying.js';
 import { lockParity, PARITY_LOCK_FILE, parseParityCommand, SHADOW_LOCK_FILE } from './parity-command.js';
 import type { ParityCommand } from './parity-command.js';
 import { exitCodeOf, neverComparedAccountsOf, reportOnLog, runParity, sweepPositionOf } from './report.js';
@@ -104,6 +105,11 @@ const USAGE = [
 	'            the confirming vote classified it, whether a classified difference\'s rule alone explains it; such',
 	'            explanations count apart from those a run confirmed, and a refusal whose confirming vote was',
 	'            refused stays unexplained',
+	'  keying    check how each representative keys the votes of its staples, which the bootstrap passes rely',
+	'            on: whether it lists each of some staples voted on a day ago from the moment of its latest vote,',
+	'            and not from a millisecond later; prints each as keying exactly, early by a millisecond or more',
+	'            (which loses staples undetected) or late, records nothing, and exits 1 unless every one keys exactly',
+	'            --staples <n>      how many staples of each representative to check (8)',
 	'  report    check the checksum and compare a sweep sample and an API diff sample, then print the',
 	'            parity report as JSON, with the latest shadow-vote run from the log; exits 1 when a signal fails',
 	'            --sample <n>       how many chain accounts the sweep sample compares (16)',
@@ -404,6 +410,11 @@ async function run(command: ParityCommand, tools: Tools): Promise<ExitCode> {
 			process.stdout.write(`${JSON.stringify(explained, null, '\t')}\n`);
 			return(0);
 		}
+		case 'keying': {
+			const checked = await checkKeying({ representatives: tools.representatives, staples: command.staples, now: Date.now() });
+			process.stdout.write(`${JSON.stringify(checked, null, '\t')}\n`);
+			return(keyingExitCodeOf(checked));
+		}
 		case 'report': {
 			if (command.logOnly) {
 				const report = await reportOnLog({ ...tools, knownBehaviors: await capturedBehaviors(fileURLToPath(CAPTURE_DIRECTORY)) });
@@ -471,8 +482,8 @@ async function main(argv: readonly string[]): Promise<ExitCode> {
 		});
 		const log = new ParityLog(parityLogPath(directory));
 		try {
-			// Every record of the invocation is made against the build the follower runs now; a report on the log alone records nothing.
-			if (command.kind !== 'report' || !command.logOnly) {
+			// Every record of the invocation is made against the build the follower runs now; a report on the log alone and a keying check record nothing.
+			if ((command.kind !== 'report' || !command.logOnly) && command.kind !== 'keying') {
 				await log.append([{ kind: 'follower-build', at: new Date().toISOString(), build: await followerBuildOf(directory) }]);
 			}
 			const pacer = new RepresentativePacer(pacingOf(command), WALL_CLOCK, function(endpoint, standing, waitMilliseconds, why) {
