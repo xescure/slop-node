@@ -10,10 +10,29 @@ const lib = KeetaNet.lib;
 /** The ledger interface a read transaction hands its reads; the package declares it without exporting it. */
 export type LedgerReader = Parameters<Parameters<Ledger['runReadOnly']>[1]>[0];
 
+type Digit = '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9';
+type Letter = 'a' | 'b' | 'c' | 'd' | 'e' | 'f' | 'g' | 'h' | 'i' | 'j' | 'k' | 'l' | 'm' | 'n' | 'o' | 'p' | 'q' | 'r' | 's' | 't' | 'u' | 'v' | 'w' | 'x' | 'y' | 'z';
+
+/** A character of an RFC 9110 token [Keeta TS 0.18.8] index.js:72643. */
+type TokenCharacter = Digit | Letter | Uppercase<Letter> | '!' | '#' | '$' | '%' | '&' | '\'' | '*' | '+' | '-' | '.' | '^' | '_' | '`' | '|' | '~';
+
+type TokenOf<Remaining extends string, Name extends string> = Remaining extends `${infer First}${infer Rest}`
+	? (First extends TokenCharacter ? (Rest extends '' ? Name : TokenOf<Rest, Name>) : never)
+	: never;
+
+/**
+ * The name, if it is a literal RFC 9110 token, and never otherwise: the
+ * request's timing throws TIMING_INVALID_NAME at run time for a section
+ * named by anything else [Keeta TS 0.18.8] index.js:72671-72673, and a wide
+ * string could be anything. Each member of a union is checked on its own.
+ */
+type TimingName<Name extends string> = string extends Name ? never : (Name extends string ? TokenOf<Name, Name> : never);
+
 /**
  * Runs the reads of one request in one read-only transaction of the request's
  * own ledger, so that together they describe one state of it.
  */
+export function readLedger<Result, Identifier extends string>(request: APIRequest, identifier: TimingName<Identifier>, read: (ledger: LedgerReader) => Promise<Result>): Promise<Result>;
 export function readLedger<Result>(request: APIRequest, identifier: string, read: (ledger: LedgerReader) => Promise<Result>): Promise<Result> {
 	return(request.node.ledger.runReadOnly(`api-${identifier}`, read));
 }
