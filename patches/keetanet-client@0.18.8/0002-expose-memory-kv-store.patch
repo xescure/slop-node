@@ -16,7 +16,7 @@ Applies with "patch -p1" from the package root, after 0001.
 
 --- a/client/index.js
 +++ b/client/index.js
-@@ -66787,6 +66787,7 @@
+@@ -67822,6 +67822,7 @@
  const Certificate = __importStar(__webpack_require__(5661));
  const common_1 = __webpack_require__(5663);
  const effects_1 = __webpack_require__(7346);
@@ -24,7 +24,7 @@ Applies with "patch -p1" from the package root, after 0001.
  exports["default"] = {
      /**
       * The `Account` module provides functionality for managing key pairs
-@@ -66803,6 +66804,9 @@
+@@ -67838,6 +67839,9 @@
          addTimeStatistic: common_1.addTimeStatistic,
          IdempotentKey: ledger_1.IdempotentKey
      },

@@ -14,7 +14,7 @@ Applies with "patch -p1" from the package root.
 
 --- a/client/index.js
 +++ b/client/index.js
-@@ -66785,6 +66785,8 @@
+@@ -67820,6 +67820,8 @@
  const Initial = __importStar(__webpack_require__(3750));
  const Conversion = __importStar(__webpack_require__(2360));
  const Certificate = __importStar(__webpack_require__(5661));
@@ -23,7 +23,7 @@ Applies with "patch -p1" from the package root.
  exports["default"] = {
      /**
       * The `Account` module provides functionality for managing key pairs
-@@ -66794,6 +66796,13 @@
+@@ -67829,6 +67831,13 @@
      Block: block_1.default,
      Error: error_1.KeetaNetError,
      Ledger: ledger_1.default,

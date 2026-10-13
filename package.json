@@ -15,7 +15,7 @@
 		"stryker": "stryker"
 	},
 	"dependencies": {
-		"@keetanetwork/keetanet-client": "0.18.7",
+		"@keetanetwork/keetanet-client": "0.18.8",
 		"express": "5.2.1",
 		"pg": "8.23.1"
 	},

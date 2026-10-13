@@ -142,12 +142,12 @@ describe('the text log format', function() {
 		expect(written).toEqual([{ method, printed: `[${REQUEST_ID}] ${level} BOOTSTRAP: caught up with 3 peers { pages: 2 }` }]);
 	});
 
-	test('writes an error in full after the message, and an entry without a request ID under a placeholder', async function() {
+	test('writes an error in full after the message, and an entry without a request ID without the request prefix', async function() {
 		const { log, written } = capture({ format: 'text' });
 		const failure = new Error('check-ins are refused');
 		log.error('node', 'Background work failed:', failure);
 		await log.sync();
-		expect(written).toEqual([{ method: 'error', printed: format('[<NO_REQUEST_ID>] ERROR node:', 'Background work failed:', failure) }]);
+		expect(written).toEqual([{ method: 'error', printed: format('ERROR node:', 'Background work failed:', failure) }]);
 		expect(written[0]?.printed).toMatch(STACK_FRAME);
 	});
 });
