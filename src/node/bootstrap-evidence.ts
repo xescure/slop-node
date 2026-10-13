@@ -15,6 +15,11 @@ import { stapleKey } from './bootstrap-window.js';
  * the last read ended. The main network's history on 2025-12-31 is so dense
  * that a representative reads less than a second of it for a request, and a
  * tolerance of a second left a pass reading again most of what it read.
+ *
+ * A peer that keys a vote more than the tolerance before it was made loses
+ * staples undetected: a page shown to read up to a moment may not have read
+ * a vote keyed before it, and nothing a page lists shows it (utils/parity
+ * keying checks the main network's representatives for it).
  */
 export const VOTE_KEY_TOLERANCE_MILLISECONDS = 100;
 
