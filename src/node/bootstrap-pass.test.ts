@@ -1282,6 +1282,21 @@ function hidingFrom(peer: SimulatedPeer, staple: SimulatedStaple, mistakes: (req
 	return(harness);
 }
 
+/**
+ * A peer keyed by votes that lists 40 votes a request, with 2000 staples from
+ * an hour ago, 100 ms apart, each voted on four times within the 300 ms before
+ * it, as a main network representative's dense history is; passes start
+ * from an hour before them, from a peer known to key votes.
+ */
+function denseVotedPeer(): { peer: SimulatedPeer; first: number } {
+	const peer = new SimulatedPeer({ keying: { kind: 'votes', votesPerRead: 20, readsAtMost: 2, readMilliseconds: 0 } });
+	for (let index = 0; index < 2000; index++) {
+		const at = NOW - HOUR + index * 100;
+		peer.applyVoted(at, at, [], [at - 300, at - 200, at - 100, at]);
+	}
+	return({ peer, first: NOW - 2 * HOUR });
+}
+
 describe('a pass checking what it concludes', function() {
 	afterEach(function() {
 		vi.useRealTimers();
@@ -1569,6 +1584,56 @@ describe('a pass checking what it concludes', function() {
 		expect(firstFromMoment.length > 0).toBe(keying === 'unknown');
 	});
 
+	/*
+	 * A peer keyed by when it applied them, which the pass takes to key votes,
+	 * answering at most 700 staples a request: 1400 staples at the moment, then
+	 * 1000 applied from a millisecond past it and voted on as applied, the first
+	 * of them voted on much later, then 1500 applied from 5 s past it. The first
+	 * filter to name the crowd leaves out the 1000, as if it named them by
+	 * mistake, and its page shows a move past the moment. The page of the
+	 * further filter that checks the move shows, by that first staple, that it
+	 * read up to there, but lists 700 of the 1000, which the node lacked.
+	 */
+	test('moves past a moment only once each further filter\'s page lists no staple the node lacked with a vote made before there, from a peer it takes to key votes', async function() {
+		freezeClock(new Date(NOW));
+		const whole = new SimulatedPeer({ answersAtMost: 700 });
+		const visible = new SimulatedPeer({ answersAtMost: 700 });
+		const moment = NOW - HOUR;
+		for (let index = 0; index < 1400; index++) {
+			visible.applyAlso(whole.applyVoted(moment, moment, [], [moment]), moment);
+		}
+		for (let index = 0; index < 1000; index++) {
+			const at = moment + 1 + index;
+			let stamps = [at];
+			if (index === 0) {
+				stamps = [moment + MINUTE];
+			}
+			whole.applyVoted(at, at, [], stamps);
+		}
+		for (let index = 0; index < 1500; index++) {
+			const at = moment + 5 * SECOND + index * 10;
+			visible.applyAlso(whole.applyVoted(at, at, [], [at]), at);
+		}
+		const fullHashes = lib.Utils.Bloom.BloomFilter.create(BLOOM_CAPACITY, BLOOM_ERROR_RATE)._nbHashes;
+		let mistaken: string | undefined;
+		const harness = new Harness(async function(request) {
+			if (mistaken !== undefined && request.bloomFilter !== mistaken) {
+				return(await whole.page(request));
+			}
+			const crowded = request.bloomFilter !== undefined && lib.Utils.Bloom.deserializeBloomFilter(request.bloomFilter)._nbHashes < fullHashes;
+			if (mistaken === undefined && crowded && request.start.getTime() === moment && request.limit > 1) {
+				mistaken = request.bloomFilter;
+			}
+			return(await visible.page(request));
+		});
+		harness.progress = { reached: new Date(moment), caughtUp: true, deepScanFrom: new Date(moment), nextDeepScan: new Date(NOW + HOUR), deepScan: undefined, keying: 'votes' };
+
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(mistaken).toBeDefined();
+		expectNoLoss(whole, harness, live);
+	});
+
 	test('fails with the retry it ends with, when nothing before it failed', async function() {
 		freezeClock(new Date(NOW));
 		const peer = peerWith(3);
@@ -1616,12 +1681,7 @@ describe('a pass checking what it concludes', function() {
 	 */
 	test('asks again with fewer staples for the page from where a peer keyed by votes is shown to have reached, when it is too large, rather than probe one staple at a time', async function() {
 		freezeClock(new Date(NOW));
-		const peer = new SimulatedPeer({ keying: { kind: 'votes', votesPerRead: 20, readsAtMost: 2, readMilliseconds: 0 } });
-		for (let index = 0; index < 2000; index++) {
-			const at = NOW - HOUR + index * 100;
-			peer.applyVoted(at, at, [], [at - 300, at - 200, at - 100, at]);
-		}
-		const first = NOW - 2 * HOUR;
+		const { peer, first } = denseVotedPeer();
 		let refused: number | undefined;
 		const harness = new Harness(function(request) {
 			if (refused === undefined && request.limit > 1 && request.start.getTime() > first) {
@@ -1641,14 +1701,61 @@ describe('a pass checking what it concludes', function() {
 		expect(harness.requests[(refused ?? -1) + 1]).toMatchObject({ start: tooLarge?.start, limit: 500 });
 	});
 
+	test('asks again with half as many staples for as long as the page from where a page is shown to have read up to is too large, and goes on from there once one fits', async function() {
+		freezeClock(new Date(NOW));
+		const { peer, first } = denseVotedPeer();
+		const harness = new Harness(function(request) {
+			if (request.limit > 100 && request.start.getTime() > first) {
+				return(Promise.resolve({ kind: 'too-large' }));
+			}
+			return(peer.page(request));
+		});
+		harness.progress = { ...firstProgress(NOW, 0, new Date(first)), keying: 'votes' };
+
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(completes(live)).toBe(true);
+		expect(harness.node.size).toBe(2000);
+		const moved = harness.pages().filter(function(request): boolean {
+			return(request.start.getTime() > first);
+		}).slice(0, 5);
+		expect(moved.map(function(request): [number, number] {
+			return([request.start.getTime(), request.limit]);
+		})).toEqual([1000, 500, 250, 125, 63].map(function(limit): [number, number] {
+			return([moved[0]?.start.getTime() ?? first, limit]);
+		}));
+		expect(moved.at(-1)?.served).toBeGreaterThan(0);
+		expect(harness.pages().at(-1)?.limit).toBe(63);
+	});
+
+	test('fails when the page from where a page is shown to have read up to is too large down to a single staple', async function() {
+		freezeClock(new Date(NOW));
+		const { peer, first } = denseVotedPeer();
+		// Every answer from within the dense history but its first start is too large; the horizon lies past it.
+		const dense = function(request: PassRequest): boolean {
+			return(request.start.getTime() > first && request.start.getTime() < NOW - HOUR + 200 * SECOND);
+		};
+		const harness = new Harness(function(request) {
+			if (dense(request)) {
+				return(Promise.resolve({ kind: 'too-large' }));
+			}
+			return(peer.page(request));
+		});
+		harness.progress = { ...firstProgress(NOW, 0, new Date(first)), keying: 'votes' };
+
+		await expect(bootstrapPeer(harness.io, passOptions(1000))).rejects.toThrow('the peer holds a staple larger than a page may be');
+
+		const moved = harness.requests.filter(dense);
+		expect(moved.map(function(request): [number, number] {
+			return([request.start.getTime(), request.limit]);
+		})).toEqual([1000, 500, 250, 125, 63, 32, 16, 8, 4, 2, 1].map(function(limit): [number, number] {
+			return([moved[0]?.start.getTime() ?? first, limit]);
+		}));
+	});
+
 	test('ends at its time bound, where it started, when the page from where a page is shown to have read up to is too large until then', async function() {
 		freezeClock(new Date(NOW));
-		const peer = new SimulatedPeer({ keying: { kind: 'votes', votesPerRead: 20, readsAtMost: 2, readMilliseconds: 0 } });
-		for (let index = 0; index < 2000; index++) {
-			const at = NOW - HOUR + index * 100;
-			peer.applyVoted(at, at, [], [at - 300, at - 200, at - 100, at]);
-		}
-		const first = NOW - 2 * HOUR;
+		const { peer, first } = denseVotedPeer();
 		const harness = new Harness(function(request) {
 			if (request.limit > 1 && request.start.getTime() > first) {
 				advanceClock(MAX_PASS_MILLISECONDS);
