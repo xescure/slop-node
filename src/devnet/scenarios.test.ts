@@ -114,7 +114,7 @@ async function refusedWith(promise: Promise<unknown>, code: string): Promise<str
 /*
  * The message a ledger refuses a requirement with: the principal, the
  * entity and target, and the flags needed, which always include ACCESS.
- * [Keeta TS] index.js:69873-69879
+ * [Keeta TS] index.js:70909-70915
  */
 function lacking(principal: GenericAccount, entity: GenericAccount, target: GenericAccount, flag: string): string {
 	return(`${keyOf(principal)} does not have required permissions to perform action on ${keyOf(entity)}/${keyOf(target)} -- needs [${flag}, ACCESS]/[]`);
@@ -143,7 +143,7 @@ function permissions(flags: ConstructorParameters<typeof lib.Permissions>[0]): I
 	return(new lib.Permissions(flags));
 }
 
-/** The fee block the client computes for a staple, as a client's default does [Keeta TS] index.js:60433-60437. */
+/** The fee block the client computes for a staple, as a client's default does [Keeta TS] index.js:61423-61427. */
 function feeBlockOf(client: UserClient): (staple: VoteStaple) => Promise<Block> {
 	return(function(staple: VoteStaple): Promise<Block> {
 		return(client.initBuilder().computeFeeBlock(staple));
@@ -155,7 +155,7 @@ function anchorsOf(client: UserClient): NetworkAnchors {
 	return({ initialTrustedAccount: TRUSTED_ACCOUNT, ...lib.Account.generateBaseAddresses(client.network) });
 }
 
-/** Sends base tokens with the fee block given; the client's send takes its own [Keeta TS] index.js:60637-60642. */
+/** Sends base tokens with the fee block given; the client's send takes its own [Keeta TS] index.js:61627-61632. */
 function sendPayingFees(client: UserClient, to: GenericAccount, amount: bigint, generateFeeBlock: (staple: VoteStaple) => Promise<Block>): ReturnType<UserClient['publishBuilder']> {
 	const builder = client.initBuilder();
 	builder.send(to, amount, client.baseToken);
@@ -297,7 +297,7 @@ describe('a devnet of four representative processes under the official SDK', fun
 		builder.send(storage, 1_000n, base);
 		await settledPublish(network, owning.publishBuilder(builder));
 		expect(await balanceOf(owning, storage)).toBe(1_000n);
-		// Creating an identifier makes its creator its owner [Keeta TS] index.js:68323-68330.
+		// Creating an identifier makes its creator its owner [Keeta TS] index.js:69359-69366.
 		expect(await aclsOf(owning, storage)).toEqual([
 			`${keyOf(base)} ${keyOf(storage)} ACCESS,STORAGE_CAN_HOLD`,
 			`${keyOf(depositor)} ${keyOf(base)} ACCESS,STORAGE_DEPOSIT`,
@@ -308,7 +308,7 @@ describe('a devnet of four representative processes under the official SDK', fun
 		await settledPublish(network, depositing.send(storage, 500n, base));
 		expect(await balanceOf(owning, storage)).toBe(1_500n);
 
-		// A deposit needs the depositor's own grant on the storage account [Keeta TS] index.js:68481-68487.
+		// A deposit needs the depositor's own grant on the storage account [Keeta TS] index.js:69517-69523.
 		const strangers = network.client(stranger);
 		expect(await refusedWith(strangers.send(storage, 500n, base), 'LEDGER_INVALID_PERMISSIONS')).toBe(lacking(stranger, storage, base, 'STORAGE_DEPOSIT'));
 
@@ -344,7 +344,7 @@ describe('a devnet of four representative processes under the official SDK', fun
 		 * is skipped, but the ones after it still hold, where 0.18.4 stopped
 		 * reading them: the storage account must let the token be held, and
 		 * the token deposit into it.
-		 * [Keeta TS] index.js:68461-68492, 68646-68648
+		 * [Keeta TS] index.js:69497-69528, 69682-69684
 		 */
 		const unscoped = issuing.initBuilder();
 		unscoped.send(storage, 100n, token, undefined, { account: token });
@@ -392,7 +392,7 @@ describe('a devnet of four representative processes under the official SDK', fun
 		expect(await balanceOf(owning, recipient)).toBe(1_000n);
 		expect(await balanceOf(owning, spender)).toBe(1_000n - EVERY_FEE_PER_BLOCK);
 
-		// A signer other than the account needs SEND_ON_BEHALF on it for the token [Keeta TS] index.js:68493-68498.
+		// A signer other than the account needs SEND_ON_BEHALF on it for the token [Keeta TS] index.js:69529-69534.
 		const draining = network.client(drainer);
 		expect(await refusedWith(draining.send(drainer, 2_000n, base, undefined, { account: vault }), 'LEDGER_INVALID_PERMISSIONS')).toBe(lacking(drainer, vault, base, 'SEND_ON_BEHALF'));
 
@@ -418,7 +418,7 @@ describe('a devnet of four representative processes under the official SDK', fun
 		const multisig: MultisigAddress = pending.account;
 		const state = await creating.client.getAccountInfo(multisig);
 		expect(state.info).toMatchObject({ multisigQuorum: 2n });
-		// Each signer holds MULTISIG_SIGNER on the multisig [Keeta TS] index.js:68311-68319.
+		// Each signer holds MULTISIG_SIGNER on the multisig [Keeta TS] index.js:69347-69355.
 		expect(await aclsOf(creating, multisig)).toEqual([first, second, third].map(function(signer): string {
 			return(`${keyOf(signer)} ${keyOf(multisig)} ACCESS,MULTISIG_SIGNER`);
 		}).sort());
@@ -445,7 +445,7 @@ describe('a devnet of four representative processes under the official SDK', fun
 		}
 		const signing = network.client(first);
 
-		// The ledger counts the multisig's signers on the block against its quorum [Keeta TS] index.js:69926-69933.
+		// The ledger counts the multisig's signers on the block against its quorum [Keeta TS] index.js:70962-70969.
 		expect(await refusedWith(signing.transmit([await spendSignedBy([first])]), 'LEDGER_INVALID_PERMISSIONS')).toBe(`Quorum of 2 not reached for ${keyOf(multisig)} -- got 1`);
 		expect(await balanceOf(owning, account)).toBe(granted);
 
@@ -468,7 +468,7 @@ describe('a devnet of four representative processes under the official SDK', fun
 		 * The attacker grants itself SEND_ON_BEHALF on its own account, and a
 		 * later block of the same staple spends the victim's funds with it.
 		 * Since 0.18.5 a grant earlier in the staple counts only for the same
-		 * entity and target [Keeta TS] index.js:68035-68057, so the victim's
+		 * entity and target [Keeta TS] index.js:69071-69093, so the victim's
 		 * requirement stands.
 		 */
 		const builder = attacking.initBuilder();
@@ -497,7 +497,7 @@ describe('a devnet of four representative processes under the official SDK', fun
 		const pending = await everyone.pendingBlock();
 		expect(pending?.operations).toMatchObject([{ type: lib.Block.OperationType.SEND, amount: 700n }]);
 
-		// Representatives that voted on the pending send vote on no other successor [Keeta TS] index.js:69280-69305.
+		// Representatives that voted on the pending send vote on no other successor [Keeta TS] index.js:70316-70341.
 		const competing = minority.initBuilder();
 		competing.send(other, 1n, base);
 		await refusedWith(minority.publishBuilder(competing), 'LEDGER_SUCCESSOR_VOTE_EXISTS');
@@ -505,7 +505,7 @@ describe('a devnet of four representative processes under the official SDK', fun
 		/*
 		 * Recovering asks the representatives that have not voted, and needs
 		 * the fee block the votes ask for, which the client builds only when
-		 * told how [Keeta TS] index.js:59408-59417, 60856-60858.
+		 * told how [Keeta TS] index.js:60400-60409, 61846-61848.
 		 */
 		expect(await refusalOf(everyone.recover())).toMatchObject({ message: 'Votes require fees but generateFeeBlock was not defined' });
 		const recovered = await everyone.recover(true, { generateFeeBlock: feeBlockOf(everyone) });
@@ -528,10 +528,10 @@ describe('a devnet of four representative processes under the official SDK', fun
 		const funding = await fund(network, user, 1_000n);
 		await fund(network, other, 1_000n);
 
-		// A balance may not fall below zero at any point [Keeta TS] index.js:70086-70089.
+		// A balance may not fall below zero at any point [Keeta TS] index.js:71122-71125.
 		await refusedWith(client.send(recipient, 1_001n, base), 'LEDGER_INVALID_BALANCE');
 
-		// A block must follow the account's head, and an account without blocks takes only an opening one [Keeta TS] index.js:69260-69275.
+		// A block must follow the account's head, and an account without blocks takes only an opening one [Keeta TS] index.js:70296-70311.
 		const elsewhere = funding.blocks[0]?.hash ?? null;
 		const unopened = await sendBlock({ from: user, to: recipient, amount: 1n, token: base, previous: elsewhere, network: client.network });
 		await refusedWith(client.transmit([unopened]), 'LEDGER_NOT_OPENING');
@@ -540,7 +540,7 @@ describe('a devnet of four representative processes under the official SDK', fun
 		const misplaced = await sendBlock({ from: user, to: recipient, amount: 1n, token: base, previous: elsewhere, network: client.network });
 		await refusedWith(client.transmit([misplaced]), 'LEDGER_NOT_SUCCESSOR');
 
-		// No vote is given on a block dated more than five minutes away [Keeta TS] index.js:70185-70197.
+		// No vote is given on a block dated more than five minutes away [Keeta TS] index.js:71221-71233.
 		const stale = await sendBlock({ from: user, to: recipient, amount: 1n, token: base, previous: head, network: client.network, date: new Date(Date.now() - (10 * 60 * 1000)) });
 		await refusedWith(client.transmit([stale]), 'LEDGER_BLOCK_EXPIRED');
 
@@ -550,7 +550,7 @@ describe('a devnet of four representative processes under the official SDK', fun
 		/*
 		 * A fee block must pay each voter: one fee too few, and one of the
 		 * right count with the wrong amounts, are refused when the permanent
-		 * votes are asked for [Keeta TS] index.js:69151-69210.
+		 * votes are asked for [Keeta TS] index.js:70187-70246.
 		 */
 		await fund(network, underpaying, 1_000n);
 		await fund(network, shortPaying, 1_000n);
@@ -604,7 +604,7 @@ describe('a devnet of four representative processes under the official SDK', fun
 		 * The genesis staple is the trusted account's alone, as upstream's
 		 * genesis builder seals it, and it mints the supply with an operation
 		 * that a representative's ledger never votes for.
-		 * [Keeta TS] index.js:79646-79657, 79675-79688, 68983, 69969-69972
+		 * [Keeta TS] index.js:80798-80809, 80827-80840, 70019, 71005-71008
 		 */
 		const [genesis] = replayOrder(staples);
 		expect(genesis?.votes.map(function(vote): string {

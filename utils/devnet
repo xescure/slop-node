@@ -4,7 +4,7 @@
 #
 # Every representative charges a fee. The client's recover() builds the fee
 # block the votes ask for only when it is given generateFeeBlock (upstream
-# client [Keeta TS] index.js:59408-59417, 60856-60858), and send() recovers
+# client [Keeta TS] index.js:60400-60409, 61846-61848), and send() recovers
 # that way after LEDGER_SUCCESSOR_VOTE_EXISTS (60644-60653), so pass one, as
 # "up" prints.
 set -euo pipefail

@@ -21,7 +21,7 @@ const MALFORMED_ACCOUNT = 'keeta_not-an-account';
 
 type Call = {
 	readonly method: 'GET' | 'POST';
-	/** Below the API prefix, with each path parameter percent-encoded as the client encodes it [Keeta TS] index.js:59717-59725. */
+	/** Below the API prefix, with each path parameter percent-encoded as the client encodes it [Keeta TS] index.js:60710-60718. */
 	readonly path: string;
 	readonly body?: unknown;
 	readonly status: 200 | 500;

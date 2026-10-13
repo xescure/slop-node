@@ -7,11 +7,11 @@ import { BLOCK_WINDOW, MINUTE, TEMPORARY_VALIDITY, VOTE_SLOP, send } from './sup
  * within five minutes of now either way, a permanent or recovery vote does
  * not, and vote bytes parse only within their validity, give or take a
  * minute.
- * [Keeta TS] index.js:70185-70207, 80373-80381, 80641-80653
+ * [Keeta TS] index.js:71221-71243, 81525-81533, 81793-81805
  */
 
 // A permanent vote issued at the start of a case is valid until this moment.
-// [Keeta TS] index.js:81528-81530
+// [Keeta TS] index.js:82680-82682
 const PERMANENT_UNTIL = new Date(Date.UTC(3027, 0, 31, 0, 0, 0));
 
 export const clockScenarios: readonly Scenario[] = [
@@ -65,7 +65,7 @@ export const clockScenarios: readonly Scenario[] = [
 			 * ends more than a hundred years after the moment, so near its end
 			 * the permanent vote parses as temporary and the request is a
 			 * permanent one that lacks rep2's own vote.
-			 * [Keeta TS] index.js:80379
+			 * [Keeta TS] index.js:81531
 			 */
 			recorder.moveTo(new Date(end + VOTE_SLOP));
 			await recorder.vote(2, [block], [offered]);
@@ -78,7 +78,7 @@ export const clockScenarios: readonly Scenario[] = [
 	 * case cannot express: it parses every reference at the step's moment.
 	 * Within the parse slop the same rule shows: vote() checks no other
 	 * vote's expiry itself.
-	 * [Keeta TS] index.js:69094-69144
+	 * [Keeta TS] index.js:70130-70180
 	 */
 	scenario('C8', 'a permanent request with other votes past their validity but within the parse slop gets a permanent vote', {}, async function(recorder) {
 		await recorder.addGenesis(0, 1);
@@ -126,7 +126,7 @@ export const clockScenarios: readonly Scenario[] = [
 		 * Ledger.vote never checks the expiry of the votes it reads for a
 		 * previous; the contract has side reads skip a temporary vote only
 		 * once the moment is past its validity by the slop parsing allows.
-		 * [Keeta TS] index.js:69282-69304
+		 * [Keeta TS] index.js:70318-70340
 		 */
 		recorder.advance(TEMPORARY_VALIDITY + VOTE_SLOP);
 		await recorder.vote(0, [block]);

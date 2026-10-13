@@ -1,9 +1,9 @@
 // Upstream's own default for the number of history entries per request.
-// [Keeta TS] index.js:69532
+// [Keeta TS] index.js:70568
 export const DEFAULT_HISTORY_LIMIT = 25;
 
 // The largest page upstream's only caller ever asks for.
-// [Keeta TS] index.js:69650-69658
+// [Keeta TS] index.js:70686-70694
 export const DEFAULT_VOTES_PER_PAGE = 200;
 
 /**

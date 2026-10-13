@@ -78,7 +78,7 @@ async function advertisedRepresentatives(request: APIRequest): Promise<Advertise
  * Every representative the node knows of, with its weight and endpoints,
  * each once: itself and the representatives among its peers, current or
  * not, since a client takes this list to find representatives it does not
- * know yet [Keeta TS] index.js:59100-59137.
+ * know yet [Keeta TS] index.js:60090-60127.
  * [node-lite] adapted from getAllRepresentatives.
  */
 async function getAllRepresentatives(request: APIRequest): Promise<DeclaredResult<DeclaredLedgerGroup['representatives']['GET']>> {
@@ -105,7 +105,7 @@ function getHistory(request: APIRequest): Promise<HistoryPage> {
 /**
  * The state of each account, in the order requested; a malformed account is
  * answered with its error in place of its state, and the client matches the
- * states to accounts by "account" [Keeta TS] index.js:58572-58575.
+ * states to accounts by "account" [Keeta TS] index.js:59569-59572.
  * [node-lite] adapted from getAccountStates.
  */
 function getAccountStates(request: APIRequest, list: string): Promise<DeclaredResult<DeclaredLedgerGroup['accounts'][':accounts']['GET']>> {

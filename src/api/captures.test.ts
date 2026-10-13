@@ -29,7 +29,7 @@ type Exclusion =
 	/**
 	 * The account, or an account the answer describes, had blocks after the
 	 * head, as the evidence capture shows. A permission row has the entity
-	 * whose chain holds the block that set it [Keeta TS] index.js:68355-68360,
+	 * whose chain holds the block that set it [Keeta TS] index.js:69391-69396,
 	 * so a listing that holds a row of an account that moved is not
 	 * determined by the head: a later block of that account may have changed
 	 * the row, and a principal's listing may also gain rows from any entity.

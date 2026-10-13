@@ -9,8 +9,8 @@ const lib = KeetaNet.lib;
 /**
  * The balance of each token an account's history leaves it with: the net of
  * every change to its balances the staples of that history make, in order,
- * as the ledger computes their effects [Keeta TS] index.js:68117-68160,
- * 68195-68305. A send's sender and recipient, a forwarded receive, a
+ * as the ledger computes their effects [Keeta TS] index.js:69153-69196,
+ * 69231-69341. A send's sender and recipient, a forwarded receive, a
  * supply change and a modified balance all list the staple in the history
  * of the account whose balance moves (schema/CONTRACT.md, D18), so no other
  * staple changes them; a receive the block requires changes nothing itself.

@@ -15,8 +15,8 @@ export const PEER_SOCKETS_FULL_STATUS = 503;
 /**
  * The node's "/p2p" WebSocket server. Each socket a peer opens is attached to
  * the switch as the switch's own dialer attaches the sockets it opens
- * [Keeta TS] index.js:72314, 72319-72343, with frames bounded as the dialer
- * bounds them [Keeta TS] index.js:71812, 72250-72252, and at most
+ * [Keeta TS] index.js:73462, 73467-73491, with frames bounded as the dialer
+ * bounds them [Keeta TS] index.js:72960, 73398-73400, and at most
  * maxSockets of them open at once.
  * [node-lite] adapted from LocalNode.run.
  */
@@ -51,7 +51,7 @@ export class PeerServer {
 	 * switch has let go of it, which the node waits for as it stops. A socket
 	 * that closes before its greeting is unregistered by the switch before the
 	 * switch has registered it, which it then does
-	 * [Keeta TS] index.js:72324-72329, 72708-72731; SwitchConnections
+	 * [Keeta TS] index.js:73472-73477, 73856-73879; SwitchConnections
 	 * unregisters it once registered, as it does the sockets the switch dials.
 	 */
 	#attach(socket: BundledWebSocket, request: http.IncomingMessage): void {

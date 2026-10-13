@@ -25,13 +25,13 @@ function settled(): Settled {
 
 /** What the switch is doing with one WebSocket connection. */
 type Tracked = {
-	/** A dialed connection is registered twice: as it opens, and once dialing is done [Keeta TS] index.js:72336-72342, 73631. */
+	/** A dialed connection is registered twice: as it opens, and once dialing is done [Keeta TS] index.js:73484-73490, 74779. */
 	registrations: number;
 	/** Its socket has closed, or failed, so the switch must let go of it. */
 	closed: boolean;
 	/**
 	 * A registration ends by adding the connection to the switch's own and to
-	 * its store, even once the socket has closed [Keeta TS] index.js:72150, 72708-72731,
+	 * its store, even once the socket has closed [Keeta TS] index.js:73298, 73856-73879,
 	 * so it must be unregistered after every one.
 	 */
 	mustUnregister: boolean;
@@ -44,7 +44,7 @@ type Tracked = {
  * that the store it writes to stays open until then. A connection is held
  * until its registrations and the unregistering after them have settled, and the
  * switch unregisters it only once its socket has closed
- * [Keeta TS] index.js:72324-72329, 72733-72750.
+ * [Keeta TS] index.js:73472-73477, 73881-73898.
  */
 export class SwitchConnections {
 	readonly #log: Logger;
@@ -92,7 +92,7 @@ export class SwitchConnections {
 
 	/**
 	 * A socket's error is followed by its close, and each unregisters the
-	 * connection [Keeta TS] index.js:72324-72329; the second, and any once the
+	 * connection [Keeta TS] index.js:73472-73477; the second, and any once the
 	 * switch has let go, waits for the first rather than unregistering again.
 	 */
 	async #unregister(upstream: SwitchConnectionMethods, connection: P2PConnection): Promise<void> {
@@ -154,10 +154,10 @@ export class SwitchConnections {
 	}
 
 	/**
-	 * Stopping the switch waits for its dials first [Keeta TS] index.js:71373-71376, 72674,
+	 * Stopping the switch waits for its dials first [Keeta TS] index.js:72501-72504, 73822,
 	 * and a dial waits up to seconds for the peer's greeting
-	 * [Keeta TS] index.js:72145-72156, 72708, 73631-73632; the switch then
-	 * closes only the connections it has taken [Keeta TS] index.js:72663-72673.
+	 * [Keeta TS] index.js:73293-73304, 73856, 74779-74780; the switch then
+	 * closes only the connections it has taken [Keeta TS] index.js:73811-73821.
 	 * So the connections still being registered, which carry nothing yet, are
 	 * closed now, and any the switch registers from now on is closed instead.
 	 */
@@ -173,7 +173,7 @@ export class SwitchConnections {
 	 * the switch has let go of every one, those it registers meanwhile included.
 	 * Any connection the switch registers from then on is closed instead, until
 	 * opened again: work of the switch that nothing waits for may still dial
-	 * [Keeta TS] index.js:73211-73235, 73324.
+	 * [Keeta TS] index.js:74359-74383, 74472.
 	 */
 	async closed(): Promise<void> {
 		this.#stopping = true;

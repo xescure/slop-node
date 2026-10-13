@@ -23,7 +23,7 @@ const lib = KeetaNet.lib;
 const LOOPBACK = '127.0.0.1';
 
 /*
- * Network 0 has no alias of its own [Keeta TS] index.js:61337-61365; the
+ * Network 0 has no alias of its own [Keeta TS] index.js:62327-62355; the
  * client takes one, and reads it only for the publish aid, which stays off.
  */
 const NETWORK = 0n;

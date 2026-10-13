@@ -49,7 +49,7 @@ const IMMEDIATE_RETRIES: KVRetryPolicy = {
 
 const nodes = useLocalNodes();
 
-/** Runs the node with the manual peer, so that the switch checks in with it at once [Keeta TS] index.js:72622-72658. */
+/** Runs the node with the manual peer, so that the switch checks in with it at once [Keeta TS] index.js:73770-73806. */
 async function runWithManualPeer(node: LocalNode): Promise<void> {
 	node.config.manualPeers = [MANUAL_PEER];
 	await node.run();
@@ -65,7 +65,7 @@ describe('a manual peer\'s check-in whose write fails', function() {
 		await runWithManualPeer(created.node);
 
 		expect(await rejected).toEqual(expect.objectContaining({ message: CHECK_IN_REFUSED }));
-		// The switch handles the check-in once stopping waits for it [Keeta TS] index.js:72676-72683.
+		// The switch handles the check-in once stopping waits for it [Keeta TS] index.js:73824-73831.
 		await created.node.stop();
 	});
 

@@ -27,7 +27,7 @@ export type PostgresPoolOptions = {
  * belongs to a process that has stopped; ending it releases the row locks
  * that other attempts wait on. A statement may run longer than the budget:
  * gc runs its batches in one transaction for up to its time limit, 280 s by
- * default [Keeta TS] index.js:67852-67862, though each statement handles at
+ * default [Keeta TS] index.js:68888-68898, though each statement handles at
  * most one batch, and stats counts the whole main ledger in one statement.
  * Thirty seconds leaves room for those on a large ledger and still ends a
  * statement stuck waiting for a lock, which the idle limit frees long before.

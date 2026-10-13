@@ -122,7 +122,7 @@ export function sampledForInformation(blocksHash: string, every: number): boolea
  * The offline ledger lives in the follower's cluster, where a serializable
  * transaction left open holds back what Postgres may forget of every
  * other, so that the follower's own transactions fail as conflicts; upstream's
- * default runs one for minutes [Keeta TS] index.js:67852-67861.
+ * default runs one for minutes [Keeta TS] index.js:68888-68897.
  */
 export const SHADOW_GC_SLICE_MILLISECONDS = 2000;
 
@@ -163,7 +163,7 @@ function keyOf(staple: VoteStaple): string {
 	return(staple.blocksHash.toString());
 }
 
-/** The ledger's refusal of a staple whose blocks it holds already [Keeta TS] index.js:67683-67687. */
+/** The ledger's refusal of a staple whose blocks it holds already [Keeta TS] index.js:68719-68723. */
 function isAlreadyHeld(error: unknown): boolean {
 	return(lib.Error.isInstance(error) && error.code === 'LEDGER_BLOCK_ALREADY_EXISTS');
 }
@@ -172,7 +172,7 @@ function isAlreadyHeld(error: unknown): boolean {
  * Applies the follower's staples to the offline ledger as its ledger
  * accepted them: through the storage's adjust, as the ledger's add does
  * once the votes are weighed, without weighing them again
- * [Keeta TS] index.js:69397-69411, 67717-67729. The follower's list holds
+ * [Keeta TS] index.js:69397-69411, 68753-68765. The follower's list holds
  * only staples its ledger accepted, each at the place it applied it, and a
  * staple it applied by a replay of the staples deferred behind another,
  * which weighs nothing, was weighed as it arrived, under the weights of an
@@ -616,7 +616,7 @@ export async function runShadowVotes(run: ShadowRun): Promise<ShadowRunState> {
 			}
 			/*
 			 * The node's log keeps every entry, with the values it names, until
-			 * the node syncs [Keeta TS] index.js:71109-71122, 71377-71383, and
+			 * the node syncs [Keeta TS] index.js:72209-72222, 72505-72511, and
 			 * nothing else syncs an offline node, so its log would otherwise
 			 * hold every warning of the whole replay.
 			 */
@@ -639,7 +639,7 @@ export async function runShadowVotes(run: ShadowRun): Promise<ShadowRunState> {
 	} finally {
 		/*
 		 * Stopping flushes the node's statistics and closes its switch,
-		 * which never had a peer [Keeta TS] index.js:71373-71383.
+		 * which never had a peer [Keeta TS] index.js:72501-72511.
 		 */
 		await node.stop();
 	}

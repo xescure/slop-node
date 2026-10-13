@@ -8,7 +8,7 @@ const lib = KeetaNet.lib;
 /**
  * The status of every failure of a whole request, a refusal as well as an
  * internal failure: the client gives up on any status of 500 or more instead
- * of retrying [Keeta TS] index.js:59658-59671.
+ * of retrying [Keeta TS] index.js:60651-60664.
  */
 export const ERROR_STATUS = 500;
 
@@ -32,7 +32,7 @@ export function newErrorID(): ErrorID {
 /**
  * A request the node refuses, as the KeetaNet error it raised: the fields the
  * error's own JSON writes, which the client rebuilds the error from
- * [Keeta TS] index.js:66067-66073, 66533-66540, 66575-66590, 66334-66410.
+ * [Keeta TS] index.js:67057-67063, 67542-67549, 67584-67599, 67343-67419.
  */
 export type RefusalBody = {
 	readonly error: true;

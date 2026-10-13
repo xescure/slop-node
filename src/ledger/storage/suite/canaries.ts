@@ -27,7 +27,7 @@ type DrainAttempt = {
  * The thief grants SEND_ON_BEHALF to itself, on its own account, and in the
  * same request signs a send from the victim. A grant satisfies a requirement
  * only when it is on the account the requirement is for.
- * [Keeta TS] index.js:68032-68061
+ * [Keeta TS] index.js:69068-69097
  */
 async function drainAttempt(network: TestNetwork, cursor: ChainCursor): Promise<DrainAttempt> {
 	const victim = requireAt(network.users, 0);
@@ -91,7 +91,7 @@ export function defineCanaryCases(driver: DriverUnderTest): void {
 		 * The victim's removal of a flag from the thief, on the victim's own
 		 * account, matches the drain's requirement in everything but its
 		 * method, so only the method check refuses it.
-		 * [Keeta TS] index.js:68035-68043
+		 * [Keeta TS] index.js:69071-69079
 		 */
 		test('subtract does not satisfy a grant requirement', async function() {
 			const { network, ledger } = await startNetwork();
@@ -120,7 +120,7 @@ export function defineCanaryCases(driver: DriverUnderTest): void {
 		/*
 		 * A token's send of itself skips the token's own ACCESS check, and must
 		 * still need the storage account's STORAGE_CAN_HOLD and STORAGE_DEPOSIT.
-		 * [Keeta TS] index.js:68461-68491, 68646-68648
+		 * [Keeta TS] index.js:69497-69527, 69682-69684
 		 */
 		test('token self-send into storage is rejected', async function() {
 			const { network, ledger } = await startNetwork();

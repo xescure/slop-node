@@ -427,7 +427,7 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			expect(await ledger.add(waiting)).toEqual([]);
 			const firstStaple = await confirmedStaple([firstMissing], network.representatives);
 
-			// Replay never defers again [Keeta TS] index.js:67722-67725.
+			// Replay never defers again [Keeta TS] index.js:68758-68761.
 			expect(blocksHashesOf(await ledger.add(firstStaple))).toEqual(blocksHashesOf([firstStaple]));
 			expect(await deferredWaitingOn(storage, firstMissing.hash)).toEqual(blocksHashesOf([waiting]));
 			expect(await deferredWaitingOn(storage, secondMissing.hash)).toEqual(blocksHashesOf([waiting]));
@@ -514,7 +514,7 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 			const staple = await confirmedStaple([waiting], network.representatives);
 			expect(await ledger.add(staple)).toEqual([]);
 			const later = new Date(Date.now() + 1);
-			// Further back than the minute by which upstream takes a vote to be from the future [Keeta TS] index.js:80373-80375, 80653.
+			// Further back than the minute by which upstream takes a vote to be from the future [Keeta TS] index.js:81525-81527, 81805.
 			advanceClock(-10 * 60 * 1000);
 
 			const listed = await storage.listStrandedDeferredStaples(later, 10);

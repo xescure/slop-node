@@ -38,7 +38,7 @@ export function jsonLogLine(level: JSONLogLevel, message: string, time: Date, at
 	return(JSON.stringify({ level, message, time: time.toISOString(), ...attributes }));
 }
 
-/** Upstream's order of the levels [Keeta TS] index.js:70620-70637. */
+/** Upstream's order of the levels [Keeta TS] index.js:71656-71673. */
 const LEVEL_ORDER: Readonly<Record<LogLevel, number>> = {
 	DEBUG: 0,
 	INFO: 1,

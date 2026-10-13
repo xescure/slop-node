@@ -364,7 +364,7 @@ describe('the requirements a SEND puts on its account', function() {
 	 * against what upstream records for the same block, in each shape the
 	 * classifier tells apart: 0.18.7 records every listed requirement except one
 	 * of an account on itself, which it skips, and keeps the ones after it.
-	 * [Keeta TS] index.js:68646-68648
+	 * [Keeta TS] index.js:69682-69684
 	 */
 	test.each([
 		{ shape: 'a keyed account to a keyed account', onItself: 0, block: () => sendBlock({ from: user, to: delegate, amount: 10n, token, previous: null, network: NETWORK }) },

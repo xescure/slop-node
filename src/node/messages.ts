@@ -8,7 +8,7 @@ const LOG_SOURCE = 'P2P';
 /**
  * How long stopping waits for the messages the switch is handling: handling
  * one can wait on the node's own messages to peers, which have no time limit
- * [Keeta TS] index.js:72203-72218, so a peer that never answers could
+ * [Keeta TS] index.js:73351-73366, so a peer that never answers could
  * otherwise keep the node from stopping.
  */
 export const MESSAGE_SETTLE_MILLISECONDS = 5000;
@@ -16,8 +16,8 @@ export const MESSAGE_SETTLE_MILLISECONDS = 5000;
 /**
  * The messages a switch is handling. A WebSocket hands each one to the switch
  * without waiting for it, and a failure then has no one to catch it
- * [Keeta TS] index.js:72362-72369; handling one adds to the ledger and writes
- * the node's statistics last [Keeta TS] index.js:72813-72815, 71409-71435. So
+ * [Keeta TS] index.js:73510-73517; handling one adds to the ledger and writes
+ * the node's statistics last [Keeta TS] index.js:73961-73963, 72537-72563. So
  * the node waits for them before its storage closes, and a failure is logged
  * and answered as a message not taken, rather than ending the process.
  */
@@ -43,9 +43,9 @@ export class SwitchMessages {
 	/**
 	 * Waits as settled does, then refuses every message until opened again:
 	 * a socket the switch dials after the node stopped, with work nothing
-	 * waits for [Keeta TS] index.js:73211-73235, 73324, still delivers what
+	 * waits for [Keeta TS] index.js:74359-74383, 74472, still delivers what
 	 * the peer sends before it closes, and handling a message writes the
-	 * node's statistics [Keeta TS] index.js:72813-72815.
+	 * node's statistics [Keeta TS] index.js:73961-73963.
 	 */
 	async closed(): Promise<void> {
 		await this.settled();

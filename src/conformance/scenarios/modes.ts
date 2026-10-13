@@ -11,7 +11,7 @@ import { confirmed, send } from './support.js';
  * only what it is given to bootstrap from. A vote checks its blocks are
  * present, then the key, then the mode; a quote checks its blocks, then the
  * mode, then the key; an add checks the mode before anything in the staple.
- * [Keeta TS] index.js:69012-69024, 69356-69391, 70171-70176
+ * [Keeta TS] index.js:70048-70060, 70392-70427, 71207-71212
  */
 
 const DEV_NETWORK = KeetaNet.Client.Config.NetworkIDs.dev;

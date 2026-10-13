@@ -11,8 +11,8 @@ export type Uninstall = () => void;
  * ERROR, in full, under a new error ID, instead of letting it end the
  * process. Upstream's switch starts work it handles only later, if ever: a
  * manual peer's check-in, at once and then on a timer
- * [Keeta TS] index.js:72622-72658, 72676-72683, and the rest of a broadcast
- * once one peer has the message [Keeta TS] index.js:73015-73017, 73324.
+ * [Keeta TS] index.js:73770-73806, 73824-73831, and the rest of a broadcast
+ * once one peer has the message [Keeta TS] index.js:74163-74165, 74472.
  * A storage failure in that work would otherwise stop a representative that
  * is serving, and restarting it would not make the storage healthier.
  */
@@ -30,7 +30,7 @@ export function logUnhandledRejections(log: Logger): Uninstall {
 /**
  * Until uninstalled, notes at DEBUG a rejection handled after it was
  * reported unhandled, as the switch handles its work once it waits for it
- * [Keeta TS] index.js:72676-72683, where Node.js would print a warning on
+ * [Keeta TS] index.js:73824-73831, where Node.js would print a warning on
  * the console.
  */
 export function noteRejectionsHandledLate(log: Logger): Uninstall {

@@ -25,11 +25,11 @@ The schema states the structure of each line. The rules it cannot state are give
 |---|---|
 | Account | its public key string, `keeta_...`, in the canonical form Keeta prints |
 | Amount, supply, weight, height, quorum | a decimal string of a non-negative integer, without leading zeros |
-| Idempotent key | base64 (RFC 4648, with padding) of the bytes a block carries as its idempotent value, the form a block's JSON gives it [Keeta TS] index.js:63928 |
+| Idempotent key | base64 (RFC 4648, with padding) of the bytes a block carries as its idempotent value, the form a block's JSON gives it [Keeta TS] index.js:64918 |
 | Block hash, certificate hash | 64 uppercase hex digits, as Keeta prints a hash |
 | Ledger checksum | 64 uppercase hex digits: the 256-bit value, zero-padded on the left |
 | Certificate | base64 (RFC 4648, with padding) of its DER bytes |
-| Permission set | `{"base": D, "external": D}`: the base flags and the external offsets, each as the decimal of the integer whose bits they are, `Permissions.base.bigint` and `Permissions.external.bigint` [Keeta TS] index.js:74234-74239 |
+| Permission set | `{"base": D, "external": D}`: the base flags and the external offsets, each as the decimal of the integer whose bits they are, `Permissions.base.bigint` and `Permissions.external.bigint` [Keeta TS] index.js:75382-75387 |
 | Text | a JSON string (section 2.1) |
 
 A field that this document says may be `null` is written as `null` when the value is absent. No other field is ever `null`, and no field appears that this document does not define.
@@ -84,7 +84,7 @@ The key fields of a record identify it: no two records of a dump have the same k
 One record for each account of the dumped set (section 5), from `getAccountInfo` and `getAccountRep`.
 
 - `name`, `description`, `metadata`: the account info as stored. An account that was never described has empty strings.
-- `representative`: the account it delegates its weight to, or `null` when it has none. An account whose key type cannot delegate, an identifier other than a storage account, always has `null`: the ledger answers for it without asking storage [Keeta TS] index.js:69488-69496, 67172-67183.
+- `representative`: the account it delegates its weight to, or `null` when it has none. An account whose key type cannot delegate, an identifier other than a storage account, always has `null`: the ledger answers for it without asking storage [Keeta TS] index.js:70524-70532, 68208-68219.
 - `defaultPermission`: present exactly when the account is an identifier, that is when its key type is network, token, storage or multisig. It holds the identifier's default permissions, or `null` when its info has none.
 - `multisigQuorum`: present exactly when the account is a multisig. It holds the number of signers the multisig requires, or `null` when its info has none.
 
@@ -99,7 +99,7 @@ The key type is the one the account's public key string encodes, `Account.keyTyp
 
 One permission row of the main ledger: the principal may do what `base` and `external` grant on the entity, scoped to the target. A row of principal type `CERTIFICATE` grants to the holders of a certificate: `principal` is the account that holds it and `certificate` its hash.
 
-A row without permissions has a record, with `base` and `external` both `"0"`. Such a row is not the same state as no row: for its exact target it stops a row of the same principal for the whole entity from applying [Keeta TS] index.js:67109-67132. Only a row that was deleted has no record.
+A row without permissions has a record, with `base` and `external` both `"0"`. Such a row is not the same state as no row: for its exact target it stops a row of the same principal for the whole entity from applying [Keeta TS] index.js:68145-68168. Only a row that was deleted has no record.
 
 The rows are those that `listACLsByEntity` and `listACLsByPrincipal` return for each account of the dumped set, without filters, with each row written once. Listing from both sides finds a row whose entity lies outside the set through its principal.
 
@@ -125,9 +125,9 @@ One record for each certificate that `getAccountCertificates` returns for an acc
 {"kind":"checksum","ledgerChecksum":H}
 ```
 
-Exactly one record: the node's ledger checksum, the XOR of the hash of every block of every staple the ledger applied. `Ledger.add` folds in the staples it applies [Keeta TS] index.js:69413-69417, and a driver folds in the staples that gc applies (`CONTRACT.md` section 2.6). It is not read from storage: a node's statistics hold it, and the producer writes the value it was given.
+Exactly one record: the node's ledger checksum, the XOR of the hash of every block of every staple the ledger applied. `Ledger.add` folds in the staples it applies [Keeta TS] index.js:70449-70453, and a driver folds in the staples that gc applies (`CONTRACT.md` section 2.6). It is not read from storage: a node's statistics hold it, and the producer writes the value it was given.
 
-A representative serves the checksum of its own ledger at `GET /node/ledger/checksum`, as the `checksum` field (`api/node.d.ts` lines 49-53 of the package). That value equals this record only for a ledger that applied exactly the staples the dump was produced from. Its JSON encoding of a `bigint` is `"0x"` followed by uppercase hex without leading zeros [Keeta TS] index.js:78411-78434, 78476, so even equal values are spelled differently. They are compared as numbers: `BigInt(served) === BigInt('0x' + ledgerChecksum)`.
+A representative serves the checksum of its own ledger at `GET /node/ledger/checksum`, as the `checksum` field (`api/node.d.ts` lines 49-53 of the package). That value equals this record only for a ledger that applied exactly the staples the dump was produced from. Its JSON encoding of a `bigint` is `"0x"` followed by uppercase hex without leading zeros [Keeta TS] index.js:79559-79582, 79628, so even equal values are spelled differently. They are compared as numbers: `BigInt(served) === BigInt('0x' + ledgerChecksum)`.
 
 ### 3.6 `head`
 
@@ -143,7 +143,7 @@ One record for each account of the dumped set that has a chain on the main ledge
 {"kind":"idempotent","account":A,"key":K,"block":H}
 ```
 
-One record for each block of the applied staples (section 5) that carries an idempotent value: `account` is the block's account, `key` its idempotent value, and `block` the block that `getIdempotentBlockHash` names on the main ledger for that account and value, or `null` when it names none. The ledger looks a key up under the account of the block that carries it [Keeta TS] index.js:68921-68931, 69711-69716. On a ledger that applied every staple, `block` is the hash of the block that carries the key.
+One record for each block of the applied staples (section 5) that carries an idempotent value: `account` is the block's account, `key` its idempotent value, and `block` the block that `getIdempotentBlockHash` names on the main ledger for that account and value, or `null` when it names none. The ledger looks a key up under the account of the block that carries it [Keeta TS] index.js:69957-69967, 70747-70752. On a ledger that applied every staple, `block` is the hash of the block that carries the key.
 
 Storage resolves a key it is given but cannot list keys, so the blocks of the applied staples are where the keys come from.
 
@@ -161,7 +161,7 @@ One record for each token account of the dumped set: the `supply` of its account
 {"kind":"weight","representative":A,"weight":D}
 ```
 
-One record for each distinct account that some account of the dumped set delegates to, that is each non-null `representative` of section 3.1, whether or not it belongs to the set itself. `weight` is its voting power, which is the weight storage holds as delegated to it, `delegatedWeight` [Keeta TS] index.js:69457-69462.
+One record for each distinct account that some account of the dumped set delegates to, that is each non-null `representative` of section 3.1, whether or not it belongs to the set itself. `weight` is its voting power, which is the weight storage holds as delegated to it, `delegatedWeight` [Keeta TS] index.js:70493-70498.
 
 ## 4. Order
 
@@ -171,7 +171,7 @@ The order is also the ascending byte order of the lines, and a producer may sort
 
 ## 5. Producing a dump
 
-A producer is given the staples the ledger applied and the ledger checksum. The dumped set is the accounts those staples touch: the union of the `touched` sets that upstream's `computeEffectOfBlocks` returns for the blocks of each staple the ledger applied [Keeta TS] index.js:68674-68812, together with the network's base token and network address, which `Account.generateBaseAddresses` derives from the network id [Keeta TS] index.js:62635-62639. A producer must not add accounts it found by other means: the set is fixed by the staples, so that every implementation dumps the same accounts.
+A producer is given the staples the ledger applied and the ledger checksum. The dumped set is the accounts those staples touch: the union of the `touched` sets that upstream's `computeEffectOfBlocks` returns for the blocks of each staple the ledger applied [Keeta TS] index.js:69710-69848, together with the network's base token and network address, which `Account.generateBaseAddresses` derives from the network id [Keeta TS] index.js:63625-63629. A producer must not add accounts it found by other means: the set is fixed by the staples, so that every implementation dumps the same accounts.
 
 Every record except `checksum` is read through the storage interface, from the main ledger:
 
@@ -185,7 +185,7 @@ Every record except `checksum` is read through the storage interface, from the m
 | `weight` | `delegatedWeight` of each representative found |
 | `idempotent` | `getIdempotentBlockHash` of each idempotent value of an applied block, from `'main'` |
 
-A producer must read all of them in one read-only transaction, so that the records describe one state; `Ledger.runReadOnly` provides it [Keeta TS] index.js:70390-70392. Nothing is read from a driver's own tables, so any implementation of the storage interface, in any language, produces the same dump from the same state.
+A producer must read all of them in one read-only transaction, so that the records describe one state; `Ledger.runReadOnly` provides it [Keeta TS] index.js:71426-71428. Nothing is read from a driver's own tables, so any implementation of the storage interface, in any language, produces the same dump from the same state.
 
 A dump holds no wall-clock value, and nothing of the side ledger, the votes, the staples, the deferred staples, the serial numbers or the statistics other than the checksum. No block of the head file carries an idempotent value, so the committed dump has no `idempotent` record; the tests exercise the kind on a ledger of their own.
 

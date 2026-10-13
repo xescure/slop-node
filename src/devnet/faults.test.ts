@@ -30,7 +30,7 @@ const RECEIVER = userOf(999);
 
 /*
  * A vote's issue time may be up to a minute ahead of the clock that checks
- * it [Keeta TS] index.js:80373, 80653, and a representative votes on a block
+ * it [Keeta TS] index.js:81525, 81805, and a representative votes on a block
  * dated within five minutes of its clock (70185-70197). Half a minute ahead
  * is inside both, and far from either edge.
  */
@@ -167,7 +167,7 @@ class Traffic {
 
 	/*
 	 * The client warns of every request it has retried for over 5 s
-	 * [Keeta TS] index.js:59688-59692, which a representative that is down
+	 * [Keeta TS] index.js:60681-60685, which a representative that is down
 	 * makes it do twice a second; the outcome of each publish is what is
 	 * checked, so the warnings are only counted.
 	 */

@@ -61,7 +61,7 @@ function watchUsesAfterDestroy(): readonly string[] {
 /*
  * A broadcast returns once one peer has the message, while its sends to the
  * others, which redial a peer whose connection failed, carry on
- * [Keeta TS] index.js:73164-73240, 73261-73324; stopping the node closes
+ * [Keeta TS] index.js:74312-74388, 74409-74472; stopping the node closes
  * those connections under them.
  */
 test('a node stopped while it broadcasts uses its key-value store only until it has stopped, and leaves no rejection unhandled', async function() {

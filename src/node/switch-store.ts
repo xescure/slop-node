@@ -12,11 +12,11 @@ function ignoreOutcome(): void {
  * passes every operation to the node's store until the node stops.
  *
  * A broadcast returns once one peer has the message
- * [Keeta TS] index.js:73324, and its sends to the other peers carry on with
+ * [Keeta TS] index.js:74472, and its sends to the other peers carry on with
  * nothing to wait for them: a send that fails redials the peer
- * [Keeta TS] index.js:73211-73235, records it in the store
- * [Keeta TS] index.js:73633-73644, and sends again, recording the message
- * without waiting for that write [Keeta TS] index.js:73015-73017. Such work
+ * [Keeta TS] index.js:74359-74383, records it in the store
+ * [Keeta TS] index.js:74781-74792, and sends again, recording the message
+ * without waiting for that write [Keeta TS] index.js:74163-74165. Such work
  * can outlive the node, so once the node has stopped, the switch's
  * operations go to a store in memory that is then dropped, and the node's
  * store may be closed as soon as the operations it was already given have

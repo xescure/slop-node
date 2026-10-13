@@ -18,7 +18,7 @@ const FEE_PER_BLOCK = 5n;
 
 /*
  * The network created by UserClient.initializeNetwork lets anyone create
- * storage accounts only [Keeta TS] index.js:79607; a development network
+ * storage accounts only [Keeta TS] index.js:80759; a development network
  * also lets anyone create tokens, which needs TOKEN_ADMIN_CREATE.
  */
 const NETWORK_DEFAULT_PERMISSION = ['ACCESS', 'STORAGE_CREATE', 'TOKEN_ADMIN_CREATE'] as const;
@@ -138,7 +138,7 @@ describe.each(STORAGES_UNDER_TEST)('the official SDK against a node on %s', func
 
 		/*
 		 * The supply is minted to the token account. The builder writes a
-		 * block's sends before its supply change [Keeta TS] index.js:57723-57807,
+		 * block's sends before its supply change [Keeta TS] index.js:58719-58803,
 		 * so sending the new supply on in the same block would overdraw the
 		 * token account; the issuer sends it on from the token account next.
 		 */
@@ -192,7 +192,7 @@ describe.each(STORAGES_UNDER_TEST)('the official SDK against a node on %s', func
 		const head = (await holder.head())?.toString();
 
 		const refusal = await refusalOf(holder.send(RECEIVER, SUPPLY + 1n, holder.baseToken));
-		// [Keeta TS] index.js:70088 refuses a balance that would become negative.
+		// [Keeta TS] index.js:71124 refuses a balance that would become negative.
 		expect(lib.Error.isInstance(refusal)).toBe(true);
 		expect(refusal).toMatchObject({ code: 'LEDGER_INVALID_BALANCE', type: 'LEDGER' });
 

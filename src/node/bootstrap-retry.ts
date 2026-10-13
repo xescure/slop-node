@@ -63,7 +63,7 @@ export function backoffAfter(refusals: number): number {
 
 /** What a refused staple waits for before it is worth offering again. */
 export type Awaited =
-	/** Voting weight: the voters, by public key, whose weight was too little [Keeta TS] index.js:69740-69760. */
+	/** Voting weight: the voters, by public key, whose weight was too little [Keeta TS] index.js:70776-70796. */
 	| { readonly kind: 'weight'; readonly voters: readonly string[] }
 	/** A staple that lands on one of these accounts, by public key: a credit, a grant, the block a chain lacks. */
 	| { readonly kind: 'accounts'; readonly accounts: readonly string[] }

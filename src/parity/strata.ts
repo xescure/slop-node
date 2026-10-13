@@ -1,6 +1,6 @@
 import type { AccountKind } from './follower-store.js';
 
-/** The operation types a block may carry, by the names the client gives them [Keeta TS] index.js:64636-64646. */
+/** The operation types a block may carry, by the names the client gives them [Keeta TS] index.js:65626-65636. */
 export const OPERATION_NAMES = ['SEND', 'SET_REP', 'SET_INFO', 'MODIFY_PERMISSIONS', 'CREATE_IDENTIFIER', 'TOKEN_ADMIN_SUPPLY', 'TOKEN_ADMIN_MODIFY_BALANCE', 'RECEIVE', 'MANAGE_CERTIFICATE'] as const;
 
 export type OperationName = typeof OPERATION_NAMES[number];

@@ -46,9 +46,9 @@ export function readLedger<Result>(request: APIRequest, identifier: string, read
 
 /**
  * A refusal of the request, as the API error the client rebuilds from the
- * code [Keeta TS] index.js:66022-66040. The package exports no constructor
+ * code [Keeta TS] index.js:67012-67030. The package exports no constructor
  * for it, and its JSON decoder builds one from a valid code
- * [Keeta TS] index.js:66334-66410.
+ * [Keeta TS] index.js:67343-67419.
  */
 export function apiError(code: APIErrorCode, message: string): Error {
 	return(lib.Error.fromJSON({ type: 'API', code, message }));
@@ -103,7 +103,7 @@ function parseSide<Side extends string>(query: APIRequest['query'], sides: reado
 
 /**
  * Which ledger to read: the main ledger unless the request names the side
- * ledger [Keeta TS] index.js:67868-67873, 58778-58789; any other side is
+ * ledger [Keeta TS] index.js:68904-68909, 59775-59786; any other side is
  * refused as a representative refuses it.
  * [node-lite] adapted from ledgerSelector.
  */
@@ -114,9 +114,9 @@ export function parseLedgerStorage(query: APIRequest['query']): LedgerStorage {
 /**
  * Which ledger to find a block on, where a request may also name both, as
  * the client does for the blocks of an account it recovers
- * [Keeta TS] index.js:59349-59351; the ledger passes the choice on to its
+ * [Keeta TS] index.js:60341-60343; the ledger passes the choice on to its
  * storage, which reads both as it does for its own checks
- * [Keeta TS] index.js:69502-69505, 67668.
+ * [Keeta TS] index.js:70538-70541, 68704.
  */
 export function parseLedgerSelector(query: APIRequest['query']): LedgerSelector {
 	return(parseSide(query, LEDGER_SELECTORS));
@@ -137,7 +137,7 @@ export function parseToken(text: string): TokenAddress {
 }
 
 /**
- * Accounts separated by commas, as the client joins them [Keeta TS] index.js:59958-59960.
+ * Accounts separated by commas, as the client joins them [Keeta TS] index.js:60948-60950.
  * [node-lite] adapted from parseAccounts.
  */
 export function parseAccountList(text: string): GenericAccount[] {

@@ -9,7 +9,7 @@ import { confirmed, genesisBlocksOf, send, sendFrom } from './support.js';
  * account's head, and a node votes for one successor of a previous at a
  * time. NOT_OPENING and NOT_SUCCESSOR name every account the request's head
  * check covered.
- * [Keeta TS] index.js:69260-69305, 70096-70170
+ * [Keeta TS] index.js:70296-70341, 71132-71206
  */
 
 /** User 0's genesis block before its head, so a block after it is no successor. */

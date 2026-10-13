@@ -4,11 +4,11 @@ import type { EnvironmentConfig } from './config.js';
 
 /**
  * The arenas of its key-value store in which the switch keeps peers: those it
- * has verified and those that greeted it [Keeta TS] index.js:72532-72548, 73563-73567, 73644,
- * when it last saw each [Keeta TS] index.js:73451, the connections it can
- * reopen [Keeta TS] index.js:72460-72472, 72720, 73390-73401, when it last
- * dialed each manual peer [Keeta TS] index.js:72626-72633, and the filters
- * peers' connections asked for [Keeta TS] index.js:73580, 73659.
+ * has verified and those that greeted it [Keeta TS] index.js:73680-73696, 74711-74715, 74792,
+ * when it last saw each [Keeta TS] index.js:74599, the connections it can
+ * reopen [Keeta TS] index.js:73608-73620, 73868, 74538-74549, when it last
+ * dialed each manual peer [Keeta TS] index.js:73774-73781, and the filters
+ * peers' connections asked for [Keeta TS] index.js:74728, 74807.
  */
 export const PEER_ARENAS = ['knownPeers', 'potentialPeers', 'lastSeenPeers', 'connectedPeers', 'manualPeerCheckIn', 'messageFilters'] as const;
 
@@ -30,7 +30,7 @@ export async function rememberedPeerArenas(kv: KVStorageProviderAPI): Promise<Pe
 
 /**
  * The switch dials and broadcasts to the peers its store remembers, whatever
- * the environment names [Keeta TS] index.js:72519-72620, 73250-73306, so a node
+ * the environment names [Keeta TS] index.js:73667-73768, 74398-74454, so a node
  * whose network is closed to its peer-to-peer surface (networkClosedToP2P)
  * refuses to start with any.
  */

@@ -51,7 +51,7 @@ function gate(): { readonly opened: Promise<void>; readonly open: () => void } {
  * Ledger fixes an attempt's moment before it asks the driver for the
  * transaction, so a held attempt keeps a moment from before the wait, like
  * one queued behind a lock or waiting for a connection.
- * [Keeta TS] index.js:70393-70396
+ * [Keeta TS] index.js:71429-71432
  */
 class HeldAdmissions {
 	readonly #count: number;

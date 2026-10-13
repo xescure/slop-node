@@ -24,7 +24,7 @@ import { BLOCK_WINDOW, TEMPORARY_VALIDITY, VOTE_SLOP, confirmed, extraUserKey, i
  * can serve several votes, so only the count limits a fee block. Only a
  * permanent request is checked, and only one with a fee block validates its
  * ledger outcome again.
- * [Keeta TS] index.js:69073-69212, 69324-69330, 70212-70226
+ * [Keeta TS] index.js:70109-70248, 70360-70366, 71248-71262
  */
 
 const lib = KeetaNet.lib;
@@ -41,7 +41,7 @@ const EARLIER_QUOTED_FEE = 9n;
  * A key outside the default network's users. Its opening block creates the
  * fee token, so the token's address follows from the key alone and a node's
  * fee policy can name it before the case starts.
- * [Keeta TS] index.js:62864-62889
+ * [Keeta TS] index.js:63854-63879
  */
 const TOKEN_ISSUER = extraUserKey(DEFAULT_WEIGHTS.length, 0);
 
@@ -203,7 +203,7 @@ export const feeScenarios: readonly Scenario[] = [
 	/*
 	 * The fee check runs before the outcome is validated again, so the other
 	 * token need not exist.
-	 * [Keeta TS] index.js:69179-69212, 69324-69330
+	 * [Keeta TS] index.js:70215-70248, 70360-70366
 	 */
 	scenario('F5a', 'a fee paid in another token is refused', CHARGING, async function(recorder) {
 		await payAndRequest(recorder, [...feesTo(recorder, [0, 1]), { to: recorder.representative(2), token: FEE_TOKEN }]);
@@ -290,7 +290,7 @@ export const feeScenarios: readonly Scenario[] = [
 	 * quote from before a fee change is one the same key signed on a ledger
 	 * of its own that charges more. The node's own quote shows what it
 	 * charges now.
-	 * [Keeta TS] index.js:70212-70226
+	 * [Keeta TS] index.js:71248-71262
 	 */
 	scenario('F12', 'a vote on a quote carries the quote\'s fee, not the one its node charges now', CHARGING, async function(recorder) {
 		await recorder.addGenesis(0);

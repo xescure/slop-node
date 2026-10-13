@@ -8,16 +8,16 @@ export type PeerLimits = {
 
 /**
  * Representatives keep a socket to each peer they dial, and every client
- * listening for its account's staples keeps one [Keeta TS] index.js:61072-61085,
+ * listening for its account's staples keeps one [Keeta TS] index.js:62062-62075,
  * so a representative serves many; 512 stays below the 1024 open files a
  * process may have by default on Linux, leaving the rest to API requests, the
  * database and the node's own dials, and bounds the frames of up to 16 MiB that
  * open sockets can make the node hold.
  *
  * A representative posts each staple it adds, or passes on, to each peer once
- * [Keeta TS] index.js:71451-71464, 72195-72218, so a node that keeps up handles
+ * [Keeta TS] index.js:72579-72592, 73343-73366, so a node that keeps up handles
  * a few at a time, and handling a greeting posts every peer the node knows to
- * the sender [Keeta TS] index.js:73466-73479. Beyond 256 a post would only
+ * the sender [Keeta TS] index.js:74614-74627. Beyond 256 a post would only
  * queue more work; its sender ignores the answer, and a staple refused still
  * reaches the node by bootstrap.
  */

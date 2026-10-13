@@ -34,7 +34,7 @@ const BASE_TOKEN_INFO = {
 } as const;
 
 // Without TOKEN_ADMIN_CREATE nobody could create tokens on the test network.
-// [Keeta TS] index.js:79607 defaults the network address to STORAGE_CREATE only.
+// [Keeta TS] index.js:80759 defaults the network address to STORAGE_CREATE only.
 const NETWORK_DEFAULT_PERMISSION = ['ACCESS', 'STORAGE_CREATE', 'TOKEN_ADMIN_CREATE'] as const;
 
 const GENESIS_VOTE_SERIAL = 0n;
@@ -138,7 +138,7 @@ function computeFeeFor(policy: TestFeePolicy): ComputeFee {
  * test timed out. Counting attempts makes it fail at once instead. Four is
  * enough for the races two processes of one representative can lose, each
  * attempt seeing the winner's commit.
- * [Keeta TS] index.js:70307-70330, 70361-70368
+ * [Keeta TS] index.js:71343-71366, 71397-71404
  */
 export const TEST_TRANSACTION_RETRIES = 4;
 
@@ -174,7 +174,7 @@ function baseTokenMetadata(): string {
 /*
  * The upstream generator funds one recipient, so it covers only the case with a
  * single representative.
- * [Keeta TS] index.js:79586
+ * [Keeta TS] index.js:80738
  */
 async function buildSingleHolderGenesis(trustedSigner: Account, holder: Holder): Promise<VoteStaple> {
 	const { voteStaple } = await lib.Utils.Initial.generateInitialVoteStaple({
@@ -198,7 +198,7 @@ async function buildSingleHolderGenesis(trustedSigner: Account, holder: Holder):
  * SET_REP block per holder. Genesis is only ever added to a ledger: it spends
  * TOKEN_ADMIN_MODIFY_BALANCE, which voting does not support, and total weight
  * is still zero while it is added.
- * [Keeta TS] index.js:69747-69751
+ * [Keeta TS] index.js:70783-70787
  */
 async function buildMultiHolderGenesis(trustedSigner: Account, holders: readonly Holder[], date: Date): Promise<VoteStaple> {
 	const { networkAddress, baseToken } = lib.Account.generateBaseAddresses(NETWORK);

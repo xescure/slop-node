@@ -49,7 +49,7 @@ function apiEndpointsOf(peers: readonly P2PPeer[]): string[] {
 /**
  * The switch lists a representative's peers only once the representative
  * advertises both its endpoints, and fails until then
- * [Keeta TS] index.js:72543, 73506-73516; it cannot have greeted anyone
+ * [Keeta TS] index.js:73691, 74654-74664; it cannot have greeted anyone
  * before, so it knows no peer.
  */
 function switchListsPeers(config: NodeConfig): boolean {

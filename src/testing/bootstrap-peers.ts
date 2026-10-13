@@ -284,7 +284,7 @@ function lastVoteOf(bytes: Buffer): number {
  * whatever they depend on, and pages them as the main network's
  * representatives do: it keys each vote at the moment it was made, and lists
  * from a start each staple with a vote made at or after it, leaving out
- * those the filter names, up to the limit [Keeta TS] index.js:69633-69702,
+ * those the filter names, up to the limit [Keeta TS] index.js:70669-70738,
  * as one read of its votes, in no order of its own: the order applied.
  */
 export async function startServingPeer(): Promise<ServingPeer> {
@@ -358,7 +358,7 @@ export type ReadingRule = { readonly votesPerRead: number; readonly resumesPast:
  * A representative keyed by votes that reads them as the rule says, lists
  * each read's staples but those the filter names, up to the limit, and
  * answers for a block the votes on it and each block they cover, as the
- * client asks for a block's staple [Keeta TS] index.js:58802-58842,
+ * client asks for a block's staple [Keeta TS] index.js:59799-59839,
  * 59887-59933, 58778-58796.
  */
 export async function startReadingPeer(rule: ReadingRule): Promise<ReadingPeer> {
@@ -490,7 +490,7 @@ export async function startReadingPeer(rule: ReadingRule): Promise<ReadingPeer> 
 	});
 }
 
-/** The most votes upstream's catch-up reads at a time [Keeta TS] index.js:69653-69656. */
+/** The most votes upstream's catch-up reads at a time [Keeta TS] index.js:70689-70692. */
 export const VOTES_PER_READ = 200;
 
 /** A staple as the catch-up reads it: its blocks hash and when its votes were made. */
@@ -502,7 +502,7 @@ type VotedStaple = { readonly blocksHash: { toString(): string }; readonly votes
  * made in the same millisecond as another staple's: the votes made at or
  * after the moment, by when they were made, read VOTES_PER_READ at a time,
  * and each read's staples once, in the order their votes come
- * [Keeta TS] index.js:69633-69702.
+ * [Keeta TS] index.js:70669-70738.
  */
 export function listedByVotes(staples: readonly VotedStaple[], from: Date): string[] {
 	const votes = staples.flatMap(function(staple): { readonly staple: string; readonly made: number }[] {

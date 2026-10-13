@@ -21,7 +21,7 @@ const ENDPOINTS = { api: 'https://rep.invalid/api', p2p: 'wss://rep.invalid/p2p'
 /**
  * How a node is configured to name itself to clients. A representative
  * node's switch fails to list peers without both endpoints and a key
- * [Keeta TS] index.js:73496-73516, so only a participant can lack one.
+ * [Keeta TS] index.js:74644-74664, so only a participant can lack one.
  */
 type Identity =
 	| { readonly kind: 'representative' }
@@ -31,8 +31,8 @@ type Identity =
  * A node of the network that is never run, configured with the identity
  * given. The node is built with a key, as this upstream builds every node's
  * ledger as a representative's, which refuses to exist without one, until it
- * computes the ledger kind from the node kind [Keeta TS] index.js:71334-71346,
- * 70245-70248; a participant without a key has it taken from its
+ * computes the ledger kind from the node kind [Keeta TS] index.js:72462-72474,
+ * 71281-71284; a participant without a key has it taken from its
  * configuration afterwards.
  */
 function nodeWith(network: TestNetwork, identity: Identity): Node {

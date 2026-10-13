@@ -89,7 +89,7 @@ export type MultisigSigner = Extract<BlockV2JSON['signer'], readonly unknown[]>;
 
 /*
  * Only a version 2 block carries a multisig signer; each listed key signs.
- * [Keeta TS] index.js:64140-64166
+ * [Keeta TS] index.js:65130-65156
  */
 export function multisigSendBlock(input: BlockContext & { readonly from: GenericAccount; readonly signer: MultisigSigner; readonly to: GenericAccount; readonly amount: bigint; readonly token: TokenAddress }): Promise<Block> {
 	const { from, signer, to, amount, token, previous, network, subnet, idempotent, date } = input;
@@ -125,7 +125,7 @@ export function setRepresentativeBlock(input: SignedBlockContext & { readonly re
 /*
  * The identifier derives from the owner's previous block and the operation
  * index, so the token address is known before the block is published.
- * [Keeta TS] index.js:62864-62889
+ * [Keeta TS] index.js:63854-63879
  */
 export async function createTokenBlock(input: BlockContext & { readonly owner: Account }): Promise<{ readonly block: Block; readonly token: TokenAddress }> {
 	const { owner, ...context } = input;
@@ -153,7 +153,7 @@ export async function createStorageBlock(input: BlockContext & { readonly owner:
 /*
  * A multisig identifier carries its signers and quorum in the creation
  * arguments; its address derives like any other identifier's.
- * [Keeta TS] index.js:68305-68320
+ * [Keeta TS] index.js:69341-69356
  */
 export async function createMultisigBlock(input: BlockContext & { readonly owner: Account; readonly signers: readonly MultisigConfig['signers'][number][]; readonly quorum: bigint }): Promise<{ readonly block: Block; readonly multisig: MultisigAddress }> {
 	const { owner, signers, quorum, ...context } = input;
@@ -212,7 +212,7 @@ export function setInfoBlock(input: SignedBlockContext & Omit<BlockJSONOperation
  * Adding a certificate requires the intermediate certificates field to be
  * present, and null states that there are none; removing one requires it to
  * be absent.
- * [Keeta TS] index.js:65684-65686
+ * [Keeta TS] index.js:66674-66676
  */
 export function manageCertificateBlock(input: SignedBlockContext & Omit<BlockJSONOperationMANAGE_CERTIFICATE, 'type'>): Promise<Block> {
 	const { account, signer, previous, network, subnet, idempotent, date, intermediateCertificates, ...fields } = input;
@@ -237,7 +237,7 @@ export function manageCertificateBlock(input: SignedBlockContext & Omit<BlockJSO
 /*
  * A fee block pays the voters with SENDs only, as many as the votes that
  * charge a fee, and must be a version 2 block with the FEE purpose.
- * [Keeta TS] index.js:57612-57681
+ * [Keeta TS] index.js:58608-58677
  */
 export function feeBlock(input: BlockContext & { readonly from: Account; readonly payments: readonly Pick<BlockJSONOperationSEND, 'to' | 'token' | 'amount'>[] }): Promise<Block> {
 	const { from, payments, previous, network, subnet, idempotent, date } = input;
@@ -280,7 +280,7 @@ type VoteValidity = {
  * newest block's date, plus the vote's delay, rather than from the clock. The
  * clock has passed that date by the time the blocks are voted on, so a vote
  * without a delay is never issued in the future.
- * [Keeta TS] index.js:81533-81540
+ * [Keeta TS] index.js:82685-82692
  */
 function permanentValidityForBlocks(blocks: readonly Block[], delayMilliseconds: number): VoteValidity {
 	const validFrom = new Date(delayMilliseconds + Math.max(...blocks.map(function(block): number {

@@ -36,7 +36,7 @@ export type RouteMethod = 'GET' | 'POST';
 /**
  * Whether the node a request ran on is synced before the request is
  * answered. A route that peers post to is not: syncing waits for the node's
- * pending sends to peers [Keeta TS] index.js:71377-71383, 72677-72683, among
+ * pending sends to peers [Keeta TS] index.js:72505-72511, 73825-73831, among
  * them its own posts to the peer that is waiting for this answer, so two
  * nodes posting to each other would each wait for the other.
  */

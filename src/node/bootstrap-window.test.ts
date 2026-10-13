@@ -8,7 +8,7 @@ import type { NamedStaple } from './bootstrap-window.js';
 
 const lib = KeetaNet.lib;
 
-/** The longest URL the client requests [Keeta TS] index.js:59614-59617. */
+/** The longest URL the client requests [Keeta TS] index.js:60606-60609. */
 const CLIENT_URL_LIMIT = 8192;
 
 /** About the size of a staple of one send with two votes. */
@@ -117,7 +117,7 @@ describe('the staples a filter names', function() {
 
 	/*
 	 * The client places a staple's cells by two 32-bit hashes of its bytes
-	 * [Keeta TS] index.js:90799-90809, so a filter names, on every cell, a
+	 * [Keeta TS] index.js:92959-92969, so a filter names, on every cell, a
 	 * staple whose two hashes agree with a named staple's modulo its size. In
 	 * a filter of 53 cells, which one staple's 24 cells leave mostly clear,
 	 * such a staple turns up among some three thousand.

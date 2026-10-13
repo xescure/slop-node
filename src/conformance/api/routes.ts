@@ -12,7 +12,7 @@ export type Route = {
 	readonly path: string;
 };
 
-/** Every route is served below this path [Keeta TS] index.js:61390. */
+/** Every route is served below this path [Keeta TS] index.js:62380. */
 const API_BASE = '/api';
 
 /** The tree key that stands for the subtree's own path rather than a segment of it. */
@@ -179,7 +179,7 @@ export function routeOfRequest(routes: readonly Route[], method: HTTPMethod, pat
 	return(best.route);
 }
 
-/** The path parameters of a request the route serves, by name, decoded as the client encoded them [Keeta TS] index.js:59717-59725. */
+/** The path parameters of a request the route serves, by name, decoded as the client encoded them [Keeta TS] index.js:60710-60718. */
 export function pathParameters(route: Route, path: string): Readonly<Record<string, string>> {
 	const segments = path.split('/');
 	const template = route.path.split('/');

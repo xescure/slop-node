@@ -64,13 +64,13 @@ def fail(message):
 
 
 # The first byte of an account's public key string names its key type
-# [Keeta TS] index.js:61548-61554, 62455-62468.
+# [Keeta TS] index.js:62538-62544, 63445-63458.
 KEY_TYPE_ECDSA_SECP256K1 = 0
 KEY_TYPE_NETWORK = 2
 KEY_TYPE_TOKEN = 3
 KEY_TYPE_STORAGE = 4
 KEY_TYPE_MULTISIG = 7
-# The operation types a block carries [Keeta TS] index.js:64636-64646.
+# The operation types a block carries [Keeta TS] index.js:65626-65636.
 OPERATION_SEND = 0
 OPERATION_CREATE_IDENTIFIER = 4
 # Enough of the network's first staples to hold one of each kind the history
@@ -231,7 +231,7 @@ def page_length(name, body):
 def last_staple_id(name, body):
 	"""
 	The blocks hash of the last staple <name> returned, the SHA3-256 of its
-	blocks' hashes [Keeta TS] index.js:80126-80135, or None when <name> was
+	blocks' hashes [Keeta TS] index.js:81278-81287, or None when <name> was
 	not requested.
 	"""
 	if body is None:
@@ -243,7 +243,7 @@ def last_staple_id(name, body):
 
 
 def staple_id(staple):
-	"""The blocks hash of a staple, the SHA3-256 of its blocks' hashes [Keeta TS] index.js:80126-80135."""
+	"""The blocks hash of a staple, the SHA3-256 of its blocks' hashes [Keeta TS] index.js:81278-81287."""
 	return hashlib.sha3_256(b"".join(bytes.fromhex(block["$hash"]) for block in staple["blocks"])).hexdigest().upper()
 
 
@@ -355,7 +355,7 @@ def capture(parameters, directory, selected):
 
 	c.get("ledger-block", [*ledger, "block", p.user_head])
 	c.get("ledger-block-side", [*ledger, "block", p.user_head], {"side": "side"})
-	# The client asks for "both" as it recovers an account [Keeta TS] index.js:59349-59351.
+	# The client asks for "both" as it recovers an account [Keeta TS] index.js:60341-60343.
 	c.get("ledger-block-both", [*ledger, "block", p.user_head], {"side": "both"})
 	c.get("ledger-block-unknown", [*ledger, "block", UNKNOWN_HASH])
 	c.get("ledger-block-malformed", [*ledger, "block", MALFORMED_HASH])

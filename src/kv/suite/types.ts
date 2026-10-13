@@ -4,7 +4,7 @@ import type { KVStorageProviderAPI } from '@keetanetwork/keetanet-client/lib/kv/
  * What a store does with an entry whose expiry has passed. Upstream's memory
  * store forgets such an entry only when get reads it; until then, list still
  * names it and an exclusive create still finds it
- * [Keeta TS] index.js:66878-66885, 66897-66914, 66927-66930. A database store
+ * [Keeta TS] index.js:67914-67921, 67933-67950, 67963-67966. A database store
  * treats it as absent everywhere.
  */
 export type ExpiredEntryHandling = 'forgotten-on-read' | 'absent';
@@ -21,7 +21,7 @@ export type KVStoreSharing =
 /** What an exclusive create of a key that exists is refused with. */
 export type ExistingKeyRefusal =
 	| { readonly code: 'KV_KEY_ALREADY_EXISTS' }
-	// Upstream's memory store raises a plain error [Keeta TS] index.js:66880-66884.
+	// Upstream's memory store raises a plain error [Keeta TS] index.js:67916-67920.
 	| { readonly message: string };
 
 /** One entry of the shared key-value suite. */

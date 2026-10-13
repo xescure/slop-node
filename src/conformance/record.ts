@@ -154,7 +154,7 @@ export class CaseRecorder {
 	/**
 	 * A staple's canonical bytes are its uncompressed form, the one its hash
 	 * covers. A staple an earlier step already carried is referenced.
-	 * [Keeta TS] index.js:81036-81040
+	 * [Keeta TS] index.js:82188-82192
 	 */
 	add(actor: number, staple: VoteStaple, from?: AddSource): Promise<StepHandle> {
 		const bytes = toBase64(staple.toBytes(true));

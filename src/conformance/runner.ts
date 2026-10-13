@@ -185,7 +185,7 @@ function requireIssuer(issuer: Account, representative: Account | null, what: st
 /**
  * Re-parses what the ledger returned, which verifies the signature, and
  * checks that the actor's representative issued it.
- * [Keeta TS] index.js:80558-80563
+ * [Keeta TS] index.js:81710-81715
  */
 function observeVote(vote: Vote, representative: Account | null): Performed {
 	let parsed: Vote;
@@ -254,7 +254,7 @@ function upstreamErrorOf(error: unknown): CaseError {
  * it, and our drivers wrap anything without a KeetaNet code as LEDGER_OTHER
  * with the original as its cause. That wrapping is the driver's, so the
  * cause is recorded instead, and a wrapping without one is a fault.
- * [Keeta TS] index.js:70351
+ * [Keeta TS] index.js:71387
  */
 export function caseErrorOf(error: unknown): CaseError {
 	if (lib.Error.isInstance(error) && error.code === DRIVER_WRAPPING_CODE) {

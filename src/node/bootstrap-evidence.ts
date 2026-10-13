@@ -25,7 +25,7 @@ export const VOTE_KEY_TOLERANCE_MILLISECONDS = 100;
 
 /**
  * The most votes a peer reads at a time for a request
- * [Keeta TS] index.js:69655-69659, and so the most staples it lists for one
+ * [Keeta TS] index.js:70691-70695, and so the most staples it lists for one
  * read: a page cut within a read may have listed only some of the staples of
  * that read, which are among this many last.
  */
@@ -202,7 +202,7 @@ export class KnownVotes {
 /**
  * The index below which a page's staples were listed by reads it listed in
  * full. A peer stops between reads when its time for a request runs out
- * [Keeta TS] index.js:69641-69647, but within one when it reaches the limit,
+ * [Keeta TS] index.js:70677-70683, but within one when it reaches the limit,
  * the one asked for or a lower one of its own: so all of a page shorter than
  * the limit asked for and than the longest answer the peer gave before,
  * which no limit of its own cut, and of any other page, all but its

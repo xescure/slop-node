@@ -12,7 +12,7 @@ import type { PublishedToken } from './support.js';
  * each token may not fall below zero at any point of the request, taken in
  * block order, a RECEIVE needs what was sent to it earlier in the request,
  * and a token's supply has a maximum.
- * [Keeta TS] index.js:67133-67138, 67502-67530, 70084-70093
+ * [Keeta TS] index.js:68169-68174, 68538-68566, 71120-71129
  */
 
 const lib = KeetaNet.lib;
@@ -84,10 +84,10 @@ export const balanceScenarios: readonly Scenario[] = [
 	/*
 	 * The literal row is a negative amount after the cutoff, which no block
 	 * can carry: building or parsing it fails with BLOCK_AMOUNT_BELOW_ZERO
-	 * [Keeta TS] index.js:67139-67148. Before the cutoff such a block exists,
+	 * [Keeta TS] index.js:68175-68184. Before the cutoff such a block exists,
 	 * and the ledger refuses it with a check of its own, made before the
 	 * block's age is checked.
-	 * [Keeta TS] index.js:69947-69957
+	 * [Keeta TS] index.js:70983-70993
 	 */
 	scenario('B8', 'a negative amount, in a block dated before the cutoff that still admits one, is refused by the ledger\'s operation check', {}, async function(recorder) {
 		await recorder.addGenesis(0);
@@ -118,7 +118,7 @@ export const balanceScenarios: readonly Scenario[] = [
 	/*
 	 * Each account's balance of each token is checked for falling negative
 	 * before its receives are.
-	 * [Keeta TS] index.js:70084-70093
+	 * [Keeta TS] index.js:71120-71129
 	 */
 	scenario('EO17', 'an account whose receive is not met and that overspends is refused for the balance', {}, async function(recorder) {
 		await recorder.addGenesis(0);

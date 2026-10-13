@@ -18,7 +18,7 @@ const lib = KeetaNet.lib;
 type PeerEndpoints = { readonly p2p: string; readonly api: string };
 
 /**
- * A peer as a node writes it out [Keeta TS] index.js:71988-72019: a
+ * A peer as a node writes it out [Keeta TS] index.js:73136-73167: a
  * representative with its key, endpoints, preferred update channel and either
  * its signature in base64 or a certificate, or a participant with only its
  * kind.
@@ -28,7 +28,7 @@ type PeerRecord =
 	| { kind: NodeKind.REPRESENTATIVE; key: string; endpoints: PeerEndpoints; preferUpdates: 'http' | 'websocket'; certificate: null }
 	| { kind: NodeKind.PARTICIPANT };
 
-/** [Keeta TS] index.js:71988-72019 */
+/** [Keeta TS] index.js:73136-73167 */
 function peerRecord(peer: P2PPeer): PeerRecord {
 	switch (peer.kind) {
 		case lib.Node.Kind.REPRESENTATIVE: {
@@ -54,7 +54,7 @@ type PeersResult = { peers: PeerRecord[] };
 /**
  * The peers the switch counts as current: validated, recently seen, and never
  * this node itself, as the switch lists them by default
- * [Keeta TS] index.js:72521-72614.
+ * [Keeta TS] index.js:73669-73762.
  * [node-lite] adapted from getPeers.
  */
 async function getPeers(request: APIRequest): Promise<PeersResult> {
@@ -78,7 +78,7 @@ function debugClearStats(): Promise<DeclaredResult<DeclaredNodeGroup['ledger']['
 }
 
 /**
- * The XOR of every block hash the ledger applied [Keeta TS] index.js:69415,
+ * The XOR of every block hash the ledger applied [Keeta TS] index.js:70451,
  * with the moment of the snapshot of the ledger it describes.
  * [node-lite] adapted from getLedgerChecksum.
  */
@@ -94,8 +94,8 @@ function getVersion(): Promise<DeclaredResult<DeclaredNodeGroup['version']['GET'
 /**
  * Adds a staple of blocks and the votes that confirm them to the ledger, and
  * passes on to peers the staples that adding it created; publish says
- * whether the staple sent was among them [Keeta TS] index.js:71384-71410,
- * 58481-58485.
+ * whether the staple sent was among them [Keeta TS] index.js:72512-72538,
+ * 59478-59482.
  * [node-lite] adapted from publishVoteStaple.
  */
 async function publishVoteStaple(request: APIRequest, body: unknown): Promise<DeclaredResult<DeclaredNodeGroup['publish']['POST']>> {
@@ -103,12 +103,12 @@ async function publishVoteStaple(request: APIRequest, body: unknown): Promise<De
 	return({ publish: await request.node.addToLedger(staple) });
 }
 
-/** A page of a bootstrap holds 1000 staples, the ledger's own default, unless the request asks for fewer [Keeta TS] index.js:69633. */
+/** A page of a bootstrap holds 1000 staples, the ledger's own default, unless the request asks for fewer [Keeta TS] index.js:70669. */
 const BOOTSTRAP_LIMIT: LimitBounds = { defaultLimit: 1000, maximum: 1000 };
 
 /**
  * The moment a bootstrap page starts from, as the client writes a date
- * [Keeta TS] index.js:59166-59168. A representative fails on one it cannot
+ * [Keeta TS] index.js:60156-60158. A representative fails on one it cannot
  * read as an internal error rather than refusing it, so this throws a plain
  * error.
  */
@@ -126,9 +126,9 @@ function parseBootstrapStart(text: string | undefined): Date {
 /**
  * The staples added to the ledger on or after the moment, leaving out those
  * the bloom filter says the client already holds; a page is empty once every
- * staple has been sent [Keeta TS] index.js:59140-59182, 69633-69700. The
+ * staple has been sent [Keeta TS] index.js:59140-59182, 70669-70736. The
  * ledger adds staples until their count reaches the limit, so a fractional
- * limit holds one staple more than its whole part [Keeta TS] index.js:69639.
+ * limit holds one staple more than its whole part [Keeta TS] index.js:70675.
  * [node-lite] adapted from getVoteStaplesAfter.
  */
 async function getVoteStaplesAfter(request: APIRequest): Promise<DeclaredResult<DeclaredNodeGroup['bootstrap']['votes']['GET']>> {

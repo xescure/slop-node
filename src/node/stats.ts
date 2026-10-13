@@ -8,7 +8,7 @@ const lib = KeetaNet.lib;
 
 const ClientStats: typeof Stats = lib.Stats;
 
-/** A ledger checksum and every other xor statistic is a hash's width [Keeta TS] index.js:74282. */
+/** A ledger checksum and every other xor statistic is a hash's width [Keeta TS] index.js:75430. */
 const XOR_BUFFER_SIZE = lib.Utils.Hash.HashFunctionLength;
 
 function ignoreFailure(): void {
@@ -19,8 +19,8 @@ function ignoreFailure(): void {
  * The node's statistics, which survive a store that fails for a while.
  *
  * Upstream's sync keeps the promise of a sync that failed, and every later
- * sync, get and getXor awaits it first [Keeta TS] index.js:74397-74398,
- * 74431-74432, 74473-74496: one failed write, such as one made while
+ * sync, get and getXor awaits it first [Keeta TS] index.js:75545-75546,
+ * 75579-75580, 75621-75644: one failed write, such as one made while
  * Postgres restarts, fails all of them until the process restarts, and the
  * changes that sync had taken are lost, the ledger checksum's among them.
  * Here each sync follows the one before it however that one ended, and a

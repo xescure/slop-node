@@ -236,7 +236,7 @@ async function headRecords(reader: LedgerReader, accounts: readonly GenericAccou
  * Storage cannot list idempotent keys, so each key is one that an applied
  * block carries, looked up on the main ledger under the block's account as
  * the ledger keys it.
- * [Keeta TS] index.js:68921-68931, 69711-69716
+ * [Keeta TS] index.js:69957-69967, 70747-70752
  */
 async function idempotentRecords(reader: LedgerReader, staples: readonly VoteStaple[]): Promise<IdempotentRecord[]> {
 	const records: IdempotentRecord[] = [];

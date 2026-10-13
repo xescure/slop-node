@@ -50,7 +50,7 @@ const PREFLIGHT_STATUS = 200;
 
 /**
  * Twice the largest message a peer may send over the WebSocket
- * [Keeta TS] index.js:71812, leaving room for the escaping of a message that
+ * [Keeta TS] index.js:72960, leaving room for the escaping of a message that
  * a peer posts over HTTP inside a JSON string.
  */
 const REQUEST_BODY_LIMIT_BYTES = 32 * 1024 * 1024;
@@ -170,7 +170,7 @@ function normalizePrefix(prefix: string): string {
 
 /**
  * The client requests a route at the advertised API endpoint followed by the
- * route's path [Keeta TS] index.js:59584-59585, so the routes are served below
+ * route's path [Keeta TS] index.js:60576-60577, so the routes are served below
  * the endpoint's own path.
  */
 function advertisedPrefix(apiEndpoint: string | undefined): string {
@@ -197,9 +197,9 @@ function needsAdvertising(config: LocalNodeConfig): boolean {
 }
 
 /**
- * The switch dials each manual peer as it is added [Keeta TS] index.js:72623-72658,
- * which Node does as it is constructed [Keeta TS] index.js:71352-71358, and greets
- * it with the node's endpoints [Keeta TS] index.js:73496-73513, which a node
+ * The switch dials each manual peer as it is added [Keeta TS] index.js:73771-73806,
+ * which Node does as it is constructed [Keeta TS] index.js:72480-72486, and greets
+ * it with the node's endpoints [Keeta TS] index.js:74644-74661, which a node
  * that advertises where it listens does not know yet; the peers are added once
  * it runs.
  */
@@ -365,7 +365,7 @@ export class LocalNode extends ClientNode {
 	 * then serves peers on "/p2p" unless told not to or its network is closed
 	 * to peers, dials its manual peers, and starts bootstrapping from its
 	 * peers. A peer's greeting on "/p2p" would make it a peer the node
-	 * broadcasts to [Keeta TS] index.js:73250, 73563-73567, and one it
+	 * broadcasts to [Keeta TS] index.js:74398, 74711-74715, and one it
 	 * remembers.
 	 */
 	override async run(options?: RunOptions): Promise<void> {
@@ -409,7 +409,7 @@ export class LocalNode extends ClientNode {
 	 * refuse them first (getConfigFromEnv, refuseRememberedPeers), but a node
 	 * built in code reaches here with whatever it was given, and the switch
 	 * dials both its manual peers and those its store remembers as it runs
-	 * [Keeta TS] index.js:72519-72620, 72622-72658.
+	 * [Keeta TS] index.js:73667-73768, 73770-73806.
 	 */
 	async #refusePeersWhereClosed(): Promise<void> {
 		const network = nodeNetworkClosedToP2P(this.config.network, this.ledger.ledgerWriteMode);
@@ -430,7 +430,7 @@ export class LocalNode extends ClientNode {
 		return(nodeNetworkClosedToP2P(this.config.network, this.ledger.ledgerWriteMode) === undefined);
 	}
 
-	/** A ledger that is read-only adds nothing, bootstrapped or not [Keeta TS] index.js:69363-69365. */
+	/** A ledger that is read-only adds nothing, bootstrapped or not [Keeta TS] index.js:70399-70401. */
 	#startBootstrap(): BootstrapClient | undefined {
 		const mode = this.ledger.ledgerWriteMode;
 		switch (mode) {
@@ -460,7 +460,7 @@ export class LocalNode extends ClientNode {
 	/**
 	 * Unlike Node.main, success does not end the process: run returns once the
 	 * node listens, and the node then serves until it is stopped. A failure to
-	 * start ends the process as Node.main does [Keeta TS] index.js:71301-71309.
+	 * start ends the process as Node.main does [Keeta TS] index.js:72429-72437.
 	 */
 	static override main(config: LocalNodeConfig): void {
 		const node = new LocalNode(config);
@@ -473,7 +473,7 @@ export class LocalNode extends ClientNode {
 	/**
 	 * Stops bootstrapping, then serving peers and requests, waiting for the
 	 * requests in flight, then stops the node, whose switch stops checking in
-	 * with manual peers [Keeta TS] index.js:72663-72666, and waits until the
+	 * with manual peers [Keeta TS] index.js:73811-73814, and waits until the
 	 * switch is done with every message peers delivered, over a WebSocket or
 	 * posted over HTTP, then with every connection, and then with the node's
 	 * store, so that the storage can be closed after. A check-in that its

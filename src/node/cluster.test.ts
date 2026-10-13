@@ -105,7 +105,7 @@ type Listener = {
 	readonly close: () => void;
 };
 
-/** The switch sends its messages as text frames [Keeta TS] index.js:72404. */
+/** The switch sends its messages as text frames [Keeta TS] index.js:73552. */
 function addOf(data: unknown): string | undefined {
 	if (typeof data !== 'string') {
 		return(undefined);
@@ -119,9 +119,9 @@ function addOf(data: unknown): string | undefined {
 
 /**
  * A participant connected to the member's /p2p WebSocket, greeting it with a
- * filter on the account [Keeta TS] index.js:73548-73582, once the switch has
+ * filter on the account [Keeta TS] index.js:74696-74730, once the switch has
  * registered the connection, which it does once it has handled the greeting
- * [Keeta TS] index.js:72319-72343, 72693-72731.
+ * [Keeta TS] index.js:73467-73491, 73841-73879.
  */
 async function listen(member: ClusterMember, filter: Account): Promise<Listener> {
 	const node = member.node;
@@ -177,7 +177,7 @@ async function listen(member: ClusterMember, filter: Account): Promise<Listener>
 	});
 }
 
-/** Resolves once the switch has kept a staple from a connection whose filter it does not pass [Keeta TS] index.js:73091-73096. */
+/** Resolves once the switch has kept a staple from a connection whose filter it does not pass [Keeta TS] index.js:74239-74244. */
 function filteredOnce(member: ClusterMember): Promise<void> {
 	const stats = member.node.stats;
 	const increment = stats.incr.bind(stats);
@@ -252,8 +252,8 @@ describe.each(STORAGES_UNDER_TEST)('representatives on %s', function(storage: St
 		await third.takeOffline();
 		/*
 		 * The client tries a representative it cannot reach 33 times, waiting
-		 * up to half a second between tries [Keeta TS] index.js:59570-59572,
-		 * 59700-59708, so while one is offline the client knows the reachable
+		 * up to half a second between tries [Keeta TS] index.js:60562-60564,
+		 * 60693-60701, so while one is offline the client knows the reachable
 		 * ones, as a wallet would after failing to reach it.
 		 */
 		const reachable = [first, second];

@@ -5,7 +5,7 @@ const lib = KeetaNet.lib;
 
 /**
  * How far ahead of the clock that reads it a vote may be timestamped
- * [Keeta TS] index.js:80373-80375, 80653.
+ * [Keeta TS] index.js:81525-81527, 81805.
  */
 export const VOTE_SLOP_MILLISECONDS = 60_000;
 
@@ -25,14 +25,14 @@ export const BOOTSTRAP_MARGIN_MILLISECONDS: number = VOTE_SLOP_MILLISECONDS + PE
  * How many staples a filter names at the error rate below. A filter is
  * always as large as one made for this many, about 40,000 bits, which keeps
  * the request within the 8 KiB the client allows a URL
- * [Keeta TS] index.js:59614-59617 even when the filter is full.
+ * [Keeta TS] index.js:60606-60609 even when the filter is full.
  */
 export const BLOOM_CAPACITY = 1200;
 
 /**
  * The rate a full filter's cells are sized for: that every cell of a staple
  * it was not given is set. A staple the filter names by mistake is one the
- * peer leaves out [Keeta TS] index.js:69686-69690; the filter names one at a
+ * peer leaves out [Keeta TS] index.js:70722-70726; the filter names one at a
  * higher rate in all (errorRateOf).
  */
 export const BLOOM_ERROR_RATE = 1e-7;
@@ -64,7 +64,7 @@ function hashesFor(named: number): number {
  * another by mistake: that every cell of the staple is set, or that its
  * cells are those of a staple the filter names. The client places a staple's
  * cells by the low 32 bits of two hashes of its bytes
- * [Keeta TS] index.js:26784-26786, 90743-90745, 90799-90809, 90820-90842, so
+ * [Keeta TS] index.js:27780-27782, 92903-92905, 92959-92969, 92980-93002, so
  * a staple whose two hashes agree with a named staple's modulo the filter's
  * size is named on every cell, which with FILTER_BITS cells happens once in
  * FILTER_BITS squared for each staple named: about 7.4e-7 for a full filter,
@@ -87,7 +87,7 @@ function errorRateOf(named: number): number {
  */
 export const ACCEPTED_ERROR_RATE: number = errorRateOf(BLOOM_CAPACITY);
 
-/** What a filter reads of a staple: its bytes, as the peer tests them [Keeta TS] index.js:69686-69690. */
+/** What a filter reads of a staple: its bytes, as the peer tests them [Keeta TS] index.js:70722-70726. */
 export type NamedStaple = {
 	readonly blocksHash: { toString(): string };
 	toBytes(): ArrayBuffer;

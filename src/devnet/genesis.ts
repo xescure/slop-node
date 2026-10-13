@@ -133,7 +133,7 @@ export function feeEnvironmentOf(index: RepresentativeIndex): Environment {
 	}
 }
 
-/** A staple is confirmed by votes holding at least this much of the delegated weight [Keeta TS] index.js:69753-69760. */
+/** A staple is confirmed by votes holding at least this much of the delegated weight [Keeta TS] index.js:70789-70796. */
 export function requiredVotingWeight(totalWeight: bigint): bigint {
 	return(((totalWeight * 2n) / 3n) + 1n);
 }
@@ -204,7 +204,7 @@ export type DelegationNetwork = {
 
 /*
  * The client caches each representative's weight and asks only those with
- * some for votes [Keeta TS] index.js:59728-59757, so every step takes a new
+ * some for votes [Keeta TS] index.js:60721-60750, so every step takes a new
  * client once every node holds the step before.
  */
 export async function delegateWeight(network: DelegationNetwork): Promise<void> {

@@ -71,7 +71,7 @@ const purgeExpiredEntries: Statement<[string, Date, number]> = kvStatement('purg
 /*
  * Counts in double precision, as upstream's memory store counts in
  * JavaScript numbers. An expired counter counts from zero and loses its
- * expiry; an unexpired one keeps it [Keeta TS] index.js:66931-66950. A live
+ * expiry; an unexpired one keeps it [Keeta TS] index.js:67967-67986. A live
  * value that is not a number returns no row.
  */
 const incrementEntry: Statement<[string, string, number, Date], { total: string }> = kvStatement('increment_entry', `
@@ -124,7 +124,7 @@ type Attempt<Result> =
 /**
  * Builds upstream's error for a code of its key-value type. The package
  * exports no key-value error class, so the public JSON decoder builds it.
- * [Keeta TS] index.js:66334-66338, 66399-66401, 66426-66431
+ * [Keeta TS] index.js:67343-67347, 67408-67410, 67435-67440
  */
 function createKVError(code: KVErrorCode, message: string): Error {
 	const error = lib.Error.fromJSON({ type: 'KV', code, message });
@@ -137,7 +137,7 @@ function createKVError(code: KVErrorCode, message: string): Error {
 /**
  * The moment an entry stored now with this ttl expires, by the caller's
  * clock, as upstream's memory store computes it
- * [Keeta TS] index.js:66887-66890. The store refuses a ttl that names no
+ * [Keeta TS] index.js:67923-67926. The store refuses a ttl that names no
  * moment a Date can hold.
  */
 function expiryOf(ttl: number | undefined): Date | null {
@@ -177,7 +177,7 @@ function encodeValue(value: JSONSerializable): string {
  *
  * An operation that fails transiently, committing nothing, is attempted
  * again as the retry policy says: the switch writes to the store from timers
- * and from work it does not wait for [Keeta TS] index.js:72622-72658, 73015-73017,
+ * and from work it does not wait for [Keeta TS] index.js:73770-73806, 74163-74165,
  * so a database that is busy or restarting for a moment would otherwise fail
  * work that no caller retries. Any other failure is the operation's.
  */
@@ -198,7 +198,7 @@ export class PostgresKVStorage implements KVStorageProviderAPI {
 	/**
 	 * Stores the value, or removes the key for undefined or null; an
 	 * exclusive create refuses a key that has a live entry
-	 * [Keeta TS] index.js:66878-66896.
+	 * [Keeta TS] index.js:67914-67932.
 	 */
 	async set(arena: string, key: string, value: JSONSerializable | undefined, options?: KVSetOptionsType): Promise<void> {
 		const exclusive = options?.exclusiveCreate ?? false;
@@ -243,7 +243,7 @@ export class PostgresKVStorage implements KVStorageProviderAPI {
 	/**
 	 * A named arena's live entry, or, in the null arena, the buffer under the
 	 * key as uppercase hex, as upstream prints a BufferStorage
-	 * [Keeta TS] index.js:66865-66870, 66897-66914, 76858-76861.
+	 * [Keeta TS] index.js:67901-67906, 67933-67950, 78006-78009.
 	 */
 	async get(arena: string | null, key: string): Promise<JSONSerializable | undefined> {
 		if (arena === null) {
@@ -288,7 +288,7 @@ export class PostgresKVStorage implements KVStorageProviderAPI {
 	/**
 	 * Folds the change into the null arena's buffer under the key; the arena
 	 * argument is ignored, as upstream ignores it
-	 * [Keeta TS] index.js:66831-66836, 66951-66968.
+	 * [Keeta TS] index.js:67867-67872, 67987-68004.
 	 */
 	async xor(_arena: null, key: string, change: BufferStorage): Promise<void> {
 		if (!key.startsWith(BUFFER_KEY_PREFIX)) {

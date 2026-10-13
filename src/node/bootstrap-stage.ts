@@ -133,10 +133,10 @@ export type Applied = {
  * side, kept until it adds them, which it does in the order of their votes.
  *
  * Why. The ledger judges a staple by the voting weight it holds when the
- * staple is added [Keeta TS] index.js:69397-69401, 69740-69759, and nothing
+ * staple is added [Keeta TS] index.js:69397-69401, 70776-70795, and nothing
  * in upstream relaxes that for a bootstrap: a bootstrap add only passes a
- * ledger that is otherwise read-only [Keeta TS] index.js:69363-69370. Upstream
- * serves the history in the order of its votes [Keeta TS] index.js:69655-69702,
+ * ledger that is otherwise read-only [Keeta TS] index.js:70399-70406. Upstream
+ * serves the history in the order of its votes [Keeta TS] index.js:70691-70738,
  * one page after another from a moment, so a node reading it from the start
  * adds each staple onto the history before it, as the representatives that
  * voted it held it. Ranges read side by side, each added as it comes, add

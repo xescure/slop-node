@@ -102,7 +102,7 @@ export function shadowVote(staple: VoteStaple, ledger: Ledger): Promise<ShadowVo
  * The ledger's vote on the staple's blocks asked for beside the staple's
  * own permanent votes, as a temporary vote that skips the check of the
  * blocks' dates, once those votes hold more than a quarter of the voting
- * weight [Keeta TS] index.js:69028-69050, 69228-69238, 69309-69316; it
+ * weight [Keeta TS] index.js:70064-70086, 70264-70274, 70345-70352; it
  * must run with the clock at the staple's moment.
  */
 export function voteBesidePermanentVotes(staple: VoteStaple, ledger: Ledger): Promise<ShadowVote> {
@@ -171,7 +171,7 @@ function keyOf(account: GenericAccount | undefined): string {
 /*
  * A refusal names the first requirement that its principal does not meet,
  * with an absent target interpolated as "undefined".
- * [Keeta TS] index.js:69873-69879
+ * [Keeta TS] index.js:70909-70915
  */
 function refusalMessageOf(requirement: Requirement): string {
 	const flags = requirement.permissions.base.flags.join(', ');
@@ -208,7 +208,7 @@ function isSend(operation: BlockOperations): operation is BlockOperationSEND {
  * The requirements a SEND puts on the block's account, in upstream's order,
  * each completed as an account requirement is: the block's account is the
  * principal and ACCESS the permissions unless the entry names its own.
- * [Keeta TS] index.js:68461-68492, 68620-68637
+ * [Keeta TS] index.js:69497-69528, 69656-69673
  */
 export function sendRequirements(block: Block, operation: BlockOperationSEND): Requirement[] {
 	const access = new lib.Permissions(['ACCESS']);
@@ -239,7 +239,7 @@ function isSelfRequirement(requirement: Requirement): boolean {
  * that can be its own principal's, since a signer's requirements are made
  * only when the signer is not the account.
  * [Keeta TS 0.18.4] index.js:68490-68492
- * [Keeta TS] index.js:68646-68648
+ * [Keeta TS] index.js:69682-69684
  */
 function skippedAfterSelfRequirement(blocks: readonly Block[], refused: Requirement): boolean {
 	let listings = 0;
@@ -269,7 +269,7 @@ function skippedAfterSelfRequirement(blocks: readonly Block[], refused: Requirem
  * target, and never a SUBTRACT; it recorded the refused requirement, so no
  * earlier grant met it under that rule.
  * [Keeta TS 0.18.4] index.js:67901-67906
- * [Keeta TS] index.js:68035-68057
+ * [Keeta TS] index.js:69071-69093
  */
 function grantedUnderOldScope(blocks: readonly Block[], refused: Requirement, anchors: NetworkAnchors): boolean {
 	const firstRequiring = blocks.findIndex(function(_block, index): boolean {
@@ -292,7 +292,7 @@ function grantedUnderOldScope(blocks: readonly Block[], refused: Requirement, an
  * only vote is the trusted account's own, as upstream's genesis vote is. The
  * refused requirement is one of another account on either of them, since
  * the trusted account's own on its opening blocks are never recorded.
- * [Keeta TS] index.js:79675-79688, 68653-68661
+ * [Keeta TS] index.js:80827-80840, 69689-69697
  */
 function isTrustedAccountGenesis(staple: RefusedStaple, refused: Requirement, anchors: NetworkAnchors): boolean {
 	function opens(account: Account | GenericAccount): boolean {
@@ -315,14 +315,14 @@ const RECIPIENT_ACCESS_RELEASE = new Date('2026-05-23T16:44:23.024Z');
  * Every release from 0.10.5 through 0.16.2 lists only the sender's access on
  * the token for a SEND [Keeta TS 0.16.2] index.js:68008-68015; 0.18.0 adds the
  * recipient's [Keeta TS 0.18.0] index.js:68263-68279, as 0.18.7 does
- * [Keeta TS] index.js:68461-68474. No representative can have run 0.18.0
+ * [Keeta TS] index.js:69497-69510. No representative can have run 0.18.0
  * before it was published, so a staple whose every vote is older was voted
  * without it. Only a
  * SEND names an account other than a block's own or its signer as the
  * principal of a requirement on a token, so a principal that is neither for any
  * block of the staple is required only as a recipient. A recipient listed after
  * a self requirement in every SEND is the early return's instead.
- * [Keeta TS] index.js:68458-68603, 68620-68631
+ * [Keeta TS] index.js:69494-69639, 69656-69667
  */
 function requiredOnlyOfRecipient(staple: RefusedStaple, refused: Requirement): boolean {
 	const votedBeforeRelease = staple.votes.length > 0 && staple.votes.every(function(vote): boolean {
@@ -358,7 +358,7 @@ function explains(reason: PermissionRefusalReason, staple: RefusedStaple, refuse
 	}
 }
 
-/** How far from the moment a temporary vote is issued a block may be dated [Keeta TS] index.js:70185-70197. */
+/** How far from the moment a temporary vote is issued a block may be dated [Keeta TS] index.js:71221-71233. */
 export const BLOCK_DATE_WINDOW_MILLISECONDS: number = 5 * 60_000;
 
 /*
@@ -366,7 +366,7 @@ export const BLOCK_DATE_WINDOW_MILLISECONDS: number = 5 * 60_000;
  * blocks has validated, and only for a temporary vote asked for on its own:
  * a vote asked for beside temporary votes is permanent and issued without
  * the check, as is a temporary one asked for beside permanent votes alone
- * [Keeta TS] index.js:69028-69050, 69309-69316, 69317-69347, 70179-70197;
+ * [Keeta TS] index.js:70064-70086, 70345-70352, 70353-70383, 71215-71233;
  * 0.18.4 checks the same [Keeta TS 0.18.4] index.js:70013-70025. A staple
  * whose block is dated more than the window before its earliest vote was
  * therefore voted on through one of those, as its blocks were older than

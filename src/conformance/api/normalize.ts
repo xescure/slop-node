@@ -13,13 +13,13 @@ export type Normalization =
 	| 'error-id'
 	/*
 	 * A representative gives a history entry the time of its own vote in the
-	 * staple [Keeta TS] index.js:81061-81087. A node that voted in none of
+	 * staple [Keeta TS] index.js:82213-82239. A node that voted in none of
 	 * the staples gives its entries the votes' average.
 	 */
 	| 'staple-time'
 	/*
 	 * A staple's "$binary" is its DER compressed with zlib
-	 * [Keeta TS] index.js:81016-81027. Compression is not canonical: a node
+	 * [Keeta TS] index.js:82168-82179. Compression is not canonical: a node
 	 * that rebuilds a staple from its blocks and votes compresses it with
 	 * zlib's defaults, while the representative serves the same DER
 	 * compressed differently. The DER, which the client inflates and decodes,

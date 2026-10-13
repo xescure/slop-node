@@ -61,7 +61,7 @@ export function permissionsByPrincipal(rows: readonly ACLRow[]): ACLRow[] {
 	return(sortedBy(rows, principalKeys));
 }
 
-/** A block's votes by their ID, the hash of their issuer and serial [Keeta TS] index.js:80569-80570. */
+/** A block's votes by their ID, the hash of their issuer and serial [Keeta TS] index.js:81721-81722. */
 export function votesByID(votes: readonly Vote[]): Vote[] {
 	return(sortedBy(votes, function(vote): readonly string[] {
 		return([vote.$id]);

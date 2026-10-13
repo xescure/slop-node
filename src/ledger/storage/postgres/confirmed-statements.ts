@@ -83,9 +83,9 @@ export const aclsOfEntity: Statement<[string, boolean | null], ACLColumns> = sta
 
 /*
  * Bit 1 of a base set is OWNER, read in two's complement as upstream's bit
- * field reads a bigint [Keeta TS] index.js:73716-73718, 76569-76571. A decoded
+ * field reads a bigint [Keeta TS] index.js:74864-74866, 77717-77719. A decoded
  * set holding OWNER also holds ACCESS, so has(['OWNER']) is that bit alone
- * [Keeta TS] index.js:74031-74045, 74151-74163. Dividing by two with floor
+ * [Keeta TS] index.js:75179-75193, 75299-75311. Dividing by two with floor
  * shifts a negative set as well, and the truncating remainder of an odd
  * quotient is 1 or -1, never 0.
  */

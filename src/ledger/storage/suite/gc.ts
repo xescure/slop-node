@@ -446,7 +446,7 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			expect(await node.ledger.add(await confirmedStaple([second], network.representatives))).toEqual([]);
 			await node.ledger.add(await confirmedStaple([first], network.representatives));
 
-			// Upstream's loop reads the time before its first batch, so a limit spent by then would run none and report nothing left [Keeta TS] index.js:67852-67861.
+			// Upstream's loop reads the time before its first batch, so a limit spent by then would run none and report nothing left [Keeta TS] index.js:68888-68897.
 			expect(await node.ledger.gc(-1)).toBe(false);
 
 			expect(hashOf(await node.ledger.getHeadBlock(user, 'main'))).toBe(hashOf(second));
@@ -962,7 +962,7 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			const missing = await sendFromGenesis(network, 1, 1n);
 			const late = await confirmedStaple([await sendFromGenesis(network, 0, 7n), await sendFrom(network, 1, missing.hash, 2n)], network.representatives);
 			expect(await ledger.add(late)).toEqual([]);
-			// Further back than the minute by which upstream takes a vote to be from the future [Keeta TS] index.js:80373-80375, 80653.
+			// Further back than the minute by which upstream takes a vote to be from the future [Keeta TS] index.js:81525-81527, 81805.
 			advanceClock(-10 * 60 * 1000);
 
 			expect(await ledger.gc()).toBe(false);

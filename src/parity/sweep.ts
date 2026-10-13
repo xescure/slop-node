@@ -37,7 +37,7 @@ const CHAIN_ACCOUNTS_PER_REPRESENTATIVE_IN_A_BATCH = 8;
 /**
  * Passive accounts whose states one request asks for. The client joins
  * every account it is given into one path, without a bound
- * [Keeta TS] index.js:58565-58577, 59958-59960; the bound observed is the
+ * [Keeta TS] index.js:59562-59574, 60948-60950; the bound observed is the
  * servers': the representatives and the follower answer 431 to a request
  * line beyond about 16 KiB, some 225 accounts. A hundred stays well inside
  * that, and a representative answers it in about a second.
@@ -49,7 +49,7 @@ const START: SweepCursor = { lap: 0, afterRowID: '0' };
 /** How many more times a chain account found moving is compared at once, before its chain is compared instead. */
 const MOVING_RETRIES = 2;
 
-/** Blocks of a chain one request asks for: as many as the client asks for [Keeta TS] index.js:58873. */
+/** Blocks of a chain one request asks for: as many as the client asks for [Keeta TS] index.js:59870. */
 const CHAIN_PAGE_BLOCKS = 200;
 
 /** Pages of a representative's chain read past the follower's head before the account is left unanswered. */
@@ -57,7 +57,7 @@ const CHAIN_PAGES = 10;
 
 /**
  * A representative votes on a block only within five minutes of its date
- * [Keeta TS] index.js:70185-70196, so a block dated that long before the
+ * [Keeta TS] index.js:71221-71232, so a block dated that long before the
  * follower's reach less the margin was voted on before the reach.
  */
 const BLOCK_DATE_VOTE_SPREAD_MILLISECONDS = 5 * 60_000;

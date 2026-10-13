@@ -13,19 +13,19 @@ export const MINUTE: number = 60 * 1000;
 
 export const HOUR: number = 60 * MINUTE;
 
-/** How far a block's date may lie from the clock for a temporary vote, either way. [Keeta TS] index.js:70194 */
+/** How far a block's date may lie from the clock for a temporary vote, either way. [Keeta TS] index.js:71230 */
 export const BLOCK_WINDOW: number = 5 * MINUTE;
 
-/** How long a temporary vote is valid from the moment it is issued. [Keeta TS] index.js:70207 */
+/** How long a temporary vote is valid from the moment it is issued. [Keeta TS] index.js:71243 */
 export const TEMPORARY_VALIDITY: number = 5 * MINUTE;
 
-/** How far a vote's validity may be off the clock when its bytes are parsed. [Keeta TS] index.js:80653 */
+/** How far a vote's validity may be off the clock when its bytes are parsed. [Keeta TS] index.js:81805 */
 export const VOTE_SLOP: number = MINUTE;
 
-/** The largest supply a token may have. [Keeta TS] index.js:61315 */
+/** The largest supply a token may have. [Keeta TS] index.js:62305 */
 export const MAXIMUM_SUPPLY: bigint = (10n ** 200n) - 1n;
 
-/** Blocks dated from this moment on may not carry a negative amount. [Keeta TS] index.js:61330 */
+/** Blocks dated from this moment on may not carry a negative amount. [Keeta TS] index.js:62320 */
 export const NEGATIVE_AMOUNTS_REFUSED_FROM: Date = new Date(Date.UTC(2025, 10, 21));
 
 /**
@@ -120,7 +120,7 @@ export type TokenOptions = {
 /*
  * The owner creates the token, and the token's opening block names it, sets
  * its default permission and mints the supply into its own balance.
- * [Keeta TS] index.js:65426-65428
+ * [Keeta TS] index.js:66416-66418
  */
 export async function issueToken(recorder: CaseRecorder, chains: ChainCursor, owner: Account, options: TokenOptions): Promise<IssuedToken> {
 	const { network } = recorder.network;

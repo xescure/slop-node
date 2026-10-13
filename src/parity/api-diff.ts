@@ -214,7 +214,7 @@ function isExplicitTag(value: ASN1Value): value is Extract<ASN1Value, { readonly
 	return(lib.Utils.ASN1.ASN1CheckUtilities.isASN1ContextTag(value, 'explicit'));
 }
 
-/** A block's fields, of either version: a sequence, or a sequence tagged explicitly with 1 [Keeta TS] index.js:63202-63323. */
+/** A block's fields, of either version: a sequence, or a sequence tagged explicitly with 1 [Keeta TS] index.js:64192-64313. */
 function blockFieldsOf(bytes: Buffer): readonly ASN1Value[] {
 	const decoded = lib.Utils.ASN1.ASN1toJS(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
 	if (Array.isArray(decoded)) {
@@ -228,7 +228,7 @@ function blockFieldsOf(bytes: Buffer): readonly ASN1Value[] {
 
 /**
  * The types of operation the block carries, each once. Each operation is
- * encoded tagged explicitly with its type [Keeta TS] index.js:64948-64959,
+ * encoded tagged explicitly with its type [Keeta TS] index.js:65938-65949,
  * in the one field of the block that is a sequence of such tags, so the
  * types are read from the encoding alone; decoding the whole block would
  * build every account and amount of its operations, which costs about ten

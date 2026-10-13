@@ -39,7 +39,7 @@ export type RequestedAccount =
 /**
  * A malformed account is not a failure of the request: the client reads the
  * error of an account state and throws it for that account alone
- * [Keeta TS] index.js:58241-58256, 60000-60008. The error is written as
+ * [Keeta TS] index.js:59238-59253, 60990-60998. The error is written as
  * String writes it, an Error by its name and message, which is how a
  * representative reports an account it cannot parse.
  */
@@ -54,7 +54,7 @@ export function requestedAccount(text: string): RequestedAccount {
 /**
  * An account's head block hash and height, representative, balances and
  * info. The head comes with its height, as the client reads it
- * [Keeta TS] index.js:60000-60023.
+ * [Keeta TS] index.js:60990-61013.
  * [node-lite] adapted from getAccountState.
  */
 async function accountState(ledger: LedgerReader, account: GenericAccount): Promise<AccountState> {
@@ -103,7 +103,7 @@ async function getAccountState(request: APIRequest, text: string): Promise<Accou
 
 /**
  * The head block of the account's chain and its height, both null for an
- * account without blocks [Keeta TS] index.js:58743-58745.
+ * account without blocks [Keeta TS] index.js:59740-59742.
  * [node-lite] adapted from getAccountsHead.
  */
 function getAccountHead(request: APIRequest, text: string): Promise<DeclaredResult<DeclaredAccountGroup['head']['GET']>> {
@@ -118,10 +118,10 @@ function getAccountHead(request: APIRequest, text: string): Promise<DeclaredResu
 	}));
 }
 
-/** A page of the chain holds 25 blocks unless the request asks for fewer, or for more up to the 200 the client asks for [Keeta TS] index.js:58873. */
+/** A page of the chain holds 25 blocks unless the request asks for fewer, or for more up to the 200 the client asks for [Keeta TS] index.js:59870. */
 const CHAIN_LIMIT: LimitBounds = { defaultLimit: 25, maximum: 200 };
 
-/** The start that names the account's head block [Keeta TS] index.js:58871-58877. */
+/** The start that names the account's head block [Keeta TS] index.js:59868-59874. */
 const CHAIN_HEAD = 'HEAD';
 
 type ChainPage = DeclaredResult<DeclaredAccountGroup['chain']['GET']>;
@@ -165,7 +165,7 @@ function getAccountChain(request: APIRequest, text: string): Promise<ChainPage> 
 		const blocks: ChainPage['blocks'] = [];
 		for (let block = await chainStart(ledger, account, start); block !== null; block = await ledger.getBlock(block.previous, 'main')) {
 			blocks.push({ block });
-			// A hash compares unequal to an absent end [Keeta TS] index.js:76878-76881.
+			// A hash compares unequal to an absent end [Keeta TS] index.js:78026-78029.
 			if (block.$opening || block.hash.compare(end)) {
 				break;
 			}
@@ -212,7 +212,7 @@ async function listACLsByPrincipalForEntities(request: APIRequest, text: string,
 	return({ permissions: permissionsByEntity(await request.node.ledger.listACLsByPrincipal(parseAccount(text), parseAccountList(entityList))) });
 }
 
-/** The permissions any principal holds on the account as entity [Keeta TS] index.js:58637-58644. [node-lite] adapted from listACLsByEntity. */
+/** The permissions any principal holds on the account as entity [Keeta TS] index.js:59634-59641. [node-lite] adapted from listACLsByEntity. */
 async function listACLsByEntity(request: APIRequest, text: string): Promise<DeclaredResult<DeclaredAccountGroup['acl']['granted']['GET']>> {
 	return({ permissions: permissionsByPrincipal(await request.node.ledger.listACLsByEntity(parseAccount(text))) });
 }
@@ -236,7 +236,7 @@ function distinctEntities(rows: PermissionsList['permissions']): GenericAccount[
 /**
  * Each entity the principal holds permissions on, with the entity's info,
  * balances and every principal's permissions on it, which the client reads
- * [Keeta TS] index.js:58618-58627; entities named in the request narrow the
+ * [Keeta TS] index.js:59615-59624; entities named in the request narrow the
  * principal's rows first.
  * [node-lite] adapted from listACLsByPrincipalWithInfo.
  */
@@ -269,7 +269,7 @@ function listACLsByPrincipalWithInfoForEntities(request: APIRequest, text: strin
 
 type CertificateStrings = DeclaredResult<DeclaredAccountGroup['certificates']['GET']>['certificates'][number];
 
-/** A certificate and its intermediates as PEM text, which the client parses [Keeta TS] index.js:60054-60065. */
+/** A certificate and its intermediates as PEM text, which the client parses [Keeta TS] index.js:61044-61055. */
 function certificateStrings(found: CertificateWithIntermediates): CertificateStrings {
 	return({
 		certificate: found.certificate.toPEM(),
@@ -288,7 +288,7 @@ async function getAccountCertificates(request: APIRequest, text: string): Promis
 
 /**
  * One certificate, or nulls when the account holds none with the hash
- * [Keeta TS] index.js:58720-58722.
+ * [Keeta TS] index.js:59717-59719.
  * [node-lite] adapted from getCertificateByHash.
  */
 async function getCertificateByHash(request: APIRequest, text: string, hashText: string): Promise<DeclaredResult<DeclaredAccountGroup['certificates'][':certificateHash']['GET']>> {
@@ -318,7 +318,7 @@ function getAccountPendingBlock(request: APIRequest, text: string): Promise<Decl
 
 /**
  * The block the account published with the idempotent key, base64 encoded
- * [Keeta TS] index.js:59526-59542.
+ * [Keeta TS] index.js:60518-60534.
  * [node-lite] adapted from getBlockFromIdempotent.
  */
 async function getBlockFromIdempotent(request: APIRequest, text: string, idempotent: string): Promise<DeclaredResult<DeclaredAccountGroup['idempotent'][':idempotent']['GET']>> {

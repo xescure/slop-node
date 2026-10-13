@@ -49,7 +49,7 @@ export function replayOrder<Staple extends Orderable>(staples: readonly Staple[]
 /*
  * The ledger belongs to a node so that the checksum its adds and gc passes
  * fold is recorded: a bare ledger discards those statistics.
- * [Keeta TS] index.js:69001-69006
+ * [Keeta TS] index.js:70037-70042
  */
 function createReplayNode(storage: LedgerStorageAPI): Node {
 	return(new lib.Node(mainnetNodeConfig(storage)));
@@ -117,7 +117,7 @@ export async function replayOn(node: Node, staples: readonly VoteStaple[], optio
  * first, with the clock frozen at each staple's timestamp, and then runs gc
  * until nothing remains to retry. A staple that the ledger refuses fails the
  * replay; one that is deferred is reported if gc could not apply it.
- * [Keeta TS] index.js:67852-67863
+ * [Keeta TS] index.js:68888-68899
  */
 export async function replayMainnet(storage: LedgerStorageAPI, staples: readonly VoteStaple[], options: ReplayOptions = {}): Promise<ReplayResult> {
 	const node = createReplayNode(storage);
@@ -129,7 +129,7 @@ export async function replayMainnet(storage: LedgerStorageAPI, staples: readonly
 		 * never had a peer. The ledger stays readable: it never uses the
 		 * switch, and later transactions still merge their statistics into
 		 * the node.
-		 * [Keeta TS] index.js:71373-71383
+		 * [Keeta TS] index.js:72501-72511
 		 */
 		await node.stop();
 	}

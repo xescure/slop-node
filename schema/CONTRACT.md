@@ -15,31 +15,31 @@
 
 ## 1. Scope and vocabulary
 
-**Driver, ledger and node.** A driver serves exactly one `Ledger` configuration. The `Ledger` constructor calls `init` once. `Ledger.copy`, which `Node.copy` uses, shares the driver with the copy without calling `init` again [Keeta TS] index.js:70250-70266.
+**Driver, ledger and node.** A driver serves exactly one `Ledger` configuration. The `Ledger` constructor calls `init` once. `Ledger.copy`, which `Node.copy` uses, shares the driver with the copy without calling `init` again [Keeta TS] index.js:71286-71302.
 
-**Main ledger.** The confirmed state: every staple that `adjust` applied, with its blocks, votes, chain positions, and the balances, supplies, weights, representatives, ACLs, account info, certificates, idempotent keys and history that follow from it. Only permanent votes reach the main ledger: `Ledger.add` refuses any other [Keeta TS] index.js:69388-69395.
+**Main ledger.** The confirmed state: every staple that `adjust` applied, with its blocks, votes, chain positions, and the balances, supplies, weights, representatives, ACLs, account info, certificates, idempotent keys and history that follow from it. Only permanent votes reach the main ledger: `Ledger.add` refuses any other [Keeta TS] index.js:70424-70431.
 
-**Side ledger.** This node's own pending votes, the blocks those votes cover, and the idempotent keys of those blocks. `addPendingVote` is called only with the vote the node has just sealed [Keeta TS] index.js:69310-69316, 69342-69354, so the side ledger never holds another representative's vote. It holds no balances, ACLs, heights or heads.
+**Side ledger.** This node's own pending votes, the blocks those votes cover, and the idempotent keys of those blocks. `addPendingVote` is called only with the vote the node has just sealed [Keeta TS] index.js:70346-70352, 70378-70390, so the side ledger never holds another representative's vote. It holds no balances, ACLs, heights or heads.
 
-**Staple and its identity.** A staple is a set of votes on one ordered list of blocks. Its identity is its `blocksHash`: the hash of the concatenated hashes of its blocks, in vote order [Keeta TS] index.js:80126-80143. Different subsets of a quorum produce different vote sets for the same blocks, so a driver keys a staple by `blocksHash` and never by the hash of its serialized form.
+**Staple and its identity.** A staple is a set of votes on one ordered list of blocks. Its identity is its `blocksHash`: the hash of the concatenated hashes of its blocks, in vote order [Keeta TS] index.js:81278-81295. Different subsets of a quorum produce different vote sets for the same blocks, so a driver keys a staple by `blocksHash` and never by the hash of its serialized form.
 
-**Staple bytes.** A staple's bytes are a zlib stream (RFC 1950) of its ASN.1 encoding: its blocks in vote order, then its votes in ascending order of vote hash [Keeta TS] index.js:80741-80775. The encoding is a function of the votes and blocks; the zlib stream is not, since zlib implementations differ in the streams they make, and a staple decoded from compressed bytes returns exactly those bytes [Keeta TS] index.js:80976-80983, 81016-81027. Of the 140 staples of one page a main network representative served from the beginning of time, all 140 encode their votes in vote-hash order, yet Node.js's `zlib.deflateSync`, at any level, memory level, strategy or window, reproduces none of their streams, and zlib-ng at level 6 only 85 of them. All four representatives serve the same bytes for the same staple. A representative leaves out of a bootstrap page each staple whose bytes, as it holds them, the requester's filter names [Keeta TS] index.js:69686-69690, so a driver keeps each main staple's bytes as it received them and reads the staple back as those bytes (`getVoteStaples`, `getVoteStaplesFromBlockHash`); a staple rebuilt from its votes and blocks would be named by bytes no peer holds. Tested by `src/node/bootstrap-mainnet.test.ts: "names the staples it holds by the bytes the representative serves, so that reading them again downloads none of them"`, on the representative's page (`src/testing/fixtures/mainnet-rep1-epoch-page.json`).
+**Staple bytes.** A staple's bytes are a zlib stream (RFC 1950) of its ASN.1 encoding: its blocks in vote order, then its votes in ascending order of vote hash [Keeta TS] index.js:81893-81927. The encoding is a function of the votes and blocks; the zlib stream is not, since zlib implementations differ in the streams they make, and a staple decoded from compressed bytes returns exactly those bytes [Keeta TS] index.js:82128-82135, 82168-82179. Of the 140 staples of one page a main network representative served from the beginning of time, all 140 encode their votes in vote-hash order, yet Node.js's `zlib.deflateSync`, at any level, memory level, strategy or window, reproduces none of their streams, and zlib-ng at level 6 only 85 of them. All four representatives serve the same bytes for the same staple. A representative leaves out of a bootstrap page each staple whose bytes, as it holds them, the requester's filter names [Keeta TS] index.js:70722-70726, so a driver keeps each main staple's bytes as it received them and reads the staple back as those bytes (`getVoteStaples`, `getVoteStaplesFromBlockHash`); a staple rebuilt from its votes and blocks would be named by bytes no peer holds. Tested by `src/node/bootstrap-mainnet.test.ts: "names the staples it holds by the bytes the representative serves, so that reading them again downloads none of them"`, on the representative's page (`src/testing/fixtures/mainnet-rep1-epoch-page.json`).
 
-**Vote identity.** A vote is identified by `$uid`, built from its issuer and serial [Keeta TS] index.js:80569-80570.
+**Vote identity.** A vote is identified by `$uid`, built from its issuer and serial [Keeta TS] index.js:81721-81722.
 
-**Temporary and permanent votes.** A temporary vote is valid until five minutes after it is issued [Keeta TS] index.js:70204-70207. A permanent vote is valid for about a thousand years [Keeta TS] index.js:81526-81529 and is flagged `$permanent` [Keeta TS] index.js:80376-80380.
+**Temporary and permanent votes.** A temporary vote is valid until five minutes after it is issued [Keeta TS] index.js:71240-71243. A permanent vote is valid for about a thousand years [Keeta TS] index.js:82678-82681 and is flagged `$permanent` [Keeta TS] index.js:81528-81532.
 
 **Live and unexpired.** A stored vote is live at a moment when Keeta's `Vote` class would accept it at that moment. One of this node's side votes is unexpired at moment m unless it is temporary and m - 60 s > `validityTo`. Side reads and gc use only the expiry bound, never the start of validity (D4). A side block counts only while an unexpired side vote covers it, and a side idempotent key counts only while its block counts.
 
-**Transaction moment.** `transaction.moment`, which `Ledger.beginTransaction` sets to the wall clock when an attempt starts [Keeta TS] index.js:70393-70396. Each retry is a new attempt with a new moment. The transaction moment is the "now" of every expiry decision in the transaction, and the confirmation moment of every staple the transaction applies. A driver never substitutes the wall clock or a database clock for it.
+**Transaction moment.** `transaction.moment`, which `Ledger.beginTransaction` sets to the wall clock when an attempt starts [Keeta TS] index.js:71429-71432. Each retry is a new attempt with a new moment. The transaction moment is the "now" of every expiry decision in the transaction, and the confirmation moment of every staple the transaction applies. A driver never substitutes the wall clock or a database clock for it.
 
 **Selector.** `LedgerSelector` is `'main' | 'side' | 'both'`. Members that take one answer from the main ledger, the side ledger, or both (D7). Members that take none read the main ledger only.
 
-**Opening sentinel.** The `previous` of an account's first block is the hash of the account's public key [Keeta TS] index.js:63173-63175. It is never a block itself, but successor lookups accept it.
+**Opening sentinel.** The `previous` of an account's first block is the hash of the account's public key [Keeta TS] index.js:64163-64165. It is never a block itself, but successor lookups accept it.
 
 **Deferred staple.** A confirmed staple that extends a block this node does not have on its main chain. It is stored, waiting on each missing previous block, and applied when the last of them arrives (D13).
 
-**Key spellings.** Hashes are spelled as upstream's `toString()` prints them, in uppercase hex [Keeta TS] index.js:76858-76861. Accounts are spelled as public key strings (`keeta_...`), and an account given as a string is first converted to that form [Keeta TS] index.js:62709-62714. Members that return maps key them this way.
+**Key spellings.** Hashes are spelled as upstream's `toString()` prints them, in uppercase hex [Keeta TS] index.js:78006-78009. Accounts are spelled as public key strings (`keeta_...`), and an account given as a string is first converted to that form [Keeta TS] index.js:63699-63704. Members that return maps key them this way.
 
 ## 2. Lifecycle walkthrough
 
@@ -50,56 +50,56 @@ The walkthrough follows representative R, which runs a node with its private key
 `Ledger.add(genesis)`. The genesis staple carries one permanent vote by the initial trusted account and opens the network address, the base token and the first users.
 
 1. `beginTransaction({ node, moment, identifier: 'db-add', readOnly: false })`.
-2. `delegatedWeight(tx)` returns `0n`, so the quorum is a vote by the initial trusted account [Keeta TS] index.js:69740-69751.
+2. `delegatedWeight(tx)` returns `0n`, so the quorum is a vote by the initial trusted account [Keeta TS] index.js:70776-70787.
 3. `adjust(tx, genesis, effects)`, where `computeEffectOfBlocks` has computed `effects` in memory [Keeta TS] index.js:69404-69407:
    1. Base: the chain-order and shared-previous checks, which make no storage call (D14).
-   2. Base, `preAdjust`: `getBlockHeights` for every block, all `null`, then for the previous blocks outside the staple. Opening blocks get height 0, and each later block of the same chain gets its previous block's height plus one [Keeta TS] index.js:67678-67732.
+   2. Base, `preAdjust`: `getBlockHeights` for every block, all `null`, then for the previous blocks outside the staple. Opening blocks get height 0, and each later block of the same chain gets its previous block's height plus one [Keeta TS] index.js:68714-68768.
    3. Base, the confirmed-history check: `getHeadBlock(tx, account, 'main')` for each opening block and `getBlockFromPrevious(tx, previous, 'main')` for every other block whose previous lies outside the staple. All are `null` (D14).
-   4. Base, settlement statistics: on a ledger with a node and a private key, `getVotes(tx, hash, 'side')` for each block [Keeta TS] index.js:67593-67632.
-   5. Base, `computeLedgerEffect`: `listACLsByPrincipal`, `getBalance`, `getAccountRep`, `delegatedWeight` and `getAccountCertificateByHash`, as the effects require [Keeta TS] index.js:67187-67345.
+   4. Base, settlement statistics: on a ledger with a node and a private key, `getVotes(tx, hash, 'side')` for each block [Keeta TS] index.js:68629-68668.
+   5. Base, `computeLedgerEffect`: `listACLsByPrincipal`, `getBalance`, `getAccountRep`, `delegatedWeight` and `getAccountCertificateByHash`, as the effects require [Keeta TS] index.js:68223-68381.
    6. `persistConfirmedStaple(tx, change)` writes the blocks, chain positions, the vote, history, ACLs, account info, supply, balances, delegation and weight (section 4.2).
    7. `removeDeferredStaple(tx, genesis.blocksHash)`, then `listDeferredStaplesWaitingOn(tx, hashes of the genesis blocks)`, which finds nothing.
    8. `adjust` returns `[genesis]`.
-4. `Ledger.add` XORs every block hash of every returned staple into `statsPending` under `ledgerChecksum` [Keeta TS] index.js:69413-69417. A `LedgerDriverTransaction` drops that statistic: the staple's write in step 6 holds its part of the checksum (D19).
-5. `commitTransaction(tx)`. Only after the commit succeeds does `Ledger` merge `statsPending` into the node's statistics [Keeta TS] index.js:69001-69006.
+4. `Ledger.add` XORs every block hash of every returned staple into `statsPending` under `ledgerChecksum` [Keeta TS] index.js:70449-70453. A `LedgerDriverTransaction` drops that statistic: the staple's write in step 6 holds its part of the checksum (D19).
+5. `commitTransaction(tx)`. Only after the commit succeeds does `Ledger` merge `statsPending` into the node's statistics [Keeta TS] index.js:70037-70042.
 
 ### 2.2 Temporary vote
 
 `Ledger.vote([B])`, where block B extends A.
 
 1. `beginTransaction({ identifier: 'db-vote', readOnly: false })`.
-2. If B carries an idempotent value: `getIdempotentBlockHash(tx, key, 'both', B.hash)`. A non-null answer refuses the vote with `LEDGER_IDEMPOTENT_KEY_EXISTS` [Keeta TS] index.js:69254-69259.
-3. Base: `getHeadBlockHashes(tx, {U})` calls `getHeadBlocks(tx, [U], 'both')`, which must return A. Otherwise the vote is refused with `LEDGER_NOT_SUCCESSOR`, `LEDGER_NOT_OPENING` or `LEDGER_NOT_EMPTY` [Keeta TS] index.js:69260-69276.
-4. `getVotesFromMultiplePrevious(tx, [A], 'both', R)` returns `null`, so no successor of A has an unexpired vote by R [Keeta TS] index.js:69281-69306.
-5. Outcome validation reads the account state the blocks need: `getAccountInfo`, `listACLsByPrincipal`, `listACLsByEntity`, `getAccountCertificates`, `getAccountCertificateByHash`, `listOwners` and `getBalance` [Keeta TS] index.js:69760-69880, 69982-70095.
-6. `getNextSerialNumber(tx)` [Keeta TS] index.js:70202.
-7. `addPendingVote(tx, staple of [temporary vote] on [B])`: B gets a side copy, and the vote is indexed by B, by A (B's previous) and by its `blocksHash`. B's idempotent key, if any, is claimed on the side [Keeta TS] index.js:69310-69316.
+2. If B carries an idempotent value: `getIdempotentBlockHash(tx, key, 'both', B.hash)`. A non-null answer refuses the vote with `LEDGER_IDEMPOTENT_KEY_EXISTS` [Keeta TS] index.js:70290-70295.
+3. Base: `getHeadBlockHashes(tx, {U})` calls `getHeadBlocks(tx, [U], 'both')`, which must return A. Otherwise the vote is refused with `LEDGER_NOT_SUCCESSOR`, `LEDGER_NOT_OPENING` or `LEDGER_NOT_EMPTY` [Keeta TS] index.js:70296-70312.
+4. `getVotesFromMultiplePrevious(tx, [A], 'both', R)` returns `null`, so no successor of A has an unexpired vote by R [Keeta TS] index.js:70317-70342.
+5. Outcome validation reads the account state the blocks need: `getAccountInfo`, `listACLsByPrincipal`, `listACLsByEntity`, `getAccountCertificates`, `getAccountCertificateByHash`, `listOwners` and `getBalance` [Keeta TS] index.js:70796-70916, 71018-71131.
+6. `getNextSerialNumber(tx)` [Keeta TS] index.js:71238.
+7. `addPendingVote(tx, staple of [temporary vote] on [B])`: B gets a side copy, and the vote is indexed by B, by A (B's previous) and by its `blocksHash`. B's idempotent key, if any, is claimed on the side [Keeta TS] index.js:70346-70352.
 8. `commitTransaction(tx)`.
 
-`Ledger.quote([B])` performs the same validation and takes a serial, but never calls `addPendingVote` [Keeta TS] index.js:69356-69360, 70202.
+`Ledger.quote([B])` performs the same validation and takes a serial, but never calls `addPendingVote` [Keeta TS] index.js:70392-70396, 71238.
 
 ### 2.3 Permanent vote
 
 `Ledger.vote([B, FEE], temporaryVotes)`, where a quorum of temporary votes on B is attached and FEE pays the voters.
 
 1. Steps 1 to 3 of 2.2. The idempotent lookup excludes each block's own hash, so B's side claim does not refuse B. The head of U is still A, because side blocks are never heads (D5).
-2. `getVotesFromMultiplePrevious(tx, [A, B], 'both', R)`. Under A it returns exactly R's temporary vote, which a permanent vote may replace [Keeta TS] index.js:69288-69301. Under B it returns `null`.
+2. `getVotesFromMultiplePrevious(tx, [A, B], 'both', R)`. Under A it returns exactly R's temporary vote, which a permanent vote may replace [Keeta TS] index.js:70324-70337. Under B it returns `null`.
 3. Outcome validation, as in 2.2.
-4. `delegatedWeight(tx)` and `delegatedWeight(tx, issuers)` check that the attached votes carry quorum [Keeta TS] index.js:69334-69338, 69740-69759.
-5. `getNextSerialNumber(tx)`, then `addPendingVote(tx, staple of [permanent vote] on [B, FEE])` [Keeta TS] index.js:69342-69354. FEE gets a side copy. The permanent vote is stored beside the temporary vote, which stays (D6).
+4. `delegatedWeight(tx)` and `delegatedWeight(tx, issuers)` check that the attached votes carry quorum [Keeta TS] index.js:70370-70374, 70776-70795.
+5. `getNextSerialNumber(tx)`, then `addPendingVote(tx, staple of [permanent vote] on [B, FEE])` [Keeta TS] index.js:70378-70390. FEE gets a side copy. The permanent vote is stored beside the temporary vote, which stays (D6).
 6. `commitTransaction(tx)`.
 
-From now on, `getVotesFromMultiplePrevious(tx, [A], 'both', R)` returns two votes, so R refuses every further vote on a successor of A [Keeta TS] index.js:69288-69305.
+From now on, `getVotesFromMultiplePrevious(tx, [A], 'both', R)` returns two votes, so R refuses every further vote on a successor of A [Keeta TS] index.js:70324-70341.
 
 ### 2.4 Publish
 
 `Ledger.add(S)`, where S carries a quorum of permanent votes on [B, FEE].
 
-1. `beginTransaction({ identifier: 'db-add', readOnly: false })`, then `delegatedWeight` twice for the quorum check [Keeta TS] index.js:69398-69401.
+1. `beginTransaction({ identifier: 'db-add', readOnly: false })`, then `delegatedWeight` twice for the quorum check [Keeta TS] index.js:70434-70437.
 2. `adjust(tx, S, effects)`:
    1. Base, `preAdjust`: B and FEE have no height, because side blocks never have one (D5). B gets A's height plus one, and FEE, whose previous is B, gets B's height plus one.
    2. Base, the confirmed-history check: A has no main successor.
-   3. Base, settlement statistics: `getVotes(tx, B.hash, 'side')` finds R's temporary vote, and the time since its `validityFrom` is recorded. The increments are held until `adjust` returns [Keeta TS] index.js:67593-67632.
+   3. Base, settlement statistics: `getVotes(tx, B.hash, 'side')` finds R's temporary vote, and the time since its `validityFrom` is recorded. The increments are held until `adjust` returns [Keeta TS] index.js:68629-68668.
    4. `persistConfirmedStaple(tx, change)` writes the main rows. In the same write it removes the side copies of the staple's votes that are R's own, the side copies of B and FEE, and their side idempotent claims. R's temporary vote on B stays on the side until it expires or gc collects it (D6, D20).
    5. `removeDeferredStaple`, then `listDeferredStaplesWaitingOn(tx, [B, FEE])`.
    6. `adjust` returns `[S]`.
@@ -109,7 +109,7 @@ From now on, `getVotesFromMultiplePrevious(tx, [A], 'both', R)` returns two vote
 
 Node N lacks A and receives S.
 
-1. In `adjust(tx, S, effects)`, `preAdjust` finds no height for A and calls the base's `adjustDefer`. That calls `getBlockHeights` for S's previous blocks outside the staple, then `storeDeferredStaple(tx, S, [A])`. `preAdjust` returns an empty result, and `adjust` returns `[]`. Nothing enters the checksum, and the commit persists the deferred staple [Keeta TS] index.js:67717-67729.
+1. In `adjust(tx, S, effects)`, `preAdjust` finds no height for A and calls the base's `adjustDefer`. That calls `getBlockHeights` for S's previous blocks outside the staple, then `storeDeferredStaple(tx, S, [A])`. `preAdjust` returns an empty result, and `adjust` returns `[]`. Nothing enters the checksum, and the commit persists the deferred staple [Keeta TS] index.js:68753-68765.
 2. Later, staple T containing A arrives. `adjust(tx, T, ...)` applies T. Then `listDeferredStaplesWaitingOn(tx, hashes of T's blocks)` finds S, and S runs through the same template in the same transaction, with deferral disabled, inside `runIsolated(tx, unit)`:
    - `preAdjust` now sees A's height, which T wrote earlier in the transaction.
    - S is persisted, and `removeDeferredStaple(tx, S.blocksHash)` runs.
@@ -120,7 +120,7 @@ Node N lacks A and receives S.
 
 ### 2.6 Garbage collection
 
-`Ledger.gc(timeLimitMS)` runs the driver's `gc` in one read-write transaction (`'db-gc'`) [Keeta TS] index.js:70517-70521. That is upstream's loop, which calls `gcBatch` until a batch reports that no work remains, or until `timeLimitMS` (default 280000 ms) has elapsed [Keeta TS] index.js:67852-67862, except that the driver always runs one batch first: upstream reads the time before its first batch, so a limit spent by then would run none and report that no work remains, which ends a caller that collects until none does. Tested by `gc.ts: "gc runs one batch at least however short its time, and reports whether more remains"`. Each base batch makes these calls:
+`Ledger.gc(timeLimitMS)` runs the driver's `gc` in one read-write transaction (`'db-gc'`) [Keeta TS] index.js:71553-71557. That is upstream's loop, which calls `gcBatch` until a batch reports that no work remains, or until `timeLimitMS` (default 280000 ms) has elapsed [Keeta TS] index.js:68888-68898, except that the driver always runs one batch first: upstream reads the time before its first batch, so a limit spent by then would run none and report that no work remains, which ends a caller that collects until none does. Tested by `gc.ts: "gc runs one batch at least however short its time, and reports whether more remains"`. Each base batch makes these calls:
 
 1. `collectDeadDeferredStaples(tx, 100)`: removes deferred staples that can never apply, because the `previous` of one of their blocks has a confirmed successor. Each is logged once, as a network integrity alarm.
 2. `listReleasedDeferredStaples(tx, 100, exclude)`: deferred staples whose awaited blocks are all on the main ledger, in an order the base sets by what it excludes. It lists first the staples whose gc retry never failed. If fewer than the limit remain, it then lists, oldest failure first, the staples whose last retry failed and that are due again, because the driver has applied a staple since that failure. Staples this gc transaction has retried already are excluded throughout. The driver keeps the failures per instance and outside every transaction, since a failure is no write that an abort would undo; it counts as applied each staple that an add or a gc retry applied in a transaction, committed or not, with what each released, and an undone unit counts none; counting a staple whose transaction then aborted only makes failed staples due sooner. A staple that an earlier retry of the batch has made dead is dropped and logged in the same way, through `getBlockFromPrevious(tx, previous, 'main')` and `removeDeferredStaple`. Each other staple is retried through the `adjust` template with deferral disabled, inside `runIsolated(tx, unit)`, until `heapProcessWindowMs` since the batch began is spent, after it tried one staple at least. The staples left are listed again by the next batch, so a batch holds the transaction for about one window plus one retry, not for as many staples as the limit allows. Tested by `gc.ts: "a gc batch retries the released staples it listed only until the replay window is spent, applying one at least, and says more remain"`. The staples it applies, chained replays included, are folded into `ledgerChecksum`. A failed retry is logged, its unit is undone, and it stays deferred. A retry that fails with an error `evaluateError` reports as retryable, a conflict with another transaction or a lost session, is not the staple's failure: `Ledger.run` reruns the transaction for it, and a retry on the same ledger may then succeed, so the staple is not recorded as failed and the next gc retries it as one that never failed; but the third such failure in a row of one staple's retries, per driver instance, is recorded as a failure, since a conflict passes once the other transaction ends and one that recurs is the staple's own, which would otherwise roll back every gc. Such a failure ends the gc call, which reports that more remains: on Postgres the conflict has already doomed the transaction, so any other staple the call retried in it would be rolled back at its commit. A staple whose retry fails so every time therefore costs at most three gc calls, each ending at its retry, before it is recorded as failed, and then, like any failed staple, one more each time it is due again. The progress bound below counts the other failures. Tested by `gc.ts: "a released staple whose retry fails with an error that asks for the transaction to run again every time is recorded as failed after the third, and keeps no gc going"`, by `gc.ts: "a released staple whose retry fails with an error that asks for the transaction to run again is retried by the next gc, not left until a staple is applied"` and by `gc.ts: "a released staple whose retry fails with an error that asks for the transaction to run again ends the gc, which retries no other staple in that transaction"`. Nothing here reads the clock but the window, so the order and the retries are the same however slow a retry is.
@@ -145,7 +145,7 @@ After 2.4, gc collects R's temporary vote on B, because B is on the main ledger.
 - `readOnly`, which defaults to `true`
 - `statsPending`, an instance of upstream's `StatsPending` that keeps every statistic but `ledgerChecksum`
 
-This is the shape of upstream's `LedgerStorageTransactionBase` [Keeta TS] index.js:68952-68960. `Ledger` writes the checksum and settlement increments into `statsPending`, and merges it into the node's statistics only after a successful commit [Keeta TS] index.js:69001-69006, 74339-74350. The node writes its statistics to its store later still [Keeta TS] index.js:71377-71383, so a checksum kept there would lose the staples a process committed before it stopped without that write; the driver keeps it instead (D19). A driver built on the base returns a `LedgerDriverTransaction` (`src/ledger/storage/base.ts`) or a subclass of it.
+This is the shape of upstream's `LedgerStorageTransactionBase` [Keeta TS] index.js:69988-69996. `Ledger` writes the checksum and settlement increments into `statsPending`, and merges it into the node's statistics only after a successful commit [Keeta TS] index.js:70037-70042, 75487-75498. The node writes its statistics to its store later still [Keeta TS] index.js:72505-72511, so a checksum kept there would lose the staples a process committed before it stopped without that write; the driver keeps it instead (D19). A driver built on the base returns a `LedgerDriverTransaction` (`src/ledger/storage/base.ts`) or a subclass of it.
 
 ### 3.2 Attempts, commit and abort
 
@@ -155,7 +155,7 @@ This is the shape of upstream's `LedgerStorageTransactionBase` [Keeta TS] index.
 - **Commit** makes every write of the transaction visible to later transactions at once.
 - **Abort** discards every write of the transaction. Tested by `transactions.ts: "abort discards writes but never reuses a serial"`.
 - **A commit that fails** never yields a retryable error unless the driver knows that nothing was committed (D17). A retried `add` of a staple that did commit fails with `LEDGER_BLOCK_ALREADY_EXISTS`. A retried `vote` signs a second vote under a new serial. Tested for the Postgres driver by `src/ledger/storage/postgres/driver.test.ts: "a broken connection at commit is not retried"` and `src/ledger/storage/postgres/driver.test.ts: "a serialization failure at commit is retried by Ledger.run"`.
-- **Read-only transactions.** `Ledger` passes `readOnly: true` only from `runReadOnly`, which every getter uses [Keeta TS] index.js:70390-70392. `vote`, `quote`, `add` and `gc` run read-write [Keeta TS] index.js:70397-70411, 70517-70521. A read-only transaction never calls `adjust`, `addPendingVote` or `gc`, so a driver may serve it from a read-only snapshot. The memory driver does not distinguish the two.
+- **Read-only transactions.** `Ledger` passes `readOnly: true` only from `runReadOnly`, which every getter uses [Keeta TS] index.js:71426-71428. `vote`, `quote`, `add` and `gc` run read-write [Keeta TS] index.js:71433-71447, 71553-71557. A read-only transaction never calls `adjust`, `addPendingVote` or `gc`, so a driver may serve it from a read-only snapshot. The memory driver does not distinguish the two.
 
 ### 3.3 Isolation
 
@@ -166,7 +166,7 @@ A driver must provide the following.
    - `add` reads heights in `preAdjust`, then persists. Two concurrent adds of one staple must apply it once. Tested by `concurrency.ts: "concurrent adds of one staple apply it once"`, and across two processes by `concurrency.ts: "two processes adding one staple apply it once, and the other finds it applied after a retry"`.
    - One transaction defers S on A while another applies A. Under weaker isolation each misses the other's write, and S waits until a gc retry. Untested.
 2. **Read-your-writes.** Every read in a transaction sees that transaction's earlier writes. Replay depends on this, because a replayed staple reads the heights, balances and representatives its trigger has just written. Tested by `transactions.ts: "reads see the transaction's own writes"`, `confirmed.ts: "a staple reads the permissions and representative an earlier staple of its transaction wrote"`, and by every replay case in `deferral.ts`.
-3. **Concurrent calls within one transaction.** Upstream issues reads on one transaction concurrently [Keeta TS] index.js:67332-67339, 67638-67646, 69935-69945, and `Promise.all` over `add` within one transaction is legal. A driver must accept overlapping calls on one transaction and lose no write. The base runs overlapping `adjust` calls, and gc batches, on one transaction one after another (item 4). Tested by `transactions.ts: "concurrent calls within one transaction keep every write"`.
+3. **Concurrent calls within one transaction.** Upstream issues reads on one transaction concurrently [Keeta TS] index.js:68368-68375, 68674-68682, 70971-70981, and `Promise.all` over `add` within one transaction is legal. A driver must accept overlapping calls on one transaction and lose no write. The base runs overlapping `adjust` calls, and gc batches, on one transaction one after another (item 4). Tested by `transactions.ts: "concurrent calls within one transaction keep every write"`.
 4. **Per-staple isolation.** `runIsolated(tx, unit)` (section 4.2) is the isolation boundary of a deferred staple. The base runs each replayed staple, and each staple a gc pass retries, as one unit, together with everything that staple releases in turn, so units nest. If a unit throws at any point, none of its writes may remain while the transaction continues: before the write, in `persistConfirmedStaple`, or after it, in `removeDeferredStaple` or a nested replay. The staple then stays deferred. It is neither returned by `adjust` nor part of the ledger checksum, and its settlement statistics are not recorded. Its trigger still commits. A database driver implements `runIsolated` with a savepoint, released when the unit succeeds and rolled back when it fails. Without one, a failed statement aborts the whole transaction, or a staple that failed after its write stays half-applied.
    - `persistConfirmedStaple` must still apply a whole change or nothing, because the staple at the top of `adjust` runs in no unit, and the base's default `runIsolated` adds no isolation.
    - Rolling a unit back undoes every write made while it was open. The base therefore runs `adjust` and gc batches one at a time per transaction, so no other `adjust` writes into an open unit.
@@ -196,7 +196,7 @@ Tested by `src/ledger/storage/postgres/driver.test.ts: "a failed unit rolls back
 
 - An error that is a KeetaNet error (`lib.Error.isInstance`) is returned unchanged. That covers ledger errors, vote errors, idempotent-key errors and block errors. Callers depend on their codes, and `Ledger.run` then retries exactly the ones that ask for it.
 - Any other error becomes a non-retryable `LEDGER_OTHER` with the original message, and the original error as its `cause`. The case below checks both.
-- `Ledger.run` retries only instances of upstream's own ledger error class [Keeta TS] index.js:70360-70370. The package does not export that class, so `createLedgerError` (`src/ledger/storage/errors.ts`) builds it through `lib.Error.fromJSON` [Keeta TS] index.js:66340-66396. Codes are restricted to upstream's list [Keeta TS] index.js:66453-66492.
+- `Ledger.run` retries only instances of upstream's own ledger error class [Keeta TS] index.js:71396-71406. The package does not export that class, so `createLedgerError` (`src/ledger/storage/errors.ts`) builds it through `lib.Error.fromJSON` [Keeta TS] index.js:67349-67405. Codes are restricted to upstream's list [Keeta TS] index.js:67462-67501.
 
 Tested by `transactions.ts: "ledger errors pass through evaluateError and anything else becomes non-retryable"`.
 
@@ -223,7 +223,7 @@ Under real concurrency, commit order and transaction-moment order can differ: a 
 
 `getNextSerialNumber` must return a non-negative `bigint` that this node has never returned before and never returns again. It must be strictly greater than every earlier serial, and gaps are allowed. The counter lives outside every transaction, so a serial taken by an aborted or retried attempt is never reissued.
 
-Every temporary vote, quote and permanent vote takes a serial [Keeta TS] index.js:70202, 69342. A vote's identity is its issuer and serial, so two different votes under one serial would be provable equivocation.
+Every temporary vote, quote and permanent vote takes a serial [Keeta TS] index.js:71238, 70378. A vote's identity is its issuer and serial, so two different votes under one serial would be provable equivocation.
 
 Tested by:
 - `transactions.ts: "abort discards writes but never reuses a serial"`
@@ -234,7 +234,7 @@ Tested by:
 
 Persistence across restarts is required and untested. The memory driver keeps its counter only in memory and restarts it at 1, so it must never back a representative key that has signed votes before: its serials would repeat earlier ones.
 
-**Postgres.** One sequence, `vote_serials` (`bigint`, starting at 1, `CACHE 1`, no cycle), read with `nextval`. Given a transaction, the driver runs `nextval` on that transaction's connection; without one, on a connection of its own. Upstream takes the serial inside the read-write transaction of `vote` or `quote` [Keeta TS] index.js:69342, 70202, which already holds a pooled connection: taking a second one would wait forever once every connection of the pool is held by a transaction doing the same. `nextval` never rolls back, so an aborted attempt's serial is never issued again. Tested by `src/ledger/storage/postgres/driver.test.ts: "votes complete on a pool of one connection, alone and concurrently"`. `CACHE 1` makes every call take the next value of the one shared counter, so the serials of all processes together strictly increase; a larger cache would hand each connection its own block of values, and serials from two processes would no longer follow the order they were taken in.
+**Postgres.** One sequence, `vote_serials` (`bigint`, starting at 1, `CACHE 1`, no cycle), read with `nextval`. Given a transaction, the driver runs `nextval` on that transaction's connection; without one, on a connection of its own. Upstream takes the serial inside the read-write transaction of `vote` or `quote` [Keeta TS] index.js:70378, 71238, which already holds a pooled connection: taking a second one would wait forever once every connection of the pool is held by a transaction doing the same. `nextval` never rolls back, so an aborted attempt's serial is never issued again. Tested by `src/ledger/storage/postgres/driver.test.ts: "votes complete on a pool of one connection, alone and concurrently"`. `CACHE 1` makes every call take the next value of the one shared counter, so the serials of all processes together strictly increase; a larger cache would hand each connection its own block of values, and serials from two processes would no longer follow the order they were taken in.
 
 ## 4. Members
 
@@ -254,7 +254,7 @@ Persistence across restarts is required and untested. The memory driver keeps it
 init: (config: LedgerConfig, ledger: Ledger) => void;
 ```
 
-- **Semantics.** Binds the driver to one ledger. The `Ledger` constructor calls it synchronously and ignores the return value, so asynchronous setup belongs in `beginTransaction` [Keeta TS] index.js:70250-70255. A node constructs its ledger before its own statistics exist [Keeta TS] index.js:71341-71351, so `init` must not read `ledger.node.stats`. The base reads it lazily in `stats`. The base also stores `config` where upstream's base class reads its logger.
+- **Semantics.** Binds the driver to one ledger. The `Ledger` constructor calls it synchronously and ignores the return value, so asynchronous setup belongs in `beginTransaction` [Keeta TS] index.js:71286-71291. A node constructs its ledger before its own statistics exist [Keeta TS] index.js:72469-72479, so `init` must not read `ledger.node.stats`. The base reads it lazily in `stats`. The base also stores `config` where upstream's base class reads its logger.
 - **Selector, ordering.** None.
 - **Errors.** A second call throws `storage driver is already initialized`. A member that needs the configuration before `init` rejects with `StorageDriverNotInitializedError`.
 - **Tested by** `transactions.ts: "a driver serves exactly one ledger"`.
@@ -281,7 +281,7 @@ beginTransaction: (transactionBase: LedgerStorageTransactionBaseOptions) => Prom
 - **Selector, ordering.** None.
 - **Errors.** Any error goes through `evaluateError`, like every other error of the attempt.
 - **Tested by** every case. Its shape is checked by `stats.ts: "stats reads settlement times and retries from the node"`, where the node's settlement statistics arrive only through `statsPending`.
-- **Upstream.** [Keeta TS] index.js:70393-70396.
+- **Upstream.** [Keeta TS] index.js:71429-71432.
 - **Postgres.** Checks out one pooled connection and runs `BEGIN ISOLATION LEVEL SERIALIZABLE`, followed by `READ ONLY` when `readOnly` is true or absent. The connection is held until commit or abort (section 3.3). A connection lost while `BEGIN` runs is closed and the error reported.
 
 ### `commitTransaction`
@@ -293,7 +293,7 @@ commitTransaction: (transaction: any) => Promise<void>;
 - **Semantics.** Section 3.2.
 - **Errors.** Rejects for a transaction that has already ended.
 - **Tested by** `transactions.ts: "a finished transaction rejects further use"`.
-- **Upstream.** [Keeta TS] index.js:69001-69006, 70337-70347.
+- **Upstream.** [Keeta TS] index.js:70037-70042, 70337-70347.
 - **Postgres.** Waits for every statement issued on the transaction, then runs `COMMIT`. If any statement of the attempt reported a conflict, it rolls back instead and reports that conflict, retryable. Postgres answers `COMMIT` of a transaction that a failed statement aborted with `ROLLBACK`, which the driver reports as an error. A failed `COMMIT` leaves the transaction finished and its connection closed. Tested by `src/ledger/storage/postgres/driver.test.ts: "a serialization failure at commit is reported as retryable"` and `src/ledger/storage/postgres/driver.test.ts: "a broken connection at commit is not retried"`.
 
 ### `abortTransaction`
@@ -305,7 +305,7 @@ abortTransaction: (transaction: any) => Promise<void>;
 - **Semantics.** Section 3.2.
 - **Errors.** Rejects for a transaction that has already ended.
 - **Tested by** `transactions.ts: "abort discards writes but never reuses a serial"` and `transactions.ts: "a finished transaction rejects further use"`.
-- **Upstream.** [Keeta TS] index.js:69007-69011, 70337-70347.
+- **Upstream.** [Keeta TS] index.js:70043-70047, 70337-70347.
 - **Postgres.** Waits for every statement issued on the transaction, then runs `ROLLBACK`. A connection that cannot roll back is closed, which rolls back too, so abort itself never fails.
 
 ### `evaluateError`
@@ -316,7 +316,7 @@ evaluateError: (error: any) => Promise<any>;
 
 - **Semantics.** Section 3.4, plus the conflict mapping of section 3.5 for drivers with concurrent transactions. Implemented by the base. A driver with database conflicts extends it, mapping its own transient errors and delegating everything else.
 - **Tested by** `transactions.ts: "ledger errors pass through evaluateError and anything else becomes non-retryable"`, including the `LEDGER_OTHER` code and the `cause`.
-- **Upstream.** [Keeta TS] index.js:70350-70372.
+- **Upstream.** [Keeta TS] index.js:71386-71408.
 - **Postgres.** Not overridden. Each statement's error is mapped where it is raised (section 3.5), so `evaluateError` receives a ledger error for a conflict and makes anything else `LEDGER_OTHER`.
 
 ### `delegatedWeight`
@@ -330,7 +330,7 @@ delegatedWeight: (transaction: any, rep?: Account | InstanceType<typeof Account.
   - With an `Account`: its weight, or `0n` if it has none.
   - With an `Account.Set`: the sum over its distinct members.
 
-  A representative's weight is the sum of the base-token balances of the accounts that delegate to it. It is maintained by adding the weight deltas that `computeLedgerEffect` resolves, so the total always equals the sum of the per-representative weights. The quorum test compares the two [Keeta TS] index.js:69740-69759. Weights are not clamped (D9).
+  A representative's weight is the sum of the base-token balances of the accounts that delegate to it. It is maintained by adding the weight deltas that `computeLedgerEffect` resolves, so the total always equals the sum of the per-representative weights. The quorum test compares the two [Keeta TS] index.js:70776-70795. Weights are not clamped (D9).
 - **Selector.** Main only.
 - **Tested by**:
   - `genesis.ts: "genesis state reads back"`
@@ -338,7 +338,7 @@ delegatedWeight: (transaction: any, rep?: Account | InstanceType<typeof Account.
   - `confirmed.ts: "set representative moves weight"`
   - `transactions.ts: "concurrent calls within one transaction keep every write"`
   - the quorum check of every `add` and permanent vote
-- **Upstream.** `votingPower` [Keeta TS] index.js:69457-69462; the quorum check [Keeta TS] index.js:69740-69759; `computeLedgerEffect` [Keeta TS] index.js:67202-67208.
+- **Upstream.** `votingPower` [Keeta TS] index.js:70493-70498; the quorum check [Keeta TS] index.js:70776-70795; `computeLedgerEffect` [Keeta TS] index.js:68238-68244.
 - **Postgres.** Without `rep`: `sum(weight)` over `weights`, or 0 when it has no rows. With an account or a set: the same sum over the rows whose representative's public key is listed, through `accounts_public_key_key` and `weights_pkey`. The deltas are added on write (`persistConfirmedStaple`), so a weight is one row per representative.
 
 ### `getBalance`
@@ -347,7 +347,7 @@ delegatedWeight: (transaction: any, rep?: Account | InstanceType<typeof Account.
 getBalance: (transaction: any, account: GenericAccount, token: TokenAddress) => Promise<bigint>;
 ```
 
-- **Semantics.** The stored balance, or `0n` for a pair with no row. A negative stored balance is returned as it is (D9). Upstream's own wrapper refuses to report one [Keeta TS] index.js:69421-69428, but vote validation reads the driver directly and must see the true value [Keeta TS] index.js:67190-67200.
+- **Semantics.** The stored balance, or `0n` for a pair with no row. A negative stored balance is returned as it is (D9). Upstream's own wrapper refuses to report one [Keeta TS] index.js:70457-70464, but vote validation reads the driver directly and must see the true value [Keeta TS] index.js:68226-68236.
 - **Selector.** Main only.
 - **Tested by**:
   - `confirmed.ts: "a cross-account funding gap stores a negative balance that heals"`
@@ -366,7 +366,7 @@ getAllBalances: (transaction: any, account: GenericAccount) => Promise<GetAllBal
 - **Selector.** Main only.
 - **Ordering.** Unspecified.
 - **Tested by** `genesis.ts: "genesis state reads back"`, `confirmed.ts: "send moves balances and credits the receiver"` and `confirmed.ts: "token creation, supply and token-account balances"`.
-- **Upstream.** [Keeta TS] index.js:69429-69438.
+- **Upstream.** [Keeta TS] index.js:70465-70474.
 - **Postgres.** The holder's `balances` rows with `balance <> 0`, through the `account_id` prefix of `balances_pkey`.
 
 ### `getAccountInfo`
@@ -375,7 +375,7 @@ getAllBalances: (transaction: any, account: GenericAccount) => Promise<GetAllBal
 getAccountInfo: <T extends AccountKeyAlgorithm = AccountKeyAlgorithm>(transaction: any, account: Account<T> | string) => Promise<AccountInfoForType<T>>;
 ```
 
-- **Semantics.** The stored info, formatted by upstream's `_formatAccountInfoFromRow` [Keeta TS] index.js:67733-67785, which supplies defaults for missing fields:
+- **Semantics.** The stored info, formatted by upstream's `_formatAccountInfoFromRow` [Keeta TS] index.js:68769-68821, which supplies defaults for missing fields:
   - `name`, `description` and `metadata` default to `''`.
   - Identifiers carry `defaultPermission`, which defaults to empty.
   - Tokens carry `supply`, which defaults to `0n`.
@@ -388,7 +388,7 @@ getAccountInfo: <T extends AccountKeyAlgorithm = AccountKeyAlgorithm>(transactio
   - `genesis.ts: "genesis state reads back"`
   - `confirmed.ts: "token creation, supply and token-account balances"`
   - `confirmed.ts: "set info merges defined keys only"`
-- **Upstream.** The wrapper [Keeta TS] index.js:69497-69501; the default-permission and quorum checks [Keeta TS] index.js:69760-69770; `computeLedgerEffect` [Keeta TS] index.js:67222-67231.
+- **Upstream.** The wrapper [Keeta TS] index.js:70533-70537; the default-permission and quorum checks [Keeta TS] index.js:70796-70806; `computeLedgerEffect` [Keeta TS] index.js:68258-68267.
 - **Postgres.** The account's row in `accounts`, left-joined by ID to `account_info` (`account_info_pkey`) and `supplies` (`supplies_pkey`). A `NULL` column is an absent field, and an account without a row has every field absent. `default_base_permission` and `default_external_permission` are both set or both `NULL`.
 
 ### `listOwners`
@@ -398,11 +398,11 @@ listOwners: (transaction: any, identifier: IdentifierAddress, target?: GenericAc
 ```
 
 - **Semantics.** The distinct accounts whose ACL rows on the identifier include `OWNER`. Certificate principals are never owners. With `target`, only rows whose target equals it count. Returns `[]` when there are none.
-- Upstream requires exactly one owner to remain. A principal listed twice would be counted twice, and a valid staple refused with `LEDGER_INVALID_OWNER_COUNT` [Keeta TS] index.js:70044-70078. Distinctness is untested: no case stores two `OWNER` rows for one principal.
+- Upstream requires exactly one owner to remain. A principal listed twice would be counted twice, and a valid staple refused with `LEDGER_INVALID_OWNER_COUNT` [Keeta TS] index.js:71080-71114. Distinctness is untested: no case stores two `OWNER` rows for one principal.
 - **Selector.** Main only.
 - **Ordering.** Unspecified.
 - **Tested by** `confirmed.ts: "token creation, supply and token-account balances"`, which covers no target, the entity as target, and another target.
-- **Postgres.** One statement over the `acls` rows of the identifier's ID (`acls_entity`) with an account principal (`certificate IS NULL`), the given target's ID when there is one, and the `OWNER` bit set in `base_permissions` (section 6.5), returning each principal's public key once. A decoded set that holds `OWNER` also holds `ACCESS`, so the bit alone decides `has(['OWNER'])` [Keeta TS] index.js:74031-74045, 74151-74163. Tested by `src/ledger/storage/postgres/driver.test.ts: "owners are the distinct account principals whose base set holds OWNER, by target when one is given"`, which also covers distinctness.
+- **Postgres.** One statement over the `acls` rows of the identifier's ID (`acls_entity`) with an account principal (`certificate IS NULL`), the given target's ID when there is one, and the `OWNER` bit set in `base_permissions` (section 6.5), returning each principal's public key once. A decoded set that holds `OWNER` also holds `ACCESS`, so the bit alone decides `has(['OWNER'])` [Keeta TS] index.js:75179-75193, 75299-75311. Tested by `src/ledger/storage/postgres/driver.test.ts: "owners are the distinct account principals whose base set holds OWNER, by target when one is given"`, which also covers distinctness.
 
 ### `listACLsByPrincipal`
 
@@ -414,7 +414,7 @@ listACLsByPrincipal: (transaction: any, principal: ACLRow['principal'], entityLi
 - **Row shape.**
   - `target` is never `null`: an entity-wide row has `target` equal to `entity`.
   - `permissions` is an upstream `Permissions` instance.
-  - Rows are unique per principal, entity and target, because `findPermissionMatch` takes the first exact match [Keeta TS] index.js:67109-67132.
+  - Rows are unique per principal, entity and target, because `findPermissionMatch` takes the first exact match [Keeta TS] index.js:68145-68168.
 - **Selector.** Main only.
 - **Ordering.** Unspecified.
 - **Tested by**:
@@ -425,7 +425,7 @@ listACLsByPrincipal: (transaction: any, principal: ACLRow['principal'], entityLi
   - `confirmed.ts: "a staple reads the permissions and representative an earlier staple of its transaction wrote"`
   - `genesis.ts: "genesis state reads back"`
   - the three cases in `canaries.ts`
-- **Upstream.** The permission check, which passes deduplicated entities [Keeta TS] index.js:69828-69880. `computeLedgerEffect`, which calls it once per principal, possibly with an empty entity list [Keeta TS] index.js:67241-67285.
+- **Upstream.** The permission check, which passes deduplicated entities [Keeta TS] index.js:70864-70916. `computeLedgerEffect`, which calls it once per principal, possibly with an empty entity list [Keeta TS] index.js:68277-68321.
 - **Postgres.** The `acls` rows with the principal's ID and `certificate IS NOT DISTINCT FROM` the certificate hash, which is `NULL` for an account principal, and, with `entityList`, an entity in the list. An empty `entityList` is answered without a statement, once the transaction is checked to be open: `computeLedgerEffect` asks with one for every principal a staple has an effect on but adjusts no permission of, hundreds for a single staple on the main network. Served by the `principal_id` prefix of `acls_scope`, unique over (`principal_id`, `certificate`, `entity_id`, `target_id`) with `NULLS NOT DISTINCT`, so an account principal's rows are unique too; `IS NOT DISTINCT FROM` filters the rows that prefix finds. An entity-wide row stores the entity as its target. Permissions are read from the two unbounded integers `base_permissions` and `external_permissions`, which may be negative (D10).
 
 ### `listACLsByEntity`
@@ -434,7 +434,7 @@ listACLsByPrincipal: (transaction: any, principal: ACLRow['principal'], entityLi
 listACLsByEntity: (transaction: any, entity: GenericAccount, options?: ListACLsByEntityFilters) => Promise<ACLRow[]>;
 ```
 
-- **Semantics.** Every ACL row on the entity, restricted to `options.principalType` when given. Returns `[]` when there are none. The filter must be honoured: the certificate check throws on a row of the wrong type [Keeta TS] index.js:69771-69779. Rows that hold no permission are listed (provisional: confirmed by the live parity checks).
+- **Semantics.** Every ACL row on the entity, restricted to `options.principalType` when given. Returns `[]` when there are none. The filter must be honoured: the certificate check throws on a row of the wrong type [Keeta TS] index.js:70807-70815. Rows that hold no permission are listed (provisional: confirmed by the live parity checks).
 - **Selector.** Main only.
 - **Ordering.** Unspecified.
 - **Tested by**:
@@ -454,9 +454,9 @@ adjust: (transaction: any, input: VoteStaple, changes: ComputedEffectOfBlocks) =
 
 - **Semantics.** Applies a confirmed staple, and every deferred staple that it releases, inside the caller's transaction. `Ledger.add` has already checked the write mode, network, permanence and quorum, and checks nothing else [Keeta TS] index.js:69361-69402. Implemented by the base as a template, run once for the input and once for each replayed waiter:
   1. Refuse a staple that lists a block before its own previous, or whose blocks share a previous (D14).
-  2. Run `preAdjust`. It refuses the staple if any block has a main height, and otherwise assigns heights or defers. An empty result returns `[]` [Keeta TS] index.js:67678-67732.
+  2. Run `preAdjust`. It refuses the staple if any block has a main height, and otherwise assigns heights or defers. An empty result returns `[]` [Keeta TS] index.js:68714-68768.
   3. Refuse a staple that would overwrite confirmed history (D14).
-  4. Compute the settlement statistics while R's temporary side vote is still readable [Keeta TS] index.js:67593-67632.
+  4. Compute the settlement statistics while R's temporary side vote is still readable [Keeta TS] index.js:68629-68668.
   5. Compute the change through upstream's `computeLedgerEffect`, then call `persistConfirmedStaple` and `removeDeferredStaple`.
   6. Replay the staples waiting on the applied blocks, with deferral disabled, within the replay window, each in its own isolated unit (section 3.3, item 4; D13).
 
@@ -496,7 +496,7 @@ addPendingVote: (transaction: any, blocksAndVote: VoteStaple) => Promise<void>;
   - `votes.ts: "a pending vote added while a unit that later fails is open survives the unit"`
   - `src/ledger/storage/postgres/driver.test.ts: "pending votes added concurrently on one transaction open their units one at a time"`, for two such votes on one transaction
 - Replacement of a stored vote with the same `$uid` is untested.
-- **Upstream.** [Keeta TS] index.js:69310-69316, 69342-69354.
+- **Upstream.** [Keeta TS] index.js:70346-70352, 70378-70390.
 - **Postgres.** In one savepoint taken in turn:
   1. Intern the blocks' accounts and the issuer.
   2. Insert each block as a `blocks` row with `ledger = 'side'`, skipping a hash already stored on either ledger (`ON CONFLICT (hash) DO NOTHING`), so a main block keeps its row.
@@ -523,7 +523,7 @@ getBlock: (transaction: any, block: BlockHash, from: LedgerSelector) => Promise<
   - `votes.ts: "publishing promotes the staple and deletes side copies of promoted rows"`
   - `votes.ts: "after expiry a competing vote is allowed"`
   - `confirmed.ts: "map reads return every requested key with null for absent"`
-- **Upstream.** The wrapper, which defaults to `'main'` [Keeta TS] index.js:69502-69506; `getBlockFromIdempotent` [Keeta TS] index.js:69717-69724; the staple fallback, which counts a thrown error or a non-block as missing [Keeta TS] index.js:69602-69631.
+- **Upstream.** The wrapper, which defaults to `'main'` [Keeta TS] index.js:70538-70542; `getBlockFromIdempotent` [Keeta TS] index.js:70753-70760; the staple fallback, which counts a thrown error or a non-block as missing [Keeta TS] index.js:70638-70667.
 - **Postgres.** `'main'`: the `blocks` row with the hash and `ledger = 'main'` (`blocks_pkey`). `'side'`: the row with the hash and `ledger = 'side'` for which a `vote_blocks` row (`vote_blocks_block`) names a vote unexpired at the transaction moment.
 
 ### `getBlockHeight`
@@ -533,7 +533,7 @@ getBlockHeight: (transaction: any, blockHash: BlockHash, account: GenericAccount
 ```
 
 - **Semantics.** The zero-based position of the block on the account's main chain, where the opening block is `0n`. Returns `null` when the hash is unknown, is the opening sentinel, or is on the side ledger only. It also returns `null` when the block is on another account's chain, which is untested.
-- Side blocks must have no height. `preAdjust` refuses a staple any of whose blocks has one, so otherwise every staple this node voted on would fail at publish [Keeta TS] index.js:67682-67688.
+- Side blocks must have no height. `preAdjust` refuses a staple any of whose blocks has one, so otherwise every staple this node voted on would fail at publish [Keeta TS] index.js:68718-68724.
 - **Selector.** Main only (D5).
 - **Tested by** `votes.ts: "publishing promotes the staple and deletes side copies of promoted rows"` (publish after voting), and through `getAccountsBlockHeightInfo` in `genesis.ts: "genesis state reads back"`.
 - **Postgres.** The `chain` row of the hash (`chain_block_hash_key`) whose account is the given account; any other hash has no row.
@@ -544,7 +544,7 @@ getBlockHeight: (transaction: any, blockHash: BlockHash, account: GenericAccount
 getBlockHeights: (transaction: any, toFetch: { blockHash: BlockHash; account: GenericAccount; }[]) => Promise<{ [blockHash: string]: bigint | null; }>;
 ```
 
-- **Semantics.** One entry per distinct block hash, holding `getBlockHeight` of that hash. Implemented by upstream's base class [Keeta TS] index.js:67638-67646. A driver may override it with a batched read that returns the same answer.
+- **Semantics.** One entry per distinct block hash, holding `getBlockHeight` of that hash. Implemented by upstream's base class [Keeta TS] index.js:68674-68682. A driver may override it with a batched read that returns the same answer.
 - **Tested by** every `add`, through `preAdjust`.
 - **Postgres.** Inherited; one `getBlockHeight` read per hash.
 
@@ -554,7 +554,7 @@ getBlockHeights: (transaction: any, toFetch: { blockHash: BlockHash; account: Ge
 getAccountsBlockHeightInfo: (transaction: any, toFetch: { account: GenericAccount; blockHash?: BlockHash; }[]) => Promise<{ [account: string]: { blockHash: BlockHash; height: bigint | null; } | null; }>;
 ```
 
-- **Semantics.** One entry per account, keyed by public key. Without a hash, it reads the account's main head: `null` when there is none, otherwise the head's hash and height. With a hash, it returns that hash and `getBlockHeight` of it, which may be `null`. Implemented by upstream's base class [Keeta TS] index.js:67647-67666.
+- **Semantics.** One entry per account, keyed by public key. Without a hash, it reads the account's main head: `null` when there is none, otherwise the head's hash and height. With a hash, it returns that hash and `getBlockHeight` of it, which may be `null`. Implemented by upstream's base class [Keeta TS] index.js:68683-68702.
 - **Tested by**:
   - `genesis.ts: "genesis state reads back"`
   - `confirmed.ts: "send moves balances and credits the receiver"`
@@ -572,7 +572,7 @@ getVotes: (transaction: any, block: BlockHash, from: LedgerSelector) => Promise<
   - `'main'`: every vote of the confirmed staple that contains the block, or `null` if the block is not on the main ledger.
   - `'side'`: every unexpired side vote that covers the block, from whichever staples hold it, or `null`. A temporary vote on [B] and a permanent vote on [B, FEE] are both returned for B. After publish, R's temporary vote on B is still returned until it expires or gc collects it, although `getBlock(B, 'side')` is then `null`.
   - `'both'`: the main answer, or else the side answer (D7).
-- Never `[]`. The staple fallback reads the blocks of the first vote of any non-null answer [Keeta TS] index.js:69576-69580. A main answer always covers one block set.
+- Never `[]`. The staple fallback reads the blocks of the first vote of any non-null answer [Keeta TS] index.js:70612-70616. A main answer always covers one block set.
 - **Ordering.** Unspecified.
 - **Tested by**:
   - `votes.ts: "getVotes selectors: side returns all live side votes, both prefers main, absent gives null"`
@@ -580,7 +580,7 @@ getVotes: (transaction: any, block: BlockHash, from: LedgerSelector) => Promise<
   - `votes.ts: "publishing promotes the staple and deletes side copies of promoted rows"`
   - `genesis.ts: "genesis state reads back"`
   - `confirmed.ts: "map reads return every requested key with null for absent"`
-- **Upstream.** The wrapper [Keeta TS] index.js:69463-69467; the staple fallback [Keeta TS] index.js:69565-69631; settlement statistics with `'side'` [Keeta TS] index.js:67606-67611.
+- **Upstream.** The wrapper [Keeta TS] index.js:70499-70503; the staple fallback [Keeta TS] index.js:70601-70667; settlement statistics with `'side'` [Keeta TS] index.js:68642-68647.
 - **Postgres.** `'main'`: the main block's row (`blocks_pkey`), then every `votes` row with `ledger = 'main'` and `blocks_hash` equal to the block's staple (`votes_main`), in row ID order, which is the staple's vote order. `'side'`: the votes unexpired at the transaction moment that a `vote_blocks` row of the block names (`vote_blocks_block`), in row ID order.
 
 ### `getVotesFromPrevious`
@@ -589,7 +589,7 @@ getVotes: (transaction: any, block: BlockHash, from: LedgerSelector) => Promise<
 getVotesFromPrevious: (transaction: any, block: BlockHash, from: LedgerSelector) => Promise<Vote[] | null>;
 ```
 
-- **Semantics.** `getVotesFromMultiplePrevious` for one hash, with a missing entry read as `null`. Implemented by upstream's base class, which also forwards an optional `issuer` that the interface typing omits [Keeta TS] index.js:67844-67851. No upstream code calls it.
+- **Semantics.** `getVotesFromMultiplePrevious` for one hash, with a missing entry read as `null`. Implemented by upstream's base class, which also forwards an optional `issuer` that the interface typing omits [Keeta TS] index.js:68880-68887. No upstream code calls it.
 - Untested.
 - **Postgres.** Inherited; reads through `getVotesFromMultiplePrevious`.
 
@@ -605,8 +605,8 @@ getVotesFromMultiplePrevious: (transaction: any, prevBlocks: BlockHash[], from: 
   - `'both'`: for each p separately, the main answer, or else the side answer.
 
   p may be an opening sentinel. One vote may appear under several keys when its blocks chain.
-- **Why expired votes are excluded.** The answer is the equivocation guard of `vote`. A non-empty answer permits a vote only when it holds exactly one vote, the vote is this node's and temporary, and the request is for a permanent vote [Keeta TS] index.js:69281-69306. An expired vote left in the answer would block the account until gc ran.
-- **Why main-wins never changes a vote decision.** Every main vote is permanent [Keeta TS] index.js:69388-69395, and `vote` always passes its own key as `issuer`. A non-null main answer therefore holds only this node's permanent votes, and it refuses the request whatever a side answer would add: a single permanent vote may not be replaced, and two or more votes exceed the limit [Keeta TS] index.js:69288-69305. When the main answer is `null`, `'both'` returns the side answer, which is what a union would return. The proof needs `'main'` to answer `null`, not `[]`, when the successor's staple holds no vote of `issuer`.
+- **Why expired votes are excluded.** The answer is the equivocation guard of `vote`. A non-empty answer permits a vote only when it holds exactly one vote, the vote is this node's and temporary, and the request is for a permanent vote [Keeta TS] index.js:70317-70342. An expired vote left in the answer would block the account until gc ran.
+- **Why main-wins never changes a vote decision.** Every main vote is permanent [Keeta TS] index.js:70424-70431, and `vote` always passes its own key as `issuer`. A non-null main answer therefore holds only this node's permanent votes, and it refuses the request whatever a side answer would add: a single permanent vote may not be replaced, and two or more votes exceed the limit [Keeta TS] index.js:70324-70341. When the main answer is `null`, `'both'` returns the side answer, which is what a union would return. The proof needs `'main'` to answer `null`, not `[]`, when the successor's staple holds no vote of `issuer`.
 - Under `'both'`, the main answer hides this node's unexpired side vote on a competitor of p's main successor from API reads, until gc collects it (provisional: confirmed by the live parity checks).
 - **Tested by**:
   - `votes.ts: "a temporary vote is stored on the side ledger and is not a head"`
@@ -619,7 +619,7 @@ getVotesFromMultiplePrevious: (transaction: any, prevBlocks: BlockHash[], from: 
   - `confirmed.ts: "successor votes filtered to a representative outside the confirming quorum are null"`, for the `null` premise above
 
   Untested: `'both'` when main and side both answer for one p.
-- **Upstream.** The wrapper [Keeta TS] index.js:69468-69472.
+- **Upstream.** The wrapper [Keeta TS] index.js:70504-70508.
 - **Postgres.** `'main'`: for each listed previous, the main successor (`blocks_main_successor`) and the `votes` rows of its staple with `ledger = 'main'` (`votes_main`), restricted to the issuer's public key when given. `'side'`: the votes unexpired at the transaction moment, restricted to the issuer, that a `vote_blocks` row names for a block whose `previous` is listed (`blocks_previous`), each vote once per previous. The covered block may be on either ledger: a vote whose block has since moved to main still guards its previous until gc collects it. Both answers list votes in row ID order and group them by previous in the process.
 
 ### `getVoteStaples`
@@ -630,9 +630,9 @@ getVoteStaples: (transaction: any, voteBlockHashes: VoteBlockHash[], from: Ledge
 
 - **Semantics.** A `VoteBlockHashMap` with an entry for every requested `blocksHash`:
   - `'main'`: the confirmed staple, as the bytes it was received as (section 1, staple bytes).
-  - `'side'`: a staple built from the unexpired side votes with that `blocksHash` and the block list stored with them. If any of those votes is permanent, only the permanent ones are used [Keeta TS] index.js:80795-80827. `null` when none is unexpired.
+  - `'side'`: a staple built from the unexpired side votes with that `blocksHash` and the block list stored with them. If any of those votes is permanent, only the permanent ones are used [Keeta TS] index.js:81947-81979. `null` when none is unexpired.
   - `'both'`: for each key, the main answer, or else the side answer.
-- Upstream never passes an empty list or more than 10,000 hashes [Keeta TS] index.js:69521-69531. A missing entry is an internal error to upstream, and a `null` entry is an internal error to history [Keeta TS] index.js:69512-69520, 69540-69548.
+- Upstream never passes an empty list or more than 10,000 hashes [Keeta TS] index.js:70557-70567. A missing entry is an internal error to upstream, and a `null` entry is an internal error to history [Keeta TS] index.js:70548-70556, 70576-70584.
 - **Tested by**:
   - `confirmed.ts: "map reads return every requested key with null for absent"`
   - `votes.ts: "a temporary vote is stored on the side ledger and is not a head"`
@@ -650,9 +650,9 @@ getVoteStaples: (transaction: any, voteBlockHashes: VoteBlockHash[], from: Ledge
 getHistory: (transaction: any, account: GenericAccount | null, start: VoteBlockHash | null, limit?: number) => Promise<VoteBlockHash[]>;
 ```
 
-- **Semantics.** The `blocksHash` of each main staple that touched the account, or of every main staple when `account` is `null`. A staple is listed under its signers and the accounts it has an effect on (D18). At most `limit` entries are returned; upstream always passes a number, which may not be an integer, and a driver returns the whole entries it allows (`1.5` gives one); the default is 25 [Keeta TS] index.js:69532. Every returned hash must resolve through `getVoteStaples(..., 'main')` [Keeta TS] index.js:69540-69548.
+- **Semantics.** The `blocksHash` of each main staple that touched the account, or of every main staple when `account` is `null`. A staple is listed under its signers and the accounts it has an effect on (D18). At most `limit` entries are returned; upstream always passes a number, which may not be an integer, and a driver returns the whole entries it allows (`1.5` gives one); the default is 25 [Keeta TS] index.js:70568. Every returned hash must resolve through `getVoteStaples(..., 'main')` [Keeta TS] index.js:70576-70584.
 - **Ordering and paging.** Newest first in history order (D8):
-  - The key is the ordered pair (staple time, `blocksHash`), descending (provisional: confirmed by the live parity checks). The staple time is `VoteStaple.timestamp()` with no argument, as an integer count of milliseconds since the Unix epoch [Keeta TS] index.js:81070-81096, and `blocksHash` is compared as unsigned bytes.
+  - The key is the ordered pair (staple time, `blocksHash`), descending (provisional: confirmed by the live parity checks). The staple time is `VoteStaple.timestamp()` with no argument, as an integer count of milliseconds since the Unix epoch [Keeta TS] index.js:82222-82248, and `blocksHash` is compared as unsigned bytes.
   - `start` is exclusive.
   - With an `account`, a `start` that is unknown, or no entry of that account's history, is refused with an error that has no code, which the API answers as an internal failure, as the main network's representatives do (`conformance/API.md`, Mainnet captures). With `account` `null`, a `start` that is unknown gives `[]`.
 - **Selector.** Main only.
@@ -675,7 +675,7 @@ getHeadBlocks: (transaction: any, accounts: GenericAccount[], from: LedgerSelect
   - `'main'` and `'both'`: the highest block of its main chain, or `null` when it has none.
   - `'side'`: `null` for every account (D5).
 
-  A side block is never a head. The permanent vote's head check reads `'both'`, and a side head would refuse every permanent vote [Keeta TS] index.js:67667-67677, 69260-69276.
+  A side block is never a head. The permanent vote's head check reads `'both'`, and a side head would refuse every permanent vote [Keeta TS] index.js:68703-68713, 70296-70312.
 - **Tested by**:
   - `votes.ts: "a temporary vote is stored on the side ledger and is not a head"`
   - `confirmed.ts: "map reads return every requested key with null for absent"`
@@ -688,7 +688,7 @@ getHeadBlocks: (transaction: any, accounts: GenericAccount[], from: LedgerSelect
 getHeadBlockHashes: (transaction: any, accounts: InstanceType<typeof Account.Set>) => Promise<{ [account: string]: BlockHash | null; }>;
 ```
 
-- **Semantics.** The hashes of `getHeadBlocks(..., 'both')`. Implemented by upstream's base class [Keeta TS] index.js:67667-67677. Its only caller is the head check of `vote`.
+- **Semantics.** The hashes of `getHeadBlocks(..., 'both')`. Implemented by upstream's base class [Keeta TS] index.js:68703-68713. Its only caller is the head check of `vote`.
 - **Tested by** every case in `votes.ts`.
 - **Postgres.** Inherited; reads through `getHeadBlocks`.
 
@@ -698,7 +698,7 @@ getHeadBlockHashes: (transaction: any, accounts: InstanceType<typeof Account.Set
 getHeadBlock: (transaction: any, account: GenericAccount, from: LedgerSelector) => Promise<Block | null>;
 ```
 
-- **Semantics.** `getHeadBlocks` for one account, with a missing entry read as `null`. Implemented by upstream's base class [Keeta TS] index.js:67836-67843.
+- **Semantics.** `getHeadBlocks` for one account, with a missing entry read as `null`. Implemented by upstream's base class [Keeta TS] index.js:68872-68879.
 - **Tested by** `genesis.ts: "genesis state reads back"` and `votes.ts: "a temporary vote is stored on the side ledger and is not a head"`.
 - **Postgres.** Inherited; reads through `getHeadBlocks`.
 
@@ -710,11 +710,11 @@ getBlockFromPrevious: (transaction: any, block: BlockHash, from: LedgerSelector)
 
 - **Semantics.** The block whose `previous` is the given hash. The hash may be an opening sentinel.
   - `'main'`: the unique confirmed successor.
-  - `'side'`: of the side blocks whose `previous` matches and which an unexpired side vote covers, the one whose covering vote has the latest `validityFrom`, and of equals the one with the greater hash. When a vote is issued its block is the only such block, because voting refuses a competing successor until this node's vote on another expires. A transaction with a stale moment can still see an expired vote's block beside the block voted on after that vote expired, and the later vote names the current successor. No decision reads the side answer: upstream calls the member only from its public wrappers [Keeta TS] index.js:69482-69486, 70466-70470, and the base calls it only with `'main'`.
+  - `'side'`: of the side blocks whose `previous` matches and which an unexpired side vote covers, the one whose covering vote has the latest `validityFrom`, and of equals the one with the greater hash. When a vote is issued its block is the only such block, because voting refuses a competing successor until this node's vote on another expires. A transaction with a stale moment can still see an expired vote's block beside the block voted on after that vote expired, and the later vote names the current successor. No decision reads the side answer: upstream calls the member only from its public wrappers [Keeta TS] index.js:70518-70522, 71502-71506, and the base calls it only with `'main'`.
   - `'both'`: the main answer, or else the side answer.
   - `null` when absent.
 
-  The upstream wrapper gives `from` no default [Keeta TS] index.js:69473-69477.
+  The upstream wrapper gives `from` no default [Keeta TS] index.js:70509-70513.
 - **Tested by**:
   - `votes.ts: "a temporary vote is stored on the side ledger and is not a head"`
   - `votes.ts: "after expiry a competing vote is allowed"`
@@ -732,10 +732,10 @@ getBlockFromPrevious: (transaction: any, block: BlockHash, from: LedgerSelector)
 getAccountRep: (transaction: any, account: GenericAccount | string) => Promise<Account | null>;
 ```
 
-- **Semantics.** The account's stored representative, or `null` when it never set one. A string is converted to an account first. Upstream calls it only for account types that can delegate [Keeta TS] index.js:69488-69496.
+- **Semantics.** The account's stored representative, or `null` when it never set one. A string is converted to an account first. Upstream calls it only for account types that can delegate [Keeta TS] index.js:70524-70532.
 - **Selector.** Main only.
 - **Tested by** `genesis.ts: "genesis state reads back"`, `confirmed.ts: "set representative moves weight"`, `confirmed.ts: "a staple reads the permissions and representative an earlier staple of its transaction wrote"` and `votes.ts: "a temporary vote is stored on the side ledger and is not a head"`.
-- **Upstream.** `computeLedgerEffect` [Keeta TS] index.js:67210-67220.
+- **Upstream.** `computeLedgerEffect` [Keeta TS] index.js:68246-68256.
 - **Postgres.** The `delegations` row of the account's ID (`delegations_pkey`), joined to the representative's public key.
 
 ### `getVotesAfter`
@@ -747,9 +747,9 @@ getVotesAfter: (transaction: any, moment: Date, startKey?: string, options?: Get
 - **Semantics.** The votes of main staples made at or after `moment`, those whose `validityFrom` is, page by page (D8, catch-up order). `options.bloomFilter` and `options.timeout` may be ignored.
 - **Ordering and paging.**
   - Votes ascend by `validityFrom`, then by a node-local sequence that breaks ties within a millisecond.
-  - A page holds at most `maxVotesPerPage` votes, and at least one while any remains. The default page size is 200, the largest upstream requests. Upstream asks for 32 times its remaining limit [Keeta TS] index.js:69653-69656, which is not an integer when the limit is not, so a driver treats a fractional `maxVotesPerPage` as the next whole number: 32.96 votes means 33.
+  - A page holds at most `maxVotesPerPage` votes, and at least one while any remains. The default page size is 200, the largest upstream requests. Upstream asks for 32 times its remaining limit [Keeta TS] index.js:70689-70692, which is not an integer when the limit is not, so a driver treats a fractional `maxVotesPerPage` as the next whole number: 32.96 votes means 33.
   - A page ends between votes, wherever they fall in their staples, so a staple whose votes two pages hold is listed by both (D8).
-  - `nextKey` is an opaque string that resumes after the page's last vote. It is omitted on the last page, because upstream's loop stops only when it is `undefined` [Keeta TS] index.js:69695-69699.
+  - `nextKey` is an opaque string that resumes after the page's last vote. It is omitted on the last page, because upstream's loop stops only when it is `undefined` [Keeta TS] index.js:70731-70735.
   - The key is used only within one read transaction.
 - **Selector.** Main only: a side vote is never listed.
 - **Errors.** A malformed `startKey` throws, which `evaluateError` turns into `LEDGER_OTHER`. Untested.
@@ -759,7 +759,7 @@ getVotesAfter: (transaction: any, moment: Date, startKey?: string, options?: Get
   - `confirmed.ts: "votes made in the same millisecond page one at a time, none skipped or listed twice"`
   - `confirmed.ts: "a fractional page size is rounded up for votes and down for history"`
   - `confirmed.ts: "catch-up orders by when each vote was made, not by when its staple was applied, even when the clock goes back"`
-- **Upstream.** [Keeta TS] index.js:69633-69702. The moment comparison is "on or after" [Keeta TS] index.js:69659-69666.
+- **Upstream.** [Keeta TS] index.js:70669-70738. The moment comparison is "on or after" [Keeta TS] index.js:70695-70702.
 - **Postgres.** `votes` with `ledger = 'main'` and `validity_from >= $moment`, `ORDER BY validity_from, id`, through `votes_catch_up` (`validity_from`, `id`, main rows only; schema version 4); a page after a key continues with `(validity_from, id) > (key)`. `id` is an identity column, so it is node-local and never reused, and a staple's votes are inserted in staple order. The query fetches `max(ceil(maxVotesPerPage), 1) + 1` votes; the page takes all but the last, and the key of its last vote is returned only when a fetched vote was left over. The key is the last vote's `validity_from` in milliseconds and its `id`, in decimal, joined by `:` (`src/ledger/storage/paging.ts`). Tested by `src/ledger/storage/postgres/driver.test.ts: "a catch-up page $name reads main votes in order from votes_catch_up, without sorting them"`, from a moment and after a key.
 
 ### `getVoteStaplesFromBlockHash`
@@ -768,7 +768,7 @@ getVotesAfter: (transaction: any, moment: Date, startKey?: string, options?: Get
 getVoteStaplesFromBlockHash?: (transaction: any, blocks: BlockHash[], from: LedgerSelector) => Promise<VoteStaple[]>;
 ```
 
-- **Semantics.** Optional upstream; `LedgerStorageDriverBase` implements it for every driver here. When present, it replaces upstream's fallback [Keeta TS] index.js:69559-69564, which `getVoteStaplesAfter`, and so the bootstrap route, reads through. It returns the staples the fallback finds [Keeta TS] index.js:69565-69631:
+- **Semantics.** Optional upstream; `LedgerStorageDriverBase` implements it for every driver here. When present, it replaces upstream's fallback [Keeta TS] index.js:70595-70600, which `getVoteStaplesAfter`, and so the bootstrap route, reads through. It returns the staples the fallback finds [Keeta TS] index.js:70601-70667:
   - the distinct, complete main staples containing the given blocks
   - in order of first appearance
   - skipping hashes with no main votes, and staples with a block that is not on the main ledger
@@ -783,7 +783,7 @@ getVoteStaplesFromBlockHash?: (transaction: any, blocks: BlockHash[], from: Ledg
 cache?: (transaction: any) => LedgerRequestCache | undefined;
 ```
 
-- **Semantics.** Optional, and implemented by no driver here. Upstream stores the returned cache on its atomic interface and never reads it [Keeta TS] index.js:68990-68999. If a driver provides one, it must be scoped to one transaction: a `Vote` is checked for expiry only when constructed, so a cache that outlived its transaction could serve an expired vote.
+- **Semantics.** Optional, and implemented by no driver here. Upstream stores the returned cache on its atomic interface and never reads it [Keeta TS] index.js:70026-70035. If a driver provides one, it must be scoped to one transaction: a `Vote` is checked for expiry only when constructed, so a cache that outlived its transaction could serve an expired vote.
 - Untested.
 - **Postgres.** Not implemented.
 
@@ -793,7 +793,7 @@ cache?: (transaction: any) => LedgerRequestCache | undefined;
 gc: (transaction: any, timeLimitMS?: number) => Promise<boolean>;
 ```
 
-- **Semantics.** Upstream's loop, inherited unchanged. It calls `gcBatch` until a batch reports that no work remains, in which case it returns `false`, or until `timeLimitMS` (default 280000 ms) has elapsed, in which case it returns the last batch's answer [Keeta TS] index.js:67852-67862. The base implements `gcBatch` as D20 states. The whole loop runs in one transaction [Keeta TS] index.js:70517-70521. Correctness never depends on gc having run.
+- **Semantics.** Upstream's loop, inherited unchanged. It calls `gcBatch` until a batch reports that no work remains, in which case it returns `false`, or until `timeLimitMS` (default 280000 ms) has elapsed, in which case it returns the last batch's answer [Keeta TS] index.js:68888-68898. The base implements `gcBatch` as D20 states. The whole loop runs in one transaction [Keeta TS] index.js:71553-71557. Correctness never depends on gc having run.
 - **Time limit.** A caller should pass a small `timeLimitMS`, a few seconds, and call `gc` again while it returns `true`. With the default, one call can hold one read-write transaction open for up to 280 s. On a driver with real concurrency that transaction conflicts with every vote and add that touches what it collects, and a serialization failure late in it rolls back all of its batches, which `Ledger.run` may not retry once its 5 s budget has passed [Keeta TS] index.js:70294-70389. A small limit keeps each transaction to a few batches, and the work done before a failure committed.
 - **Tested by** every case in `gc.ts`.
 - **Postgres.** Inherited loop, over the batch primitives of section 4.2.
@@ -814,7 +814,7 @@ getNextSerialNumber: (transaction?: any) => Promise<bigint>;
 getAccountCertificates: (transaction: any, account: GenericAccount) => Promise<CertificateWithIntermediates[]>;
 ```
 
-- **Semantics.** Every certificate the account holds, whether or not it is currently valid, as `{ certificate, intermediates }` with `intermediates` `null` when none were given. Returns `[]` when there are none. Callers check validity themselves [Keeta TS] index.js:69787-69810.
+- **Semantics.** Every certificate the account holds, whether or not it is currently valid, as `{ certificate, intermediates }` with `intermediates` `null` when none were given. Returns `[]` when there are none. Callers check validity themselves [Keeta TS] index.js:70823-70846.
 - **Selector.** Main only.
 - **Ordering.** Unspecified.
 - **Tested by** `confirmed.ts: "certificates add and remove"`, `confirmed.ts: "an expired certificate is still read back"` and, for stored intermediates, `confirmed.ts: "a certificate is read back with its intermediates"`.
@@ -826,7 +826,7 @@ getAccountCertificates: (transaction: any, account: GenericAccount) => Promise<C
 getAccountCertificateByHash: (transaction: any, account: GenericAccount, hash: CertificateHash) => Promise<CertificateWithIntermediates | null>;
 ```
 
-- **Semantics.** The certificate with this hash that the account holds, or `null`. A `null` answer during `adjust` makes `computeLedgerEffect` refuse an ACL granted to that certificate with `LEDGER_CERTIFICATE_NOT_FOUND` (D15) [Keeta TS] index.js:67233-67239, 67456-67460.
+- **Semantics.** The certificate with this hash that the account holds, or `null`. A `null` answer during `adjust` makes `computeLedgerEffect` refuse an ACL granted to that certificate with `LEDGER_CERTIFICATE_NOT_FOUND` (D15) [Keeta TS] index.js:68269-68275, 68492-68496.
 - **Selector.** Main only.
 - **Tested by** `confirmed.ts: "certificates add and remove"`, `confirmed.ts: "an expired certificate is still read back"`, `confirmed.ts: "a certificate is read back with its intermediates"` and `confirmed.ts: "an ACL granted to a certificate this node lacks is rejected"`.
 - **Postgres.** The `certificates` row with the account's ID and the hash, through `certificates_pkey` (`account_id`, `hash`).
@@ -842,12 +842,12 @@ getIdempotentBlockHash: (transaction: any, idempotent: IdempotentKey, from: Ledg
   - `'side'`: a side block that claims the key, is covered by an unexpired side vote, and is not the excluded block. Otherwise `null`.
   - `'both'`: the main answer, or else the side answer. Each is computed with the exclusion applied.
 
-  `vote` excludes each block's own hash, so a permanent vote can follow the temporary vote that claimed the key on the side [Keeta TS] index.js:69254-69259.
+  `vote` excludes each block's own hash, so a permanent vote can follow the temporary vote that claimed the key on the side [Keeta TS] index.js:70290-70295.
 - **Tested by**:
   - `confirmed.ts: "idempotent keys resolve on main"`
   - `votes.ts: "side idempotent keys are visible under both and lose to main"`
   - `gc.ts: "gc removes expired side votes and their unreferenced blocks but keeps permanent ones"`
-- **Upstream.** The wrappers, which default to `'both'` [Keeta TS] index.js:69711-69724.
+- **Upstream.** The wrappers, which default to `'both'` [Keeta TS] index.js:70747-70760.
 - **Postgres.** A key is stored as the 32 bytes its uppercase hex spells. `'main'`: the `idempotent_keys` row with the key and `ledger = 'main'`, through `idempotent_keys_main`, a unique index on `key` over main rows only, when its block `IS DISTINCT FROM` the excluded one. `'side'`: of the side claims of the key (`idempotent_keys_pkey`) whose block is a side copy that a vote unexpired at the transaction moment covers, other than the excluded block, the lowest block hash.
 
 ### `stats`
@@ -856,7 +856,7 @@ getIdempotentBlockHash: (transaction: any, idempotent: IdempotentKey, from: Ledg
 stats: () => Promise<LedgerStatistics>;
 ```
 
-- **Semantics.** Implemented by the base over the driver's `countLedger` (section 4.2). It takes no transaction, and `Ledger.stats` calls it without one and without retries [Keeta TS] index.js:70537-70551. The field definitions are in D19.
+- **Semantics.** Implemented by the base over the driver's `countLedger` (section 4.2). It takes no transaction, and `Ledger.stats` calls it without one and without retries [Keeta TS] index.js:71573-71587. The field definitions are in D19.
 - `ledger.node` is read from the ledger passed to `init`. After `Ledger.copy`, which shares the driver, `stats` still reports the original ledger's node. Untested.
 - **Tested by** `stats.ts: "stats returns the upstream shape with counts that follow the staples added"`, `stats.ts: "stats reads settlement times and retries from the node"` and `stats.ts: "a replayed staple that rolls back does not record a settlement time"`.
 - **Postgres.** The base's, over `countLedger`.
@@ -1085,7 +1085,7 @@ Provided by the base, not implemented by drivers. Logs a network integrity alarm
 abstract bootstrapStage(): BootstrapStage;
 ```
 
-Not part of upstream's interface. A node far behind reads its peers' history in ranges side by side, but adds it in the order of the staples' votes: the ledger judges each staple by the voting weight it holds when the staple is added [Keeta TS] index.js:69397-69401, 69740-69759, so history added out of that order can leave the ledger in a state no stretch of the history ever had, which refuses staples the network applied. The stage keeps what the bootstrap read until the node adds it (`src/node/bootstrap-stage.ts`). It lives outside every ledger transaction, and the ledger never reads it.
+Not part of upstream's interface. A node far behind reads its peers' history in ranges side by side, but adds it in the order of the staples' votes: the ledger judges each staple by the voting weight it holds when the staple is added [Keeta TS] index.js:69397-69401, 70776-70795, so history added out of that order can leave the ledger in a state no stretch of the history ever had, which refuses staples the network applied. The stage keeps what the bootstrap read until the node adds it (`src/node/bootstrap-stage.ts`). It lives outside every ledger transaction, and the ledger never reads it.
 
 `BootstrapStage` (`src/ledger/storage/stage.ts`) keeps staples by key, the `blocksHash` as `BlockHash.toString` spells it, each with its bytes as received and the moments its earliest and latest votes were made (their `validityFrom`):
 
@@ -1118,8 +1118,8 @@ This node's own side votes are judged by the expiry bound alone: side reads and 
 m is the transaction moment. `isVoteLive` (`src/ledger/storage/expiry.ts`, internal and not exported from the package) implements the first predicate and exists only for parity checks against the `Vote` class; it must never filter side reads or gc. `isVoteUnexpired` implements the second, and every side read filter and gc use it.
 
 **Reason.**
-- The `Vote` constructor rejects a vote outside the first predicate's bounds with `VOTE_MOMENT_BEFORE_VALIDITY_FROM` or `VOTE_EXPIRED` [Keeta TS] index.js:80370-80374, 80676-80679, and upstream's own staple builder drops expired votes [Keeta TS] index.js:80795-80799.
-- `Ledger` fixes the transaction moment before the driver admits the transaction [Keeta TS] index.js:70393-70396. A transaction that waited behind a long one, such as a gc pass, carries a moment from before the wait, and a competing vote committed during the wait has a later `validityFrom`. Dropping that vote as issued in the future would let the waiting `vote` sign a competitor, which is equivocation; a gc pass would likewise delete a vote that still guards its previous. A stale moment can only delay expiry, so the expiry bound alone is always safe.
+- The `Vote` constructor rejects a vote outside the first predicate's bounds with `VOTE_MOMENT_BEFORE_VALIDITY_FROM` or `VOTE_EXPIRED` [Keeta TS] index.js:81522-81526, 81828-81831, and upstream's own staple builder drops expired votes [Keeta TS] index.js:81947-81951.
+- `Ledger` fixes the transaction moment before the driver admits the transaction [Keeta TS] index.js:71429-71432. A transaction that waited behind a long one, such as a gc pass, carries a moment from before the wait, and a competing vote committed during the wait has a later `validityFrom`. Dropping that vote as issued in the future would let the waiting `vote` sign a competitor, which is equivocation; a gc pass would likewise delete a vote that still guards its previous. A stale moment can only delay expiry, so the expiry bound alone is always safe.
 - Judging at the transaction moment makes every read in one transaction agree, and lets correctness not depend on gc. It also makes a transaction opened with an earlier moment see the side votes that had not expired then, if they are still stored. The gc cases read stored rows this way.
 
 **Tested by**:
@@ -1139,7 +1139,7 @@ The three "admitted late" cases hold the request's transaction in `beginTransact
 
 Heights and heads count main-ledger blocks only, under every selector. `getHeadBlocks(..., 'side')` returns `null` for every account.
 
-**Reason.** The permanent vote on B arrives after the temporary vote has put B on the side ledger, and its head check reads `'both'`. A side head would refuse it with `LEDGER_NOT_SUCCESSOR`, or with `LEDGER_NOT_EMPTY` for an opening block [Keeta TS] index.js:69260-69276. A side height would make `preAdjust` refuse the publish with `LEDGER_BLOCK_ALREADY_EXISTS` [Keeta TS] index.js:67682-67688.
+**Reason.** The permanent vote on B arrives after the temporary vote has put B on the side ledger, and its head check reads `'both'`. A side head would refuse it with `LEDGER_NOT_SUCCESSOR`, or with `LEDGER_NOT_EMPTY` for an opening block [Keeta TS] index.js:70296-70312. A side height would make `preAdjust` refuse the publish with `LEDGER_BLOCK_ALREADY_EXISTS` [Keeta TS] index.js:68718-68724.
 
 **Tested by** `votes.ts: "a temporary vote is stored on the side ledger and is not a head"`, and by `src/ledger/storage/suite-meta.test.ts: "the vote lifecycle cases catch heads that count side blocks"`, which runs the vote cases against a driver whose `'both'` heads count side blocks and requires them to fail.
 
@@ -1151,10 +1151,10 @@ Heights and heads count main-ledger blocks only, under every selector. `getHeadB
 - gc collects every side vote that can never be published, with the side blocks and idempotent claims only it held: a vote is collected once the `previous` of any block it covers has a confirmed successor. That successor is either the block itself, now on the main ledger, or a competitor that won. Only a confirmed successor counts: a competitor that is merely pending on the side ledger, or held in a deferred staple, leaves the vote in place, because the vote still guards its previous.
 
 **Reason.**
-- The temporary vote is what the settlement statistic measures from at publish [Keeta TS] index.js:67593-67632.
-- Once a permanent vote exists, keeping or deleting the temporary vote gives the same vote decisions: one remaining permanent vote, or two votes, both refuse further successors [Keeta TS] index.js:69288-69305.
+- The temporary vote is what the settlement statistic measures from at publish [Keeta TS] index.js:68629-68668.
+- Once a permanent vote exists, keeping or deleting the temporary vote gives the same vote decisions: one remaining permanent vote, or two votes, both refuse further successors [Keeta TS] index.js:70324-70341.
 - A row that moves to the main ledger exists once, so `'both'` never sees two copies.
-- `preAdjust` refuses a staple any of whose blocks is already on the main ledger [Keeta TS] index.js:67682-67688, and `adjust` refuses one whose block competes with a confirmed successor (D14), so such a vote can never be published. A permanent vote never expires: kept on a dead competitor, it would hold its blocks' idempotent keys forever, and this node would refuse every later block carrying one of those keys with `LEDGER_IDEMPOTENT_KEY_EXISTS` [Keeta TS] index.js:69254-69259. Such a vote arises with honest representatives: this node votes permanently, the client abandons the staple, and the network later confirms a competitor.
+- `preAdjust` refuses a staple any of whose blocks is already on the main ledger [Keeta TS] index.js:68718-68724, and `adjust` refuses one whose block competes with a confirmed successor (D14), so such a vote can never be published. A permanent vote never expires: kept on a dead competitor, it would hold its blocks' idempotent keys forever, and this node would refuse every later block carrying one of those keys with `LEDGER_IDEMPOTENT_KEY_EXISTS` [Keeta TS] index.js:70290-70295. Such a vote arises with honest representatives: this node votes permanently, the client abandons the staple, and the network later confirms a competitor.
 
 **Tested by**:
 - `votes.ts: "a permanent vote with a fee block joins the temporary vote"`
@@ -1176,7 +1176,7 @@ Heights and heads count main-ledger blocks only, under every selector. `getHeadB
 - `getVotes(..., 'side')` returns every unexpired side vote on the block.
 
 **Reason.**
-- Upstream callers index results directly, and treat a missing entry as a crash [Keeta TS] index.js:69263-69273, 69284-69285, 69512-69520. The staple fallback reads the first vote of any non-null `getVotes` answer [Keeta TS] index.js:69576-69580.
+- Upstream callers index results directly, and treat a missing entry as a crash [Keeta TS] index.js:70299-70309, 70320-70321, 70548-70556. The staple fallback reads the first vote of any non-null `getVotes` answer [Keeta TS] index.js:70612-70616.
 - Returning one ledger's answer keeps a `getVotes` answer from mixing the main staple's votes with side votes on other block sets.
 - What has been confirmed reads as confirmed, and main-wins never changes a vote decision (see `getVotesFromMultiplePrevious`).
 
@@ -1197,17 +1197,17 @@ Main staples are ordered two ways. History is ordered by the staple itself; the 
 #### History order
 
 The history key of a main staple is the ordered pair (staple time, `blocksHash`) (provisional: confirmed by the live parity checks):
-1. its staple time: `VoteStaple.timestamp()` called with no `preferRep`, which is the earliest `validityFrom` of its votes plus the mean offset of every vote's `validityFrom` from it, floored to a whole millisecond [Keeta TS] index.js:81070-81096. It is an integer count of milliseconds since the Unix epoch, the value of the JavaScript `Date` that `timestamp` returns;
+1. its staple time: `VoteStaple.timestamp()` called with no `preferRep`, which is the earliest `validityFrom` of its votes plus the mean offset of every vote's `validityFrom` from it, floored to a whole millisecond [Keeta TS] index.js:82222-82248. It is an integer count of milliseconds since the Unix epoch, the value of the JavaScript `Date` that `timestamp` returns;
 2. its `blocksHash`, compared as a sequence of unsigned bytes, which orders the same as comparing its equal-length uppercase hex.
 
 - `getHistory` descends by the whole key. `start` is exclusive. A `start` that is unknown, or not in the listed history, gives `[]`.
 - The key is computed once, when the staple is stored, and kept with it. A staple applied late, for example after deferral, sorts by its staple time.
 
 **Reason.**
-- Without `preferRep`, the staple time depends only on the staple's votes, so every node lists the same history in the same order, however late it applied each staple. With `preferRep`, `timestamp` returns that representative's own vote time instead [Keeta TS] index.js:81070-81096, which would make the order depend on the node asking.
+- Without `preferRep`, the staple time depends only on the staple's votes, so every node lists the same history in the same order, however late it applied each staple. With `preferRep`, `timestamp` returns that representative's own vote time instead [Keeta TS] index.js:82222-82248, which would make the order depend on the node asking.
 - `blocksHash` identifies a main staple, so the pair is a total order: a page boundary falls between two definite staples, even inside a tie on staple time.
-- The pair fits one ordered value: a fixed-width big-endian staple time followed by the `blocksHash` bytes compares in the same order. Upstream's unused `LedgerStorageBase._generateNoisyTimestamp` builds keys of this time-major shape [Keeta TS] index.js:67815.
-- The client passes the previous page's `nextKey` as the next start [Keeta TS] index.js:58986-58990, and its fallback passes the last returned staple's ID [Keeta TS] index.js:58992-58994. Paging by the last returned staple works without duplicates only if `start` is exclusive.
+- The pair fits one ordered value: a fixed-width big-endian staple time followed by the `blocksHash` bytes compares in the same order. Upstream's unused `LedgerStorageBase._generateNoisyTimestamp` builds keys of this time-major shape [Keeta TS] index.js:68851.
+- The client passes the previous page's `nextKey` as the next start [Keeta TS] index.js:59976-59980, and its fallback passes the last returned staple's ID [Keeta TS] index.js:59982-59984. Paging by the last returned staple works without duplicates only if `start` is exclusive.
 
 **Tested by**:
 - `confirmed.ts: "history lists each staple under the accounts it involves, newest first, exclusive start, a start outside an account's history refused"`
@@ -1220,7 +1220,7 @@ The history key of a main staple is the ordered pair (staple time, `blocksHash`)
 The catch-up key is a main vote's: the moment the vote was made, its `validityFrom`, followed by a node-local sequence number that breaks ties within a millisecond and is never reused. A staple has one key per vote.
 
 - `getVotesAfter` lists the votes of main staples made at or after the requested moment, ascending by this key, in pages of whole votes: at most the page size asked for, rounded up, and at least one while any remains. `nextKey` is omitted on the last page.
-- Upstream's `getVoteStaplesAfter` takes each page as one read: it lists the staples holding the read's votes, each once, in the order `getVoteStaplesFromBlockHash` returns them, the order of the votes, and leaves out those the filter names, until its limit [Keeta TS] index.js:69633-69702. So a staple is listed once for each read that holds one of its votes, and again by a later read that holds another. A read holds at most 200 votes [Keeta TS] index.js:69653-69656, and the loop stops for time only between reads [Keeta TS] index.js:69641-69647.
+- Upstream's `getVoteStaplesAfter` takes each page as one read: it lists the staples holding the read's votes, each once, in the order `getVoteStaplesFromBlockHash` returns them, the order of the votes, and leaves out those the filter names, until its limit [Keeta TS] index.js:70669-70738. So a staple is listed once for each read that holds one of its votes, and again by a later read that holds another. A read holds at most 200 votes [Keeta TS] index.js:70689-70692, and the loop stops for time only between reads [Keeta TS] index.js:70677-70683.
 
 So a bootstrap page from a moment lists only staples with a vote made at or after it, reads votes a bounded number at a time, and runs out of time only between reads.
 
@@ -1228,7 +1228,7 @@ So a bootstrap page from a moment lists only staples with a vote made at or afte
 - Observed on main network representatives: a representative keys each vote at its own `validityFrom`, so that a page from a later moment leaves out exactly the staples whose votes all precede it; it reads votes a few at a time, about 15 to 25 on recent pages; it lists a staple once for each read that holds one of its votes, about 15% of a page being a staple listed again; it lists the staples of one read in no fixed order; and it runs out of time only between reads. A catch-up from this node and one from a representative then read alike.
 - The votes say when a staple was made, the same on every node; when this node applied it does not. A staple applied late, as during a bootstrap, is listed where the representatives list it.
 - The sequence makes the key a total order, so a page boundary falls between two definite votes, even within a millisecond.
-- Pages end between votes, not staples: upstream's loop removes duplicates only within one read [Keeta TS] index.js:69668-69674, and a staple listed again by a later read is what a representative lists too.
+- Pages end between votes, not staples: upstream's loop removes duplicates only within one read [Keeta TS] index.js:70704-70710, and a staple listed again by a later read is what a representative lists too.
 - Not fixed by the observations, and not to be relied on by a reader: how many votes a read holds, below 200, and the order of the staples within a read. This node reads as many votes as upstream asks for and lists a read's staples in the order of their votes.
 
 **Tested by**:
@@ -1245,8 +1245,8 @@ So a bootstrap page from a moment lists only staples with a vote made at or afte
 - `getAccountInfo` never returns `null`. Only the vote cases T1 and T7 test it for an account with no stored info (see `getAccountInfo`).
 
 **Reason.**
-- A confirmed staple can spend funds whose incoming staple this node has not yet applied, because deferral covers only the account's own chain [Keeta TS] index.js:67717-67729. The stored balance is negative until the funding arrives.
-- Vote validation reads the driver directly and must see the true value [Keeta TS] index.js:67190-67200.
+- A confirmed staple can spend funds whose incoming staple this node has not yet applied, because deferral covers only the account's own chain [Keeta TS] index.js:68753-68765. The stored balance is negative until the funding arrives.
+- Vote validation reads the driver directly and must see the true value [Keeta TS] index.js:68226-68236.
 
 Negative weights are untested.
 
@@ -1254,10 +1254,10 @@ Negative weights are untested.
 
 ### D10. ACLs
 
-- Permission updates are applied exactly as upstream's `computeLedgerEffect` resolves them: a `null` permission deletes the row, and a SET with no flags stores an empty row. Deleting an emptied row for an exact target would let the entity-wide row match again through `findPermissionMatch`'s fallback, which would change effective permissions [Keeta TS] index.js:67109-67132, 67467-67486.
+- Permission updates are applied exactly as upstream's `computeLedgerEffect` resolves them: a `null` permission deletes the row, and a SET with no flags stores an empty row. Deleting an emptied row for an exact target would let the entity-wide row match again through `findPermissionMatch`'s fallback, which would change effective permissions [Keeta TS] index.js:68145-68168, 68503-68522.
 - `listACLsByEntity` and `listACLsByPrincipal` list empty rows (provisional: confirmed by the live parity checks).
 - `listOwners` honours `target`.
-- `listACLsByPrincipal` with an empty entity list returns `[]`, which `computeLedgerEffect` passes when every update of a principal is a SET or a delete [Keeta TS] index.js:67266-67285.
+- `listACLsByPrincipal` with an empty entity list returns `[]`, which `computeLedgerEffect` passes when every update of a principal is a SET or a delete [Keeta TS] index.js:68302-68321.
 
 **Tested by**:
 - `confirmed.ts: "modify permissions: add, set, null deletes, entity-wide fallback"`
@@ -1269,20 +1269,20 @@ Negative weights are untested.
 
 A field that an info effect carries replaces the stored field. A field it lacks, or carries as `undefined`, keeps the stored value.
 
-**Reason.** Upstream builds info effects whose fields may be present but `undefined`, for example when a multisig identifier is created [Keeta TS] index.js:68140-68145, 68309.
+**Reason.** Upstream builds info effects whose fields may be present but `undefined`, for example when a multisig identifier is created [Keeta TS] index.js:69176-69181, 69345.
 
-Only partly testable through blocks. SET_INFO on an identifier must carry `defaultPermission` [Keeta TS] index.js:65426-65428, and no block can be built for a multisig account [Keeta TS] index.js:63818-63823. Multisig creation is therefore the only effect with present-but-undefined fields. A SET_INFO that leaves a field undefined is untested.
+Only partly testable through blocks. SET_INFO on an identifier must carry `defaultPermission` [Keeta TS] index.js:66416-66418, and no block can be built for a multisig account [Keeta TS] index.js:64808-64813. Multisig creation is therefore the only effect with present-but-undefined fields. A SET_INFO that leaves a field undefined is untested.
 
 **Tested by** `confirmed.ts: "set info merges defined keys only"`.
 
 ### D12. Idempotent keys
 
-- Keys are upstream's `IdempotentKey`, spelled in uppercase hex [Keeta TS] index.js:68920-68951.
+- Keys are upstream's `IdempotentKey`, spelled in uppercase hex [Keeta TS] index.js:69956-69987.
 - The main ledger holds a key for at most one block. A second main block with the same key is refused with `LEDGER_IDEMPOTENT_KEY_EXISTS`, whether it arrives in a later staple or in the same one.
 - A side claim counts only while its block has an unexpired side vote, so a claim whose votes expired is ignored, and may remain stored until gc.
 - A main claim and a side claim of one key can coexist, and `'both'` returns the main one. A storage schema with one row per key and ledger must therefore let a new side claim replace one whose votes have expired.
 
-**Reason.** Voting refuses a block whose key another block holds on either ledger [Keeta TS] index.js:69254-69259. A competing block can still be confirmed by the network, and then holds the key on the main ledger while this node's expired claim lingers.
+**Reason.** Voting refuses a block whose key another block holds on either ledger [Keeta TS] index.js:70290-70295. A competing block can still be confirmed by the network, and then holds the key on the main ledger while this node's expired claim lingers.
 
 **Tested by** `confirmed.ts: "idempotent keys resolve on main"`, `votes.ts: "side idempotent keys are visible under both and lose to main"` and `gc.ts: "gc removes our votes on a competitor of a confirmed block and frees its idempotent key"`.
 
@@ -1297,9 +1297,9 @@ Only partly testable through blocks. SET_INFO on an identifier must carry `defau
 - A staple applied on its own after it was deferred stops waiting.
 
 **Reason.**
-- `preAdjust` defers on a missing previous block of the account's own chain [Keeta TS] index.js:67717-67729.
+- `preAdjust` defers on a missing previous block of the account's own chain [Keeta TS] index.js:68753-68765.
 - `heapProcessWindowMs` bounds the replay done within one transaction.
-- Upstream's `Ledger.add` folds every returned block into its checksum by XOR [Keeta TS] index.js:69413-69417, so a staple returned twice would cancel itself out there.
+- Upstream's `Ledger.add` folds every returned block into its checksum by XOR [Keeta TS] index.js:70449-70453, so a staple returned twice would cancel itself out there.
 - A deferred staple carries a quorum and can be applied whenever its chain is complete.
 
 **Tested by**:
@@ -1329,8 +1329,8 @@ Nothing is overwritten. `persistConfirmedStaple` refuses the same conditions at 
 A staple that lists a block before its own previous is refused with a non-retryable `LEDGER_PREVIOUS_NOT_SEEN`, also before `preAdjust`, and is never deferred.
 
 **Reason.**
-- `preAdjust` assigns heights but does not detect forks [Keeta TS] index.js:67678-67732, so applying such a staple would silently replace confirmed history. Two quorums confirming a fork is a network integrity failure.
-- `preAdjust` defers an out-of-order staple on a block that the staple itself carries, so no arrival would ever release it. Upstream's vote validation uses the same code for the same ordering fault [Keeta TS] index.js:70150-70160.
+- `preAdjust` assigns heights but does not detect forks [Keeta TS] index.js:68714-68768, so applying such a staple would silently replace confirmed history. Two quorums confirming a fork is a network integrity failure.
+- `preAdjust` defers an out-of-order staple on a block that the staple itself carries, so no arrival would ever release it. Upstream's vote validation uses the same code for the same ordering fault [Keeta TS] index.js:71186-71196.
 - A deferred staple that can only fail would be retried, and fail, on every replay and every gc pass.
 
 **Tested by**:
@@ -1348,7 +1348,7 @@ Section 3.5, which lists the cases that test it.
 
 A confirmed staple that grants an ACL to a certificate this node does not hold is refused with `LEDGER_CERTIFICATE_NOT_FOUND`, as `computeLedgerEffect` decides, and nothing of it is applied. Once the certificate is held, the same staple applies. (provisional: confirmed by the live parity checks)
 
-**Reason.** `computeLedgerEffect` performs this check whatever its options [Keeta TS] index.js:67456-67460. Deferral covers only the account's own chain, so the staple is not deferred: replay or gc retries it only if it was already deferred for another reason.
+**Reason.** `computeLedgerEffect` performs this check whatever its options [Keeta TS] index.js:68492-68496. Deferral covers only the account's own chain, so the staple is not deferred: replay or gc retries it only if it was already deferred for another reason.
 
 **Tested by** `confirmed.ts: "an ACL granted to a certificate this node lacks is rejected"` and `gc.ts: "gc counts a deferred chain its retry releases in the checksum"`.
 
@@ -1356,7 +1356,7 @@ A confirmed staple that grants an ACL to a certificate this node does not hold i
 
 Section 3.6.
 
-**Reason.** A vote's identity is its issuer and serial, and `Ledger.run` reruns a failed attempt from the start with a new serial [Keeta TS] index.js:70294-70389, 70202.
+**Reason.** A vote's identity is its issuer and serial, and `Ledger.run` reruns a failed attempt from the start with a new serial [Keeta TS] index.js:70294-70389, 71238.
 
 **Tested by** the cases listed in section 3.6.
 
@@ -1373,11 +1373,11 @@ Sections 3.2 to 3.4, which also describe how the memory driver meets them.
 - An account that is only the entity or target of a permission requirement is touched but not listed: the token of a SEND or RECEIVE whose own chain, balance and supply the staple leaves alone, the network address of a CREATE_IDENTIFIER, the token a SEND_ON_BEHALF names.
 
 **Reason.**
-- `touched` holds the signers, every account with an `ACCOUNT` entry, and the entities and targets of permission requirements [Keeta TS] index.js:68662-68665, 68700-68709, 68776-68781. A requirement's principal gets an `ACCOUNT` entry when the requirement is recorded [Keeta TS] index.js:67994-68022, 68032-68033.
+- `touched` holds the signers, every account with an `ACCOUNT` entry, and the entities and targets of permission requirements [Keeta TS] index.js:69698-69701, 69736-69745, 69812-69817. A requirement's principal gets an `ACCOUNT` entry when the requirement is recorded [Keeta TS] index.js:69030-69058, 69068-69069.
 - The bundle does not decide which accounts list a staple; the representatives' storage does. The main network's representatives answer a page of an account's history from a staple of which the account is no entry with an internal error, and from one of its entries with the page after it (`getHistory`). All four answer that way for:
   - the base token from a staple that only moves it: an error;
   - the network address from a staple that creates tokens: an error;
-  - the base token from a staple that sends it to a storage account, as the principal of the storage account's STORAGE_CAN_HOLD requirement [Keeta TS] index.js:68476-68491: a page;
+  - the base token from a staple that sends it to a storage account, as the principal of the storage account's STORAGE_CAN_HOLD requirement [Keeta TS] index.js:69512-69527: a page;
   - a signer of a multisig, the multisig, the principal of a granted permission, a block's account and a recipient: a page.
 
 **Tested by** `confirmed.ts: "history lists each staple under the accounts it involves, newest first, exclusive start, a start outside an account's history refused"`, which also checks that a delegation does not touch the representative it names, `confirmed.ts: "history lists a staple under its signers and the accounts it has an effect on, not under an account a permission requirement only names"`, and the replayed captures of conformance/API.md. No member reads account rows, so their creation is untested.
@@ -1393,8 +1393,8 @@ Sections 3.2 to 3.4, which also describe how the memory driver meets them.
 | `blockCount` | blocks on the main ledger; side and deferred blocks excluded |
 | `transactionCount` | operations in the blocks on the main ledger |
 | `representativeCount` | accounts whose stored weight is above zero |
-| `db.retries` | the node's `ledger`/`dbRetries` statistic, which `Ledger.run` increments after a successful run [Keeta TS] index.js:70379; -1 without a node |
-| `settlementTimes` | the node's `ledger`/`settlementTime` timing data [Keeta TS] index.js:74451-74472; `lib.Stats.placeholderTimingData()` without a node [Keeta TS] index.js:74388-74396 |
+| `db.retries` | the node's `ledger`/`dbRetries` statistic, which `Ledger.run` increments after a successful run [Keeta TS] index.js:71415; -1 without a node |
+| `settlementTimes` | the node's `ledger`/`settlementTime` timing data [Keeta TS] index.js:75599-75620; `lib.Stats.placeholderTimingData()` without a node [Keeta TS] index.js:75536-75544 |
 
 **Reason.** The upstream bundle does not define these fields, and no upstream code reads them.
 
@@ -1402,7 +1402,7 @@ Sections 3.2 to 3.4, which also describe how the memory driver meets them.
 
 **The ledger checksum.** `ledgerChecksum()` returns the XOR of the hash of every block on the main ledger, with the `moment` and `momentRange` of the view it is read from. The driver keeps it: each staple's write stores the XOR of its blocks' hashes with the staple, its part of the checksum, and folds that part into the checksum the driver keeps, in the same transaction, so the checksum is the XOR of the parts of the staples on the main ledger, and reading it reads none of them. The Postgres driver keeps the checksum in 256 rows of `ledger_checksum`, each the XOR of the parts of the staples whose `blocks_hash` begins with its `shard` byte, on pages filled to a tenth, and reads their `bit_xor`.
 
-**Reason.** Upstream's ledger keeps its checksum as a node statistic: `Ledger.add` folds each staple it adds into the transaction's statistics, the node merges them after the commit and writes them to its store later [Keeta TS] index.js:69001-69006, 69413-69417, 71377-71383. A process stopped in between holds the staples and has lost their part of the checksum. Folding the checksum from every staple at each read costs as much as the ledger holds. Under serializable isolation, two transactions at once that update one row conflict, and one of them is retried; one row that every staple's write updated would make every two writes at once conflict, while with 256 rows two writes conflict only when their staples' `blocks_hash` begin with the same byte. That holds only while a write reads its row alone: Postgres records a scan of a whole table, which it prefers for a table of a few pages, as a read of every row. On pages filled to a tenth, it finds the row through the primary key, and rewrites it on its page without writing the index.
+**Reason.** Upstream's ledger keeps its checksum as a node statistic: `Ledger.add` folds each staple it adds into the transaction's statistics, the node merges them after the commit and writes them to its store later [Keeta TS] index.js:70037-70042, 70449-70453, 72505-72511. A process stopped in between holds the staples and has lost their part of the checksum. Folding the checksum from every staple at each read costs as much as the ledger holds. Under serializable isolation, two transactions at once that update one row conflict, and one of them is retried; one row that every staple's write updated would make every two writes at once conflict, while with 256 rows two writes conflict only when their staples' `blocks_hash` begin with the same byte. That holds only while a write reads its row alone: Postgres records a scan of a whole table, which it prefers for a table of a few pages, as a read of every row. On pages filled to a tenth, it finds the row through the primary key, and rewrites it on its page without writing the index.
 
 **Tested by** `stats.ts: "the checksum is the driver's, written with the staples it covers, and no node statistic holds it"`, `gc.ts: "gc counts a deferred chain its retry releases in the checksum"`, and the Postgres driver's `"a node killed after its commits, before it writes its statistics, leaves a checksum covering every staple it committed"`.
 
@@ -1416,8 +1416,8 @@ Sections 3.2 to 3.4, which also describe how the memory driver meets them.
 A batch reports whether work remains. A deferred retry that failed in this transaction does not count as remaining work. Scheduling gc is left to the application running the node; nothing in the upstream package calls `Ledger.gc`.
 
 **Reason.**
-- Upstream's loop checks its time budget only between batches, so batches stay small [Keeta TS] index.js:67852-67862.
-- Upstream's `Ledger.add` folds into its checksum only the staples it receives [Keeta TS] index.js:69413-69417; the driver's checksum takes every staple from its write, whoever applies it.
+- Upstream's loop checks its time budget only between batches, so batches stay small [Keeta TS] index.js:68888-68898.
+- Upstream's `Ledger.add` folds into its checksum only the staples it receives [Keeta TS] index.js:70449-70453; the driver's checksum takes every staple from its write, whoever applies it.
 - A side vote that can never be published only holds idempotent keys and storage (D6).
 - A deferred staple that can never apply would fail, and raise the integrity alarm, on every replay and every gc pass. It carries a quorum, so the conflict is reported, once, when it is dropped.
 - Reporting a failing retry as remaining work would keep the loop, and its transaction, running until the time budget ran out.
@@ -1466,12 +1466,12 @@ Tested by the cases of `src/ledger/storage/postgres/migrations.test.ts`, among t
 
 ### 6.4 Key-value store
 
-Upstream's statistics and peer-to-peer layers keep their state in a key-value store, `KVStorageProviderAPI` [Keeta TS] index.js:72514, 72832-72835, 74356-74361, 74473-74496. `schema/migrations/0002_kv.sql` holds it in the same database as the ledger, and `src/kv/postgres.ts` implements the interface over it. Upstream's memory store [Keeta TS] index.js:66871-66969 is the reference for its behavior.
+Upstream's statistics and peer-to-peer layers keep their state in a key-value store, `KVStorageProviderAPI` [Keeta TS] index.js:73662, 73980-73983, 75504-75509, 75621-75644. `schema/migrations/0002_kv.sql` holds it in the same database as the ledger, and `src/kv/postgres.ts` implements the interface over it. Upstream's memory store [Keeta TS] index.js:67907-68005 is the reference for its behavior.
 
 - **Named arenas.** `kv_entries`, keyed by (`arena`, `key`), holds each value as the caller's JSON text (`json`, which keeps the text as given) and `expires_at`: the caller's clock at the write plus the ttl, or `NULL` without one. A write without a ttl clears the expiry. Keys compare as bytes (`COLLATE "C"`), and `list` and `getAll` return them in that order.
 - **Expiry.** An entry whose `expires_at` is before the caller's moment is absent from `get`, `getAll` and `list`; an exclusive create replaces it, and `incr` counts it from zero and drops its expiry. An entry is still present at the moment of its expiry itself. Upstream's memory store forgets an expired entry only when `get` reads it, so until then its `list` names the key and an exclusive create of the key is refused. A write with a ttl, after writing its own entry, deletes at most two expired entries of its arena (`kv_entries_expiry`), skipping rows another transaction has locked, so expired rows never pile up and no process has to sweep them. The write is the only statement of the transaction that can wait for a lock, and it runs first, so the transaction never holds a lock while it waits and cannot take part in a deadlock. Tested by `src/kv/postgres.test.ts: "a write with an expiry waiting for a key holds no lock another transaction waits for"`.
-- **Counters.** `incr` is one upsert that adds in `float8`, as JavaScript numbers add, and returns the total as a `bigint`. It refuses a live value that is not a JSON number, and a total that is not an integer is stored but cannot be returned, as upstream's memory store does [Keeta TS] index.js:66931-66950.
-- **The null arena.** `kv_buffers` holds the XOR accumulators, keyed by names that begin with `@buffer:`, as `bytea`, without expiry. `get(null, key)` returns the bytes in uppercase hex. `xor` refuses any other key and is one upsert whose update is `kv_xor(stored, change)`: the XOR of the two byte strings aligned at their last byte, as long as the longer [Keeta TS] index.js:66831-66836, 66951-66968.
+- **Counters.** `incr` is one upsert that adds in `float8`, as JavaScript numbers add, and returns the total as a `bigint`. It refuses a live value that is not a JSON number, and a total that is not an integer is stored but cannot be returned, as upstream's memory store does [Keeta TS] index.js:67967-67986.
+- **The null arena.** `kv_buffers` holds the XOR accumulators, keyed by names that begin with `@buffer:`, as `bytea`, without expiry. `get(null, key)` returns the bytes in uppercase hex. `xor` refuses any other key and is one upsert whose update is `kv_xor(stored, change)`: the XOR of the two byte strings aligned at their last byte, as long as the longer [Keeta TS] index.js:67867-67872, 67987-68004.
 - **Refusals.** An exclusive create of a key with a live entry fails with `KV_KEY_ALREADY_EXISTS`, where upstream's memory store raises a plain error. A ttl that names no moment a JavaScript `Date` can hold is refused with `KV_TTL_NOT_SUPPORTED`, and a number JSON cannot hold (`NaN` or an infinity), as a value or as an increment, with a `TypeError`, both before anything is written; upstream's memory store stores them as given. An exclusive create of `null` only checks: an expired entry is already absent, and a delete in a later statement could remove an entry another process created after the check. Tested by `src/kv/postgres.test.ts: "an exclusive create of null never removes an entry created after its check"`.
 - **Isolation.** Every operation is one transaction, `BEGIN ISOLATION LEVEL READ COMMITTED`, whatever the database's default. Each write is decided by the row lock its upsert takes: concurrent increments, folds and exclusive creates of one key wait for each other, and each reads the committed result of the one before, so increments from any number of processes sum exactly and one exclusive create wins. Under `SERIALIZABLE`, one of two such writes would abort instead, for a retry that reaches the same result.
 
@@ -1479,23 +1479,23 @@ Tested by `src/kv/providers.test.ts`, which runs the cases of `src/kv/suite/` ag
 
 ### 6.5 Column formats
 
-What another implementation must write, and can expect to read, in each column whose content is not plain SQL data. Every hash is upstream's `Hash`, SHA3-256 [Keeta TS] index.js:78985-79001.
+What another implementation must write, and can expect to read, in each column whose content is not plain SQL data. Every hash is upstream's `Hash`, SHA3-256 [Keeta TS] index.js:80137-80153.
 
 **Bytes.**
 
 | Column | Holds |
 |---|---|
-| `blocks.bytes` | `Block.toBytes()`: the ASN.1 encoding of the block with its signatures. A block decoded from bytes returns exactly those bytes; a block built in the process returns upstream's encoding of it [Keeta TS] index.js:63836-63844, 64051-64122 |
-| `votes.bytes` | `Vote.toBytes()`: the vote, an X.509 certificate signed by its issuer, as the bytes it was decoded from or sealed as [Keeta TS] index.js:80588-80590 |
-| `staples.bytes` | `VoteStaple.toBytes()` without an argument when the staple was applied: the compressed bytes it was received as, or, for a staple built in the process, upstream's compression of its encoding [Keeta TS] index.js:80976-80983, 81016-81027. Read back as those bytes (section 1, staple bytes). `NULL` only for a staple stored before schema version 3, which a reader rebuilds from its rows. No key is built from these bytes |
-| `deferred_staples.bytes` | `VoteStaple.toBytes()` without an argument: a zlib stream (RFC 1950) of the staple's ASN.1 encoding, the compressed bytes it was decoded from when it arrived compressed [Keeta TS] index.js:81016-81027. A reader inflates bytes that begin with a zlib header and reads any other bytes as the encoding itself [Keeta TS] index.js:79804-79817, 80969-81003, so a writer may store either. No key is built from these bytes |
+| `blocks.bytes` | `Block.toBytes()`: the ASN.1 encoding of the block with its signatures. A block decoded from bytes returns exactly those bytes; a block built in the process returns upstream's encoding of it [Keeta TS] index.js:64826-64834, 65041-65112 |
+| `votes.bytes` | `Vote.toBytes()`: the vote, an X.509 certificate signed by its issuer, as the bytes it was decoded from or sealed as [Keeta TS] index.js:81740-81742 |
+| `staples.bytes` | `VoteStaple.toBytes()` without an argument when the staple was applied: the compressed bytes it was received as, or, for a staple built in the process, upstream's compression of its encoding [Keeta TS] index.js:82128-82135, 82168-82179. Read back as those bytes (section 1, staple bytes). `NULL` only for a staple stored before schema version 3, which a reader rebuilds from its rows. No key is built from these bytes |
+| `deferred_staples.bytes` | `VoteStaple.toBytes()` without an argument: a zlib stream (RFC 1950) of the staple's ASN.1 encoding, the compressed bytes it was decoded from when it arrived compressed [Keeta TS] index.js:82168-82179. A reader inflates bytes that begin with a zlib header and reads any other bytes as the encoding itself [Keeta TS] index.js:80956-80969, 82121-82155, so a writer may store either. No key is built from these bytes |
 | `bootstrap_stage.bytes` | `VoteStaple.toBytes()` without an argument, as `deferred_staples.bytes`: the bytes the staple was received as. No key is built from these bytes |
-| `certificates.certificate` | `Certificate.toDER()`: the certificate's DER, as the bytes it was decoded from [Keeta TS] index.js:78102-78105 |
-| `certificates.intermediates` | `CertificateBundle.getDERBuffer()` of the operation's intermediate certificates: the DER of a `SEQUENCE OF Certificate`, or the bytes the bundle was decoded from, or `NULL` when the operation names none [Keeta TS] index.js:77436-77500 |
-| `hash32` columns | The 32 bytes of the hash: a block's `hash`, a staple's `blocksHash` (the hash of its blocks' hashes in vote order [Keeta TS] index.js:80126-80143), a certificate's `hash()` [Keeta TS] index.js:78134-78137, or an idempotent key, the hash of the account's key type byte and public key followed by the block's idempotent bytes [Keeta TS] index.js:62911-62918, 68920-68931. `previous` of an account's first block is its opening hash (section 1) |
+| `certificates.certificate` | `Certificate.toDER()`: the certificate's DER, as the bytes it was decoded from [Keeta TS] index.js:79250-79253 |
+| `certificates.intermediates` | `CertificateBundle.getDERBuffer()` of the operation's intermediate certificates: the DER of a `SEQUENCE OF Certificate`, or the bytes the bundle was decoded from, or `NULL` when the operation names none [Keeta TS] index.js:78584-78648 |
+| `hash32` columns | The 32 bytes of the hash: a block's `hash`, a staple's `blocksHash` (the hash of its blocks' hashes in vote order [Keeta TS] index.js:81278-81295), a certificate's `hash()` [Keeta TS] index.js:79282-79285, or an idempotent key, the hash of the account's key type byte and public key followed by the block's idempotent bytes [Keeta TS] index.js:63901-63908, 69956-69967. `previous` of an account's first block is its opening hash (section 1) |
 | `kv_buffers.value` | The accumulator's bytes, as `BufferStorage.getBuffer()` returns them |
 
-**`accounts.key_type`.** Upstream's `AccountKeyAlgorithm` [Keeta TS] index.js:61546-61555:
+**`accounts.key_type`.** Upstream's `AccountKeyAlgorithm` [Keeta TS] index.js:62536-62545:
 
 | Value | Algorithm |
 |---|---|
@@ -1509,9 +1509,9 @@ What another implementation must write, and can expect to read, in each column w
 
 5 is unassigned. `accounts.public_key` is the account's `publicKeyString`, as upstream prints it (`keeta_...`).
 
-**`votes.uid`.** The vote's `$uid`: `ID=` followed by the issuer's `publicKeyString`, `/Serial=`, and the vote's serial as a decimal integer without sign or leading zeros [Keeta TS] index.js:80317, 80569. For example `ID=keeta_aab.../Serial=42`.
+**`votes.uid`.** The vote's `$uid`: `ID=` followed by the issuer's `publicKeyString`, `/Serial=`, and the vote's serial as a decimal integer without sign or leading zeros [Keeta TS] index.js:81469, 81721. For example `ID=keeta_aab.../Serial=42`.
 
-**Permission sets.** `acls.base_permissions`, `acls.external_permissions`, `account_info.default_base_permission` and `account_info.default_external_permission` each hold one of upstream's bit fields as the integer it reads as, `Permissions.base.bigint` or `Permissions.external.bigint`, in decimal `numeric`. Bit k is set when `value & (1 << k)` is non-zero, with a negative value read in two's complement [Keeta TS] index.js:76531-76545, 76569-76571. The base bits are the `BaseFlag` offsets [Keeta TS] index.js:73715-73731:
+**Permission sets.** `acls.base_permissions`, `acls.external_permissions`, `account_info.default_base_permission` and `account_info.default_external_permission` each hold one of upstream's bit fields as the integer it reads as, `Permissions.base.bigint` or `Permissions.external.bigint`, in decimal `numeric`. Bit k is set when `value & (1 << k)` is non-zero, with a negative value read in two's complement [Keeta TS] index.js:77679-77693, 77717-77719. The base bits are the `BaseFlag` offsets [Keeta TS] index.js:74863-74879:
 
 | Bit | Flag | Bit | Flag |
 |---|---|---|---|
@@ -1524,6 +1524,6 @@ What another implementation must write, and can expect to read, in each column w
 | 6 | `TOKEN_ADMIN_SUPPLY` | 14 | `MULTISIG_SIGNER` |
 | 7 | `TOKEN_ADMIN_MODIFY_BALANCE` | | |
 
-An external set's bit k is external offset k, an application-defined flag that the network bounds by its `maxExternalOffset` [Keeta TS] index.js:74101-74106. Values are stored as the set held them, so a stored set decodes to the same `Permissions`; a statement that tests a flag reads its bit, as `listOwners` reads bit 1.
+An external set's bit k is external offset k, an application-defined flag that the network bounds by its `maxExternalOffset` [Keeta TS] index.js:75249-75254. Values are stored as the set held them, so a stored set decodes to the same `Permissions`; a statement that tests a flag reads its bit, as `listOwners` reads bit 1.
 
 **`blocks.operation_count`.** The number of operations in the block, `block.operations.length`. The sum over main blocks is `transactionCount` in `stats` (D19).

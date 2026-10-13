@@ -24,7 +24,7 @@ export type EdgeCaseResult = EdgeCaseOutcome & { readonly blocksHash: string };
  * A block waits on its previous unless it opens its chain or its previous is
  * an earlier block of the same staple; a staple is deferred while any such
  * previous is not on the main ledger.
- * [Keeta TS] index.js:67678-67732
+ * [Keeta TS] index.js:68714-68768
  */
 async function awaitedBlocks(ledger: Ledger, staple: VoteStaple): Promise<BlockHash[]> {
 	const own = new Set(staple.blocks.map(function(block): string {

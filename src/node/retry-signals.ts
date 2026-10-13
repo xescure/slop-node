@@ -34,7 +34,7 @@ function signersOf(block: Block): GenericAccount[] {
  * The accounts the staples' blocks change on the ledger: each block's
  * account, whose chain, balances, permissions and certificates its own
  * blocks set, and the accounts its sends credit.
- * [Keeta TS] index.js:68167-68228
+ * [Keeta TS] index.js:69203-69264
  */
 export function landedOn(staples: readonly VoteStaple[]): string[] {
 	const landed = new Set<string>();
@@ -89,7 +89,7 @@ export function awaitedOf(staple: VoteStaple, code: string): Awaited {
  * weight delegated in all. With no weight delegated at all, the ledger
  * wants a vote of its trusted account instead, which the offer itself
  * checks.
- * [Keeta TS] index.js:69740-69760
+ * [Keeta TS] index.js:70776-70796
  */
 export async function weightSufficesOn(ledger: Pick<Ledger, 'runReadOnly'>, voterSets: readonly (readonly string[])[]): Promise<boolean[]> {
 	return(await ledger.runReadOnly('bootstrap-retry-weight', async function(reader): Promise<boolean[]> {

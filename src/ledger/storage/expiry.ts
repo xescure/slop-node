@@ -2,7 +2,7 @@ import type { Vote } from '@keetanetwork/keetanet-client/lib/vote.js';
 
 /**
  * How far either end of a vote's validity period stretches.
- * [Keeta TS] index.js:80653
+ * [Keeta TS] index.js:81805
  */
 export const voteExpirySlopMilliseconds = 60_000;
 
@@ -12,7 +12,7 @@ export const voteExpirySlopMilliseconds = 60_000;
  * exists to check parity with that class only. It must never filter side
  * reads or gc: a transaction's moment can be stale, and the future bound would
  * then hide a vote that still guards its previous. Use isVoteUnexpired there.
- * [Keeta TS] index.js:80373-80374, 80641-80653
+ * [Keeta TS] index.js:81525-81526, 81793-81805
  * @internal
  */
 export function isVoteLive(vote: Pick<Vote, 'validityFrom' | 'validityTo' | '$permanent'>, moment: Date): boolean {
@@ -29,7 +29,7 @@ export function isVoteLive(vote: Pick<Vote, 'validityFrom' | 'validityTo' | '$pe
  * behind a long one carries a stale moment, and a competing vote committed
  * meanwhile would look issued in the future; hiding it would let the node
  * sign a competitor. A stale moment can only delay expiry.
- * [Keeta TS] index.js:70393-70396, 80641-80653
+ * [Keeta TS] index.js:71429-71432, 81793-81805
  */
 export function isVoteUnexpired(vote: Pick<Vote, 'validityTo' | '$permanent'>, moment: Date): boolean {
 	if (vote.$permanent) {

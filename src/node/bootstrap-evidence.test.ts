@@ -19,7 +19,7 @@ import { BOOTSTRAP_MARGIN_MILLISECONDS, stapleKey } from './bootstrap-window.js'
 
 const TOLERANCE = VOTE_KEY_TOLERANCE_MILLISECONDS;
 
-/** The most votes a peer reads at a time for a request [Keeta TS] index.js:69655-69659. */
+/** The most votes a peer reads at a time for a request [Keeta TS] index.js:70691-70695. */
 const VOTES_PER_READ = 200;
 
 /** A staple of its own name whose votes were made at the moments given. */

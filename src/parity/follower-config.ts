@@ -8,7 +8,7 @@ import { assertNever } from '../util/assert-never.js';
 
 /**
  * The API endpoints of the main network's representatives, as the client's
- * configuration of that network names them [Keeta TS] index.js:61375-61395.
+ * configuration of that network names them [Keeta TS] index.js:62365-62385.
  */
 export const MAINNET_REPRESENTATIVE_APIS: readonly string[] = KeetaNet.Client.Config.getDefaultConfig('main').representatives.map(function(representative): string {
 	return(representative.endpoints.api);
@@ -149,7 +149,7 @@ export function followerDirectory(text: string, temporaryDirectory: string, work
 	return(directory);
 }
 
-/** A seed is 32 bytes [Keeta TS] index.js:61735, written in hexadecimal. */
+/** A seed is 32 bytes [Keeta TS] index.js:62725, written in hexadecimal. */
 const SEED = /^[0-9a-f]{64}$/;
 
 /** Group and others may do nothing with the seed. */

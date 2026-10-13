@@ -153,7 +153,7 @@ if (missingSwitchMethods.length > 0) {
  * Replaces, on this switch alone, the methods by which it takes and lets go
  * of connections with those the wrapper builds around its own; every caller,
  * upstream's connections included, then goes through them
- * [Keeta TS] index.js:72324-72342, 73631.
+ * [Keeta TS] index.js:73472-73490, 74779.
  */
 export function wrapSwitchConnections(p2pSwitch: P2PSwitch, wrap: (upstream: SwitchConnectionMethods) => SwitchConnectionMethods): void {
 	const wrapped = wrap({
@@ -167,7 +167,7 @@ export function wrapSwitchConnections(p2pSwitch: P2PSwitch, wrap: (upstream: Swi
 /**
  * Replaces, on this switch alone, the method by which it takes a message
  * with the one the wrapper builds around its own; a WebSocket hands it
- * every message [Keeta TS] index.js:72362-72369, as the route peers post
+ * every message [Keeta TS] index.js:73510-73517, as the route peers post
  * messages to does.
  */
 export function wrapSwitchReceive(p2pSwitch: P2PSwitch, wrap: (upstream: SwitchReceiveMethod) => SwitchReceiveMethod): void {
@@ -183,7 +183,7 @@ function isStatsPendingConstructor(candidate: unknown): candidate is typeof Stat
  * Every storage transaction carries upstream's own pending-statistics
  * accumulator, which Stats.merge consumes on commit. The package exports only
  * its subclass Stats, so the class is reached as that export's parent.
- * [Keeta TS] index.js:74304-74352, 68952-68960
+ * [Keeta TS] index.js:75452-75500, 69988-69996
  */
 const statsParent: unknown = Object.getPrototypeOf(KeetaNet.lib.Stats);
 if (!isStatsPendingConstructor(statsParent)) {

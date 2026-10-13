@@ -27,7 +27,7 @@ function assertCode<Code extends string>(error: ParsedError, code: Code): assert
  * Builds upstream's own ledger error class, which the package does not export:
  * Ledger.run retries only instances of that exact class, and only when they
  * say so. The public JSON decoder is the one way to construct it.
- * [Keeta TS] index.js:66340-66396, 66508-66520, 70325-70375
+ * [Keeta TS] index.js:67349-67405, 67517-67529, 70325-70375
  */
 export function createLedgerError(code: LedgerBaseErrorCode, message: string, policy: RetryPolicy = { retry: false }): KeetaNetLedgerError {
 	const encoded: { type: 'LEDGER'; code: LedgerBaseErrorCode; message: string; shouldRetry: boolean; retryDelay?: number } = {
@@ -47,7 +47,7 @@ export function createLedgerError(code: LedgerBaseErrorCode, message: string, po
 /**
  * The error upstream raises when an idempotent key is already taken by another
  * block, built the same way as createLedgerError.
- * [Keeta TS] index.js:66355-66383, 66544-66572
+ * [Keeta TS] index.js:67364-67392, 67553-67581
  */
 export function createIdempotentKeyError(input: { readonly blockHash: BlockHash; readonly existingBlockHash: BlockHash; readonly account: GenericAccount; readonly idempotent: Buffer }): KeetaNetLedgerIdempotentKeyError {
 	const code = 'LEDGER_IDEMPOTENT_KEY_EXISTS';

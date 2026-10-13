@@ -20,7 +20,7 @@ const sdkNodes = useSDKNodes();
  * The first staples of the first page the main network's first
  * representative served from the beginning of time, their bytes in the
  * order served: the genesis staple comes fifth, after four staples whose
- * voters only it gives weight [Keeta TS] index.js:69740-69752.
+ * voters only it gives weight [Keeta TS] index.js:70776-70788.
  */
 const FIXTURE = new URL('../testing/fixtures/mainnet-rep1-epoch-page.json', import.meta.url);
 
@@ -116,7 +116,7 @@ describe('a node following the main network', function() {
 
 	/*
 	 * A representative leaves out each staple whose bytes, as it holds them,
-	 * the filter names [Keeta TS] index.js:69686-69690. Those of the main
+	 * the filter names [Keeta TS] index.js:70722-70726. Those of the main
 	 * network were compressed by whoever made them, and no rebuild from their
 	 * votes and blocks gives the same bytes, so the node names what it holds
 	 * by the bytes it received.

@@ -27,7 +27,7 @@ const lib = KeetaNet.lib;
 const LOOPBACK = '127.0.0.1';
 
 /*
- * Network 0 has no alias of its own [Keeta TS] index.js:61337-61365; the
+ * Network 0 has no alias of its own [Keeta TS] index.js:62327-62355; the
  * node's configuration names it "test", and the client reads that alias only
  * for the publish aid, which stays off.
  */
@@ -36,7 +36,7 @@ const NETWORK_ALIAS = 'test';
 
 /*
  * The network UserClient.initializeNetwork creates lets anyone create storage
- * accounts only [Keeta TS] index.js:79607; a development network lets anyone
+ * accounts only [Keeta TS] index.js:80759; a development network lets anyone
  * create tokens as well.
  */
 const NETWORK_DEFAULT_PERMISSION = ['ACCESS', 'STORAGE_CREATE', 'TOKEN_ADMIN_CREATE'] as const;
@@ -598,7 +598,7 @@ export class Cluster {
 	/*
 	 * Each node was given the earlier nodes when it started. The switch keeps a
 	 * peer it was dialed by as unverified, and knows only the peers it dialed
-	 * itself [Keeta TS] index.js:73548-73600, 73642-73645, so each earlier node
+	 * itself [Keeta TS] index.js:74696-74748, 74790-74793, so each earlier node
 	 * dials the later ones too, in the form the setting takes and as the node
 	 * dials the peers it was configured with.
 	 */
@@ -631,7 +631,7 @@ export class Cluster {
 
 	/*
 	 * The client caches each representative's weight and asks only those with
-	 * some for votes [Keeta TS] index.js:59728-59757, so every step takes a new
+	 * some for votes [Keeta TS] index.js:60721-60750, so every step takes a new
 	 * client once the network holds the step before.
 	 */
 	async #delegate(): Promise<void> {

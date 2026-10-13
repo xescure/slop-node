@@ -63,7 +63,7 @@ type Mutable<Shape> = { -readonly [Field in keyof Shape]: Shape[Field] };
  * Upstream builds info effects whose present fields may still hold undefined,
  * for example when a multisig identifier is created; such a field keeps its
  * stored value.
- * [Keeta TS] index.js:68173, 68309, 68334-68341
+ * [Keeta TS] index.js:69209, 69345, 69370-69377
  */
 type InfoEffect = { readonly [Field in keyof AccountInfoUpdate]?: AccountInfoUpdate[Field] | undefined };
 
@@ -112,7 +112,7 @@ function collectAccountFields(effects: ComputedEffectOfBlocks): Pick<ConfirmedSt
 	return({ infoUpdates, delegations, certificateUpdates });
 }
 
-/** [Keeta TS] index.js:68920-68931 */
+/** [Keeta TS] index.js:69956-69967 */
 function collectIdempotentKeys(staple: VoteStaple): IdempotentKeyClaim[] {
 	const claims: IdempotentKeyClaim[] = [];
 	for (const block of staple.blocks) {
@@ -139,11 +139,11 @@ function toAccountKeys(...accountSets: readonly Iterable<GenericAccount>[]): Set
  * The accounts whose history lists a staple: every account it has an effect
  * on, the principal of a permission requirement among them, which takes in
  * every signer of its blocks: a block's account has an effect
- * [Keeta TS] index.js:68717-68723, and a signer other than the account,
+ * [Keeta TS] index.js:69753-69759, and a signer other than the account,
  * nested multisig signers included, is a requirement's principal
- * [Keeta TS] index.js:68742-68767. An account that only a requirement names
+ * [Keeta TS] index.js:69778-69803. An account that only a requirement names
  * as its entity or target, such as the token of a send or the network address
- * of an identifier's creation, is touched [Keeta TS] index.js:68662-68665 but
+ * of an identifier's creation, is touched [Keeta TS] index.js:69698-69701 but
  * not listed, as the main network's representatives list history (D18).
  */
 export function historyAccountsOf(effects: Pick<ComputedEffectOfBlocks, 'accounts'>): Set<AccountKey> {
@@ -161,7 +161,7 @@ export function historyAccountsOf(effects: Pick<ComputedEffectOfBlocks, 'account
  * current state only through upstream's own computeLedgerEffect, so that SET
  * balances, representative weight moves and ACL fallbacks behave exactly as
  * upstream intends.
- * [Keeta TS] index.js:67187-67580
+ * [Keeta TS] index.js:68223-68616
  */
 export async function computeConfirmedStapleChange(input: {
 	readonly transaction: unknown;
@@ -194,7 +194,7 @@ export async function computeConfirmedStapleChange(input: {
 	});
 }
 
-/** The XOR of the hashes of the staple's blocks, which upstream folds into the ledger checksum [Keeta TS] index.js:69413-69417. */
+/** The XOR of the hashes of the staple's blocks, which upstream folds into the ledger checksum [Keeta TS] index.js:70449-70453. */
 function stapleChecksumOf(staple: VoteStaple): bigint {
 	let checksum = 0n;
 	for (const block of staple.blocks) {

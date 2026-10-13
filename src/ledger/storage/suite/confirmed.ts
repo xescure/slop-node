@@ -99,7 +99,7 @@ function byBlocksHashDescending(left: VoteStaple, right: VoteStaple): number {
 /**
  * The staple as one that arrived compressed by another zlib, which no
  * rebuild from its votes and blocks reproduces: it decodes alike, and
- * returns exactly these bytes [Keeta TS] index.js:80976-80983, 81016-81027.
+ * returns exactly these bytes [Keeta TS] index.js:82128-82135, 82168-82179.
  */
 function receivedAsCompressedElsewhere(staple: VoteStaple): VoteStaple {
 	return(new lib.Vote.Staple(deflateSync(Buffer.from(staple.toBytes(true)), { level: 1 })));
@@ -349,7 +349,7 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			const cursor = new ChainCursor(network.genesis);
 			await ledger.add(network.genesis);
 
-			// The target is named only as possibly new [Keeta TS] index.js:68353.
+			// The target is named only as possibly new [Keeta TS] index.js:69389.
 			await applyPermissionChanges(network, ledger, cursor, entity, [
 				{ principal, target, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['ACCESS']) }
 			]);
@@ -422,7 +422,7 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 		 * block decoder refuses bytes that differ from that re-encoding; only
 		 * the set the block carries can reach storage, and it reads back as
 		 * carried.
-		 * [Keeta TS] index.js:64673-64696, 74121-74155, 63964-63975
+		 * [Keeta TS] index.js:65663-65686, 75269-75303, 64954-64965
 		 */
 		test('a permission set built with a negative external set is stored as the confirmed block carries it', async function() {
 			const { network, ledger } = await startNetwork();
@@ -680,7 +680,7 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			const mayDeposit = cursor.append(await modifyPermissionsBlock({ account: storage, signer: owner, previous: cursor.previous(storage), network: network.network, principal: holder, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['STORAGE_DEPOSIT']), target: token }));
 			const granted = await confirmedStaple([canHold, mayDeposit], network.representatives);
 			advanceClock(1000);
-			// The token is the principal of the storage account's STORAGE_CAN_HOLD requirement [Keeta TS] index.js:68476-68491.
+			// The token is the principal of the storage account's STORAGE_CAN_HOLD requirement [Keeta TS] index.js:69512-69527.
 			const deposited = await confirmedStaple([cursor.append(await sendBlock({ from: holder, previous: cursor.previous(holder), to: storage, amount: 2n, token, network: network.network }))], network.representatives);
 			for (const staple of [created, issued, moved, granted, deposited]) {
 				advanceClock(1000);
@@ -1211,7 +1211,7 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			const user = requireAt(network.users, 0);
 			await ledger.add(network.genesis);
 			const before = { user: await ledger.getBalance(user, network.baseToken), token: await ledger.getBalance(network.baseToken, network.baseToken) };
-			// The account signs for itself, so upstream requires no permission of anyone, and touches no account but the account's own [Keeta TS] index.js:68240-68251, 68590-68599.
+			// The account signs for itself, so upstream requires no permission of anyone, and touches no account but the account's own [Keeta TS] index.js:69276-69287, 69626-69635.
 			const set = await operationsBlock({ account: user, previous: headOf(network.genesis, user), network: network.network, operations: [{ type: lib.Block.OperationType.TOKEN_ADMIN_MODIFY_BALANCE, method: lib.Block.AdjustMethod.SET, token: network.baseToken, amount: 1n }] });
 
 			await ledger.add(await confirmedStaple([set], network.representatives));

@@ -111,7 +111,7 @@ export function defineStatsCases(driver: DriverUnderTest): void {
 			const stats = await node.ledger.stats();
 
 			expect(stats.db).toEqual({ retries: 0 });
-			// Ledger.run counts each retry under the ledger's statistics [Keeta TS] index.js:70379.
+			// Ledger.run counts each retry under the ledger's statistics [Keeta TS] index.js:71415.
 			node.stats.incr('ledger', 'dbRetries', 2);
 			expect((await node.ledger.stats()).db).toEqual({ retries: 2 });
 			expect(Object.keys(stats.settlementTimes).sort()).toEqual(Object.keys(lib.Stats.placeholderTimingData()).sort());
@@ -159,7 +159,7 @@ export function defineStatsCases(driver: DriverUnderTest): void {
 			await node.stats.sync();
 
 			expect((await storage.ledgerChecksum()).checksum).toBe(checksumOf([network.genesis, staple]));
-			// The statistic upstream's ledger folds every applied block into [Keeta TS] index.js:69415.
+			// The statistic upstream's ledger folds every applied block into [Keeta TS] index.js:70451.
 			expect((await node.stats.getXor('ledgerChecksum')).toBigInt()).toBe(0n);
 		});
 

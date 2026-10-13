@@ -8,7 +8,7 @@ import { HOUR, send } from './support.js';
 /*
  * Which kind of vote a request asks for, and the checks on the votes and
  * quote that come with it.
- * [Keeta TS] index.js:69037-69251
+ * [Keeta TS] index.js:70073-70287
  */
 
 // Every representative weighs exactly a quarter of the total.

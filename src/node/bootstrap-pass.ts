@@ -93,7 +93,7 @@ export class LongestAnswer {
  *
  * A peer tests every staple it reads against the filter, and runs out of
  * time for a request only once it has a staple to send
- * [Keeta TS] index.js:69641-69647, so one sent a filter may read on until
+ * [Keeta TS] index.js:70677-70683, so one sent a filter may read on until
  * something in front of it gives up, as a gateway that answers 504 does, or
  * until the node stops waiting. So the window halves whenever the peer gives
  * up, down to PRIMING_FLOOR, and the pass fails; it grows by PRIMING_STEP
@@ -517,7 +517,7 @@ type Listed<Staple extends PassStaple> = { readonly staples: readonly Staple[]; 
  * their order, so many at a time, and listing the staples of those it read,
  * leaving out those the filter names, until the limit, or until its time for
  * the request runs out once it has one to send
- * [Keeta TS] index.js:69633-69702. Peers key in one of two ways:
+ * [Keeta TS] index.js:70669-70738. Peers key in one of two ways:
  * - by when they applied them, as versions of this node before it keyed
  *   votes did: each staple once, at the moment it applied it, listed in the
  *   order of their keys;
@@ -566,7 +566,7 @@ type Listed<Staple extends PassStaple> = { readonly staples: readonly Staple[]; 
  *
  * A filter names a fixed number of staples, and a peer that runs out of time
  * spends it on the staples the filter names as well, which it reads before
- * it leaves them out [Keeta TS] index.js:69686-69690, so the start moves on,
+ * it leaves them out [Keeta TS] index.js:70722-70726, so the start moves on,
  * but only to a moment the page is shown to have read up to: from the start
  * S to T only on an answer from T, with any filter, that lists a staple x of
  * the page that shows T (shows), which, as far as the pass knows how the

@@ -17,9 +17,9 @@ type HistoryEntry = HistoryPage['history'][number];
 
 /**
  * A history entry: the staple, the hash of its blocks, which names it as the
- * start of the next page [Keeta TS] index.js:58986-58995, 81044-81053, and
+ * start of the next page [Keeta TS] index.js:59976-59985, 82196-82205, and
  * the time this node gives it, its own vote's time when it voted, which is
- * what the staple's timestamp prefers [Keeta TS] index.js:81070-81087.
+ * what the staple's timestamp prefers [Keeta TS] index.js:82222-82239.
  */
 function historyEntry(staple: VoteStaple, representative: Parameters<VoteStaple['timestamp']>[0]): HistoryEntry {
 	return({ voteStaple: staple, $id: staple.blocksHash.toString(), $timestamp: staple.timestamp(representative).toISOString() });

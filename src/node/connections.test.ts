@@ -152,7 +152,7 @@ describe('the connections a switch holds', function() {
 		expect(later.connection.abort).toBe(true);
 	});
 
-	/* A dial registers its connection a second time once its first registration ends [Keeta TS] index.js:73630, even after its socket closed. */
+	/* A dial registers its connection a second time once its first registration ends [Keeta TS] index.js:74778, even after its socket closed. */
 	test('are unregistered once at a time, and again after a registration that follows', async function() {
 		const served = await harness();
 		const release = served.holdUnregistering();

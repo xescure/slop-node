@@ -28,7 +28,7 @@ export type ShadowReplay = {
  * Replays the staples into a fresh representative ledger of the devnet's
  * network, putting each staple's blocks to its vote before adding it, with
  * the clock at the staple's moment. The vote asked for is a temporary one,
- * which no fee is checked for [Keeta TS] index.js:69145-69150, so the
+ * which no fee is checked for [Keeta TS] index.js:70181-70186, so the
  * ledger charges none.
  */
 export async function shadowReplay(staples: readonly VoteStaple[]): Promise<ShadowReplay> {
