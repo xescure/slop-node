@@ -57,6 +57,8 @@ describe('the name of a read of a request', function() {
 			void readLedger(onRequest, either, readNothing);
 			// @ts-expect-error -- a token holds one character at least
 			void readLedger(onRequest, '', readNothing);
+			// @ts-expect-error -- the text of the compiler's error is no token either
+			void readLedger(onRequest, 'account/state is not an RFC 9110 token', readNothing);
 		}
 		expect(readsNamed).toBeTypeOf('function');
 	});

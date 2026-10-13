@@ -16,15 +16,22 @@ type Letter = 'a' | 'b' | 'c' | 'd' | 'e' | 'f' | 'g' | 'h' | 'i' | 'j' | 'k' | 
 /** A character of an RFC 9110 token [Keeta TS 0.18.8] index.js:72643. */
 type TokenCharacter = Digit | Letter | Uppercase<Letter> | '!' | '#' | '$' | '%' | '&' | '\'' | '*' | '+' | '-' | '.' | '^' | '_' | '`' | '|' | '~';
 
+/**
+ * The type a name that is no token would need, which it cannot have, so that
+ * the compiler's error says why. Without NoInfer the compiler would read the
+ * name back out of this text, and take a name that already ends in it.
+ */
+type NotAToken<Name extends string> = `${NoInfer<Name>} is not an RFC 9110 token`;
+
 type TokenOf<Remaining extends string, Name extends string> = Remaining extends `${infer First}${infer Rest}`
-	? (First extends TokenCharacter ? (Rest extends '' ? Name : TokenOf<Rest, Name>) : never)
-	: never;
+	? (First extends TokenCharacter ? (Rest extends '' ? Name : TokenOf<Rest, Name>) : NotAToken<Name>)
+	: NotAToken<Name>;
 
 /**
- * The name, if it is a literal RFC 9110 token, and never otherwise: the
- * request's timing throws TIMING_INVALID_NAME at run time for a section
- * named by anything else [Keeta TS 0.18.8] index.js:72671-72673. Each member
- * of a union is checked on its own.
+ * The name, if it is a literal RFC 9110 token, and otherwise a type it cannot
+ * have: the request's timing throws TIMING_INVALID_NAME at run time for a
+ * section named by anything else [Keeta TS 0.18.8] index.js:72671-72673. Each
+ * member of a union is checked on its own.
  */
 type TimingName<Name extends string> = Name extends string ? TokenOf<Name, Name> : never;
 
