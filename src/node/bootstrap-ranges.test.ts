@@ -263,6 +263,10 @@ describe('reading the history in ranges', function() {
 			['rep3', middle - RANGE_OVERLAP_MILLISECONDS, END]
 		]);
 		expect(harness.events).toMatchObject([{ kind: 'split', peer: 'rep3', left: { peer: 'rep2', end: new Date(middle) }, taken: { id: 3, peer: 'rep3' } }]);
+		// Each pass is told the range it reads, by its ID within the layout, the split-off part by the ID it took, so that it keeps its own page limit.
+		expect(harness.tasks.map(function({ peer, task }): [string, number, number] {
+			return([peer, task.id, task.layout.getTime()]);
+		}).sort()).toEqual([['rep1', 0, NOW - 9 * DAY], ['rep2', 1, NOW - 9 * DAY], ['rep3', 3, NOW - 9 * DAY]]);
 
 		const short = new Harness();
 		short.layout = { ...harness.layout, ranges: [rangeOf(0, END - 3 * RANGE_OVERLAP_MILLISECONDS, END, 'rep1')] };

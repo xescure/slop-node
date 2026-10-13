@@ -159,7 +159,8 @@ export class PrimingWindow {
 export type PassIdentity =
 	| { readonly kind: 'live' }
 	| { readonly kind: 'deep' }
-	| { readonly kind: 'range'; readonly id: number };
+	/** Range IDs start again from 0 with each layout, which its start names (src/node/bootstrap-ranges.ts, RangeLayout). */
+	| { readonly kind: 'range'; readonly layout: Date; readonly id: number };
 
 /**
  * How many staples a pass asks for in a page, kept for the next pass of the
@@ -169,14 +170,17 @@ export type PassIdentity =
  * to them first, each too large an answer downloaded in full.
  *
  * It halves whenever an answer is too large, and doubles, up to the cap,
- * after each answer that fits while it stays below the size an answer was
- * last too large at. Doubling to that size or past it asks again for an
- * answer as large as one that did not fit, so it waits for so many answers
- * in a row to fit: FIRST_PROBE_AFTER, then twice as many each time such an
- * answer is too large again, up to MAX_PROBE_AFTER, which in that stretch
- * leaves one answer too large in about 17 requests. Once one fits, the
- * history has thinned, and the limit doubles after each answer, back to the
- * cap within a handful of requests.
+ * after each full page while it stays below the size an answer was last too
+ * large at. Only a full page shows that the limit fits: in that stretch a
+ * representative ends a page by its own time after 20 to 50 staples,
+ * whatever the limit, so a page shorter than the limit says nothing of a
+ * larger one, and leaves the limit, and the count below, as they are.
+ * Doubling to that size or past it asks again for an answer as large as one
+ * that did not fit, so it waits for so many full pages in a row:
+ * FIRST_PROBE_AFTER, then twice as many each time such an answer is too
+ * large again, up to MAX_PROBE_AFTER. A full page at that size shows the
+ * history has thinned, and the limit doubles after each full page, back to
+ * the cap within a handful of requests.
  */
 export class PageLimit {
 	readonly #cap: number;
@@ -184,7 +188,7 @@ export class PageLimit {
 	/** The fewest staples an answer was too large for since an answer that large last fitted. */
 	#tooLargeAt: number | undefined;
 	#probeAfter = FIRST_PROBE_AFTER;
-	/** Answers in a row that fitted at the size. */
+	/** Full pages in a row at the size. */
 	#fitted = 0;
 
 	constructor(cap: number) {
@@ -206,9 +210,13 @@ export class PageLimit {
 		this.#fitted = 0;
 	}
 
-	/** An answer for that many staples fitted; one for fewer than the size, as a probe for a single staple, says nothing of how many fit. */
-	fitted(limit: number): void {
-		if (limit !== this.#size) {
+	/**
+	 * An answer for that many staples fitted, listing so many. One for fewer
+	 * than the size, as a probe for a single staple, or one the peer ended
+	 * before the limit, says nothing of how many fit.
+	 */
+	fitted(limit: number, listed: number): void {
+		if (limit !== this.#size || listed < limit) {
 			return;
 		}
 		if (this.#tooLargeAt !== undefined && limit >= this.#tooLargeAt) {
@@ -225,11 +233,13 @@ export class PageLimit {
 	}
 }
 
-/** Answers in a row that fit before a page limit doubles to where an answer was too large, at first. */
+/** Full pages in a row before a page limit doubles to where an answer was too large, at first. */
 const FIRST_PROBE_AFTER = 2;
 
-/** The most answers in a row that must fit before a page limit doubles to where an answer was too large. */
+/** The most full pages in a row a page limit waits for before it doubles to where an answer was too large. */
 const MAX_PROBE_AFTER = 16;
+
+const RANGE_KEY_PREFIX = 'range ';
 
 function identityKey(pass: PassIdentity): string {
 	switch (pass.kind) {
@@ -237,7 +247,7 @@ function identityKey(pass: PassIdentity): string {
 		case 'deep':
 			return(pass.kind);
 		case 'range':
-			return(`range ${String(pass.id)}`);
+			return(`${RANGE_KEY_PREFIX}${String(pass.id)}`);
 		default:
 			return(assertNever(pass));
 	}
@@ -246,9 +256,19 @@ function identityKey(pass: PassIdentity): string {
 /** The page limits of a peer's passes, by their identity, kept for as long as the node reads the peer. */
 export class PageLimits {
 	readonly #kept = new Map<string, PageLimit>();
+	/** The layout whose ranges the limits kept for ranges are of. */
+	#layout: number | undefined;
 
-	/** The page limit of the passes of that identity, opening at the cap. */
+	/** The page limit of the passes of that identity, opening at the cap; those of the ranges of another layout are let go first. */
 	of(pass: PassIdentity, cap: number): PageLimit {
+		if (pass.kind === 'range' && pass.layout.getTime() !== this.#layout) {
+			this.#layout = pass.layout.getTime();
+			for (const key of this.#kept.keys()) {
+				if (key.startsWith(RANGE_KEY_PREFIX)) {
+					this.#kept.delete(key);
+				}
+			}
+		}
 		const key = identityKey(pass);
 		let limit = this.#kept.get(key);
 		if (limit === undefined) {
@@ -817,7 +837,7 @@ class Pass<Staple extends PassStaple> {
 			default:
 				return(assertNever(answer));
 		}
-		this.#pageLimit.fitted(limit);
+		this.#pageLimit.fitted(limit, answer.staples.length);
 		const staples = answer.staples;
 		await this.#keying.observe(staples, start);
 		this.#known.learn(staples);
@@ -1346,8 +1366,10 @@ export async function bootstrapPeer<Staple extends PassStaple>(io: PeerIO<Staple
 
 /** A range of a peer's history a pass reads (src/node/bootstrap-ranges.ts). */
 export type RangeSetup = {
-	/** Names the range (src/node/bootstrap-ranges.ts, BootstrapRange), whose passes keep their page limit. */
+	/** Names the range (src/node/bootstrap-ranges.ts, BootstrapRange) within its layout, whose passes keep their page limit. */
 	readonly id: number;
+	/** Where the layout the range is part of begins, which names it. */
+	readonly layout: Date;
 	/** Where the node holds or has queued every staple the range's peers keyed from where it began. */
 	readonly reached: Date;
 	/** The range's end as it stands, which moves earlier when another peer takes on the later part of what is left of it. */
@@ -1387,7 +1409,7 @@ export async function bootstrapRange<Staple extends PassStaple>(io: PeerIO<Stapl
 	const end = function(): number {
 		return(range.end().getTime());
 	};
-	const identity: PassIdentity = { kind: 'range', id: range.id };
+	const identity: PassIdentity = { kind: 'range', layout: range.layout, id: range.id };
 	const pass = new Pass(io, { start: range.reached, horizon: end, end, until: range.until.getTime(), use: range.use, keying, moved: range.moved, pageLimit: io.pageLimits.of(identity, options.limit) }, options);
 	const [result] = await Promise.allSettled([pass.run()]);
 	// As after the passes over a peer, the staples queued are offered again whatever the pass did.

@@ -529,6 +529,7 @@ class Schedule {
 		this.#running.set(id, { since, from });
 		const result = await read(peer, {
 			id,
+			layout: this.#layout.from,
 			reached: range.reached,
 			end: () => {
 				return(this.#layout.ranges.find(function(each): boolean {
