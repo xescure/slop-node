@@ -6,6 +6,7 @@ import { SimulatedNode, SimulatedPeer } from '../testing/simulated-peer.js';
 import type { SimulatedKeying, SimulatedPeerOptions, SimulatedStaple } from '../testing/simulated-peer.js';
 import { advanceClock, freezeClock } from '../testing/network.js';
 import { assertNever } from '../util/assert-never.js';
+import { VOTE_KEY_TOLERANCE_MILLISECONDS } from './bootstrap-evidence.js';
 import type { PeerKeying } from './bootstrap-evidence.js';
 import { DEEP_SCAN_DEPTH_MILLISECONDS, DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PrimingWindow, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, bootstrapPeer, bootstrapRange, completes, firstProgress } from './bootstrap-pass.js';
 import type { PassAnswer, PassEvent, PassOptions, PassOutcome, PassRequest, PeerIO, PeerOutcome, PeerProgress, RangeSetup } from './bootstrap-pass.js';
@@ -23,25 +24,25 @@ const EPOCH = new Date(0);
 
 /** The traces of the passes over a range "how much a pass over a range asks of a peer" pins. */
 const RANGE_TRACES: Readonly<Record<'votes' | 'unknown' | 'applied', Trace>> = {
-	votes: { requests: 4, probes: 0, starts: 2, served: 2000, resent: 1, heldReads: [1200], digest: 229355267359273 },
-	unknown: { requests: 4, probes: 0, starts: 2, served: 2000, resent: 1, heldReads: [1200], digest: 229355267359273 },
-	applied: { requests: 4, probes: 0, starts: 2, served: 2000, resent: 1, heldReads: [1200], digest: 123229139457523 }
+	votes: { requests: 4, probes: 0, starts: 2, served: 2000, resent: 1, heldReads: [1200], digest: 167672040477705 },
+	unknown: { requests: 4, probes: 0, starts: 2, served: 2000, resent: 1, heldReads: [1200], digest: 167672040477705 },
+	applied: { requests: 4, probes: 0, starts: 2, served: 2000, resent: 1, heldReads: [1200], digest: 187298976035100 }
 };
 
 /** The traces of the passes "how much a pass asks of a peer" pins. */
 const TRACES: Readonly<Record<'applied' | 'held' | 'votes' | 'late' | 'short' | 'votesHeld' | 'crowd' | 'crowdApplied' | 'crowdVotes' | 'lateVotes' | 'readsOut' | 'lateHeld', Trace>> = {
-	applied: { requests: 18, probes: 0, starts: 4, served: 5003, resent: 3, heldReads: [1200], digest: 247901558670418 },
-	held: { requests: 4, probes: 0, starts: 3, served: 2008, resent: 2008, heldReads: [1200, 951, 951], digest: 156468785367195 },
-	votes: { requests: 12, probes: 0, starts: 3, served: 3002, resent: 2, heldReads: [1200], digest: 93622937973668 },
-	late: { requests: 68, probes: 63, starts: 65, served: 4054, resent: 0, heldReads: [1200], digest: 197065495884012 },
-	short: { requests: 135, probes: 7, starts: 6, served: 4743, resent: 4, heldReads: [1200], digest: 202431116504974 },
+	applied: { requests: 18, probes: 0, starts: 4, served: 5003, resent: 3, heldReads: [1200], digest: 186180261100999 },
+	held: { requests: 4, probes: 0, starts: 3, served: 2004, resent: 2004, heldReads: [1200, 951, 951], digest: 261710530049216 },
+	votes: { requests: 12, probes: 0, starts: 3, served: 3002, resent: 2, heldReads: [1200], digest: 61473113644198 },
+	late: { requests: 68, probes: 63, starts: 65, served: 4054, resent: 0, heldReads: [1200], digest: 82862574564010 },
+	short: { requests: 135, probes: 7, starts: 5, served: 4743, resent: 3, heldReads: [1200], digest: 274051218990136 },
 	votesHeld: { requests: 3, probes: 1, starts: 2, served: 10, resent: 10, heldReads: [1200], digest: 239466737070861 },
-	crowd: { requests: 8, probes: 1, starts: 3, served: 4394, resent: 1001, heldReads: [1200, 709], digest: 164432122336495 },
-	crowdApplied: { requests: 63, probes: 54, starts: 56, served: 6234, resent: 3000, heldReads: [1200, 201, 200, 909], digest: 277639266679156 },
-	crowdVotes: { requests: 7, probes: 0, starts: 3, served: 4393, resent: 1001, heldReads: [1200, 709], digest: 244570485464348 },
-	lateVotes: { requests: 8, probes: 0, starts: 5, served: 3004, resent: 4, heldReads: [1200], digest: 151997275387847 },
-	readsOut: { requests: 24, probes: 4, starts: 19, served: 5021, resent: 17, heldReads: [1200], digest: 139906256349956 },
-	lateHeld: { requests: 71, probes: 67, starts: 69, served: 2857, resent: 300, heldReads: [1200, 951, 1040], digest: 271364552582492 }
+	crowd: { requests: 52, probes: 43, starts: 44, served: 6132, resent: 2000, heldReads: [1200, 951, 200, 1089], digest: 149205940462783 },
+	crowdApplied: { requests: 52, probes: 43, starts: 44, served: 6132, resent: 2000, heldReads: [1200, 951, 200, 1089], digest: 140360043369356 },
+	crowdVotes: { requests: 10, probes: 2, starts: 4, served: 4304, resent: 1001, heldReads: [1200], digest: 27743548621431 },
+	lateVotes: { requests: 8, probes: 0, starts: 5, served: 3004, resent: 4, heldReads: [1200], digest: 174936495550604 },
+	readsOut: { requests: 24, probes: 4, starts: 19, served: 5021, resent: 17, heldReads: [1200], digest: 131596033642035 },
+	lateHeld: { requests: 71, probes: 67, starts: 69, served: 2857, resent: 300, heldReads: [1200, 951, 1040], digest: 263339953179791 }
 };
 
 /** Passes whose filters take seeds from a fixed sequence, so that each run names the same staples by mistake. */
@@ -1180,7 +1181,8 @@ function mistakenCrowd(keying: PeerKeying, layout: CrowdLayout): { whole: Simula
  * A peer whose 2101 staples at the moment an hour ago, voted on then, are more
  * than a filter holds, and which answers at most 700 a request; 30 staples
  * follow, 100 ms apart, then as many as asked for applied from 4 s past the
- * moment, 1 ms apart, whose votes were made 1.5 s past it.
+ * moment, 1 ms apart, whose votes were made half the tolerance before the
+ * tolerance before the last of the 30 was voted on.
  */
 function crowdEndingIn(late: number): { peer: SimulatedPeer; last: SimulatedStaple; moment: number } {
 	freezeClock(new Date(NOW));
@@ -1196,7 +1198,7 @@ function crowdEndingIn(late: number): { peer: SimulatedPeer; last: SimulatedStap
 	}
 	for (let index = 0; index < late; index++) {
 		const at = moment + 4 * SECOND + index;
-		peer.applyVoted(at, at, [], [moment + 1500]);
+		peer.applyVoted(at, at, [], [moment + 2901 - VOTE_KEY_TOLERANCE_MILLISECONDS * 3 / 2]);
 	}
 	return({ peer, last, moment });
 }
@@ -1473,11 +1475,12 @@ describe('a pass checking what it concludes', function() {
 
 	/*
 	 * After the crowd, staples applied from 4 s past the moment whose votes
-	 * were made 1.5 s past it, before the moment a move is checked to. Keyed
-	 * by when they were applied, they lie past that moment, so a further
-	 * filter lists the same staple first from the start as from there; keyed
-	 * by their votes, they lie before it, and a page that lists them lacked
-	 * them. Each is voted on once, so no page shows which way the peer keys.
+	 * were made within the tolerance before the moment a move is checked to,
+	 * the tolerance before the last of the 30 was voted on. Keyed by when
+	 * they were applied, they lie past that moment, so a further filter lists
+	 * the same staple first from the start as from there; keyed by their
+	 * votes, they lie before it, and a page that lists them lacked them. Each
+	 * is voted on once, so no page shows which way the peer keys.
 	 * The filter of the page that reaches past the moment, and every filter
 	 * that checks a move, name the last staple of the crowd by mistake.
 	 */
@@ -1544,6 +1547,38 @@ describe('a pass checking what it concludes', function() {
 		expect(completes(live)).toBe(true);
 		expect(harness.node.size).toBe(5000);
 		expect(harness.pages().at(-1)?.limit).toBe(500);
+	});
+
+	/*
+	 * A main network representative lists about forty staples of its dense
+	 * history for a request, written as more than 4 MiB of JSON: the page from
+	 * where the page before shows it reached is the one most often too large.
+	 */
+	test('asks again with fewer staples for the page from where a peer keyed by votes is shown to have reached, when it is too large, rather than probe one staple at a time', async function() {
+		freezeClock(new Date(NOW));
+		const peer = new SimulatedPeer({ keying: { kind: 'votes', votesPerRead: 20, readsAtMost: 2, readMilliseconds: 0 } });
+		for (let index = 0; index < 2000; index++) {
+			const at = NOW - HOUR + index * 100;
+			peer.applyVoted(at, at, [], [at - 300, at - 200, at - 100, at]);
+		}
+		const first = NOW - 2 * HOUR;
+		let refused: number | undefined;
+		const harness = new Harness(function(request) {
+			if (refused === undefined && request.limit > 1 && request.start.getTime() > first) {
+				refused = harness.requests.length;
+				return(Promise.resolve({ kind: 'too-large' }));
+			}
+			return(peer.page(request));
+		});
+		harness.progress = { ...firstProgress(NOW, 0, new Date(first)), keying: 'votes' };
+
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(completes(live)).toBe(true);
+		expect(harness.node.size).toBe(2000);
+		const tooLarge = harness.requests[refused ?? -1];
+		expect(tooLarge).toMatchObject({ limit: 1000 });
+		expect(harness.requests[(refused ?? -1) + 1]).toMatchObject({ start: tooLarge?.start, limit: 500 });
 	});
 
 	test('learns over a range how the peer keys, and reports it, though the peer\'s progress is gone meanwhile', async function() {

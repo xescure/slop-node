@@ -1182,6 +1182,36 @@ describe('bootstrapping against a peer keyed by votes, as the main network\'s re
 	});
 
 	/*
+	 * The main network's history on 2025-12-31 holds about fifteen staples a
+	 * second, whose four votes were made up to two seconds apart, and rep2
+	 * read less than a second of their votes for a request of about four
+	 * seconds on 2026-10-12. A pass moves its start to the tolerance before
+	 * the earliest vote of a staple the page listed, so each request reads
+	 * again what was keyed within the tolerance of where the last ended.
+	 */
+	test('catches up on a history of which a request reads less than a second, at about the pace its peer reads it', async function() {
+		freezeClock(new Date(NOW));
+		const keying: Extract<SimulatedKeying, { readonly kind: 'votes' }> = { kind: 'votes', votesPerRead: 20, readsAtMost: 2, readMilliseconds: 1400 };
+		const scenario = new Scenario({ latency: 1300, keying });
+		const count = 1800;
+		const spacing = 70;
+		const votes = 4;
+		const first = NOW - HOUR - count * spacing;
+		for (let index = 0; index < count; index++) {
+			const madeAt = first + index * spacing;
+			scenario.peer.applyVoted(madeAt, madeAt, [], [madeAt - 1900, madeAt - 1200 + (index * 91) % 300, madeAt - 400 - (index * 37) % 200, madeAt]);
+		}
+		scenario.from = new Date(first - MINUTE);
+
+		await scenario.onScheduleUntilComplete(100);
+
+		expect(scenario.missing()).toEqual([]);
+		const readPerRequest = keying.votesPerRead * keying.readsAtMost / votes * spacing;
+		// It was 152 ms of history a request with a tolerance of a second, a fifth of the 700 ms a request reads.
+		expect(count * spacing / requestsOf(scenario)).toBeGreaterThan(readPerRequest / 2);
+	});
+
+	/*
 	 * A probe that the peer answers with a staple of the page shows only
 	 * that one of its votes was made at or after the moment probed, which
 	 * need not be a vote the page read: the page may have ended before the
@@ -1328,8 +1358,9 @@ describe('bootstrapping against a peer keyed by votes, as the main network\'s re
 
 	test('holds every staple of a peer that keys each vote up to the tolerance from when it was made', async function() {
 		freezeClock(new Date(NOW));
+		const tolerance = VOTE_KEY_TOLERANCE_MILLISECONDS;
 		const jitter: VoteKey = function(made, staple, vote): number {
-			return(made + (staple * 7919 + vote * 104_729) % 2001 - 1000);
+			return(made + (staple * 7919 + vote * 104_729) % (2 * tolerance + 1) - tolerance);
 		};
 		const scenario = votedHistory({ ...REPRESENTATIVE, keying: { kind: 'votes', votesPerRead: 20, readsAtMost: 10, readMilliseconds: 450, keyedAt: jitter } }, 3000, SECOND);
 

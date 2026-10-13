@@ -17,6 +17,7 @@ import { request, useLocalNodes } from '../testing/local-node.js';
 import type { HTTPAnswer } from '../testing/local-node.js';
 import { NODE_VERSION } from '../version.js';
 import { LocalNodeError } from './errors.js';
+import type { LedgerWriteMode } from './config.js';
 import type { LocalNode } from './local.js';
 import { SHUTDOWN_GRACE_MILLISECONDS } from './server.js';
 
@@ -394,7 +395,7 @@ function unusedPort(): Promise<number> {
 	return(listenAndClose(0));
 }
 
-describe('a node built in code on a network closed to its peer-to-peer surface', function() {
+describe('a node built in code on main', function() {
 	const PEER: P2PPeer = {
 		kind: lib.Node.Kind.REPRESENTATIVE,
 		key: lib.Account.fromSeed('d4f6a8c1e3b5d7f9a0c2e4b6d8f1a3c5e7092b4d6f8a0c2e4b6d8f1a3c5e7b93', 0),
@@ -403,15 +404,19 @@ describe('a node built in code on a network closed to its peer-to-peer surface',
 		certificate: null
 	};
 
-	/** A node following main, as one a caller builds without the environment would. */
-	async function followingMain(): Promise<LocalNode> {
-		const { node } = await nodes.create({ ledgerWriteMode: 'bootstrap-only', genesis: 'absent' });
+	/** A node on main in the mode given, as one a caller builds without the environment would. */
+	async function onMain(ledgerWriteMode: LedgerWriteMode): Promise<LocalNode> {
+		const { node } = await nodes.create({ ledgerWriteMode, genesis: 'absent' });
 		node.config.network = KeetaNet.Client.Config.NetworkIDs.main;
 		return(node);
 	}
 
-	test('refuses to run with manual peers, dialing none', async function() {
-		const node = await followingMain();
+	function followingMain(): Promise<LocalNode> {
+		return(onMain('bootstrap-only'));
+	}
+
+	test.each(['bootstrap-only', 'read-only', 'read-write'] as const)('refuses to run in %s mode with manual peers, dialing none', async function(mode) {
+		const node = await onMain(mode);
 		node.config.manualPeers = [PEER];
 		const dial = vi.spyOn(node.switch, 'addManualPeer');
 
@@ -419,16 +424,34 @@ describe('a node built in code on a network closed to its peer-to-peer surface',
 		expect(dial).not.toHaveBeenCalled();
 	});
 
-	test('refuses to run with peers its store remembers', async function() {
+	test('refuses to run following it with peers its store remembers', async function() {
 		const node = await followingMain();
 		await node.switch.config.kv.set('knownPeers', 'remembered', 'a peer');
 
 		await expect(node.run()).rejects.toThrow('the node keeps its peer-to-peer surface closed on the main network, but its store remembers peers (in knownPeers), which its switch would dial; forget them first ("slop-node clear-peers")');
 	});
 
-	test('runs with neither', async function() {
+	test('runs following it with neither', async function() {
 		const node = await followingMain();
 
 		await expect(node.run()).resolves.toBeUndefined();
+	});
+
+	describe('in no-voting mode, open to its peer-to-peer surface', function() {
+		test('runs with manual peers, dialing them', async function() {
+			const node = await onMain('no-voting');
+			node.config.manualPeers = [PEER];
+			const dial = vi.spyOn(node.switch, 'addManualPeer');
+
+			await expect(node.run()).resolves.toBeUndefined();
+			expect(dial).toHaveBeenCalledWith(PEER);
+		});
+
+		test('runs with peers its store remembers', async function() {
+			const node = await onMain('no-voting');
+			await node.switch.config.kv.set('knownPeers', 'remembered', 'a peer');
+
+			await expect(node.run()).resolves.toBeUndefined();
+		});
 	});
 });

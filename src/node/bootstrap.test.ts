@@ -29,6 +29,7 @@ import { BOOTSTRAP_CAUGHT_UP_ARENA, BOOTSTRAP_CAUGHT_UP_KEY, BOOTSTRAP_CURSOR_AR
 import { bootstrapEndpointsOf, bootstrapFrom, bootstrapSources } from './bootstrap-peers.js';
 import { VOTE_KEY_TOLERANCE_MILLISECONDS } from './bootstrap-evidence.js';
 import { DEEP_SCAN_PERIOD_MILLISECONDS, MAX_PASS_MILLISECONDS } from './bootstrap-pass.js';
+import { RANGE_OVERLAP_MILLISECONDS } from './bootstrap-ranges.js';
 import { FIRST_BACKOFF_MILLISECONDS, REPORT_REFUSED_AFTER_MILLISECONDS } from './bootstrap-retry.js';
 import { stagedOf } from './bootstrap-stage.js';
 import { MOST_LACKED_PER_UPDATE, STRANDED_READ, awaitedOf, dueLackedBlocks } from './retry-signals.js';
@@ -982,8 +983,8 @@ describe('a bootstrap client', function() {
 		expect(await client.update()).toEqual({ complete: false });
 		const end = Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS;
 		expect([first.pages[asked[0] ?? 0]?.start, second.pages[asked[1] ?? 0]?.start]).toEqual([
-			new Date(reached - 61_000).toISOString(),
-			new Date(Math.floor(reached + (end - reached) / 2) - 61_000).toISOString()
+			new Date(reached - RANGE_OVERLAP_MILLISECONDS).toISOString(),
+			new Date(Math.floor(reached + (end - reached) / 2) - RANGE_OVERLAP_MILLISECONDS).toISOString()
 		]);
 		const logged = info.mock.calls.map(function(call): string {
 			return(call.map(String).join(' '));
@@ -997,7 +998,7 @@ describe('a bootstrap client', function() {
 		const middle = Math.floor(reached + (end - reached) / 2);
 		expect(logged.filter(function(line): boolean {
 			return(line.includes('Bootstrap pass over'));
-		})).toEqual([`BOOTSTRAP Bootstrap pass over ${first.apiURL}: read the range from ${new Date(reached - 61_000).toISOString()} to ${new Date(middle).toISOString()} after 2 requests, 0 staples added, 0 held already, 0 queued for retry, 6 staged (0 in the queue)`]);
+		})).toEqual([`BOOTSTRAP Bootstrap pass over ${first.apiURL}: read the range from ${new Date(reached - RANGE_OVERLAP_MILLISECONDS).toISOString()} to ${new Date(middle).toISOString()} after 2 requests, 0 staples added, 0 held already, 0 queued for retry, 6 staged (0 in the queue)`]);
 		const splits = logged.filter(function(line): boolean {
 			return(line.includes('takes on the range'));
 		});
@@ -1550,7 +1551,7 @@ describe('a bootstrap client at the edges of what it accepts and meets', functio
 
 		expect(await clientOf(joining.node, { kv }).update()).toEqual({ complete: false });
 
-		expect(warnings()[0]).toBe(`BOOTSTRAP Bootstrap from ${late.apiURL}: the peer lists staples twice, as one keyed by votes does, and listed from ${start.toISOString()} staple ${peer.network.genesis.blocksHash.toString()}, none of whose votes was made within 1000 ms before it or later: it keys votes later than they were made, and passes over it now move on only by what holds whatever later moment it keys them at`);
+		expect(warnings()[0]).toBe(`BOOTSTRAP Bootstrap from ${late.apiURL}: the peer lists staples twice, as one keyed by votes does, and listed from ${start.toISOString()} staple ${peer.network.genesis.blocksHash.toString()}, none of whose votes was made within ${String(VOTE_KEY_TOLERANCE_MILLISECONDS)} ms before it or later: it keys votes later than they were made, and passes over it now move on only by what holds whatever later moment it keys them at`);
 		expect(warnings()).toHaveLength(2);
 		expect((await new BootstrapCursors(kv).read(late.apiURL))?.keying).toBe('late-votes');
 	});
@@ -1881,14 +1882,14 @@ describe('a bootstrap client at the edges of what it accepts and meets', functio
 			const end = new Date(Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS);
 			const later = new Date(GENESIS_MOMENT.getTime() + 60 * 60_000);
 			await new BootstrapCursors(kv).writeLayout({ from: GENESIS_MOMENT, end, deepScanPeer: recording.apiURL, ranges: [
-				{ id: 0, reached: new Date(GENESIS_MOMENT.getTime() - 61_000), end: later, peer: recording.apiURL, pace: { spent: 0, advanced: 0 } },
+				{ id: 0, reached: new Date(GENESIS_MOMENT.getTime() - RANGE_OVERLAP_MILLISECONDS), end: later, peer: recording.apiURL, pace: { spent: 0, advanced: 0 } },
 				{ id: 1, reached: later, end, peer: failing.apiURL, pace: { spent: 0, advanced: 0 } }
 			], standings: {}, fullQueueUpdates: 0, nextID: 2 });
 			const info = linesOf(late.node, 'info');
 
 			expect(await clientOf(late.node, { kv }).update()).toEqual({ complete: false });
 
-			expect(info()).toContainEqual(`BOOTSTRAP Bootstrap: added 3 staged staples, by their votes, of those whose earliest vote was made before ${new Date(later.getTime() - 61_000).toISOString()}; 0 staples (0 MiB) remain staged`);
+			expect(info()).toContainEqual(`BOOTSTRAP Bootstrap: added 3 staged staples, by their votes, of those whose earliest vote was made before ${new Date(later.getTime() - RANGE_OVERLAP_MILLISECONDS).toISOString()}; 0 staples (0 MiB) remain staged`);
 		});
 
 		test('logs a pass over a range it has read to its end as read', async function() {
@@ -2045,7 +2046,7 @@ describe('a bootstrap client at the edges of what it accepts and meets', functio
 		await kv.set(BOOTSTRAP_RETRY_ARENA, queued.blocksHash.toString(), { staple: Buffer.from(queued.toBytes()).toString('base64'), queuedAt: Date.now(), code: 'LEDGER_INSUFFICIENT_VOTING_WEIGHT', reported: false, awaited: { kind: awaited.kind, voters: [...awaited.voters] } });
 		advanceClock(2 * 24 * 60 * 60_000);
 		const end = new Date(Date.now() - BOOTSTRAP_MARGIN_MILLISECONDS);
-		const before = new Date(GENESIS_MOMENT.getTime() - 61_000);
+		const before = new Date(GENESIS_MOMENT.getTime() - RANGE_OVERLAP_MILLISECONDS);
 		// The range of the failing peer stays unread, so nothing staged is added in this update.
 		await new BootstrapCursors(kv).writeLayout({ from: GENESIS_MOMENT, end, deepScanPeer: recording.apiURL, ranges: [
 			{ id: 0, reached: before, end: new Date(GENESIS_MOMENT.getTime() + 60 * 60_000), peer: failing.apiURL, pace: { spent: 0, advanced: 0 } },

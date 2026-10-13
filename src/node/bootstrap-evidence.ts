@@ -5,10 +5,18 @@ import { stapleKey } from './bootstrap-window.js';
 /**
  * How far from the moment a vote was made, as the vote says, a peer keyed by
  * votes may key it. The main network's representatives key a vote at the
- * moment it says, to within the 55 ms that could be told apart; this allows
- * for a peer that rounds it or reads it a little off.
+ * moment it says, to the millisecond: on 2026-10-12 each of the four listed
+ * the latest vote of every staple asked about from that vote's moment, and
+ * none from a millisecond later. This allows for a peer that reads it a
+ * little off.
+ *
+ * A pass moves its start to the tolerance before a vote the page listed, so
+ * each request reads again what was keyed within the tolerance before where
+ * the last read ended. The main network's history on 2025-12-31 is so dense
+ * that a representative reads less than a second of it for a request, and a
+ * tolerance of a second left a pass reading again most of what it read.
  */
-export const VOTE_KEY_TOLERANCE_MILLISECONDS = 1000;
+export const VOTE_KEY_TOLERANCE_MILLISECONDS = 100;
 
 /**
  * The most votes a peer reads at a time for a request

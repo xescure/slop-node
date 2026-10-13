@@ -86,8 +86,9 @@ describe('the follower\'s node', function() {
 
 	test.each<[string, Environment, RegExp]>([
 		['a network other than main', { KEETANET_LOCAL_NODE_NETWORK: 'test' }, /FollowerSafetyError: .*main network/],
-		['a voting mode', { KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-write' }, /ConfigError: .*may only follow/],
+		['a voting mode', { KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-write' }, /ConfigError: .*may not vote/],
 		['read-only, which adds nothing', { KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-only' }, /bootstrap-only/],
+		['no-voting, which the node would open to peers', { KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'no-voting' }, /must be bootstrap-only \(it is no-voting\)/],
 		['manual peers', { KEETANET_LOCAL_NODE_MANUAL_PEERS: `keeta_aabwip6zeo2fnzfxp5hssrrqtascs2277w2zk7vqd6d3k3m4dkt2flcbca2mqki@https://rep1.main.network.api.keeta.com/api|wss://rep1.main.network.api.keeta.com/p2p` }, /manual peers|MANUAL_PEERS/],
 		['a source that is no mainnet representative', { KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: 'https://rep.example/api' }, /https:\/\/rep\.example\/api/],
 		['no sources', { KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: undefined }, /bootstraps from no representative/],
