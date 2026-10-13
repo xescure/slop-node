@@ -744,6 +744,24 @@ describe('the reads of a request', function() {
 			return(name);
 		})).toEqual([identifier]);
 	});
+
+	test('fail as an internal error when the request\'s timing refuses a section\'s name, without the name', async function() {
+		const node = await nodes.start();
+		const section: string = `api-${SECRET}`;
+		vi.spyOn(lib.Ledger.prototype, 'runReadOnly').mockImplementation(function(): Promise<never> {
+			return(Promise.resolve().then(function(): never {
+				new lib.Timing.RequestTiming().startTime(section);
+				throw(new Error(`the timing accepts the section name ${section}`));
+			}));
+		});
+
+		const answer = await request(node, '/node/ledger/representatives');
+
+		expectInternal(answer);
+		expect(answer.text).not.toContain('hunter2');
+		expect(answer.text).not.toContain('TIMING');
+		expectDocumented('GET', '/node/ledger/representatives', answer);
+	});
 });
 
 describe('one account', function() {

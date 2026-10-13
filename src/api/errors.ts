@@ -65,6 +65,14 @@ export type ErrorAnswer =
  */
 const DRIVER_WRAPPING_CODE = 'LEDGER_OTHER';
 
+/**
+ * The type of the error a request's timing raises for a section whose name
+ * is no RFC 9110 token [Keeta TS 0.18.8] index.js:67645-67653, 72671-72673. A
+ * section is named by the node's own code, so it is a fault of the node, not a
+ * refusal of the request, and its message names the section.
+ */
+const TIMING_ERROR_TYPE = 'TIMING';
+
 type RefusalOptionalFields = Omit<RefusalBody, 'error' | 'type' | 'code' | 'message'>;
 
 function stringField(json: object, name: string): string | undefined {
@@ -116,7 +124,7 @@ function refusalOf(error: unknown): RefusalBody | undefined {
 	const type = stringField(json, 'type');
 	const code = stringField(json, 'code');
 	const message = stringField(json, 'message');
-	if (type === undefined || code === undefined || message === undefined || code === DRIVER_WRAPPING_CODE) {
+	if (type === undefined || code === undefined || message === undefined || code === DRIVER_WRAPPING_CODE || type === TIMING_ERROR_TYPE) {
 		return(undefined);
 	}
 	return({ error: true, type, code, message, ...optionalFields(json) });

@@ -121,13 +121,24 @@ describe('a refusal names only what the error\'s JSON writes as the client reads
 	});
 });
 
+/** The error the request's timing raises for a section named as given. */
+function timingError(section: string): unknown {
+	try {
+		new lib.Timing.RequestTiming().startTime(section);
+	} catch (error) {
+		return(error);
+	}
+	throw(new Error(`the timing accepts the section name ${section}`));
+}
+
 describe('any other failure is answered with only an error ID', function() {
 	const internalFailures: readonly { readonly name: string; readonly error: unknown }[] = [
 		{ name: 'a ledger error a driver wrapped', error: createLedgerError('LEDGER_OTHER', `connect ECONNREFUSED ${SECRET}`) },
 		{ name: 'a plain Error', error: new Error(`could not reach ${SECRET}`) },
 		{ name: 'a thrown string', error: SECRET },
 		{ name: 'an object that only carries a KeetaNet code', error: { code: 'LEDGER_INVALID_BALANCE', message: SECRET } },
-		{ name: 'an Error whose code is not a KeetaNet code', error: Object.assign(new Error(SECRET), { code: 'ECONNREFUSED' }) }
+		{ name: 'an Error whose code is not a KeetaNet code', error: Object.assign(new Error(SECRET), { code: 'ECONNREFUSED' }) },
+		{ name: 'a timing error naming a section that is no token', error: timingError(`api-${SECRET}`) }
 	];
 
 	test.each(internalFailures)('$name', function({ error }) {
