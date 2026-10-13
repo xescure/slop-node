@@ -49,7 +49,8 @@ help:
 	@echo "                   Specify extra flags with SLOP_NODE_TEST_EXTRA_ARGS"
 	@echo "  devnet-test    - Runs the suites of the four-node devnet only, with the"
 	@echo "                   fault injection that test leaves out"
-	@echo "  do-lint        - Runs the ASCII check, eslint and cspell"
+	@echo "  do-lint        - Runs the ASCII check, the lock's integrity check, eslint"
+	@echo "                   and cspell"
 	@echo "  conformance    - Regenerates the vote-decision corpus, and the mainnet"
 	@echo "                   head state, shadow-vote exceptions and edge-case"
 	@echo "                   outcomes in conformance/"
@@ -176,6 +177,12 @@ parity: build/parity/.done
 
 # git grep exits 1 when nothing matches and 128 when it fails, and only the
 # first means the tree is clean.
+#
+# The lock copies keetanet-client's npm-shrinkwrap.json, which since 0.18.8
+# leaves out most integrity fields, and npm install drops any filled in by hand
+# each time it rewrites the lock. nix/package.nix fetches every entry checked
+# against its integrity, so the package would fail to evaluate, and
+# npm clean-install would install those entries unchecked.
 do-lint: node_modules/.patched
 	@LC_ALL=C git grep -I -n --untracked '[^[:print:][:space:]]' -- . ':!LICENSE'; \
 	status=$$?; \
@@ -186,6 +193,12 @@ do-lint: node_modules/.patched
 	if [ $$status -ne 1 ]; then \
 		echo "Error: git grep failed with status $$status." >&2; \
 		exit $$status; \
+	fi
+	@missing=$$(jq -r '.packages | to_entries[] | select(.key | startswith("node_modules/@keetanetwork/keetanet-client/node_modules/")) | select(.value.integrity == null) | "\(.key)@\(.value.version)"' package-lock.json) || exit $$?; \
+	if [ -n "$$missing" ]; then \
+		echo "Error: package-lock.json has entries without integrity; fill each from npm view <name>@<version> dist.integrity:" >&2; \
+		echo "$$missing" >&2; \
+		exit 1; \
 	fi
 	npm run eslint -- --config .eslint.config.mjs src utils
 	npm run cspell -- --config .cspell.config.mjs --no-progress 'src/**/*.ts' 'utils/**/*.ts' 'schema/*.md' 'conformance/*.md' 'api/*.json' Makefile
