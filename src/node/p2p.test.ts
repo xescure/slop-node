@@ -1,9 +1,12 @@
 import http from 'node:http';
+import { setTimeout as delay } from 'node:timers/promises';
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, onTestFinished, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { NodeConfig } from '@keetanetwork/keetanet-client/lib/node/index.js';
-import type { P2PConnection, P2PPeer } from '@keetanetwork/keetanet-client/lib/p2p.js';
+import type { P2PConnection, P2PPeer, P2PSwitch } from '@keetanetwork/keetanet-client/lib/p2p.js';
 import type { JSONSerializableObject } from '@keetanetwork/keetanet-client/lib/utils/conversion.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { APIDocument } from '../conformance/api/document.js';
@@ -508,6 +511,71 @@ async function eventLoopTurns(count: number): Promise<void> {
 	}
 }
 
+type Collector = () => void;
+
+function isCollector(candidate: unknown): candidate is Collector {
+	return(typeof candidate === 'function');
+}
+
+/**
+ * Collects garbage twice, a turn of the event loop apart, so that a WeakRef
+ * read before is cleared of a target nothing else holds.
+ */
+async function collectGarbage(): Promise<void> {
+	setFlagsFromString('--expose_gc');
+	const collector: unknown = runInNewContext('gc');
+	if (!isCollector(collector)) {
+		throw(new Error('the engine exposes no garbage collector'));
+	}
+	collector();
+	await delay(10);
+	collector();
+}
+
+type Registration = (this: P2PSwitch, connection: P2PConnection) => Promise<void>;
+
+function isRegistration(candidate: unknown): candidate is Registration {
+	return(typeof candidate === 'function');
+}
+
+type HeldRegistrations = {
+	/** Resolves once the switch has begun registering a connection. */
+	readonly started: Promise<void>;
+	readonly release: () => void;
+};
+
+/**
+ * Holds every registration of every switch built from now on in upstream's
+ * own method, beneath what the node wraps around it, until released.
+ */
+function holdRegistrations(): HeldRegistrations {
+	const registerConnection: unknown = Object.getOwnPropertyDescriptor(lib.P2P.prototype, 'registerConnection')?.value;
+	if (!isRegistration(registerConnection)) {
+		throw(new Error('the switch has no registerConnection'));
+	}
+	let start: () => void = function() {
+		throw(new Error('internal error: registered before the test waited'));
+	};
+	const started = new Promise<void>(function(resolve) {
+		start = resolve;
+	});
+	let release: () => void = function() {
+		throw(new Error('internal error: released before holding'));
+	};
+	const held = new Promise<void>(function(resolve) {
+		release = resolve;
+	});
+	vi.spyOn(lib.P2P.prototype, 'registerConnection').mockImplementation(async function(this: P2PSwitch, connection: P2PConnection): Promise<void> {
+		start();
+		await held;
+		await registerConnection.call(this, connection);
+	});
+	return({ started, release });
+}
+
+/** Sockets a peer opens and closes in turn, more than one so that each is seen to be let go of. */
+const SOCKETS_IN_TURN = 20;
+
 describe('peers over the /p2p WebSocket', function() {
 	test('the dialing node knows the peer it dialed, which lists it as unverified until it dials back', async function() {
 		const { first, second } = await startPair();
@@ -552,6 +620,43 @@ describe('peers over the /p2p WebSocket', function() {
 
 		expect(register).toHaveBeenCalledTimes(1);
 		expect(await handles.open()).toEqual([]);
+	});
+
+	/*
+	 * The bound on sockets open at once does not bound those a peer opens and
+	 * closes in turn, so were the node to keep anything of each, a peer could
+	 * grow its memory without bound. The node's log entries are dropped, as
+	 * those kept for the test hold the connections they name.
+	 */
+	test('keeps nothing of the sockets a peer opens and closes in turn', async function() {
+		const running = await nodes.start({ ledgerWriteMode: 'read-only', genesis: 'absent', captureLogs: false });
+		const p2pSwitch = running.node.switch;
+		const register = p2pSwitch.registerConnection.bind(p2pSwitch);
+		const connections: WeakRef<P2PConnection>[] = [];
+		const registrations: Promise<void>[] = [];
+		p2pSwitch.registerConnection = function(connection: P2PConnection): Promise<void> {
+			connections.push(new WeakRef(connection));
+			const registration = register(connection);
+			registrations.push(registration);
+			return(registration);
+		};
+
+		for (let index = 0; index < SOCKETS_IN_TURN; index++) {
+			const socket = await rawPeerSocket(running.node);
+			const closing = closed(socket);
+			socket.close();
+			await closing;
+		}
+		await Promise.all(registrations);
+		await running.node.log.sync();
+
+		expect(connections).toHaveLength(SOCKETS_IN_TURN);
+		await vi.waitFor(async function() {
+			await collectGarbage();
+			expect(connections.filter(function(connection): boolean {
+				return(connection.deref() !== undefined);
+			})).toHaveLength(0);
+		});
 	});
 
 	test('refuses a frame over 16 MiB, and hands one of exactly 16 MiB to the switch', async function() {
@@ -1052,6 +1157,24 @@ describe('stopping', function() {
 		await stopped;
 
 		expect(await second.node.ledger.getBalance(receiver, second.network.baseToken)).toBe(1010n);
+	});
+
+	test('waits as it stops until the switch has done taking a socket a peer opened', async function() {
+		const { started, release } = holdRegistrations();
+		const running = await nodes.start({ ledgerWriteMode: 'read-only', genesis: 'absent' });
+		await rawPeerSocket(running.node);
+		await started;
+
+		let finished = false;
+		const stopped = running.node.stop().then(function() {
+			finished = true;
+		});
+		await eventLoopTurns(STOPPING_TURNS);
+		const stoppedBeforeTaken = finished;
+		release();
+		await stopped;
+
+		expect(stoppedBeforeTaken).toBe(false);
 	});
 
 	/*

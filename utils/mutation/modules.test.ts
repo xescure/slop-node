@@ -1,0 +1,76 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { describe, expect, test } from 'vitest';
+
+const CONFIG = 'src/node/config.ts';
+
+/** The declarations of config.ts that close a network to peers, each of which a range must hold. */
+const CLOSURE_DECLARATIONS = [
+	'export const PUBLIC_NETWORKS',
+	'function votesIn(',
+	'const NON_VOTING_WRITE_MODES',
+	'function networkWithID(',
+	'export function publicNetworkOf(',
+	'function closureToP2P(',
+	'export function networkClosedToP2P(',
+	'export function nodeNetworkClosedToP2P(',
+	'function modesOpenOn(',
+	'function alternatives(',
+	'function refuseWhereClosed('
+] as const;
+
+type RangeReader = (source: string) => string[];
+
+function isRangeReader(candidate: unknown): candidate is RangeReader {
+	return(typeof candidate === 'function');
+}
+
+/* The modules are the mutation runs' own JavaScript, which the suite's TypeScript does not type, so they are read by a path the compiler does not follow. */
+async function closureRangesOf(source: string): Promise<string[]> {
+	const modules: unknown = await import(pathToFileURL(resolve('mutation/modules.js')).href);
+	if (typeof modules !== 'object' || modules === null) {
+		throw(new Error('mutation/modules.js is no module'));
+	}
+	const reader: unknown = Reflect.get(modules, 'closureRanges');
+	if (!isRangeReader(reader)) {
+		throw(new Error('mutation/modules.js exports no closureRanges'));
+	}
+	return(reader(source));
+}
+
+type LineRange = { readonly first: number; readonly last: number };
+
+function lineRangeOf(range: string): LineRange {
+	const match = /^src\/node\/config\.ts:(\d+)-(\d+)$/u.exec(range);
+	if (match?.[1] === undefined || match[2] === undefined) {
+		throw(new Error(`not a range of ${CONFIG}: ${range}`));
+	}
+	return({ first: Number(match[1]), last: Number(match[2]) });
+}
+
+describe('the parts of config.ts the peer-to-peer module mutates', function() {
+	test('hold every declaration that closes a network to peers, and end where a declaration does', async function() {
+		const source = readFileSync(CONFIG, 'utf8');
+		const lines = source.split('\n');
+		const ranges = (await closureRangesOf(source)).map(lineRangeOf);
+
+		for (const declaration of CLOSURE_DECLARATIONS) {
+			const line = lines.findIndex(function(text): boolean {
+				return(text.startsWith(declaration));
+			}) + 1;
+			expect(ranges.some(function(range): boolean {
+				return(range.first <= line && line <= range.last);
+			}), declaration).toBe(true);
+		}
+		for (const range of ranges) {
+			expect(lines[range.last - 1]).toMatch(/^\}\)?;?$/u);
+		}
+	});
+
+	test('stop the run when a part is no longer there', async function() {
+		const source = readFileSync(CONFIG, 'utf8').replace('type P2PClosure =', 'type P2PClosed =');
+
+		await expect(closureRangesOf(source)).rejects.toThrow(`${CONFIG} has not exactly one line 'type P2PClosure ='`);
+	});
+});

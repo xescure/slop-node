@@ -564,10 +564,22 @@ or requests it takes, how much memory it keeps, or a count it logs.
 
 ## p2p
 
-The peer-to-peer surface and what keeps it closed. No entry weakens the
-closure: every mutant of the closure, the write mode that votes, and the
-networks a node's ID names is killed, and those left are the unreachable
-defaults of its switches and the wording of its refusals.
+The peer-to-peer surface and what keeps it closed. No entry is in code that
+decides whether a network is closed: every mutant of the closure, of the
+write mode that votes and of the networks a node's ID names is killed, and
+none of what the node holds of a connection outlives the connection. The
+entries are:
+
+* the unreachable defaults of switches, and a local network that falls
+  through to the case of the known networks and still names no public one;
+* the separators of a list of alternatives that is never two words long;
+* checks of a message that a refusal of the switch's parser already decides;
+* a starting count that the loop after it always sets;
+* in the connections a switch holds, steps that the order in which upstream
+  registers and unregisters a connection makes unnecessary: a resolver set
+  at once, a closing of a connection already closed, a lookup that answers
+  the entry it is given, and markings that are set again before anything
+  reads them.
 
 - src/api/p2p.ts:79:6-79:17 ConditionalExpression "false" equivalent: a refusal of the parser carries no type [Keeta TS] index.js:72764-72775, so the message read from it has none, which republishedMessage refuses as a type it does not act on.
 - src/api/p2p.ts:79:19-81:3 BlockStatement "{}" equivalent: a refusal of the parser carries no type [Keeta TS] index.js:72764-72775, so the message read from it has none, which republishedMessage refuses as a type it does not act on.
@@ -581,6 +593,10 @@ defaults of its switches and the wording of its refusals.
 - src/node/config.ts:1004:21-1004:23 StringLiteral "\"Stryker was here!\"" equivalent: a list of fewer than two words places no separator.
 - src/node/config.ts:1006:69-1006:71 StringLiteral "\"Stryker was here!\"" equivalent: the last word alone places no separator.
 - src/node/config.ts:1039:3-1040:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both reasons for a closure is unreachable.
+- src/node/connections.ts:21:4-21:22 OptionalChaining "resolvePromise()" equivalent: a promise's executor runs as the promise is built, so the resolver is always set by the time it is called.
+- src/node/connections.ts:80:9-80:26 ConditionalExpression "true" equivalent: closing a connection already aborted only marks it aborted again and closes a socket that is already closing [Keeta TS] index.js:72417-72425, which does nothing.
+- src/node/connections.ts:105:7-105:28 ConditionalExpression "true" equivalent: for a connection already tracked, the connection is not among those released, and #track answers its entry as it is.
+- src/node/connections.ts:106:8-106:38 ConditionalExpression "true" equivalent: the switch registers a WebSocket connection as it attaches it, on a socket already open [Keeta TS] index.js:72288-72301, 72330-72341, so a connection being unregistered is tracked or released, and one that is neither, which the original would track, never reaches here.
+- src/node/connections.ts:124:3-124:37 CallExpression ";" equivalent: whether a connection is released is read only while it is not tracked, and it stops being tracked only as it is marked released again.
+- src/node/connections.ts:128:20-128:25 BooleanLiteral "true" equivalent: a registration marks its connection to be unregistered as it ends, and nothing reads the mark before: #settle returns while a registration is in flight, and #unregister, the only other caller of #track, never reaches it (see the entry for line 106).
 - src/node/peer-store.ts:57:44-57:158 ObjectLiteral "{}" equivalent: the loop below sets the count of every arena of PEER_ARENAS, so no starting zero is ever read.
-- src/node/peers.ts:60:26-62:4 BlockStatement "{}" harmless: the set keeps each socket's attachment once settled, which close() then waits for at once; only the memory held differs.
-- src/node/peers.ts:61:4-61:38 CallExpression ";" harmless: the set keeps each socket's attachment once settled, which close() then waits for at once; only the memory held differs.

@@ -37,6 +37,8 @@ export type LocalNodeOptions = {
 	readonly bootstrapFrom?: readonly string[];
 	/** The node's own defaults unless given. */
 	readonly peerLimits?: PeerLimits;
+	/** Whether the node's log entries are kept, as they are unless told otherwise; each holds whatever was logged, until the test ends. */
+	readonly captureLogs?: boolean;
 };
 
 /** A representative node of a test network, holding genesis, as built before it runs. */
@@ -66,6 +68,16 @@ function capturingTarget(logs: LogEntry[]): LogTarget {
 		filter: null,
 		emitLogs: function(entries: LogEntry[]): Promise<void> {
 			logs.push(...entries);
+			return(Promise.resolve());
+		}
+	});
+}
+
+function droppingTarget(): LogTarget {
+	return({
+		logLevel: 'ALL',
+		filter: null,
+		emitLogs: function(): Promise<void> {
 			return(Promise.resolve());
 		}
 	});
@@ -102,7 +114,12 @@ export function useLocalNodes(): LocalNodes {
 		const storage = await driver.create();
 		const logs: LogEntry[] = [];
 		const log = new lib.Log();
-		log.registerTarget(capturingTarget(logs));
+		// A log without a target keeps its entries for one to come, so those dropped still need one.
+		if (options.captureLogs === false) {
+			log.registerTarget(droppingTarget());
+		} else {
+			log.registerTarget(capturingTarget(logs));
+		}
 		const ledgerOptions: { -readonly [Option in keyof TestLedgerOptions]: TestLedgerOptions[Option] } = {};
 		if (options.fee !== undefined) {
 			ledgerOptions.fee = options.fee;

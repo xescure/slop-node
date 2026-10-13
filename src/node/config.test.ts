@@ -9,7 +9,7 @@ import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { requireAt } from '../ledger/storage/suite/support.js';
 import { deriveTestKeys, TEST_NETWORK_SEEDS } from '../testing/network.js';
 import { bootstrapEndpointsOf, bootstrapPacingOf } from './bootstrap-peers.js';
-import { ConfigError, DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, formatManualPeer, getConfigFromEnv, LEDGER_WRITE_MODES, localNodeConfig, LOG_FORMATS, MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, MAX_FEE_SEED_ACCOUNTS, nodeNetworkClosedToP2P, publicNetworkOf } from './config.js';
+import { ConfigError, DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, formatManualPeer, getConfigFromEnv, LEDGER_WRITE_MODES, localNodeConfig, LOG_FORMATS, MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, MAX_FEE_SEED_ACCOUNTS, nodeNetworkClosedToP2P, PUBLIC_NETWORKS, publicNetworkOf } from './config.js';
 import type { ConfigProblem, Environment, EnvironmentConfig, LedgerWriteMode } from './config.js';
 import { LocalNode } from './local.js';
 import { MAX_PEER_LIMIT } from './peer-limits.js';
@@ -391,6 +391,16 @@ describe('the closure of a node\'s network to its peers', function() {
 	test.each(LEDGER_WRITE_MODES)('closes neither the local network nor one the client does not know in %s mode', function(mode) {
 		expect(nodeNetworkClosedToP2P(0n, mode)).toBeUndefined();
 		expect(nodeNetworkClosedToP2P(12345n, mode)).toBeUndefined();
+	});
+
+	/*
+	 * A public network is closed to a node that only follows it, so one the
+	 * client adds fails here until it is named one or the other, rather than
+	 * stay open to such a node as dev and staging are.
+	 */
+	test('names each network the client knows public or not, once', function() {
+		const notPublic: readonly Networks[] = ['dev', 'staging'];
+		expect([...PUBLIC_NETWORKS, ...notPublic].sort()).toEqual([...NetworkConfig.networksArray].sort());
 	});
 
 	test('names no public network for the local one', function() {

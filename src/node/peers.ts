@@ -24,8 +24,6 @@ export class PeerServer {
 	readonly #server: BundledWebSocketServer;
 	readonly #switch: P2PSwitch;
 	readonly #log: Logger;
-	/** Sockets the switch has not yet taken: it waits for each one's greeting first [Keeta TS] index.js:72708. */
-	readonly #attaching = new Set<Promise<unknown>>();
 
 	constructor(server: http.Server, p2pSwitch: P2PSwitch, log: Logger, maxSockets: number) {
 		this.#switch = p2pSwitch;
@@ -48,25 +46,23 @@ export class PeerServer {
 	}
 
 	/**
-	 * A socket that closes before its greeting is unregistered by the switch
-	 * before the switch has registered it, which it then does
-	 * [Keeta TS] index.js:72324-72329, 72708-72731; the node's SwitchConnections
-	 * unregisters it once registered (src/node/connections.ts), as it does the
-	 * sockets the switch dials.
+	 * The switch registers the socket as it attaches it, and the node's
+	 * SwitchConnections (src/node/connections.ts) holds it from then until the
+	 * switch has let go of it, which the node waits for as it stops. A socket
+	 * that closes before its greeting is unregistered by the switch before the
+	 * switch has registered it, which it then does
+	 * [Keeta TS] index.js:72324-72329, 72708-72731; SwitchConnections
+	 * unregisters it once registered, as it does the sockets the switch dials.
 	 */
 	#attach(socket: BundledWebSocket, request: http.IncomingMessage): void {
-		const attaching = P2PInternals.P2PWebSocket.connectToSwitch(socket, this.#switch, request.socket).catch((error: unknown): void => {
+		void P2PInternals.P2PWebSocket.connectToSwitch(socket, this.#switch, request.socket).catch((error: unknown): void => {
 			this.#log.error(LOG_SOURCE, 'Attaching a peer\'s socket to the switch failed:', error);
-		}).finally((): void => {
-			this.#attaching.delete(attaching);
 		});
-		this.#attaching.add(attaching);
 	}
 
 	/**
-	 * Stops accepting sockets and drops every open one, then waits until each
-	 * has closed and the switch is done with it. Dropping rather than closing
-	 * them cleanly does not wait for peers that no longer answer.
+	 * Stops accepting sockets and drops every open one. Dropping rather than
+	 * closing them cleanly does not wait for peers that no longer answer.
 	 */
 	async close(): Promise<void> {
 		const closed = new Promise<void>((resolve, reject): void => {
@@ -82,6 +78,5 @@ export class PeerServer {
 			socket.terminate();
 		}
 		await closed;
-		await Promise.all(this.#attaching);
 	}
 }

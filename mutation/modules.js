@@ -1,4 +1,5 @@
 // @ts-check
+import { readFileSync } from 'node:fs';
 
 /**
  * The cases of the bootstrap simulation the pipeline is measured by: those
@@ -18,6 +19,60 @@ const PIPELINE_SIMULATION_CASES = {
 		're-reads the peer, once a full queue stops every pass, for a staple a pass missed that the queued staples need'
 	]
 };
+
+/** The configuration, of which the peer-to-peer module mutates only the parts that close a network to peers. */
+const CONFIG = 'src/node/config.ts';
+
+/**
+ * The parts of config.ts that close a network to its peer-to-peer surface:
+ * the public networks and the write mode that votes, the networks a node's
+ * ID names, and the closure itself with its refusals. Each runs from the line
+ * that is "from" to the first line that is "to" after the line "through", or
+ * after "from". They are found by their text, so that an edit of config.ts
+ * moves them along, and a part whose lines are not there, the first two once
+ * each, stops the run (utils/mutation/modules.test.ts runs this in the suite).
+ * @type {readonly { readonly from: string; readonly through?: string; readonly to: string }[]}
+ */
+const CLOSURE_PARTS = [
+	{
+		from: 'export const PUBLIC_NETWORKS: readonly PublicNetwork[] = [\'main\', \'test\'];',
+		through: 'const NON_VOTING_WRITE_MODES: readonly LedgerWriteMode[] = WRITE_MODES.filter(function(mode): boolean {',
+		to: '});'
+	},
+	{ from: 'function networkWithID(id: bigint): NetworkSelection | undefined {', to: '}' },
+	{ from: 'export function publicNetworkOf(selection: NetworkSelection): PublicNetwork | undefined {', to: '}' },
+	{
+		from: 'type P2PClosure =',
+		through: 'function refuseWhereClosed(reader: EnvironmentReader, network: NetworkSelection, ledgerWriteMode: LedgerWriteMode): void {',
+		to: '}'
+	}
+];
+
+/**
+ * The ranges of config.ts Stryker mutates for its parts that close a network
+ * to peers, read from that source.
+ * @param {string} source
+ * @returns {string[]}
+ */
+export function closureRanges(source) {
+	const lines = source.split('\n');
+	/** @param {string} text */
+	function onlyLine(text) {
+		const index = lines.indexOf(text);
+		if (index < 0 || lines.indexOf(text, index + 1) >= 0) {
+			throw(new Error(`${CONFIG} has not exactly one line '${text}'`));
+		}
+		return(index);
+	}
+	return(CLOSURE_PARTS.map(function(part) {
+		const first = onlyLine(part.from);
+		const last = lines.indexOf(part.to, onlyLine(part.through ?? part.from));
+		if (last < 0) {
+			throw(new Error(`${CONFIG} has no line '${part.to}' to end the part from '${part.from}'`));
+		}
+		return(`${CONFIG}:${String(first + 1)}-${String(last + 1)}`);
+	}));
+}
 
 /**
  * The modules "make mutation MODULE=<name>" mutates, each with the tests that
@@ -103,28 +158,29 @@ const MODULES = {
 	/*
 	 * The peer-to-peer surface and what keeps it closed: the routes peers
 	 * post to, the /p2p WebSocket, the peers the store remembers and the
-	 * bounds on what peers send, with the closure of a network to them in
-	 * config.ts, which is mutated by its lines, so an edit above them moves
-	 * the ranges: the write mode that votes, the networks a selection names,
-	 * and the closure itself and its refusals. The rest of config.ts is its
-	 * own module. The API's route-table case imports the table as it runs,
-	 * so that a route of p2p.ts broken as it loads fails that case rather
-	 * than every file that loads the node.
+	 * bounds on what peers send, how the node holds the switch's connections
+	 * until the switch lets go of them, and the parts of config.ts that close
+	 * a network to peers (CLOSURE_PARTS). The rest of config.ts is its own
+	 * module. The API's route-table case imports the table as it runs, so
+	 * that a route of p2p.ts broken as it loads fails that case rather than
+	 * every file that loads the node.
 	 */
 	p2p: {
-		mutate: [
-			'src/api/p2p.ts',
-			'src/node/peers.ts',
-			'src/node/peer-store.ts',
-			'src/node/peer-limits.ts',
-			'src/node/config.ts:95-117',
-			'src/node/config.ts:498-509',
-			'src/node/config.ts:533-544',
-			'src/node/config.ts:936-1042'
-		],
+		/* Read only when asked: a run's sandbox holds config.ts instrumented, where the parts' lines are not. */
+		get mutate() {
+			return([
+				'src/api/p2p.ts',
+				'src/node/peers.ts',
+				'src/node/peer-store.ts',
+				'src/node/peer-limits.ts',
+				'src/node/connections.ts',
+				...closureRanges(readFileSync(CONFIG, 'utf8'))
+			]);
+		},
 		tests: [
 			'src/node/p2p.test.ts',
 			'src/node/peers.test.ts',
+			'src/node/connections.test.ts',
 			'src/node/peer-store.test.ts',
 			'src/node/configured-peers.test.ts',
 			'src/node/config.test.ts',
@@ -143,5 +199,14 @@ export function selectedModule() {
 	if (module === undefined) {
 		throw(new Error(`unknown mutation module '${name}'; the modules are: ${Object.keys(MODULES).join(', ')}`));
 	}
-	return({ name, ...module });
+	// Spreading the module would read what it mutates, which only Stryker's own configuration asks for.
+	return({
+		name,
+		get mutate() {
+			return(module.mutate);
+		},
+		tests: module.tests,
+		ignorers: module.ignorers,
+		selectedCases: module.selectedCases
+	});
 }
