@@ -30,7 +30,7 @@ const RANGE_TRACES: Readonly<Record<'votes' | 'unknown' | 'applied', Trace>> = {
 };
 
 /** The traces of the passes "how much a pass asks of a peer" pins. */
-const TRACES: Readonly<Record<'applied' | 'held' | 'votes' | 'late' | 'short' | 'votesHeld' | 'crowd' | 'crowdApplied' | 'crowdVotes' | 'lateVotes' | 'readsOut' | 'lateHeld', Trace>> = {
+const TRACES: Readonly<Record<'applied' | 'held' | 'votes' | 'late' | 'short' | 'votesHeld' | 'crowd' | 'crowdApplied' | 'crowdHeld' | 'crowdVotes' | 'lateVotes' | 'readsOut' | 'lateHeld', Trace>> = {
 	applied: { requests: 18, probes: 0, starts: 4, served: 5003, resent: 3, heldReads: [1200], digest: 186180261100999 },
 	held: { requests: 4, probes: 0, starts: 3, served: 2004, resent: 2004, heldReads: [1200, 951, 951], digest: 261710530049216 },
 	votes: { requests: 12, probes: 0, starts: 3, served: 3002, resent: 2, heldReads: [1200], digest: 61473113644198 },
@@ -39,6 +39,7 @@ const TRACES: Readonly<Record<'applied' | 'held' | 'votes' | 'late' | 'short' | 
 	votesHeld: { requests: 3, probes: 1, starts: 2, served: 10, resent: 10, heldReads: [1200], digest: 239466737070861 },
 	crowd: { requests: 52, probes: 43, starts: 44, served: 6132, resent: 2000, heldReads: [1200, 951, 200, 1089], digest: 149205940462783 },
 	crowdApplied: { requests: 52, probes: 43, starts: 44, served: 6132, resent: 2000, heldReads: [1200, 951, 200, 1089], digest: 140360043369356 },
+	crowdHeld: { requests: 50, probes: 43, starts: 43, served: 4132, resent: 4000, heldReads: [1200, 201, 200, 1089], digest: 224903487159721 },
 	crowdVotes: { requests: 10, probes: 2, starts: 4, served: 4304, resent: 1001, heldReads: [1200], digest: 27743548621431 },
 	lateVotes: { requests: 8, probes: 0, starts: 5, served: 3004, resent: 4, heldReads: [1200], digest: 174936495550604 },
 	readsOut: { requests: 24, probes: 4, starts: 19, served: 5021, resent: 17, heldReads: [1200], digest: 131596033642035 },
@@ -414,6 +415,8 @@ describe('a pass over a peer', function() {
 		expect(harness.progress?.keying).toBe('votes');
 		// The first check of the move past the moment holds: it took 20 requests, two failed checks among them, when the staple listed first had to match too.
 		expect(harness.requests.length).toBeLessThanOrEqual(12);
+		// Named from the staple the peer lists first from each start the pass moves to, what the node holds is sent again only where reads split votes: a thousand more without them.
+		expect(harness.node.resent).toBeLessThanOrEqual(1623);
 		expect(peer.staples.filter(function(staple): boolean {
 			return(staple.moment < NOW - BOOTSTRAP_MARGIN_MILLISECONDS && !harness.node.holds(staple));
 		})).toEqual([]);
@@ -904,6 +907,50 @@ describe('a pass that must find how far its pages reached', function() {
 		}
 		expect(starts.length).toBeGreaterThan(2);
 	});
+
+	/*
+	 * A peer keyed by when it applied them that applied, over the last hours,
+	 * staples whose votes were made a month ago: no page shows how far it
+	 * read, so each move is found by probes, which the pass sends first as far
+	 * on from the start as its last move took it, doubling the distance until
+	 * a probe reaches past the page.
+	 */
+	test('probes first, from each start it moves to, as far on as its last move took it', async function() {
+		freezeClock(new Date(NOW));
+		const peer = new SimulatedPeer();
+		for (let index = 0; index < 8000; index++) {
+			peer.apply(NOW - 30 * DAY + index, NOW - 3 * HOUR + index * SECOND);
+		}
+		const harness = new Harness(function(request) {
+			return(peer.page(request));
+		});
+		harness.progress = firstProgress(NOW, 0, new Date(NOW - 4 * HOUR));
+
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(completes(live)).toBe(true);
+		expect(harness.node.size).toBe(8000);
+		const pageStarts = [...new Set(harness.requests.filter(function(request): boolean {
+			return(request.limit > 1);
+		}).map(function(request): number {
+			return(request.start.getTime());
+		}))];
+		const firstProbes = pageStarts.map(function(start): number | undefined {
+			const after = harness.requests.reduce(function(last, request, index): number {
+				if (request.limit > 1 && request.start.getTime() === start) {
+					return(index);
+				}
+				return(last);
+			}, -1);
+			return(harness.requests.slice(after + 1).find(function(request): boolean {
+				return(request.limit === 1);
+			})?.start.getTime());
+		});
+		expect(pageStarts.length).toBeGreaterThan(3);
+		expect(firstProbes.slice(1, -1)).toEqual(pageStarts.slice(1, -1).map(function(start, index): number {
+			return(start + start - (pageStarts[index] ?? 0));
+		}));
+	});
 });
 
 /** More staples at one moment than a filter and a page hold, made over the hour before it, and some after it. */
@@ -1029,6 +1076,13 @@ describe('how much a pass asks of a peer', function() {
 			harness.progress = { ...firstProgress(NOW, 0, EPOCH), keying: 'applied' };
 			return(Promise.resolve());
 		}, 1000, DRAINED, TRACES.crowdApplied],
+		['more staples at one moment than a filter and a page hold, which the node holds already', crowdPeer, async function(harness, peer) {
+			for (const staple of peer.staples) {
+				freezeClock(new Date(staple.moment));
+				await harness.node.add(staple);
+			}
+			freezeClock(new Date(NOW));
+		}, 1000, DRAINED, TRACES.crowdHeld],
 		['more staples at one moment than a filter and a page hold, from a peer it takes to key by votes', crowdPeer, function(harness) {
 			harness.progress = { ...firstProgress(NOW, 0, EPOCH), keying: 'votes' };
 			return(Promise.resolve());
@@ -1507,6 +1561,12 @@ describe('a pass checking what it concludes', function() {
 
 		expect(reachedPast).toBe(true);
 		expectNoLoss(peer, harness, live);
+		// A peer keyed by when it applied them lists first from the start what it lists first from the moment, so a check asks for that first, unless the peer is known to key by votes.
+		const firstFromMoment = harness.requests.filter(function(request, index): boolean {
+			const next = harness.requests[index + 1];
+			return(request.limit === 1 && next !== undefined && next.limit > 1 && next.start < request.start && next.bloomFilter === request.bloomFilter);
+		});
+		expect(firstFromMoment.length > 0).toBe(keying === 'unknown');
 	});
 
 	test('fails with the retry it ends with, when nothing before it failed', async function() {
@@ -1579,6 +1639,30 @@ describe('a pass checking what it concludes', function() {
 		const tooLarge = harness.requests[refused ?? -1];
 		expect(tooLarge).toMatchObject({ limit: 1000 });
 		expect(harness.requests[(refused ?? -1) + 1]).toMatchObject({ start: tooLarge?.start, limit: 500 });
+	});
+
+	test('ends at its time bound, where it started, when the page from where a page is shown to have read up to is too large until then', async function() {
+		freezeClock(new Date(NOW));
+		const peer = new SimulatedPeer({ keying: { kind: 'votes', votesPerRead: 20, readsAtMost: 2, readMilliseconds: 0 } });
+		for (let index = 0; index < 2000; index++) {
+			const at = NOW - HOUR + index * 100;
+			peer.applyVoted(at, at, [], [at - 300, at - 200, at - 100, at]);
+		}
+		const first = NOW - 2 * HOUR;
+		const harness = new Harness(function(request) {
+			if (request.limit > 1 && request.start.getTime() > first) {
+				advanceClock(MAX_PASS_MILLISECONDS);
+				return(Promise.resolve({ kind: 'too-large' }));
+			}
+			return(peer.page(request));
+		});
+		harness.progress = { ...firstProgress(NOW, 0, new Date(first)), keying: 'votes' };
+
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(live).toEqual({ kind: 'bounded', reached: new Date(first) });
+		expect(harness.requests.at(-1)).toMatchObject({ limit: 1000, served: 0 });
+		expect(harness.requests.at(-1)?.start.getTime()).toBeGreaterThan(first);
 	});
 
 	test('learns over a range how the peer keys, and reports it, though the peer\'s progress is gone meanwhile', async function() {
