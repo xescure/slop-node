@@ -7,7 +7,7 @@ import { confirmedStaple, sendBlock } from '../testing/blocks.js';
 import { startFakeAPI } from '../testing/fake-api.js';
 import type { FakeAPI } from '../testing/fake-api.js';
 import { httpSource } from './api-source.js';
-import { checkKeying, KEYING_CHECK_LIMIT, KEYING_EARLY_SPAN_MILLISECONDS, KEYING_SAMPLE_AGE_MILLISECONDS, keyingExitCodeOf } from './keying.js';
+import { checkKeying, KEYING_CHECK_LIMIT, KEYING_EARLY_SPAN_MILLISECONDS, KEYING_EARLY_STEP_MILLISECONDS, KEYING_SAMPLE_AGE_MILLISECONDS, keyingExitCodeOf } from './keying.js';
 
 const lib = KeetaNet.lib;
 
@@ -51,6 +51,13 @@ function from(moment: number, limit: number): string {
 	return(pagePath({ start: new Date(moment), limit, bloomFilter: undefined }));
 }
 
+/** Serves, from each step before the staple's latest vote back to the span, the page listed gives for how far back the step is. */
+function serveEarlier(api: FakeAPI, staple: VoteStaple, listed: (back: number) => readonly VoteStaple[]): void {
+	for (let back = KEYING_EARLY_STEP_MILLISECONDS; back <= KEYING_EARLY_SPAN_MILLISECONDS; back += KEYING_EARLY_STEP_MILLISECONDS) {
+		api.serve(from(latestVoteOf(staple) - back, KEYING_CHECK_LIMIT), page(listed(back)));
+	}
+}
+
 /** A representative listing the staples from the sample's start, then, from the latest vote of each, what the keying given lists. */
 function serve(api: FakeAPI, sample: readonly VoteStaple[], fromLatest: (staple: VoteStaple, index: number) => { readonly at: readonly VoteStaple[]; readonly after: readonly VoteStaple[] }): void {
 	api.serve(from(NOW - KEYING_SAMPLE_AGE_MILLISECONDS, 2), page(sample));
@@ -83,7 +90,9 @@ describe('how each representative keys the votes of its staples', function() {
 		if (second === undefined) {
 			throw(new Error('no staple'));
 		}
-		early.serve(from(latestVoteOf(second) - KEYING_EARLY_SPAN_MILLISECONDS, KEYING_CHECK_LIMIT), page(sample.slice(1)));
+		serveEarlier(early, second, function(): readonly VoteStaple[] {
+			return(sample.slice(1));
+		});
 		serve(late, sampled, function(staple, index) {
 			return({ at: sample.slice(index), after: sample.slice(index) });
 		});
@@ -174,12 +183,13 @@ describe('how each representative keys the votes of its staples', function() {
 		crowded.serve(from(NOW - KEYING_SAMPLE_AGE_MILLISECONDS, 1), page([first]));
 		crowded.serve(from(latestVoteOf(first) + 1, KEYING_CHECK_LIMIT), page([second]));
 		crowded.serve(from(latestVoteOf(first), KEYING_CHECK_LIMIT), page([sibling, second]));
-		crowded.serve(from(latestVoteOf(first) - KEYING_EARLY_SPAN_MILLISECONDS, KEYING_CHECK_LIMIT), page([first, sibling, second]));
 		const nowhere = await startFakeAPI();
 		nowhere.serve(from(NOW - KEYING_SAMPLE_AGE_MILLISECONDS, 1), page([first]));
 		nowhere.serve(from(latestVoteOf(first) + 1, KEYING_CHECK_LIMIT), page([second]));
 		nowhere.serve(from(latestVoteOf(first), KEYING_CHECK_LIMIT), page([second]));
-		nowhere.serve(from(latestVoteOf(first) - KEYING_EARLY_SPAN_MILLISECONDS, KEYING_CHECK_LIMIT), page([second]));
+		serveEarlier(nowhere, first, function(): readonly VoteStaple[] {
+			return([second]);
+		});
 
 		const checked = await checkKeying({ representatives: [httpSource(crowded.endpoint), httpSource(nowhere.endpoint)], staples: 1, now: NOW });
 
@@ -231,5 +241,56 @@ describe('how each representative keys the votes of its staples', function() {
 			})]);
 		})).toEqual([['not checked', ['exact', 'unanswered', 'exact']], ['not checked', ['exact', 'unsettled', 'unsettled']]]);
 		expect(keyingExitCodeOf(checked)).toBe(1);
+	});
+
+	/*
+	 * The representative keys the staple's latest vote 50 ms before it was
+	 * made, in a second of dense history: a page from a second before is full
+	 * of other staples well before it.
+	 */
+	test('finds a staple keyed early within a second of dense history, stepping back from the moment of its latest vote', async function() {
+		const sample = await staples(KEYING_CHECK_LIMIT + 2);
+		const [first, ...others] = sample;
+		if (first === undefined) {
+			throw(new Error('no staple'));
+		}
+		const api = await startFakeAPI();
+		api.serve(from(NOW - KEYING_SAMPLE_AGE_MILLISECONDS, 1), page([first]));
+		api.serve(from(latestVoteOf(first) + 1, KEYING_CHECK_LIMIT), page([]));
+		api.serve(from(latestVoteOf(first), KEYING_CHECK_LIMIT), page(others.slice(-1)));
+		serveEarlier(api, first, function(back): readonly VoteStaple[] {
+			if (back === KEYING_EARLY_STEP_MILLISECONDS) {
+				return([first, ...others.slice(-1)]);
+			}
+			return(others.slice(0, KEYING_CHECK_LIMIT));
+		});
+
+		const [checked] = await checkKeying({ representatives: [httpSource(api.endpoint)], staples: 1, now: NOW });
+
+		expect(checked?.verdict).toBe('keys early by more than 1 ms');
+	});
+
+	test('reports no representative as keying exactly while a staple of it is unsettled, though most were keyed exactly', async function() {
+		const sample = await staples(KEYING_CHECK_LIMIT + 3);
+		const [first, second, third] = sample;
+		if (first === undefined || second === undefined || third === undefined) {
+			throw(new Error('no staple'));
+		}
+		const api = await startFakeAPI();
+		api.serve(from(NOW - KEYING_SAMPLE_AGE_MILLISECONDS, 3), page([first, second, third]));
+		for (const staple of [first, third]) {
+			api.serve(from(latestVoteOf(staple) + 1, KEYING_CHECK_LIMIT), page([]));
+			api.serve(from(latestVoteOf(staple), KEYING_CHECK_LIMIT), page([staple]));
+		}
+		// The page from the second's latest vote is full without it.
+		api.serve(from(latestVoteOf(second) + 1, KEYING_CHECK_LIMIT), page([]));
+		api.serve(from(latestVoteOf(second), KEYING_CHECK_LIMIT), page(sample.slice(3, 3 + KEYING_CHECK_LIMIT)));
+
+		const [checked] = await checkKeying({ representatives: [httpSource(api.endpoint)], staples: 3, now: NOW });
+
+		expect(checked?.staples.map(function(staple) {
+			return(staple.outcome);
+		})).toEqual(['exact', 'unsettled', 'exact']);
+		expect(checked?.verdict).toBe('not checked');
 	});
 });

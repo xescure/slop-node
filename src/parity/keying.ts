@@ -1,4 +1,5 @@
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import { VOTE_KEY_TOLERANCE_MILLISECONDS } from '../node/bootstrap-evidence.js';
 import { pagePath, staplesOfPage } from '../node/bootstrap-page.js';
 import { stapleKey } from '../node/bootstrap-window.js';
 import { getOK } from './api-source.js';
@@ -22,11 +23,19 @@ export const KEYING_CHECK_LIMIT = 10;
  */
 export const KEYING_EARLY_SPAN_MILLISECONDS = 1000;
 
+/**
+ * How far apart the pages that look for it start, from the moment back: the
+ * main network's densest history holds about 36 staples a second, so a page
+ * from a second before can fill before it reaches the staple, and one from
+ * a tenth of that before cannot.
+ */
+export const KEYING_EARLY_STEP_MILLISECONDS: number = VOTE_KEY_TOLERANCE_MILLISECONDS;
+
 /** How a representative keyed the latest vote of a staple, as two pages from about its moment show. */
 export type StapleKeyingOutcome =
 	/** Listed from the moment the vote was made, and not from a millisecond later. */
 	| 'exact'
-	/** Listed from neither, though the page from the moment holds fewer than it was asked for and no other staple voted on then, and listed from KEYING_EARLY_SPAN_MILLISECONDS before: keyed before it was made. */
+	/** Listed from neither, though the page from the moment holds fewer than it was asked for and no other staple voted on then, and listed from a moment up to KEYING_EARLY_SPAN_MILLISECONDS before: keyed before it was made. */
 	| 'early'
 	/** Listed from a millisecond after the moment it was made. */
 	| 'late'
@@ -47,9 +56,9 @@ export type StapleKeying = {
  * What the staples checked show of a representative: early when one was
  * keyed early, which a pass cannot detect and loses staples to
  * (VOTE_KEY_TOLERANCE_MILLISECONDS), then late when one was keyed late; not
- * checked when one went unanswered, so that a representative failing the
- * check's requests fails it; exactly when most were keyed exactly; and not
- * checked otherwise.
+ * checked when one went unanswered or unsettled, so that a representative
+ * failing the check's requests, or keying some staples further off than the
+ * check looks, fails it; exactly when every one was keyed exactly.
  */
 export type KeyingVerdict = 'keys exactly' | 'keys early by more than 1 ms' | 'keys late' | 'not checked';
 
@@ -121,8 +130,10 @@ async function outcomeOf(source: APISource, staple: VoteStaple, latest: number):
 	if (fromLatest.length >= KEYING_CHECK_LIMIT || votedOnThenBesides(fromLatest, staple, latest)) {
 		return('unsettled');
 	}
-	if (lists(await pageFrom(source, latest - KEYING_EARLY_SPAN_MILLISECONDS, KEYING_CHECK_LIMIT), staple)) {
-		return('early');
+	for (let back = KEYING_EARLY_STEP_MILLISECONDS; back <= KEYING_EARLY_SPAN_MILLISECONDS; back += KEYING_EARLY_STEP_MILLISECONDS) {
+		if (lists(await pageFrom(source, latest - back, KEYING_CHECK_LIMIT), staple)) {
+			return('early');
+		}
 	}
 	return('unsettled');
 }
@@ -147,16 +158,10 @@ function verdictOf(staples: readonly StapleKeying[]): KeyingVerdict {
 	if (outcomes.has('late')) {
 		return('keys late');
 	}
-	if (outcomes.has('unanswered')) {
+	if (outcomes.has('unanswered') || outcomes.has('unsettled') || staples.length === 0) {
 		return('not checked');
 	}
-	const exact = staples.filter(function(staple): boolean {
-		return(staple.outcome === 'exact');
-	}).length;
-	if (2 * exact > staples.length) {
-		return('keys exactly');
-	}
-	return('not checked');
+	return('keys exactly');
 }
 
 async function representativeKeyingOf(source: APISource, check: KeyingCheck): Promise<RepresentativeKeying> {

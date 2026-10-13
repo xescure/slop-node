@@ -107,7 +107,7 @@ const USAGE = [
 	'            refused stays unexplained',
 	'  keying    check how each representative keys the votes of its staples, which the bootstrap passes rely',
 	'            on: whether it lists each of some staples voted on a day ago from the moment of its latest vote,',
-	'            and not from a millisecond later; prints each as keying exactly (most staples so, none unanswered),',
+	'            and not from a millisecond later; prints each as keying exactly (every staple settled so),',
 	'            early (one listed from up to a second before that moment instead, which loses staples undetected),',
 	'            late, or not checked, records nothing, and exits 1 unless every one keys exactly',
 	'            --staples <n>      how many staples of each representative to check (8)',
