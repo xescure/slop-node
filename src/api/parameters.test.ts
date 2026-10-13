@@ -1,13 +1,10 @@
 import { describe, expect, test } from 'vitest';
-import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { requireAt } from '../ledger/storage/suite/support.js';
 import { DEFAULT_PEER_LIMITS } from '../node/peer-limits.js';
 import { createTestNetwork } from '../testing/network.js';
 import { readLedger } from './parameters.js';
 import type { APIRequest } from './route.js';
-
-const lib = KeetaNet.lib;
 
 /** Every character an RFC 9110 token may hold. */
 const EVERY_TOKEN_CHARACTER = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!#$%&\'*+-.^_`|~';
@@ -19,7 +16,7 @@ const EVERY_TOKEN_CHARACTER = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLM
 async function request(): Promise<APIRequest> {
 	const network = await createTestNetwork({ representativeWeights: [1000n] });
 	return({
-		node: new lib.Node(network.nodeConfig(new MemoryLedgerStorage(), requireAt(network.representatives, 0))),
+		node: network.createNode(new MemoryLedgerStorage(), requireAt(network.representatives, 0)),
 		params: {},
 		query: {},
 		payload: undefined,
