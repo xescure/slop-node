@@ -51,6 +51,9 @@ help:
 	@echo "                   fault injection that test leaves out"
 	@echo "  do-lint        - Runs the ASCII check, the lock's integrity check, eslint"
 	@echo "                   and cspell"
+	@echo "  lock-integrity - Fills each entry of package-lock.json that has no"
+	@echo "                   integrity from the registry, as npm install leaves"
+	@echo "                   out those a dependency's shrinkwrap does"
 	@echo "  conformance    - Regenerates the vote-decision corpus, and the mainnet"
 	@echo "                   head state, shadow-vote exceptions and edge-case"
 	@echo "                   outcomes in conformance/"
@@ -178,12 +181,14 @@ parity: build/parity/.done
 # git grep exits 1 when nothing matches and 128 when it fails, and only the
 # first means the tree is clean.
 #
-# The lock copies keetanet-client's npm-shrinkwrap.json, which since 0.18.8
-# leaves out most integrity fields, and npm install drops any filled in by hand
-# each time it rewrites the lock. nix/package.nix fetches every entry checked
-# against its integrity, so the package would fail to evaluate, and
-# npm clean-install would install those entries unchecked.
-do-lint: node_modules/.patched
+# nix/package.nix fetches every entry of the lock checked against its
+# integrity, so the package fails to evaluate on an entry without one. npm
+# copies the entries a dependency's own npm-shrinkwrap.json pins as that file
+# has them, and keetanet-client's has left out most integrity fields since
+# 0.18.8; each npm install drops what lock-integrity filled in. The fill guards
+# only the Nix fetch: npm clean-install takes those entries from the
+# shrinkwrap, unchecked.
+do-lint: node_modules/.patched build/utils/.done
 	@LC_ALL=C git grep -I -n --untracked '[^[:print:][:space:]]' -- . ':!LICENSE'; \
 	status=$$?; \
 	if [ $$status -eq 0 ]; then \
@@ -194,14 +199,14 @@ do-lint: node_modules/.patched
 		echo "Error: git grep failed with status $$status." >&2; \
 		exit $$status; \
 	fi
-	@missing=$$(jq -r '.packages | to_entries[] | select(.key | startswith("node_modules/@keetanetwork/keetanet-client/node_modules/")) | select(.value.integrity == null) | "\(.key)@\(.value.version)"' package-lock.json) || exit $$?; \
-	if [ -n "$$missing" ]; then \
-		echo "Error: package-lock.json has entries without integrity; fill each from npm view <name>@<version> dist.integrity:" >&2; \
-		echo "$$missing" >&2; \
-		exit 1; \
-	fi
+	node build/utils/lock-integrity/main.js --lock package-lock.json --check
 	npm run eslint -- --config .eslint.config.mjs src utils
 	npm run cspell -- --config .cspell.config.mjs --no-progress 'src/**/*.ts' 'utils/**/*.ts' 'schema/*.md' 'conformance/*.md' 'api/*.json' Makefile
+
+# It asks the registry through npm, under the same configuration npm install
+# reads, for the integrity of each entry's exact version.
+lock-integrity: build/utils/.done
+	node build/utils/lock-integrity/main.js --lock package-lock.json
 
 # The tree is built beside its final name and renamed, so an interrupted run
 # never leaves a partial directory that looks complete. Every version, the
@@ -249,6 +254,6 @@ clean:
 distclean: clean
 	rm -rf node_modules .nvmrc reference .stryker
 
-.PHONY: all help test devnet-test conformance mutation mutation-usage parity do-lint reference reference-diff reference-diff-usage clean distclean
+.PHONY: all help test devnet-test conformance mutation mutation-usage parity do-lint lock-integrity reference reference-diff reference-diff-usage clean distclean
 
 endif
