@@ -23,10 +23,10 @@ type TokenOf<Remaining extends string, Name extends string> = Remaining extends 
 /**
  * The name, if it is a literal RFC 9110 token, and never otherwise: the
  * request's timing throws TIMING_INVALID_NAME at run time for a section
- * named by anything else [Keeta TS 0.18.8] index.js:72671-72673, and a wide
- * string could be anything. Each member of a union is checked on its own.
+ * named by anything else [Keeta TS 0.18.8] index.js:72671-72673. Each member
+ * of a union is checked on its own.
  */
-type TimingName<Name extends string> = string extends Name ? never : (Name extends string ? TokenOf<Name, Name> : never);
+type TimingName<Name extends string> = Name extends string ? TokenOf<Name, Name> : never;
 
 /**
  * Runs the reads of one request in one read-only transaction of the request's
