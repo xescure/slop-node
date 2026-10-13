@@ -77,14 +77,17 @@ stdenv.mkDerivation {
   # The install of the Makefile's node_modules/.done rule, from the lock whose
   # entries name the fetched tarballs. importNpmLock's own hook would also patch
   # shebangs and rebuild, and the tree would no longer match the development one.
+  #
+  # That lock stays for the prune. The original flags keetanet-client with
+  # hasShrinkwrap, and npm would take the entries below it from that package's
+  # own npm-shrinkwrap.json instead, which has no integrity for most of them
+  # since 0.18.8, and fetch those again.
   configurePhase = ''
     runHook preConfigure
 
     export HOME=$TMPDIR npm_config_offline=true npm_config_fund=false npm_config_audit=false npm_config_progress=false
-    mv package-lock.json package-lock.json.orig
     cp --no-preserve=mode $npmDeps/package-lock.json package-lock.json
     npm clean-install --ignore-scripts
-    mv package-lock.json.orig package-lock.json
     touch node_modules/.done
 
     runHook postConfigure
@@ -104,15 +107,9 @@ stdenv.mkDerivation {
   # The Make stamps and npm's hidden lockfile are not part of the runtime, and
   # the lockfile names the store paths of every fetched tarball. Pruning leaves
   # the scope directories of the development packages behind, empty.
-  #
-  # It prunes against the lock the tree was installed from. The original flags
-  # keetanet-client with hasShrinkwrap, and npm would take the entries below it
-  # from that package's own npm-shrinkwrap.json instead, which has no integrity
-  # for most of them since 0.18.8, and fetch those again.
   installPhase = ''
     runHook preInstall
 
-    cp --no-preserve=mode $npmDeps/package-lock.json package-lock.json
     npm prune --omit=dev --ignore-scripts
     rm node_modules/.done node_modules/.patched node_modules/.package-lock.json
     find node_modules -mindepth 1 -maxdepth 1 -name '@*' -type d -empty -delete
