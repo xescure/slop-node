@@ -1793,6 +1793,37 @@ describe('a pass checking what it concludes', function() {
 	});
 
 	/*
+	 * With the window at its floor, the peer gives up on the second page from
+	 * the first start, the first with a filter, after which, the second short
+	 * page in a row, the pass probes its horizon.
+	 */
+	test('probes with no filter after a page from its start the peer gave up on the filter of', async function() {
+		freezeClock(new Date(NOW));
+		const { peer, first } = denseVotedPeer();
+		let gaveUp: number | undefined;
+		const harness = new Harness(function(request) {
+			if (gaveUp === undefined && request.limit > 1 && request.bloomFilter !== undefined) {
+				gaveUp = harness.requests.length;
+				return(Promise.resolve({ kind: 'gave-up', reason: 'the gateway gave up' }));
+			}
+			return(peer.page(request));
+		});
+		harness.priming = new PrimingWindow(8);
+		harness.progress = { ...firstProgress(NOW, 0, new Date(first)), keying: 'votes' };
+
+		await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(harness.node.size).toBe(2000);
+		const since = harness.requests.slice(gaveUp ?? -1);
+		expect(since.slice(0, 3).map(function(request): [number, number, boolean] {
+			return([request.start.getTime(), request.limit, request.bloomFilter !== undefined]);
+		})).toEqual([[first, 1000, true], [first, 1000, false], [NOW - BOOTSTRAP_MARGIN_MILLISECONDS, 1, false]]);
+		expect(since.slice(1).filter(function(request): boolean {
+			return(request.bloomFilter !== undefined);
+		})).toEqual([]);
+	});
+
+	/*
 	 * With the window at its floor, the peer gives up on the page from the
 	 * second start the pass moves to, which is the fourth short page in a row,
 	 * after which the pass probes its horizon; the page asked for again with

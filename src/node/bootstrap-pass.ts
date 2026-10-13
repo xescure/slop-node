@@ -418,6 +418,14 @@ type Taken = { readonly outcomes: readonly Added[]; readonly held: boolean; read
 /** A page the peer answered, what it shows, and the filter the request that drew it carried: none once the peer gave up on one (PrimingWindow). */
 type Answered<Staple extends PassStaple> = { readonly staples: readonly Staple[]; readonly evidence: Evidence<Staple>; readonly bloomFilter: string | undefined };
 
+/** The filter the answer was asked with: the one given, unless the request was sent again with none, the peer having given up on it. */
+function sentWith<Staple extends PassStaple>(filter: Filter, answer: Answered<Staple>): Filter {
+	if (answer.bloomFilter === undefined) {
+		return(UNFILTERED);
+	}
+	return(filter);
+}
+
 /** A page asked for from the start, what it shows, and the filter it was asked with, which the node has taken. */
 type Listed<Staple extends PassStaple> = { readonly staples: readonly Staple[]; readonly evidence: Evidence<Staple>; readonly filter: Filter; readonly taken: Taken };
 
@@ -684,7 +692,7 @@ class Pass<Staple extends PassStaple> {
 		if (answer === undefined) {
 			return(undefined);
 		}
-		return({ ...answer, filter, taken: await this.#takeAll(answer.staples) });
+		return({ staples: answer.staples, evidence: answer.evidence, filter: sentWith(filter, answer), taken: await this.#takeAll(answer.staples) });
 	}
 
 	/**
@@ -885,11 +893,7 @@ class Pass<Staple extends PassStaple> {
 		named.receive(answer.staples);
 		this.#named = named;
 		await this.#advance(target.at);
-		let sent = filter;
-		if (answer.bloomFilter === undefined) {
-			sent = UNFILTERED;
-		}
-		return({ staples: answer.staples, evidence: answer.evidence, filter: sent, taken });
+		return({ staples: answer.staples, evidence: answer.evidence, filter: sentWith(filter, answer), taken });
 	}
 
 	async #advance(start: number): Promise<void> {
