@@ -104,9 +104,15 @@ stdenv.mkDerivation {
   # The Make stamps and npm's hidden lockfile are not part of the runtime, and
   # the lockfile names the store paths of every fetched tarball. Pruning leaves
   # the scope directories of the development packages behind, empty.
+  #
+  # It prunes against the lock the tree was installed from. The original flags
+  # keetanet-client with hasShrinkwrap, and npm would take the entries below it
+  # from that package's own npm-shrinkwrap.json instead, which has no integrity
+  # for most of them since 0.18.8, and fetch those again.
   installPhase = ''
     runHook preInstall
 
+    cp --no-preserve=mode $npmDeps/package-lock.json package-lock.json
     npm prune --omit=dev --ignore-scripts
     rm node_modules/.done node_modules/.patched node_modules/.package-lock.json
     find node_modules -mindepth 1 -maxdepth 1 -name '@*' -type d -empty -delete
