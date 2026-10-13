@@ -17,7 +17,7 @@ import { PageError, PageFetcher } from './bootstrap-page.js';
 import type { PageProblem } from './bootstrap-page.js';
 import { PeerPacer, PeerThrottled } from './bootstrap-pacing.js';
 import { VOTE_KEY_TOLERANCE_MILLISECONDS } from './bootstrap-evidence.js';
-import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, MAX_PASS_MILLISECONDS, PageLimit, PrimingWindow, bootstrapPeer, bootstrapRange, completes } from './bootstrap-pass.js';
+import { DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, MAX_PASS_MILLISECONDS, PageLimits, PrimingWindow, bootstrapPeer, bootstrapRange, completes } from './bootstrap-pass.js';
 import type { PassAnswer, PassEvent, PassOutcome, PassRequest, PeerIO } from './bootstrap-pass.js';
 import { bootstrapPacingOf, bootstrapSources } from './bootstrap-peers.js';
 import type { BootstrapNode } from './bootstrap-peers.js';
@@ -291,7 +291,7 @@ export class BootstrapClient {
 	readonly #crowdedAt = new Map<string, number>();
 	readonly #answers = new Map<string, LongestAnswer>();
 	readonly #priming = new Map<string, PrimingWindow>();
-	readonly #pageLimits = new Map<string, PageLimit>();
+	readonly #pageLimits = new Map<string, PageLimits>();
 	/** The lacked blocks asked for that did not land, by hash, asked for again only after a wait that doubles each time. */
 	readonly #unanswered = new Map<string, Unanswered>();
 	/** The last stranded staple read, after which the next update reads, and the blocks the pages of this round carry; none once a page was the last. */
@@ -760,8 +760,8 @@ export class BootstrapClient {
 			priming: keptFor(this.#priming, endpoint, function() {
 				return(new PrimingWindow());
 			}),
-			pageLimit: keptFor(this.#pageLimits, endpoint, function() {
-				return(new PageLimit(MAX_PAGE_LIMIT));
+			pageLimits: keptFor(this.#pageLimits, endpoint, function() {
+				return(new PageLimits());
 			}),
 			page: (request) => {
 				tally.requests++;

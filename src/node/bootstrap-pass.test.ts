@@ -8,7 +8,7 @@ import { advanceClock, freezeClock } from '../testing/network.js';
 import { assertNever } from '../util/assert-never.js';
 import { VOTE_KEY_TOLERANCE_MILLISECONDS } from './bootstrap-evidence.js';
 import type { PeerKeying } from './bootstrap-evidence.js';
-import { DEEP_SCAN_DEPTH_MILLISECONDS, DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PageLimit, PrimingWindow, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, bootstrapPeer, bootstrapRange, completes, firstProgress } from './bootstrap-pass.js';
+import { DEEP_SCAN_DEPTH_MILLISECONDS, DEEP_SCAN_PERIOD_MILLISECONDS, LongestAnswer, PageLimit, PageLimits, PrimingWindow, MAX_PASS_MILLISECONDS, MAX_PASS_REQUESTS, bootstrapPeer, bootstrapRange, completes, firstProgress } from './bootstrap-pass.js';
 import type { PassAnswer, PassEvent, PassOptions, PassOutcome, PassRequest, PeerIO, PeerOutcome, PeerProgress, RangeSetup } from './bootstrap-pass.js';
 import type { QueueUse } from './bootstrap-retry.js';
 import { BLOOM_CAPACITY, BLOOM_ERROR_RATE, BOOTSTRAP_MARGIN_MILLISECONDS, MAX_NAMED } from './bootstrap-window.js';
@@ -77,7 +77,7 @@ class Harness {
 	readonly answers = new LongestAnswer();
 	/** As wide as a filter, so that what a pass names of what the node holds is not cut short by the window the peer is read with. */
 	priming = new PrimingWindow(BLOOM_CAPACITY);
-	readonly pageLimit = new PageLimit(1000);
+	readonly pageLimits = new PageLimits();
 	progress: PeerProgress | undefined;
 	readonly #answer: (request: PassRequest) => Promise<PassAnswer<SimulatedStaple>>;
 
@@ -89,7 +89,7 @@ class Harness {
 		return({
 			answers: this.answers,
 			priming: this.priming,
-			pageLimit: this.pageLimit,
+			pageLimits: this.pageLimits,
 			page: async (request) => {
 				const answer = await this.#answer(request);
 				let served = 0;
@@ -501,7 +501,7 @@ describe('a pass over a peer', function() {
 		expect(Date.now() - NOW).toBeLessThan(5 * SECOND);
 	});
 
-	test('asks for half as many staples whenever an answer is too large', async function() {
+	test('asks for half as many staples whenever an answer is too large, and for twice as many again once answers fit', async function() {
 		freezeClock(new Date(NOW));
 		const peer = peerWith(300);
 		const harness = new Harness(function(request) {
@@ -515,7 +515,7 @@ describe('a pass over a peer', function() {
 
 		expect(harness.pages().map(function(request): number {
 			return(request.limit);
-		})).toEqual([1000, 500, 250, 250, 250]);
+		})).toEqual([1000, 500, 250, 250, 500, 250]);
 		expect(harness.node.size).toBe(300);
 	});
 
@@ -592,64 +592,154 @@ describe('the staples a pass names ahead of its start', function() {
 });
 
 describe('the staples a pass asks for in a page', function() {
-	test('start where answers last fitted after one was too large, and grow by passes none was too large in, up to the cap', function() {
+	/** The answers that must fit at most before the limit doubles to where one was too large, and the doublings from there back to 1000. */
+	const MAX_REGROWTH_REQUESTS = 16 + 5;
+
+	afterEach(function() {
+		vi.useRealTimers();
+	});
+
+	test('halve whenever an answer is too large, double after each that fits below where one was, and only after a run of them that grows each time doubling there is too large again', function() {
 		const limit = new PageLimit(1000);
-		limit.tooLarge();
-		limit.answered(1);
-		expect(limit.size).toBe(1000);
-		limit.answered(32);
-		limit.answered(500);
-		expect(limit.size).toBe(32);
-		limit.passed();
-		expect(limit.size).toBe(32);
-		limit.passed();
-		limit.passed();
-		expect(limit.size).toBe(96);
-		limit.answered(64);
-		expect(limit.size).toBe(96);
-		for (let pass = 0; pass < 40; pass++) {
-			limit.passed();
+		const sizes: number[] = [];
+		const answer = function(fits: boolean): void {
+			if (fits) {
+				limit.fitted(limit.size);
+			} else {
+				limit.tooLarge(limit.size);
+			}
+			sizes.push(limit.size);
+		};
+		for (const fits of [false, false, false, false, false, true]) {
+			answer(fits);
 		}
-		expect(limit.size).toBe(1000);
+		expect(sizes).toEqual([500, 250, 125, 63, 32, 32]);
+		// A single staple, or a page asked for at another size, says nothing.
+		limit.fitted(1);
+		limit.fitted(500);
+		expect(limit.size).toBe(32);
+		sizes.length = 0;
+		for (const fits of [true, false, ...Array<boolean>(4).fill(true), false, ...Array<boolean>(8).fill(true), false]) {
+			answer(fits);
+		}
+		expect(sizes).toEqual([64, 32, 32, 32, 32, 64, 32, 32, 32, 32, 32, 32, 32, 32, 64, 32]);
+		// Past where it was too large, it doubles after each answer, up to the cap.
+		sizes.length = 0;
+		for (let fitting = 0; fitting < 20; fitting++) {
+			answer(true);
+		}
+		expect(sizes.slice(15)).toEqual([64, 128, 256, 512, 1000]);
+		expect(sizes.slice(0, 15).every(function(size): boolean {
+			return(size === 32);
+		})).toBe(true);
+	});
+
+	test('are kept for each pass of a peer apart, a range\'s for the next pass over that range, until it completes', function() {
+		const limits = new PageLimits();
+		limits.of({ kind: 'range', id: 1 }, 1000).tooLarge(1000);
+		expect([limits.of({ kind: 'range', id: 1 }, 1000).size, limits.of({ kind: 'range', id: 2 }, 1000).size, limits.of({ kind: 'live' }, 1000).size, limits.of({ kind: 'deep' }, 1000).size]).toEqual([500, 1000, 1000, 1000]);
+		limits.forget({ kind: 'range', id: 1 });
+		expect(limits.of({ kind: 'range', id: 1 }, 1000).size).toBe(1000);
 	});
 
 	/*
-	 * Every answer of more than 100 staples is too large. The first pass ends
-	 * at its time bound within the history; the second reads the rest of it.
+	 * Every answer of more than 100 staples from within the dense history is
+	 * too large. A pass over a range of it reaches its bound within it; another
+	 * range of the same peer lies past it, where pages of any size fit.
 	 */
-	test('start, after a pass that asked for fewer, where that pass found pages fit, and regrow after passes that found none too large', async function() {
+	test('start where the last pass over the same range left them, and not where a pass over another range of the peer did', async function() {
 		freezeClock(new Date(NOW));
 		const { peer, first } = denseVotedPeer();
-		let pass = 0;
-		const limits: number[][] = [];
+		const sparse = NOW - 30 * MINUTE;
+		for (let index = 0; index < 50; index++) {
+			const at = sparse + index * SECOND;
+			peer.applyVoted(at, at, [], [at]);
+		}
+		let bound: number | undefined;
 		const harness = new Harness(function(request) {
-			if (request.limit > 1) {
-				limits[pass]?.push(request.limit);
-			}
-			if (pass === 0 && harness.requests.length === 30) {
+			if (bound !== undefined && harness.requests.length === bound) {
 				advanceClock(MAX_PASS_MILLISECONDS);
 			}
-			if (request.limit > 100) {
+			if (request.limit > 100 && request.start.getTime() < sparse - MINUTE) {
+				return(Promise.resolve({ kind: 'too-large' }));
+			}
+			return(peer.page(request));
+		});
+		const pageLimits = function(from: number): number[] {
+			return(harness.pages().slice(from).map(function(request): number {
+				return(request.limit);
+			}));
+		};
+		const range = function(id: number, reached: number, end: number): RangeSetup {
+			return({ id, reached: new Date(reached), end: function(): Date {
+				return(new Date(end));
+			}, until: new Date(Date.now() + HOUR), use: 'ahead', moved: function(): Promise<void> {
+				return(Promise.resolve());
+			} });
+		};
+
+		bound = 30;
+		const dense = await bootstrapRange(harness.io, range(1, first, sparse - MINUTE), passOptions(1000));
+		const afterDense = harness.pages().length;
+		bound = undefined;
+		const sparseLimit = harness.pageLimits.of({ kind: 'range', id: 2 }, 1000);
+		const sparseOutcome = await bootstrapRange(harness.io, range(2, sparse - MINUTE, NOW - 10 * MINUTE), passOptions(1000));
+		const afterSparse = harness.pages().length;
+		await bootstrapRange(harness.io, range(1, first, sparse - MINUTE), passOptions(1000));
+
+		expect(dense.kind).toBe('bounded');
+		expect(pageLimits(0).slice(0, 5)).toEqual([1000, 500, 250, 125, 63]);
+		// The other range starts at the cap.
+		expect(pageLimits(afterDense)[0]).toBe(1000);
+		// The dense range's next pass starts where the last left it, below where answers were too large.
+		const again = pageLimits(afterSparse);
+		expect(again[0]).toBeLessThan(100);
+		expect(again).not.toContain(1000);
+		// The other range completed, and no pass reads on from where it stopped.
+		expect(completes(sparseOutcome)).toBe(true);
+		expect(harness.pageLimits.of({ kind: 'range', id: 2 }, 1000)).not.toBe(sparseLimit);
+	});
+
+	/*
+	 * Answers of more than 100 staples from starts within the dense history
+	 * are too large; a page from the sparse history after it fits at any size.
+	 */
+	test('climb back within a pass by the answers that fit once it leaves a dense stretch', async function() {
+		freezeClock(new Date(NOW));
+		const { peer, first } = denseVotedPeer();
+		const sparse = NOW - 30 * MINUTE;
+		for (let index = 0; index < 3000; index++) {
+			const at = sparse + index * 100;
+			peer.applyVoted(at, at, [], [at]);
+		}
+		const harness = new Harness(function(request) {
+			if (request.limit > 100 && request.start.getTime() < sparse) {
 				return(Promise.resolve({ kind: 'too-large' }));
 			}
 			return(peer.page(request));
 		});
 		harness.progress = { ...firstProgress(NOW, 0, new Date(first)), keying: 'votes' };
-		const outcomes: PassOutcome[] = [];
-		for (; pass < 4; pass++) {
-			limits.push([]);
-			outcomes.push((await bootstrapPeer(harness.io, passOptions(1000))).live);
-		}
 
-		expect(outcomes[0]?.kind).toBe('bounded');
-		expect(limits[0]?.slice(0, 5)).toEqual([1000, 500, 250, 125, 63]);
-		// The second reads on through the history, its moves included, at the limit the first ended at.
-		expect(completes(outcomes[1] ?? { kind: 'bounded', reached: EPOCH })).toBe(true);
-		expect(new Set(limits[1])).toEqual(new Set([63]));
-		expect(limits[1]?.length).toBeGreaterThan(10);
-		expect(harness.node.size).toBe(2000);
-		expect(limits[2]?.[0]).toBe(95);
-		expect(limits[3]?.slice(0, 2)).toEqual([127, 64]);
+		const { live } = await bootstrapPeer(harness.io, passOptions(1000));
+
+		expect(completes(live)).toBe(true);
+		expect(harness.node.size).toBe(5000);
+		const pages = harness.pages();
+		const leaving = pages.findIndex(function(request): boolean {
+			return(request.start.getTime() >= sparse);
+		});
+		expect(leaving).toBeGreaterThan(0);
+		// Within the dense stretch, few answers are too large.
+		const denseTooLarge = pages.slice(0, leaving).filter(function(request): boolean {
+			return(request.limit > 100);
+		}).length;
+		expect(denseTooLarge).toBeLessThan(pages.slice(0, leaving).length / 8);
+		// Past it, the limit is back at the cap within a handful of requests.
+		const backAt = pages.findIndex(function(request, index): boolean {
+			return(index >= leaving && request.limit === 1000);
+		});
+		expect(backAt - leaving).toBeGreaterThan(0);
+		expect(backAt - leaving).toBeLessThanOrEqual(MAX_REGROWTH_REQUESTS);
 	});
 });
 
@@ -667,9 +757,14 @@ describe('deep re-scans of a peer', function() {
 			return(peer.page(request));
 		});
 		harness.progress = caughtUp;
+		const deepLimit = harness.pageLimits.of({ kind: 'deep' }, 1000);
+		const liveLimit = harness.pageLimits.of({ kind: 'live' }, 1000);
 
 		expect(await bootstrapPeer(harness.io, passOptions(1000))).toEqual({ live: { kind: 'drained' }, deepScan: { kind: 'drained' } });
 
+		// The next deep re-scan starts elsewhere, so the page limit of this one is let go; the pass from where the last reached reads on.
+		expect(harness.pageLimits.of({ kind: 'deep' }, 1000)).not.toBe(deepLimit);
+		expect(harness.pageLimits.of({ kind: 'live' }, 1000)).toBe(liveLimit);
 		expect(harness.starts().sort()).toEqual([caughtUp.deepScanFrom.getTime(), caughtUp.reached.getTime()].sort());
 		expect(harness.written[0]).toEqual({ ...caughtUp, deepScanFrom: caughtUp.reached, nextDeepScan: new Date(NOW + DEEP_SCAN_PERIOD_MILLISECONDS), deepScan: { reached: caughtUp.deepScanFrom, horizon: new Date(NOW - BOOTSTRAP_MARGIN_MILLISECONDS) } });
 		expect(harness.progress).toMatchObject({ caughtUp: true, deepScanFrom: caughtUp.reached, deepScan: undefined });
@@ -1232,7 +1327,7 @@ describe('how much a pass over a range asks of a peer', function() {
 		harness.progress = { ...firstProgress(NOW, 0, EPOCH), keying: known };
 		const end = NOW - HOUR;
 
-		const outcome = await bootstrapRange(harness.io, { reached: new Date(NOW - 3 * HOUR), end: function(): Date {
+		const outcome = await bootstrapRange(harness.io, { id: 0, reached: new Date(NOW - 3 * HOUR), end: function(): Date {
 			return(new Date(end));
 		}, until: new Date(NOW + HOUR), use: 'ahead', moved: function(): Promise<void> {
 			return(Promise.resolve());
@@ -1712,7 +1807,7 @@ describe('a pass checking what it concludes', function() {
 		};
 
 		await expect(bootstrapPeer({ ...holding.io, retry: failingRetry }, passOptions(10))).rejects.toThrow('the retry failed');
-		await expect(bootstrapRange({ ...holding.io, retry: failingRetry }, { reached: EPOCH, end: function(): Date {
+		await expect(bootstrapRange({ ...holding.io, retry: failingRetry }, { id: 0, reached: EPOCH, end: function(): Date {
 			return(new Date(NOW - HOUR));
 		}, until: new Date(NOW + HOUR), use: 'ahead', moved: function(): Promise<void> {
 			return(Promise.resolve());
@@ -1722,10 +1817,10 @@ describe('a pass checking what it concludes', function() {
 	test('asks for fewer staples when the page from where the page before shows it reached is too large, and goes on from there', async function() {
 		freezeClock(new Date(NOW));
 		const peer = peerWith(5000);
-		let refused = false;
+		let refused: number | undefined;
 		const harness = new Harness(function(request) {
-			if (!refused && request.limit > 1 && request.start.getTime() > 0) {
-				refused = true;
+			if (refused === undefined && request.limit > 1 && request.start.getTime() > 0) {
+				refused = harness.requests.length;
 				return(Promise.resolve({ kind: 'too-large' }));
 			}
 			return(peer.page(request));
@@ -1735,7 +1830,8 @@ describe('a pass checking what it concludes', function() {
 
 		expect(completes(live)).toBe(true);
 		expect(harness.node.size).toBe(5000);
-		expect(harness.pages().at(-1)?.limit).toBe(500);
+		const tooLarge = harness.requests[refused ?? -1];
+		expect(harness.requests[(refused ?? -1) + 1]).toMatchObject({ start: tooLarge?.start, limit: 500 });
 	});
 
 	/*
@@ -1928,7 +2024,7 @@ describe('a pass checking what it concludes', function() {
 		};
 		const start = new Date(NOW - 10 * MINUTE);
 
-		await bootstrapRange(io, { reached: start, end: function(): Date {
+		await bootstrapRange(io, { id: 0, reached: start, end: function(): Date {
 			return(new Date(NOW));
 		}, until: new Date(NOW + HOUR), use: 'ahead', moved: function(): Promise<void> {
 			return(Promise.resolve());
@@ -2122,6 +2218,7 @@ describe('a pass over a range of a peer\'s history', function() {
 
 	function rangeOf(end: number, moved: number[], until = Number.POSITIVE_INFINITY): RangeSetup {
 		return({
+			id: 0,
 			reached: EPOCH,
 			end: function(): Date {
 				return(new Date(end));
@@ -2221,20 +2318,5 @@ describe('a pass over a range of a peer\'s history', function() {
 		await bootstrapRange(harness.io, rangeOf(NOW, []), passOptions(10));
 
 		expect(harness.priming.size).toBe(40);
-	});
-
-	test('asks for as many staples as pages last fitted, and for more after a pass with no answer too large', async function() {
-		freezeClock(new Date(NOW));
-		const harness = new Harness(function(request) {
-			return(peerWith(2).page(request));
-		});
-		harness.pageLimit.tooLarge();
-		harness.pageLimit.answered(4);
-		harness.pageLimit.passed();
-
-		await bootstrapRange(harness.io, rangeOf(NOW, []), passOptions(10));
-
-		expect(harness.requests[0]?.limit).toBe(4);
-		expect(harness.pageLimit.size).toBe(36);
 	});
 });
