@@ -640,6 +640,27 @@ describe('the staples a pass asks for in a page', function() {
 		})).toBe(true);
 	});
 
+	test('wait twice as long to double to the very size an answer was too large at, once it is too large there again, and double past it after one full page there', function() {
+		const limit = new PageLimit(4000);
+		limit.tooLarge(4000);
+		limit.tooLarge(2000);
+		const sizes: number[] = [];
+		for (let fitting = 0; fitting < 2; fitting++) {
+			limit.fitted(1000, 1000);
+			sizes.push(limit.size);
+		}
+		limit.tooLarge(2000);
+		sizes.push(limit.size);
+		for (let fitting = 0; fitting < 4; fitting++) {
+			limit.fitted(limit.size, limit.size);
+			sizes.push(limit.size);
+		}
+		limit.fitted(2000, 2000);
+		sizes.push(limit.size);
+
+		expect(sizes).toEqual([1000, 2000, 1000, 1000, 1000, 1000, 2000, 4000]);
+	});
+
 	test('are kept for each pass of a peer apart, a range\'s for the next pass over that range, until it completes', function() {
 		const limits = new PageLimits();
 		const layout = new Date(NOW - DAY);
