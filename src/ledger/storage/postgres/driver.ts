@@ -224,7 +224,7 @@ export class PostgresTransaction extends LedgerDriverTransaction {
 	 * Commits once every issued statement has run. A conflict seen during the
 	 * attempt rolls it back instead and is reported, retryable. A failed
 	 * COMMIT leaves the transaction finished: Ledger never aborts after one.
-	 * [Keeta TS] index.js:70337-70347
+	 * [Keeta TS] index.js:71373-71383
 	 */
 	async commit(): Promise<void> {
 		const client = await this.#beginEnding();
@@ -498,7 +498,7 @@ function resolveAccount<T extends AccountKeyAlgorithm>(account: Account<T> | str
  * Every account a confirmed change writes a row for, with its key type, keyed
  * by public key. A change's effects are always upstream's for the staple's own
  * blocks over the ledger: upstream computes them so just before it adjusts
- * [Keeta TS] index.js:69404-69407, and so does the base's replay of a deferred
+ * [Keeta TS] index.js:70440-70443, and so does the base's replay of a deferred
  * staple (base.ts, #applyIsolated). Upstream names as touched every account
  * with an effect of its own, which takes in each block's account and each
  * holder of a balance it changes [Keeta TS] index.js:69135-69140, 69202-69207,

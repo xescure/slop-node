@@ -22,7 +22,7 @@ function getBlockByHash(request: APIRequest, text: string): Promise<DeclaredResu
 
 /**
  * The block on the main ledger whose previous is the block named
- * [Keeta TS] index.js:59255-59263.
+ * [Keeta TS] index.js:60247-60255.
  * [node-lite] adapted from getBlockSuccessor.
  */
 async function getBlockSuccessor(request: APIRequest, text: string): Promise<DeclaredResult<DeclaredLedgerGroup['block'][':blockhash']['successor']['GET']>> {

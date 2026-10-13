@@ -3,7 +3,7 @@
   "info": {
     "title": "KeetaNet node HTTP API",
     "version": "0.18.7",
-    "description": "The HTTP API of a KeetaNet node as described by version 0.18.7 of @keetanetwork/keetanet-client. The routes are those of the \"rootTree\" in the package's API typings (api/index.d.ts); the request and response shapes are the typed values as the package serializes them. Citations name the package's bundle, client/index.js, by line ([Keeta TS] index.js:N), or its typings by file. A response body is the handler's result passed through the package's JSON conversion with binary encodings added, which is why blocks, votes, quotes and staples at the top of a response carry \"$binary\" (the client decodes them from it, [Keeta TS] index.js:58891, 58977, 59808, 59814, 59923). Every route is served below /api [Keeta TS] index.js:62380."
+    "description": "The HTTP API of a KeetaNet node as described by version 0.18.7 of @keetanetwork/keetanet-client. The routes are those of the \"rootTree\" in the package's API typings (api/index.d.ts); the request and response shapes are the typed values as the package serializes them. Citations name the package's bundle, client/index.js, by line ([Keeta TS] index.js:N), or its typings by file. A response body is the handler's result passed through the package's JSON conversion with binary encodings added, which is why blocks, votes, quotes and staples at the top of a response carry \"$binary\" (the client decodes them from it, [Keeta TS] index.js:59743, 59790, 59887, 59968, 60170, 60212, 60253, 60535, 60801, 60806, 60914). Every route is served below /api [Keeta TS] index.js:62380."
   },
   "jsonSchemaDialect": "https://spec.openapis.org/oas/3.1/dialect/base",
   "paths": {
@@ -11,7 +11,7 @@
       "post": {
         "operationId": "createVote",
         "summary": "Ask the node to vote for blocks",
-        "description": "The blocks are ASN.1 encoded and base64 encoded; \"votes\" carries the votes of other representatives when a permanent vote is requested, and \"quote\" a fee quote previously issued by this node [Keeta TS] index.js:60846-60857, 60768. The client reads the vote from \"vote.$binary\" [Keeta TS] index.js:59806-59810.",
+        "description": "The blocks are ASN.1 encoded and base64 encoded; \"votes\" carries the votes of other representatives when a permanent vote is requested, and \"quote\" a fee quote previously issued by this node [Keeta TS] index.js:60846-60857, 60768. The client reads the vote from \"vote.$binary\" [Keeta TS] index.js:60799-60802.",
         "requestBody": {
           "required": true,
           "content": {
@@ -66,7 +66,7 @@
       "post": {
         "operationId": "createVoteQuote",
         "summary": "Ask the node to quote its fee for voting for blocks",
-        "description": "The blocks are ASN.1 encoded and base64 encoded [Keeta TS] index.js:60835-60840. The client reads the quote from \"quote.$binary\" [Keeta TS] index.js:59811-59815.",
+        "description": "The blocks are ASN.1 encoded and base64 encoded [Keeta TS] index.js:60835-60840. The client reads the quote from \"quote.$binary\" [Keeta TS] index.js:60804-60807.",
         "requestBody": {
           "required": true,
           "content": {
@@ -272,7 +272,7 @@
       "get": {
         "operationId": "getVoteStaplesAfter",
         "summary": "Vote staples added to the node's ledger since a moment",
-        "description": "Pages through the ledger by moment; a page is empty once every staple has been returned [Keeta TS] index.js:59140-59182.",
+        "description": "Pages through the ledger by moment; a page is empty once every staple has been returned [Keeta TS] index.js:60130-60172.",
         "parameters": [
           {
             "name": "start",
@@ -408,7 +408,7 @@
       "get": {
         "operationId": "getBlockSuccessor",
         "summary": "The block that follows a block on its account's chain",
-        "description": "\"successorBlock\" is null when the node knows no successor [Keeta TS] index.js:59255-59263.",
+        "description": "\"successorBlock\" is null when the node knows no successor [Keeta TS] index.js:60247-60255.",
         "responses": {
           "200": {
             "description": "The requested hash and its successor.",
@@ -622,7 +622,7 @@
       "get": {
         "operationId": "getAccountChain",
         "summary": "The blocks of an account's chain, newest first",
-        "description": "Pages through the chain, newest first, from \"start\" down to and including \"end\"; \"nextKey\" is the \"start\" of the next page, which may be \"end\" itself, and null once the chain or the range is exhausted [Keeta TS] index.js:58868-58901.",
+        "description": "Pages through the chain, newest first, from \"start\" down to and including \"end\"; \"nextKey\" is the \"start\" of the next page, which may be \"end\" itself, and null once the chain or the range is exhausted [Keeta TS] index.js:59865-59896.",
         "parameters": [
           {
             "name": "start",
@@ -1008,7 +1008,7 @@
       "get": {
         "operationId": "getAccountPendingBlock",
         "summary": "The block of an account the node holds on its side ledger, awaiting votes",
-        "description": "\"block\" is null when nothing is pending [Keeta TS] index.js:59219-59226.",
+        "description": "\"block\" is null when nothing is pending [Keeta TS] index.js:60209-60218.",
         "responses": {
           "200": {
             "description": "The account and its pending block.",

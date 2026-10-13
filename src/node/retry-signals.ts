@@ -9,7 +9,7 @@ import type { Awaited } from './bootstrap-retry.js';
 
 const lib = KeetaNet.lib;
 
-/** The refusal of votes whose voters' weight is too little [Keeta TS] index.js:69397-69400. */
+/** The refusal of votes whose voters' weight is too little [Keeta TS] index.js:70433-70436. */
 const INSUFFICIENT_WEIGHT = 'LEDGER_INSUFFICIENT_VOTING_WEIGHT';
 
 function keyOf(account: GenericAccount): string {

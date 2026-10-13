@@ -172,7 +172,7 @@ function isAlreadyHeld(error: unknown): boolean {
  * Applies the follower's staples to the offline ledger as its ledger
  * accepted them: through the storage's adjust, as the ledger's add does
  * once the votes are weighed, without weighing them again
- * [Keeta TS] index.js:69397-69411, 68753-68765. The follower's list holds
+ * [Keeta TS] index.js:70433-70447, 68753-68765. The follower's list holds
  * only staples its ledger accepted, each at the place it applied it, and a
  * staple it applied by a replay of the staples deferred behind another,
  * which weighs nothing, was weighed as it arrived, under the weights of an

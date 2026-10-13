@@ -51,7 +51,7 @@ The walkthrough follows representative R, which runs a node with its private key
 
 1. `beginTransaction({ node, moment, identifier: 'db-add', readOnly: false })`.
 2. `delegatedWeight(tx)` returns `0n`, so the quorum is a vote by the initial trusted account [Keeta TS] index.js:70776-70787.
-3. `adjust(tx, genesis, effects)`, where `computeEffectOfBlocks` has computed `effects` in memory [Keeta TS] index.js:69404-69407:
+3. `adjust(tx, genesis, effects)`, where `computeEffectOfBlocks` has computed `effects` in memory [Keeta TS] index.js:70440-70443:
    1. Base: the chain-order and shared-previous checks, which make no storage call (D14).
    2. Base, `preAdjust`: `getBlockHeights` for every block, all `null`, then for the previous blocks outside the staple. Opening blocks get height 0, and each later block of the same chain gets its previous block's height plus one [Keeta TS] index.js:68714-68768.
    3. Base, the confirmed-history check: `getHeadBlock(tx, account, 'main')` for each opening block and `getBlockFromPrevious(tx, previous, 'main')` for every other block whose previous lies outside the staple. All are `null` (D14).
@@ -149,9 +149,9 @@ This is the shape of upstream's `LedgerStorageTransactionBase` [Keeta TS] index.
 
 ### 3.2 Attempts, commit and abort
 
-`Ledger.run` opens one driver transaction per attempt and runs the request in it. On success it commits; if the request throws, it aborts. The error from the request, the commit or the abort goes through `evaluateError`. The whole attempt runs again with a new transaction when the evaluated error is upstream's ledger error with `shouldRetry` set and the retry budget allows it. The budget defaults to 5000 ms from the first attempt, and the delay is `retryDelay`, or 20 ms [Keeta TS] index.js:70294-70389.
+`Ledger.run` opens one driver transaction per attempt and runs the request in it. On success it commits; if the request throws, it aborts. The error from the request, the commit or the abort goes through `evaluateError`. The whole attempt runs again with a new transaction when the evaluated error is upstream's ledger error with `shouldRetry` set and the retry budget allows it. The budget defaults to 5000 ms from the first attempt, and the delay is `retryDelay`, or 20 ms [Keeta TS] index.js:71330-71425.
 
-- **Exactly once.** A transaction is committed or aborted exactly once. `Ledger` never aborts after a failed commit [Keeta TS] index.js:70337-70347, so a driver whose commit fails must release the transaction's resources itself. After commit or abort, every member called with the transaction must reject, including a second commit or abort, and one the driver answers without reading its store. Tested by `transactions.ts: "a finished transaction rejects further use"`, after a commit and after an abort.
+- **Exactly once.** A transaction is committed or aborted exactly once. `Ledger` never aborts after a failed commit [Keeta TS] index.js:71373-71383, so a driver whose commit fails must release the transaction's resources itself. After commit or abort, every member called with the transaction must reject, including a second commit or abort, and one the driver answers without reading its store. Tested by `transactions.ts: "a finished transaction rejects further use"`, after a commit and after an abort.
 - **Commit** makes every write of the transaction visible to later transactions at once.
 - **Abort** discards every write of the transaction. Tested by `transactions.ts: "abort discards writes but never reuses a serial"`.
 - **A commit that fails** never yields a retryable error unless the driver knows that nothing was committed (D17). A retried `add` of a staple that did commit fails with `LEDGER_BLOCK_ALREADY_EXISTS`. A retried `vote` signs a second vote under a new serial. Tested for the Postgres driver by `src/ledger/storage/postgres/driver.test.ts: "a broken connection at commit is not retried"` and `src/ledger/storage/postgres/driver.test.ts: "a serialization failure at commit is retried by Ledger.run"`.
@@ -259,7 +259,7 @@ init: (config: LedgerConfig, ledger: Ledger) => void;
 - **Errors.** A second call throws `storage driver is already initialized`. A member that needs the configuration before `init` rejects with `StorageDriverNotInitializedError`.
 - **Tested by** `transactions.ts: "a driver serves exactly one ledger"`.
 - Implemented by the base.
-- **Postgres.** Opens the pool and starts migrating the database (section 6.3) without waiting. The first transaction waits for the migration; one that fails is reported by that transaction and tried again by the next. An injected pool keeps its owner's settings. A pool opened from a connection string holds at most 10 connections; a checkout fails after waiting 5 s, which is `Ledger.run`'s whole retry budget [Keeta TS] index.js:70294-70389; connections use TCP keepalive, with the first probe after 10 s idle rather than the operating system's default of hours; and every session starts with `statement_timeout` at 30 s and `idle_in_transaction_session_timeout` at 10 s. Between the statements of one attempt the process only computes, so a session idle in a transaction that long belongs to a stalled process, and ending it frees the row locks other attempts wait on. A statement may outlast the retry budget: `stats` counts the whole main ledger in one statement, and gc runs its batches for up to its time limit, one batch per statement. Each setting can be overridden. Tested by `src/ledger/storage/postgres/pool.test.ts`.
+- **Postgres.** Opens the pool and starts migrating the database (section 6.3) without waiting. The first transaction waits for the migration; one that fails is reported by that transaction and tried again by the next. An injected pool keeps its owner's settings. A pool opened from a connection string holds at most 10 connections; a checkout fails after waiting 5 s, which is `Ledger.run`'s whole retry budget [Keeta TS] index.js:71330-71425; connections use TCP keepalive, with the first probe after 10 s idle rather than the operating system's default of hours; and every session starts with `statement_timeout` at 30 s and `idle_in_transaction_session_timeout` at 10 s. Between the statements of one attempt the process only computes, so a session idle in a transaction that long belongs to a stalled process, and ending it frees the row locks other attempts wait on. A statement may outlast the retry budget: `stats` counts the whole main ledger in one statement, and gc runs its batches for up to its time limit, one batch per statement. Each setting can be overridden. Tested by `src/ledger/storage/postgres/pool.test.ts`.
 
 ### `destroy`
 
@@ -293,7 +293,7 @@ commitTransaction: (transaction: any) => Promise<void>;
 - **Semantics.** Section 3.2.
 - **Errors.** Rejects for a transaction that has already ended.
 - **Tested by** `transactions.ts: "a finished transaction rejects further use"`.
-- **Upstream.** [Keeta TS] index.js:70037-70042, 70337-70347.
+- **Upstream.** [Keeta TS] index.js:70037-70042, 71373-71383.
 - **Postgres.** Waits for every statement issued on the transaction, then runs `COMMIT`. If any statement of the attempt reported a conflict, it rolls back instead and reports that conflict, retryable. Postgres answers `COMMIT` of a transaction that a failed statement aborted with `ROLLBACK`, which the driver reports as an error. A failed `COMMIT` leaves the transaction finished and its connection closed. Tested by `src/ledger/storage/postgres/driver.test.ts: "a serialization failure at commit is reported as retryable"` and `src/ledger/storage/postgres/driver.test.ts: "a broken connection at commit is not retried"`.
 
 ### `abortTransaction`
@@ -305,7 +305,7 @@ abortTransaction: (transaction: any) => Promise<void>;
 - **Semantics.** Section 3.2.
 - **Errors.** Rejects for a transaction that has already ended.
 - **Tested by** `transactions.ts: "abort discards writes but never reuses a serial"` and `transactions.ts: "a finished transaction rejects further use"`.
-- **Upstream.** [Keeta TS] index.js:70043-70047, 70337-70347.
+- **Upstream.** [Keeta TS] index.js:70043-70047, 71373-71383.
 - **Postgres.** Waits for every statement issued on the transaction, then runs `ROLLBACK`. A connection that cannot roll back is closed, which rolls back too, so abort itself never fails.
 
 ### `evaluateError`
@@ -452,7 +452,7 @@ listACLsByEntity: (transaction: any, entity: GenericAccount, options?: ListACLsB
 adjust: (transaction: any, input: VoteStaple, changes: ComputedEffectOfBlocks) => Promise<VoteStaple[]>;
 ```
 
-- **Semantics.** Applies a confirmed staple, and every deferred staple that it releases, inside the caller's transaction. `Ledger.add` has already checked the write mode, network, permanence and quorum, and checks nothing else [Keeta TS] index.js:69361-69402. Implemented by the base as a template, run once for the input and once for each replayed waiter:
+- **Semantics.** Applies a confirmed staple, and every deferred staple that it releases, inside the caller's transaction. `Ledger.add` has already checked the write mode, network, permanence and quorum, and checks nothing else [Keeta TS] index.js:70397-70438. Implemented by the base as a template, run once for the input and once for each replayed waiter:
   1. Refuse a staple that lists a block before its own previous, or whose blocks share a previous (D14).
   2. Run `preAdjust`. It refuses the staple if any block has a main height, and otherwise assigns heights or defers. An empty result returns `[]` [Keeta TS] index.js:68714-68768.
   3. Refuse a staple that would overwrite confirmed history (D14).
@@ -461,7 +461,7 @@ adjust: (transaction: any, input: VoteStaple, changes: ComputedEffectOfBlocks) =
   6. Replay the staples waiting on the applied blocks, with deferral disabled, within the replay window, each in its own isolated unit (section 3.3, item 4; D13).
 
   The settlement statistics of every applied staple enter `statsPending` when `adjust` returns, once no unit can still undo the staple. Calls to `adjust` on one transaction run one at a time.
-- **Return value.** Each applied staple exactly once: the input first, then replayed staples in the order they applied. `[]` when the input was deferred, or was already deferred. `Ledger.add` folds every returned block into `ledgerChecksum` by XOR, so a staple returned twice would cancel itself out [Keeta TS] index.js:69404-69417.
+- **Return value.** Each applied staple exactly once: the input first, then replayed staples in the order they applied. `[]` when the input was deferred, or was already deferred. `Ledger.add` folds every returned block into `ledgerChecksum` by XOR, so a staple returned twice would cancel itself out [Keeta TS] index.js:70440-70453.
 - **Errors.** All non-retryable:
   - `LEDGER_PREVIOUS_NOT_SEEN` for an out-of-order staple
   - `LEDGER_BLOCK_ALREADY_EXISTS` when any block is already on the main ledger
@@ -794,7 +794,7 @@ gc: (transaction: any, timeLimitMS?: number) => Promise<boolean>;
 ```
 
 - **Semantics.** Upstream's loop, inherited unchanged. It calls `gcBatch` until a batch reports that no work remains, in which case it returns `false`, or until `timeLimitMS` (default 280000 ms) has elapsed, in which case it returns the last batch's answer [Keeta TS] index.js:68888-68898. The base implements `gcBatch` as D20 states. The whole loop runs in one transaction [Keeta TS] index.js:71553-71557. Correctness never depends on gc having run.
-- **Time limit.** A caller should pass a small `timeLimitMS`, a few seconds, and call `gc` again while it returns `true`. With the default, one call can hold one read-write transaction open for up to 280 s. On a driver with real concurrency that transaction conflicts with every vote and add that touches what it collects, and a serialization failure late in it rolls back all of its batches, which `Ledger.run` may not retry once its 5 s budget has passed [Keeta TS] index.js:70294-70389. A small limit keeps each transaction to a few batches, and the work done before a failure committed.
+- **Time limit.** A caller should pass a small `timeLimitMS`, a few seconds, and call `gc` again while it returns `true`. With the default, one call can hold one read-write transaction open for up to 280 s. On a driver with real concurrency that transaction conflicts with every vote and add that touches what it collects, and a serialization failure late in it rolls back all of its batches, which `Ledger.run` may not retry once its 5 s budget has passed [Keeta TS] index.js:71330-71425. A small limit keeps each transaction to a few batches, and the work done before a failure committed.
 - **Tested by** every case in `gc.ts`.
 - **Postgres.** Inherited loop, over the batch primitives of section 4.2.
 
@@ -1085,7 +1085,7 @@ Provided by the base, not implemented by drivers. Logs a network integrity alarm
 abstract bootstrapStage(): BootstrapStage;
 ```
 
-Not part of upstream's interface. A node far behind reads its peers' history in ranges side by side, but adds it in the order of the staples' votes: the ledger judges each staple by the voting weight it holds when the staple is added [Keeta TS] index.js:69397-69401, 70776-70795, so history added out of that order can leave the ledger in a state no stretch of the history ever had, which refuses staples the network applied. The stage keeps what the bootstrap read until the node adds it (`src/node/bootstrap-stage.ts`). It lives outside every ledger transaction, and the ledger never reads it.
+Not part of upstream's interface. A node far behind reads its peers' history in ranges side by side, but adds it in the order of the staples' votes: the ledger judges each staple by the voting weight it holds when the staple is added [Keeta TS] index.js:70433-70437, 70776-70795, so history added out of that order can leave the ledger in a state no stretch of the history ever had, which refuses staples the network applied. The stage keeps what the bootstrap read until the node adds it (`src/node/bootstrap-stage.ts`). It lives outside every ledger transaction, and the ledger never reads it.
 
 `BootstrapStage` (`src/ledger/storage/stage.ts`) keeps staples by key, the `blocksHash` as `BlockHash.toString` spells it, each with its bytes as received and the moments its earliest and latest votes were made (their `validityFrom`):
 
@@ -1356,7 +1356,7 @@ A confirmed staple that grants an ACL to a certificate this node does not hold i
 
 Section 3.6.
 
-**Reason.** A vote's identity is its issuer and serial, and `Ledger.run` reruns a failed attempt from the start with a new serial [Keeta TS] index.js:70294-70389, 71238.
+**Reason.** A vote's identity is its issuer and serial, and `Ledger.run` reruns a failed attempt from the start with a new serial [Keeta TS] index.js:71330-71425, 71238.
 
 **Tested by** the cases listed in section 3.6.
 
@@ -1453,7 +1453,7 @@ Tested by `src/ledger/storage/sql-clock.test.ts: "no SQL uses the database clock
 ### 6.3 Migrations
 
 - **Files.** Each migration is a plain SQL file, `schema/migrations/NNNN_<name>.sql`, numbered from `0001` without gaps; `<name>` is lowercase letters, digits and single underscores. A file is applied as its exact bytes, which must be valid UTF-8. Once a file has been applied anywhere it is never edited: a change is a new file.
-- **Citations in applied files.** `0010_bootstrap_stage.sql` cites upstream's weight check as [Keeta TS] index.js:69419-69423, 69761-69779, the lines of the patched copy in `node_modules`; in `reference/0.18.7/client/index.js`, which every other citation follows, the weight check is 69397-69401 and 69740-69759. The file keeps its lines, as its SHA-256 is recorded in databases that applied it.
+- **Citations in applied files.** A migration file keeps the lines it was written with, as its SHA-256 is recorded in databases that applied it, so the files `0001` to `0011`, written while 0.18.7 was pinned, cite the bundle of 0.18.7, not `reference/0.18.8/client/index.js`, which every other citation follows. `0010_bootstrap_stage.sql` cites upstream's weight check by the lines 69419-69423 and 69761-69779 of 0.18.7's patched copy in `node_modules`; in 0.18.8's patched copy it is at 70455-70459 and 70798-70817, and in the reference [Keeta TS] index.js:70433-70437, 70776-70795.
 - **Directory entries.** Every entry of the directory must be a migration: a regular file whose whole name matches `^(\d{4})_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$` with a number of at least 1. Anything else refuses the whole migration before any file applies: a subdirectory, a symbolic link, a hidden file, a file named otherwise (`0000_x.sql`, `1_x.sql`, `0001-x.sql`, `README`), a file that is not valid UTF-8, two files with one number, a gap in the numbers, or no file at all.
 - **Shipping.** The migration files are part of the package: `schema/migrations/` is shipped beside `dist/`, and the built runner reads it there, at `../../../../schema/migrations/` from its own module. It is the one copy every implementation applies. Tested by `src/index.test.ts: "migrates a fresh database from the migrations at the package root"`, which imports the built package.
 - **Record.** The table `schema_version (version integer PRIMARY KEY, sha256 bytea NOT NULL, applied_at timestamptz NOT NULL)` holds one row per applied file: its number; in `sha256`, the raw 32-byte SHA-256 digest of the file's exact bytes, not its hex spelling; and when it was applied, by the migrating process's clock.

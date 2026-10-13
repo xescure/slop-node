@@ -22,7 +22,7 @@ The hashes are of the compressed files as committed. Every staple is distinct, w
 
 All three files are public chain data. Every staple in them is a confirmed mainnet staple that any representative serves to anyone who asks, and nothing in them is private or was obtained other than through that public interface.
 
-The head file was read from the bootstrap endpoint of one representative, `https://rep1.main.network.api.keeta.com/api/node/bootstrap/votes`. It is the endpoint that Keeta's client calls as `GET /node/bootstrap/votes` to fetch the staples a representative's ledger has confirmed since a moment [Keeta TS] index.js:59139-59183. The network is mainnet, network `0x5382` [Keeta TS] index.js:62283-62288.
+The head file was read from the bootstrap endpoint of one representative, `https://rep1.main.network.api.keeta.com/api/node/bootstrap/votes`. It is the endpoint that Keeta's client calls as `GET /node/bootstrap/votes` to fetch the staples a representative's ledger has confirmed since a moment [Keeta TS] index.js:60129-60173. The network is mainnet, network `0x5382` [Keeta TS] index.js:62283-62288.
 
 The head file holds the first staples of the chain from the epoch, all within 2025-09-23. The files do not record when they were captured: the gzip header of each carries a zero modification time, so a capture is known only to be later than the latest staple it holds.
 
@@ -119,7 +119,7 @@ On the main network, staple `1BE261B781FE0DF70EAC7FA5F6076197416F0A5AB01D42FD5D4
 
 ### 6.6 Following is unaffected
 
-`Ledger.add` checks the voting weight of a staple's votes, computes its effects and applies them [Keeta TS] index.js:69361-69408. It does not check permission requirements: only a vote does [Keeta TS] index.js:71207-71215, 71025-71058. The fixes and the added requirement change only which requirements are recorded, so a 0.18.7 node follows mainnet as before: every staple of the head is added, with and without the shadow votes, and both replays reach the same state.
+`Ledger.add` checks the voting weight of a staple's votes, computes its effects and applies them [Keeta TS] index.js:70397-70444. It does not check permission requirements: only a vote does [Keeta TS] index.js:71207-71215, 71025-71058. The fixes and the added requirement change only which requirements are recorded, so a 0.18.7 node follows mainnet as before: every staple of the head is added, with and without the shadow votes, and both replays reach the same state.
 
 ## 7. Edge cases
 
@@ -137,7 +137,7 @@ After the head, the same replay adds the 90 staples of `mainnet/edge-cases.jsonl
 | `deferred` | 89 |
 | `refused` | 0 |
 
-No staple is refused. `Ledger.add` checks a staple's voting weight before it defers anything [Keeta TS] index.js:69397-69405, and every edge case passes that check. Each one decodes and verifies, including the sends to recipients that are not points on the curve and the blocks of the all-zero account.
+No staple is refused. `Ledger.add` checks a staple's voting weight before it defers anything [Keeta TS] index.js:70433-70441, and every edge case passes that check. Each one decodes and verifies, including the sends to recipients that are not points on the curve and the blocks of the all-zero account.
 
 Of the deferred staples, 13 wait only on blocks that are in neither file, from the history between the head and the edge cases. The other 76 wait only on blocks of other edge-case staples, which are themselves deferred.
 

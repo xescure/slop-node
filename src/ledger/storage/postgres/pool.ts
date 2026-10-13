@@ -20,7 +20,7 @@ export type PostgresPoolOptions = {
 
 /*
  * Ledger.run gives up retrying once 5 s have passed since the first attempt
- * [Keeta TS] index.js:70294-70389. A checkout queued longer than that has
+ * [Keeta TS] index.js:71330-71425. A checkout queued longer than that has
  * outlived the retries of the request waiting for it, so it fails instead of
  * hanging. Between the statements of one attempt the process only computes,
  * for milliseconds, so a session idle in a transaction for twice the budget

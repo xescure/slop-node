@@ -550,7 +550,7 @@ describe('shadow votes on the follower\'s history', function() {
 	 * The follower's list holds only staples its ledger accepted. One it
 	 * applied by a replay of the staples deferred behind another was weighed
 	 * as it arrived, under the weights of an earlier place, and a replay
-	 * weighs nothing [Keeta TS] index.js:69397-69411: weighed again at its
+	 * weighs nothing [Keeta TS] index.js:70433-70447: weighed again at its
 	 * place, it could be refused where the follower applied it.
 	 */
 	test('apply every staple as the follower\'s ledger accepted it, without weighing its votes again', async function() {

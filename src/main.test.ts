@@ -114,7 +114,7 @@ describe('slop-node run with peers', function() {
 		expect(initialized.publish).toBe(true);
 		/*
 		 * A node weighs a staple's votes before it would defer it
-		 * [Keeta TS] index.js:69396-69401, and the weight that votes for the
+		 * [Keeta TS] index.js:70432-70437, and the weight that votes for the
 		 * send is the weight genesis delegates. A node still adding genesis
 		 * refuses the send, which then reaches it only by its next bootstrap,
 		 * a minute later, so the send waits until genesis is added there.

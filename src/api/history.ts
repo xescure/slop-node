@@ -31,7 +31,7 @@ function historyEntry(staple: VoteStaple, representative: Parameters<VoteStaple[
  * staples, as many as the limit allows. nextKey names the page's last
  * staple, or on an empty page the staple it continued after, as a
  * representative answers; the client stops at an empty page
- * [Keeta TS] index.js:58969-58996.
+ * [Keeta TS] index.js:59964-59986.
  * [node-lite] adapted from getAccountHistory.
  */
 export async function historyPage(request: APIRequest, account: GenericAccount | null, startText: string | undefined): Promise<HistoryPage> {

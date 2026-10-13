@@ -169,9 +169,9 @@ function statusErrorOf(endpoint: string, answer: Answer): PageError {
 /**
  * A staple's bytes in base64: a representative writes each staple as JSON
  * with its bytes beside it [Keeta TS] index.js:82240-82244, which the
- * node reads rather than rebuild the staple from the JSON as the client does
- * [Keeta TS] index.js:59179-59182, 82078-82080, so that it holds exactly the
- * staple the peer sent; a bare base64 string is read alike.
+ * node reads, as the client does [Keeta TS] index.js:60169-60172, so that
+ * it holds exactly the staple the peer sent; a bare base64 string is read
+ * alike.
  */
 function stapleBytesOf(written: unknown): string | undefined {
 	if (typeof written === 'string') {
@@ -183,7 +183,7 @@ function stapleBytesOf(written: unknown): string | undefined {
 	return(undefined);
 }
 
-/** The staples of an answer, read as the client reads them [Keeta TS] index.js:59175-59182. */
+/** The staples of an answer, read as the client reads them [Keeta TS] index.js:60165-60172. */
 function staplesOf(endpoint: string, answer: Answer): VoteStaple[] {
 	if (answer.status !== SUCCESS_STATUS) {
 		throw(statusErrorOf(endpoint, answer));
@@ -212,7 +212,7 @@ export function staplesOfPage(endpoint: string, parsed: unknown): VoteStaple[] {
 /** Sends one request to a peer when the peer's pacing lets it. */
 export type Pace = <Result>(request: () => Promise<Result>) => Promise<Result>;
 
-/** The votes a representative answers it holds on a block, none when it holds none [Keeta TS] index.js:59900-59933. */
+/** The votes a representative answers it holds on a block, none when it holds none [Keeta TS] index.js:60891-60923. */
 function votesOf(endpoint: string, parsed: unknown): Vote[] {
 	if (!isRecord(parsed) || !('votes' in parsed)) {
 		throw(new PageError(endpoint, { kind: 'malformed', detail: 'it holds no votes' }));
@@ -237,7 +237,7 @@ function votesOf(endpoint: string, parsed: unknown): Vote[] {
 	}));
 }
 
-/** The block a representative answers it holds, nothing when it holds none [Keeta TS] index.js:58778-58796. */
+/** The block a representative answers it holds, nothing when it holds none [Keeta TS] index.js:59775-59793. */
 function blockOf(endpoint: string, parsed: unknown): Block | undefined {
 	if (!isRecord(parsed) || !('block' in parsed)) {
 		throw(new PageError(endpoint, { kind: 'malformed', detail: 'it holds no block' }));
@@ -294,7 +294,7 @@ export class PageFetcher {
 	 * The staple on the main ledger that holds the block, as the peer holds
 	 * it, or nothing when the peer holds no such staple: its votes on the
 	 * block, then each block they cover, as the client builds a staple
-	 * [Keeta TS] index.js:59799-59839, 59887-59933, 58778-58796, each request
+	 * [Keeta TS] index.js:59799-59839, 60878-60923, 59775-59793, each request
 	 * sent as the pacing lets it. A PageError
 	 * as for a page: a timeout once that many milliseconds have passed for a
 	 * request, or a stop once the signal is aborted.

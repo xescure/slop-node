@@ -96,7 +96,7 @@ function stackOf(args: readonly unknown[]): string | undefined {
 	return(stacks.join('\n'));
 }
 
-/** What the text format prints besides the message: its prefix [Keeta TS] index.js:71230-71233, the errors' stacks and the trace. */
+/** What the text format prints besides the message: its prefix [Keeta TS] index.js:72329-72343, the errors' stacks and the trace. */
 function attributesOf(entry: LogEntry): JSONLogAttributes {
 	const attributes: { [name: string]: string } = { from: entry.from };
 	const requestID = entry.options.currentRequestInfo?.id;
@@ -125,7 +125,7 @@ type JSONLogTargetConfig = {
 	readonly now: () => Date;
 };
 
-/** Writes each entry as one JSON object, filtered by level and source as upstream's console target filters them [Keeta TS] index.js:70638-70645. */
+/** Writes each entry as one JSON object, filtered by level and source as upstream's console target filters them [Keeta TS] index.js:71691-71716. */
 export class JSONLogTarget implements LogTarget {
 	readonly logLevel: LogTargetLevel;
 	readonly filter: RegExp | null;

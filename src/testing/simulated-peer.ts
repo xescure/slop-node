@@ -629,7 +629,7 @@ export class SimulatedPeer {
 	}
 }
 
-/** The refusal of a staple whose voters lack weight [Keeta TS] index.js:69397-69400. */
+/** The refusal of a staple whose voters lack weight [Keeta TS] index.js:70433-70436. */
 export const SIMULATED_WEIGHT_REFUSAL = 'LEDGER_INSUFFICIENT_VOTING_WEIGHT';
 
 /** The refusal of a staple that spends what its account does not hold. */

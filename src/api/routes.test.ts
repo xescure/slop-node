@@ -103,7 +103,7 @@ function blockHashes(body: unknown): readonly string[] {
 
 /**
  * Every page of a history, following nextKey from the first page until an
- * empty page, as the client pages [Keeta TS] index.js:58969-58996.
+ * empty page, as the client pages [Keeta TS] index.js:59964-59986.
  */
 async function allPages(node: RunningLocalNode, path: string, limit: number): Promise<readonly (readonly string[])[]> {
 	const pages: (readonly string[])[] = [];

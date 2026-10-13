@@ -953,10 +953,10 @@ export class BootstrapClient {
 	 * counts one refused because another peer's pass or a P2P message added
 	 * it meanwhile as held. The ledger also refuses a staple whose
 	 * dependencies it lacks, as votes without weight before the staples that
-	 * give the voters weight [Keeta TS] index.js:69397-69400, 70776-70788,
+	 * give the voters weight [Keeta TS] index.js:70433-70436, 70776-70788,
 	 * which the queue keeps until they arrive. One that fills a gap may
 	 * release staples deferred until then, and the callback hears of each
-	 * staple added [Keeta TS] index.js:69361-69420.
+	 * staple added [Keeta TS] index.js:70397-70456.
 	 * Once the client is stopped, nothing more is offered, the rest of a page
 	 * already fetched included, and a refusal is not queued: the node
 	 * stopping it may close its storage next.

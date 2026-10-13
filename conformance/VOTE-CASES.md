@@ -138,7 +138,7 @@ Steps are numbered from 0 in the order they appear, and a step may reference onl
 
 | `type` | Fields | Upstream call |
 |---|---|---|
-| `add` | `staple`, a staple reference; `from` (optional string) | `Ledger.add(staple, from)` [Keeta TS] index.js:69361-69420 |
+| `add` | `staple`, a staple reference; `from` (optional string) | `Ledger.add(staple, from)` [Keeta TS] index.js:70397-70456 |
 | `vote` | `blocks`, a list of block bytes; `otherVotes` (optional), a list of vote references; `quote` (optional), a vote reference | `Ledger.vote(blocks, otherVotes, quote)` [Keeta TS] index.js:70048-70391 |
 | `quote` | `blocks`, a list of block bytes | `Ledger.quote(blocks)` [Keeta TS] index.js:70392-70396 |
 | `gc` | none | `Ledger.gc()` |
@@ -431,7 +431,7 @@ When a request fails several checks, the first check decides the outcome. The or
 
 **`Ledger.quote`** runs step 10, then the issuing of a temporary vote: mode, key, ledger outcome, block window, fee [Keeta TS] index.js:70392-70396, 71207-71266.
 
-**`Ledger.add`** [Keeta TS] index.js:69361-69420: the mode (`read-only` refuses every staple, `bootstrap-only` every one not added from `"bootstrap"`); each block's network and subnet, as plain errors; each vote's `validityFrom`, which must not be before 1970 (`LEDGER_INVALID_DATE`), and its permanence (plain `Can only insert permanent votes`); the quorum; then the storage.
+**`Ledger.add`** [Keeta TS] index.js:70397-70456: the mode (`read-only` refuses every staple, `bootstrap-only` every one not added from `"bootstrap"`); each block's network and subnet, as plain errors; each vote's `validityFrom`, which must not be before 1970 (`LEDGER_INVALID_DATE`), and its permanence (plain `Can only insert permanent votes`); the quorum; then the storage.
 
 ### 7.3 The order cases
 

@@ -226,7 +226,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * one of its blocks, all inside the caller's transaction. Returns each
 	 * applied staple once, or nothing when the staple had to be deferred, because
 	 * Ledger.add folds every returned block into the ledger checksum.
-	 * [Keeta TS] index.js:69404-69417
+	 * [Keeta TS] index.js:70440-70453
 	 */
 	async adjust(transaction: Transaction, input: VoteStaple, changes: ComputedEffectOfBlocks): Promise<VoteStaple[]> {
 		const windowMilliseconds = this.initialized.config.heapProcessWindowMs ?? DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS;
@@ -248,7 +248,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * the ones that ask for it. Anything else becomes a non-retryable ledger
 	 * error: Ledger.run reruns the whole transaction on a retry, which is safe
 	 * only for failures a driver knows to be transient.
-	 * [Keeta TS] index.js:70325-70375
+	 * [Keeta TS] index.js:71361-71411
 	 */
 	evaluateError(error: unknown): Promise<unknown> {
 		if (isKeetaNetError(error)) {

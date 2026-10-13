@@ -144,7 +144,7 @@ async function chainStart(ledger: LedgerReader, account: GenericAccount, start: 
  * holding blocks until their count reaches the limit. nextKey is the block
  * the next page starts from, which may be end itself, and null once the
  * chain or the range is exhausted, as a representative answers and the
- * client pages [Keeta TS] index.js:58868-58901.
+ * client pages [Keeta TS] index.js:59865-59896.
  * [node-lite] adapted from getAccountChain.
  */
 function getAccountChain(request: APIRequest, text: string): Promise<ChainPage> {
@@ -304,7 +304,7 @@ async function getCertificateByHash(request: APIRequest, text: string, hashText:
 /**
  * The block the side ledger holds after the account's main head, or after
  * the start of its chain when it has no blocks yet: the block awaiting votes
- * [Keeta TS] index.js:59219-59226.
+ * [Keeta TS] index.js:60209-60218.
  * [node-lite] adapted from getAccountPendingBlock.
  */
 function getAccountPendingBlock(request: APIRequest, text: string): Promise<DeclaredResult<DeclaredAccountGroup['pending']['GET']>> {
