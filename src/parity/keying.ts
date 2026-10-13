@@ -1,5 +1,6 @@
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { pagePath, staplesOfPage } from '../node/bootstrap-page.js';
+import { stapleKey } from '../node/bootstrap-window.js';
 import { getOK } from './api-source.js';
 import type { APISource } from './api-source.js';
 import { messageOf } from './values.js';
@@ -13,15 +14,27 @@ export const KEYING_SAMPLE_AGE_MILLISECONDS: number = 24 * 60 * 60_000;
 /** Staples a page from a vote's moment is asked for: more than the main network makes in one millisecond. */
 export const KEYING_CHECK_LIMIT = 10;
 
+/**
+ * How far before its latest vote a staple missing from the pages about that
+ * moment is looked for, to show it keyed early: ten times the tolerance a
+ * pass allows (VOTE_KEY_TOLERANCE_MILLISECONDS), as a store keeping votes to
+ * the second would key them.
+ */
+export const KEYING_EARLY_SPAN_MILLISECONDS = 1000;
+
 /** How a representative keyed the latest vote of a staple, as two pages from about its moment show. */
 export type StapleKeyingOutcome =
 	/** Listed from the moment the vote was made, and not from a millisecond later. */
 	| 'exact'
-	/** Listed from neither, though the page from the moment holds fewer than it was asked for: keyed before it was made. */
+	/** Listed from neither, though the page from the moment holds fewer than it was asked for and no other staple voted on then, and listed from KEYING_EARLY_SPAN_MILLISECONDS before: keyed before it was made. */
 	| 'early'
 	/** Listed from a millisecond after the moment it was made. */
 	| 'late'
-	/** Listed from neither, and the page from the moment is full, so the staple may come after it. */
+	/**
+	 * Listed from neither, and the page from the moment is full, or lists
+	 * another staple voted on then, among which a read the page ended in may
+	 * have left it, or the staple is not listed from the span before either.
+	 */
 	| 'unsettled';
 
 export type StapleKeying = {
@@ -33,9 +46,10 @@ export type StapleKeying = {
 /**
  * What the staples checked show of a representative: early when one was
  * keyed early, which a pass cannot detect and loses staples to
- * (VOTE_KEY_TOLERANCE_MILLISECONDS), then late when one was keyed late,
- * exactly when every staple that settled was keyed exactly, and not checked
- * when none settled.
+ * (VOTE_KEY_TOLERANCE_MILLISECONDS), then late when one was keyed late; not
+ * checked when one went unanswered, so that a representative failing the
+ * check's requests fails it; exactly when most were keyed exactly; and not
+ * checked otherwise.
  */
 export type KeyingVerdict = 'keys exactly' | 'keys early by more than 1 ms' | 'keys late' | 'not checked';
 
@@ -64,10 +78,11 @@ function latestVoteOf(staple: VoteStaple): number {
 	})));
 }
 
+/** By its bytes: a staple on the same blocks with other votes is another staple, keyed by its own votes. */
 function lists(page: readonly VoteStaple[], staple: VoteStaple): boolean {
-	const hash = staple.blocksHash.toString();
+	const key = stapleKey(staple);
 	return(page.some(function(listed): boolean {
-		return(listed.blocksHash.toString() === hash);
+		return(stapleKey(listed) === key);
 	}));
 }
 
@@ -75,12 +90,22 @@ function lists(page: readonly VoteStaple[], staple: VoteStaple): boolean {
 function eachOnce(page: readonly VoteStaple[]): VoteStaple[] {
 	const seen = new Set<string>();
 	return(page.filter(function(staple): boolean {
-		const hash = staple.blocksHash.toString();
-		if (seen.has(hash)) {
+		const key = stapleKey(staple);
+		if (seen.has(key)) {
 			return(false);
 		}
-		seen.add(hash);
+		seen.add(key);
 		return(true);
+	}));
+}
+
+/** Whether a staple of the page other than the one given has a vote made at the moment. */
+function votedOnThenBesides(page: readonly VoteStaple[], staple: VoteStaple, moment: number): boolean {
+	const key = stapleKey(staple);
+	return(page.some(function(listed): boolean {
+		return(stapleKey(listed) !== key && listed.votes.some(function(vote): boolean {
+			return(vote.validityFrom.getTime() === moment);
+		}));
 	}));
 }
 
@@ -93,10 +118,13 @@ async function outcomeOf(source: APISource, staple: VoteStaple, latest: number):
 	if (lists(fromLatest, staple)) {
 		return('exact');
 	}
-	if (fromLatest.length >= KEYING_CHECK_LIMIT) {
+	if (fromLatest.length >= KEYING_CHECK_LIMIT || votedOnThenBesides(fromLatest, staple, latest)) {
 		return('unsettled');
 	}
-	return('early');
+	if (lists(await pageFrom(source, latest - KEYING_EARLY_SPAN_MILLISECONDS, KEYING_CHECK_LIMIT), staple)) {
+		return('early');
+	}
+	return('unsettled');
 }
 
 async function stapleKeyingOf(source: APISource, staple: VoteStaple): Promise<StapleKeying> {
@@ -119,7 +147,13 @@ function verdictOf(staples: readonly StapleKeying[]): KeyingVerdict {
 	if (outcomes.has('late')) {
 		return('keys late');
 	}
-	if (outcomes.has('exact')) {
+	if (outcomes.has('unanswered')) {
+		return('not checked');
+	}
+	const exact = staples.filter(function(staple): boolean {
+		return(staple.outcome === 'exact');
+	}).length;
+	if (2 * exact > staples.length) {
 		return('keys exactly');
 	}
 	return('not checked');

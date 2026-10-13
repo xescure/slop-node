@@ -7,7 +7,7 @@ import { confirmedStaple, sendBlock } from '../testing/blocks.js';
 import { startFakeAPI } from '../testing/fake-api.js';
 import type { FakeAPI } from '../testing/fake-api.js';
 import { httpSource } from './api-source.js';
-import { checkKeying, KEYING_CHECK_LIMIT, KEYING_SAMPLE_AGE_MILLISECONDS, keyingExitCodeOf } from './keying.js';
+import { checkKeying, KEYING_CHECK_LIMIT, KEYING_EARLY_SPAN_MILLISECONDS, KEYING_SAMPLE_AGE_MILLISECONDS, keyingExitCodeOf } from './keying.js';
 
 const lib = KeetaNet.lib;
 
@@ -72,13 +72,18 @@ describe('how each representative keys the votes of its staples', function() {
 		serve(exact, sampled, function(staple, index) {
 			return({ at: sample.slice(index), after: sample.slice(index + 1) });
 		});
-		// The second staple's latest vote is keyed before it was made, so a page from that moment leaves it out.
+		// The second staple's latest vote is keyed before it was made, so a page from that moment leaves it out, and one from a little before lists it.
 		serve(early, sampled, function(staple, index) {
 			if (index === 1) {
 				return({ at: sample.slice(2), after: sample.slice(2) });
 			}
 			return({ at: sample.slice(index), after: sample.slice(index + 1) });
 		});
+		const [, second] = sampled;
+		if (second === undefined) {
+			throw(new Error('no staple'));
+		}
+		early.serve(from(latestVoteOf(second) - KEYING_EARLY_SPAN_MILLISECONDS, KEYING_CHECK_LIMIT), page(sample.slice(1)));
 		serve(late, sampled, function(staple, index) {
 			return({ at: sample.slice(index), after: sample.slice(index) });
 		});
@@ -155,5 +160,76 @@ describe('how each representative keys the votes of its staples', function() {
 		const [checked] = await checkKeying({ representatives: [httpSource(api.endpoint)], staples: 1, now: NOW });
 
 		expect(checked).toEqual({ representative: api.endpoint, verdict: 'not checked', staples: [{ staple: first.blocksHash.toString(), latestVote: new Date(latestVoteOf(first)).toISOString(), outcome: 'unsettled' }], unanswered: null });
+	});
+
+	test('takes a staple missing from the page from its latest vote for keyed early only once a page from a little before lists it, and the page from then holds no other staple voted on then', async function() {
+		const sample = await staples(3);
+		const [first, second, third] = sample;
+		if (first === undefined || second === undefined || third === undefined) {
+			throw(new Error('no staple'));
+		}
+		// Another staple on the first's blocks, its second vote made when the first's latest was, which the page from then lists.
+		const sibling = await confirmedStaple(first.blocks, voters, { voteDelays: [SECOND_VOTE_DELAY, SECOND_VOTE_DELAY] });
+		const crowded = await startFakeAPI();
+		crowded.serve(from(NOW - KEYING_SAMPLE_AGE_MILLISECONDS, 1), page([first]));
+		crowded.serve(from(latestVoteOf(first) + 1, KEYING_CHECK_LIMIT), page([second]));
+		crowded.serve(from(latestVoteOf(first), KEYING_CHECK_LIMIT), page([sibling, second]));
+		crowded.serve(from(latestVoteOf(first) - KEYING_EARLY_SPAN_MILLISECONDS, KEYING_CHECK_LIMIT), page([first, sibling, second]));
+		const nowhere = await startFakeAPI();
+		nowhere.serve(from(NOW - KEYING_SAMPLE_AGE_MILLISECONDS, 1), page([first]));
+		nowhere.serve(from(latestVoteOf(first) + 1, KEYING_CHECK_LIMIT), page([second]));
+		nowhere.serve(from(latestVoteOf(first), KEYING_CHECK_LIMIT), page([second]));
+		nowhere.serve(from(latestVoteOf(first) - KEYING_EARLY_SPAN_MILLISECONDS, KEYING_CHECK_LIMIT), page([second]));
+
+		const checked = await checkKeying({ representatives: [httpSource(crowded.endpoint), httpSource(nowhere.endpoint)], staples: 1, now: NOW });
+
+		expect(checked.map(function(representative) {
+			return([representative.verdict, representative.staples.map(function(staple) {
+				return(staple.outcome);
+			})]);
+		})).toEqual([['not checked', ['unsettled']], ['not checked', ['unsettled']]]);
+		// The page from a millisecond on lists the sibling, which is another staple, keyed by its own votes, and not the first keyed late.
+		const sameBlocks = await startFakeAPI();
+		sameBlocks.serve(from(NOW - KEYING_SAMPLE_AGE_MILLISECONDS, 1), page([first]));
+		sameBlocks.serve(from(latestVoteOf(first) + 1, KEYING_CHECK_LIMIT), page([sibling, second]));
+		sameBlocks.serve(from(latestVoteOf(first), KEYING_CHECK_LIMIT), page([first, sibling, second]));
+		const [exact] = await checkKeying({ representatives: [httpSource(sameBlocks.endpoint)], staples: 1, now: NOW });
+		expect(exact?.verdict).toBe('keys exactly');
+	});
+
+	test('fails a representative that leaves a sampled staple unanswered, and one most of whose staples do not settle', async function() {
+		const sample = await staples(KEYING_CHECK_LIMIT + 2);
+		const [first, second, third] = sample;
+		if (first === undefined || second === undefined || third === undefined) {
+			throw(new Error('no staple'));
+		}
+		const exactly = function(api: FakeAPI, staple: VoteStaple, index: number): void {
+			api.serve(from(latestVoteOf(staple) + 1, KEYING_CHECK_LIMIT), page(sample.slice(index + 1, index + 2)));
+			api.serve(from(latestVoteOf(staple), KEYING_CHECK_LIMIT), page(sample.slice(index, index + 2)));
+		};
+		// The second staple's pages go unanswered; the others are keyed exactly.
+		const failing = await startFakeAPI();
+		failing.serve(from(NOW - KEYING_SAMPLE_AGE_MILLISECONDS, 3), page([first, second, third]));
+		exactly(failing, first, 0);
+		exactly(failing, third, 2);
+		// Of three staples one settles, keyed exactly; the pages from the others' latest votes are full without them.
+		const unsettled = await startFakeAPI();
+		unsettled.serve(from(NOW - KEYING_SAMPLE_AGE_MILLISECONDS, 3), page([first, second, third]));
+		exactly(unsettled, first, 0);
+		for (const staple of [second, third]) {
+			unsettled.serve(from(latestVoteOf(staple) + 1, KEYING_CHECK_LIMIT), page([]));
+			unsettled.serve(from(latestVoteOf(staple), KEYING_CHECK_LIMIT), page(sample.slice(2, 2 + KEYING_CHECK_LIMIT).filter(function(listed): boolean {
+				return(listed !== staple);
+			}).concat(sample.slice(-1))));
+		}
+
+		const checked = await checkKeying({ representatives: [httpSource(failing.endpoint), httpSource(unsettled.endpoint)], staples: 3, now: NOW });
+
+		expect(checked.map(function(representative) {
+			return([representative.verdict, representative.staples.map(function(staple) {
+				return(staple.outcome);
+			})]);
+		})).toEqual([['not checked', ['exact', 'unanswered', 'exact']], ['not checked', ['exact', 'unsettled', 'unsettled']]]);
+		expect(keyingExitCodeOf(checked)).toBe(1);
 	});
 });
