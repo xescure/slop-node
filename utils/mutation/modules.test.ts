@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, test } from 'vitest';
+import { parseTriage } from './triage.js';
 
 const CONFIG = 'src/node/config.ts';
 
@@ -105,6 +106,37 @@ describe('the parts of config.ts the peer-to-peer module mutates', function() {
 		}
 
 		expect(timesMutated.slice(1)).toEqual(new Array<number>(lineCount).fill(1));
+	});
+
+	test('hold each entry of config.ts in mutation/equivalent.md wholly, in the module whose section it is under', async function() {
+		const modules = ['p2p', 'config'] as const;
+		const rangesOf = new Map<string, readonly LineRange[]>();
+		for (const module of modules) {
+			rangesOf.set(module, (await mutateOf(module)).filter(function(pattern): boolean {
+				return(pattern.startsWith(CONFIG));
+			}).map(lineRangeOf));
+		}
+		let section = '';
+		let entries = 0;
+		for (const line of readFileSync('mutation/equivalent.md', 'utf8').split('\n')) {
+			if (line.startsWith('## ')) {
+				section = line.slice(3);
+				continue;
+			}
+			const [entry] = parseTriage(line);
+			if (entry?.file !== CONFIG) {
+				continue;
+			}
+			entries++;
+			const holding = modules.filter(function(module): boolean {
+				return((rangesOf.get(module) ?? []).some(function(range): boolean {
+					return(range.first <= entry.start.line && entry.end.line <= range.last);
+				}));
+			});
+			// An entry no module's lines hold wholly is judged by no run, and would stay however stale it became.
+			expect(holding, entry.place).toEqual([section]);
+		}
+		expect(entries).toBeGreaterThan(0);
 	});
 
 	test('stop the run when a part is no longer there', async function() {

@@ -143,9 +143,12 @@ describe('mutation triage', function() {
 	test('judges an entry stale only inside the lines a run mutated of a file it mutated by ranges', function() {
 		const survivor: Mutant = { line: 15, column: 2, mutatorName: 'ConditionalExpression', status: 'Survived' };
 		const { mutants, ranges } = read({
-			'src/a.ts': [killed(10), survivor, killed(45), { line: 46, column: 1, mutatorName: 'StringLiteral', status: 'Killed' }]
+			'src/a.ts': [killed(10), { line: 12, column: 1, mutatorName: 'StringLiteral', status: 'Killed' }, survivor, killed(45), { line: 46, column: 1, mutatorName: 'StringLiteral', status: 'Killed' }]
 		}, ['src/a.ts:10-20', 'src/a.ts:40-50']);
-		const killedSince = entryFor('src/a.ts', { line: 46, column: 1, mutatorName: 'StringLiteral' }, 'equivalent: killed since');
+		// One in each range, so that every range of the file is judged, not only the last.
+		const killedSince = [12, 46].map(function(line): string {
+			return(entryFor('src/a.ts', { line, column: 1, mutatorName: 'StringLiteral' }, 'equivalent: killed since'));
+		}).join('\n');
 		const entries = parseTriage([
 			entryFor('src/a.ts', survivor, 'equivalent: the guard repeats the loop condition'),
 			entryFor('src/a.ts', { line: 30, column: 1, mutatorName: 'StringLiteral' }, 'equivalent: another module mutates these lines'),
@@ -161,7 +164,9 @@ describe('mutation triage', function() {
 		const inside = assess(mutants, [...entries, ...parseTriage(killedSince)], ranges);
 		expect(inside.stale.map(function(entry): string {
 			return(entry.place);
-		})).toEqual([placeOf({ file: 'src/a.ts', start: { line: 46, column: 1 }, end: { line: 46, column: 2 }, mutatorName: 'StringLiteral', replacement: 'x' })]);
+		})).toEqual([12, 46].map(function(line): string {
+			return(placeOf({ file: 'src/a.ts', start: { line, column: 1 }, end: { line, column: 2 }, mutatorName: 'StringLiteral', replacement: 'x' }));
+		}));
 		expect(passes(inside)).toBe(false);
 	});
 
@@ -184,7 +189,7 @@ describe('mutation triage', function() {
 		expect(passes(assessment)).toBe(false);
 	});
 
-	test('refuses a report that does not say what its run mutated, or names a range by columns', function() {
+	test('refuses a report that does not say what its run mutated, names a range by columns, or names a file both with ranges and whole', function() {
 		expect(function() {
 			return(mutatedRangesOf({ files: {} }));
 		}).toThrow(/the report has no config/);
@@ -197,6 +202,9 @@ describe('mutation triage', function() {
 		expect(function() {
 			return(mutatedRangesOf({ files: {}, config: { mutate: ['src/a.ts', 'src/b.ts:1:4-5:2'] } }));
 		}).toThrow(/config.mutate\[1\] names columns, of which only lines are read/);
+		expect(function() {
+			return(mutatedRangesOf({ files: {}, config: { mutate: ['src/a.ts:1-5', 'src/b.ts', 'src/a.ts'] } }));
+		}).toThrow('the report\'s config.mutate names src/a.ts both with ranges and whole, which Stryker mutates whole');
 	});
 
 	test('leaves out of the score a static survivor of a run that completed no test, and needs no entry for it', function() {

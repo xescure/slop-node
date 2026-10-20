@@ -220,15 +220,19 @@ export type LineRange = {
 /**
  * The lines a run mutated of each file its mutate list names with line
  * ranges, as "<file>:<first>-<last>". A file the list names by a pattern
- * alone, such as a glob, the run mutated whole, and it has no ranges here;
- * no module names a file both ways, which Stryker would mutate whole.
+ * alone, such as a glob, the run mutated whole, and it has no ranges here.
  */
 export type MutatedRanges = ReadonlyMap<string, readonly LineRange[]>;
 
 // Stryker 10.0.0's own form of a pattern with a range, so that no pattern it reads as a range is taken for a file name.
 const MUTATE_RANGE = /^(.*?):((\d+)(?::(\d+))?-(\d+)(?::(\d+))?)$/u;
 
-/** The line ranges of the mutate list the report's run was configured with. */
+/**
+ * The line ranges of the mutate list the report's run was configured with. A
+ * file named both with ranges and plainly Stryker mutates whole, which the
+ * ranges would hide, so such a list is refused; a glob that also matches a
+ * file named with ranges is not looked for.
+ */
 export function mutatedRangesOf(report: unknown): MutatedRanges {
 	if (!isObject(report)) {
 		throw(new Error('the report is not an object'));
@@ -238,12 +242,14 @@ export function mutatedRangesOf(report: unknown): MutatedRanges {
 		throw(new Error('the report\'s config.mutate is not a list'));
 	}
 	const ranges = new Map<string, LineRange[]>();
+	const plain = new Set<string>();
 	for (const [index, pattern] of patterns.entries()) {
 		if (typeof pattern !== 'string') {
 			throw(new Error(`the report's config.mutate[${String(index)}] is not a string`));
 		}
 		const [, file, , first, firstColumn, last, lastColumn] = MUTATE_RANGE.exec(pattern) ?? [];
 		if (file === undefined || first === undefined || last === undefined) {
+			plain.add(pattern);
 			continue;
 		}
 		// A column would need Stryker's zero-based columns set against the report's one-based ones, and no module mutates by column.
@@ -251,6 +257,11 @@ export function mutatedRangesOf(report: unknown): MutatedRanges {
 			throw(new Error(`the report's config.mutate[${String(index)}] names columns, of which only lines are read: ${pattern}`));
 		}
 		ranges.set(file, [...ranges.get(file) ?? [], { first: Number(first), last: Number(last) }]);
+	}
+	for (const file of ranges.keys()) {
+		if (plain.has(file)) {
+			throw(new Error(`the report's config.mutate names ${file} both with ranges and whole, which Stryker mutates whole`));
+		}
 	}
 	return(ranges);
 }
