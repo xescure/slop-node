@@ -5,6 +5,7 @@ import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/i
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { Vote, VoteBlockHash, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerInternals } from '../../../upstream/internals.js';
+import { assertNever } from '../../../util/assert-never.js';
 import { createLedgerError } from '../errors.js';
 import { confirmedStaple, feeBlock, manageCertificateBlock, modifyPermissionsBlock, sendBlock } from '../../../testing/blocks.js';
 import { advanceClock } from '../../../testing/network.js';
@@ -34,8 +35,8 @@ import {
 	useFixtures,
 	writeStorage
 } from './support.js';
-import type { NetworkFixture } from './support.js';
-import type { DriverUnderTest } from './types.js';
+import type { FixtureFactory, NetworkFixture } from './support.js';
+import type { DriverUnderTest, StoreSharing } from './types.js';
 
 const lib = KeetaNet.lib;
 
@@ -64,10 +65,12 @@ type SideRows = {
 	readonly block: string | null;
 };
 
+function compareByHash(left: VoteStaple, right: VoteStaple): number {
+	return(Number(left.blocksHash.toString() > right.blocksHash.toString()) - Number(left.blocksHash.toString() < right.blocksHash.toString()));
+}
+
 function sortedByHash(staples: readonly VoteStaple[]): VoteStaple[] {
-	return([...staples].sort(function(left, right): number {
-		return(Number(left.blocksHash.toString() > right.blocksHash.toString()) - Number(left.blocksHash.toString() < right.blocksHash.toString()));
-	}));
+	return([...staples].sort(compareByHash));
 }
 
 function sendFrom(network: TestNetwork, user: number, previous: BlockHash, amount: bigint, idempotent?: string): Promise<Block> {
@@ -78,6 +81,76 @@ function sendFrom(network: TestNetwork, user: number, previous: BlockHash, amoun
 
 function sendFromGenesis(network: TestNetwork, user: number, amount: bigint, idempotent?: string): Promise<Block> {
 	return(sendFrom(network, user, headOf(network.genesis, requireAt(network.users, user)), amount, idempotent));
+}
+
+/** A user's send from genesis, and the staple of a send after it, which waits on it. */
+type Waiting = {
+	readonly first: Block;
+	readonly staple: VoteStaple;
+};
+
+/*
+ * A waiting staple for each of the first users, deferred as it arrives
+ * before the send it follows, in the order gc lists them: by their hashes,
+ * and deferred in that order.
+ */
+async function deferredSeconds(network: TestNetwork, ledger: Ledger, users: number): Promise<Waiting[]> {
+	const waiting = await Promise.all(Array.from({ length: users }, async function(_unused, user): Promise<Waiting> {
+		const first = await sendFromGenesis(network, user, 5n);
+		return({ first, staple: await confirmedStaple([await sendFrom(network, user, first.hash, 7n)], network.representatives) });
+	}));
+	waiting.sort(function(left, right): number {
+		return(compareByHash(left.staple, right.staple));
+	});
+	for (const { staple } of waiting) {
+		expect(await ledger.add(staple)).toEqual([]);
+	}
+	return(waiting);
+}
+
+/*
+ * Adds the sends the staples wait on, with each replay of them held back, so
+ * that they stay deferred for gc to retry whatever the replay window.
+ */
+async function releaseHeldBack(network: TestNetwork, storage: LedgerStorageDriverBase, ledger: Ledger, waiting: readonly Waiting[]): Promise<void> {
+	const restore = afterPersisting(storage, waiting.map(function({ staple }): VoteStaple {
+		return(staple);
+	}), function(blocksHash): void {
+		throw(new Error(`replay of ${blocksHash} held back`));
+	});
+	try {
+		for (const { first } of waiting) {
+			await ledger.add(await confirmedStaple([first], network.representatives));
+		}
+	} finally {
+		restore();
+	}
+}
+
+async function appliedOf(ledger: Ledger, waiting: readonly Waiting[]): Promise<number> {
+	let applied = 0;
+	for (const { staple } of waiting) {
+		if (await ledger.getBlock(requireAt(staple.blocks, 0).hash, 'main') !== null) {
+			applied++;
+		}
+	}
+	return(applied);
+}
+
+function gcBatchOf(storage: LedgerStorageDriverBase, limit: number): Promise<boolean> {
+	return(writeStorage(storage, function(transaction) {
+		return(storage._Testing(TESTING_KEY).gcBatch(transaction, limit));
+	}));
+}
+
+/** Records each retry of the staples, which then fails. */
+function failingRetries(storage: LedgerStorageDriverBase, staples: readonly VoteStaple[]): { readonly retried: string[]; readonly restore: () => void } {
+	const retried: string[] = [];
+	const restore = afterPersisting(storage, staples, function(blocksHash): void {
+		retried.push(blocksHash);
+		throw(new Error(`injected failure after persisting ${blocksHash}`));
+	});
+	return({ retried, restore });
 }
 
 /*
@@ -638,6 +711,235 @@ export function defineGcCases(driver: DriverUnderTest): void {
 		 * any time a gc could wait out, so only the order gc lists released
 		 * staples in decides whether the applicable one is ever reached.
 		 */
+		test('a gc of no time runs one batch, and reports that more remain', async function() {
+			// A zero window ends a batch after one retry, and the frozen clock spends no time.
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0 });
+			await ledger.add(network.genesis);
+			const waiting = await deferredSeconds(network, ledger, 2);
+			await releaseHeldBack(network, storage, ledger, waiting);
+
+			expect(await ledger.gc(0)).toBe(true);
+
+			expect(await appliedOf(ledger, waiting)).toBe(1);
+		});
+
+		test('a gc batch with time left retries every released staple it lists, up to its limit', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			await ledger.add(network.genesis);
+			const waiting = await deferredSeconds(network, ledger, 3);
+			await releaseHeldBack(network, storage, ledger, waiting);
+
+			expect(await gcBatchOf(storage, 2)).toBe(true);
+			expect(await appliedOf(ledger, waiting)).toBe(2);
+			expect(await gcBatchOf(storage, 2)).toBe(false);
+			expect(await appliedOf(ledger, waiting)).toBe(3);
+		});
+
+		test('a gc that ends at a failure the transaction is to run again for collects no side vote in it', async function() {
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0 });
+			await ledger.add(network.genesis);
+			const votedAt = new Date();
+			const lone = await sendFromGenesis(network, 1, 3n);
+			const loneVote = await ledger.vote([lone]);
+			const [waiting] = await deferredSeconds(network, ledger, 1);
+			if (waiting === undefined) {
+				throw(new Error('a waiting staple expected'));
+			}
+			await releaseHeldBack(network, storage, ledger, [waiting]);
+			const restore = afterPersisting(storage, [waiting.staple], function(blocksHash): void {
+				throw(createLedgerError('LEDGER_TRANSACTION_ABORTED', `injected conflict after persisting ${blocksHash}`, { retry: true }));
+			});
+			advancePastExpiry(loneVote);
+			const loneRows = function(): Promise<SideRows> {
+				return(readStorageAt(storage, votedAt, function(transaction) {
+					return(sideRowsOf(transaction, storage, lone));
+				}));
+			};
+
+			expect(await ledger.gc()).toBe(true);
+			expect(await loneRows()).toEqual({ votes: [loneVote.$uid], block: hashOf(lone) });
+			restore();
+			expect(await ledger.gc()).toBe(false);
+			expect(await loneRows()).toEqual({ votes: null, block: null });
+		});
+
+		test('a gc retries a failed staple once, though a staple it applies after makes the failure due again, and a later gc retries it', async function() {
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0 });
+			await ledger.add(network.genesis);
+			const waiting = await deferredSeconds(network, ledger, 2);
+			const [failing, applying] = waiting;
+			if (failing === undefined || applying === undefined) {
+				throw(new Error('two waiting staples expected'));
+			}
+			await releaseHeldBack(network, storage, ledger, waiting);
+			const { retried, restore } = failingRetries(storage, [failing.staple]);
+
+			// One staple a batch: the failing one, listed first, then the other.
+			expect(await writeStorage(storage, async function(transaction) {
+				const hooks = storage._Testing(TESTING_KEY);
+				return([await hooks.gcBatch(transaction, 1), await hooks.gcBatch(transaction, 1), await hooks.gcBatch(transaction, 1)]);
+			})).toEqual([true, false, false]);
+			expect(retried).toHaveLength(1);
+			expect(await appliedOf(ledger, [failing, applying])).toBe(1);
+			// Passed over, the failure stays on record, so the staple is not taken for one that never failed.
+			expect(storage._Testing(TESTING_KEY).retryRecords()).toEqual({ failed: [failing.staple.blocksHash.toString()], askedToRunAgain: [] });
+
+			restore();
+			expect(await ledger.gc()).toBe(false);
+			expect(await appliedOf(ledger, [failing])).toBe(1);
+			expect(storage._Testing(TESTING_KEY).retryRecords()).toEqual({ failed: [], askedToRunAgain: [] });
+		});
+
+		test('a batch the staples that never failed fill retries no failed one, and a failure not yet due takes no place from one that is', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			await ledger.add(network.genesis);
+			const [notDue, due] = await deferredSeconds(network, ledger, 2);
+			if (notDue === undefined || due === undefined) {
+				throw(new Error('two waiting staples expected'));
+			}
+			const { retried } = failingRetries(storage, [notDue.staple, due.staple]);
+			const [notDueKey, dueKey] = [notDue, due].map(function({ staple }): string {
+				return(staple.blocksHash.toString());
+			});
+			// The replay that releasing a staple runs fails as well, and is no retry of gc's.
+			const release = async function({ first }: Waiting): Promise<void> {
+				const before = retried.length;
+				await ledger.add(await confirmedStaple([first], network.representatives));
+				retried.splice(before);
+			};
+
+			// Released first, the one that is to be due fails first.
+			await release(due);
+			expect(await gcBatchOf(storage, 1)).toBe(false);
+			// The add that releases the other makes the first failure due.
+			await release(notDue);
+			expect(await gcBatchOf(storage, 1)).toBe(true);
+			expect(retried).toEqual([dueKey, notDueKey]);
+			// Listed after it, and failed after the last staple applied, the other is not due.
+			expect(await gcBatchOf(storage, 1)).toBe(false);
+			expect(retried).toEqual([dueKey, notDueKey, dueKey]);
+		});
+
+		test('released staples whose retries failed are retried again oldest failure first, as of their last failure', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			await ledger.add(network.genesis);
+			const waiting = await deferredSeconds(network, ledger, 2);
+			await releaseHeldBack(network, storage, ledger, waiting);
+			const { retried } = failingRetries(storage, waiting.map(function({ staple }): VoteStaple {
+				return(staple);
+			}));
+			const [firstKey, secondKey] = waiting.map(function({ staple }): string {
+				return(staple.blocksHash.toString());
+			});
+			const unrelated = await sendFromGenesis(network, 2, 5n);
+			const applyUnrelated = async function(block: Block): Promise<void> {
+				expect(blocksHashesOf(await ledger.add(await confirmedStaple([block], network.representatives)))).toHaveLength(1);
+			};
+
+			expect(await gcBatchOf(storage, 2)).toBe(false);
+			expect(retried).toEqual([firstKey, secondKey]);
+			await applyUnrelated(unrelated);
+			expect(await gcBatchOf(storage, 1)).toBe(true);
+			expect(retried).toEqual([firstKey, secondKey, firstKey]);
+			await applyUnrelated(await sendFrom(network, 2, unrelated.hash, 3n));
+			expect(await gcBatchOf(storage, 1)).toBe(true);
+			expect(retried).toEqual([firstKey, secondKey, firstKey, secondKey]);
+		});
+
+		test('a gc batch drops a staple that an earlier retry in it kills, reporting it once, as dropped, and keeps no record of its failures', async function() {
+			const log = new RecordingLog();
+			const { network, storage, ledger } = await startNetwork([100n, 100n, 100n, 100n], { log });
+			await ledger.add(network.genesis);
+			const trigger = await sendFromGenesis(network, 0, 1n);
+			// Each fork's second block extends a chain nothing else touches.
+			const forks = sortedByHash(await Promise.all([1, 2].map(async function(user) {
+				return(await confirmedStaple([await sendFrom(network, 0, trigger.hash, BigInt(user) + 4n), await sendFromGenesis(network, user, 1n)], network.representatives));
+			})));
+			const [applying, killed] = forks;
+			if (applying === undefined || killed === undefined) {
+				throw(new Error('two forks expected'));
+			}
+			for (const fork of forks) {
+				expect(await ledger.add(fork)).toEqual([]);
+			}
+			const { restore } = failingRetries(storage, forks);
+			await ledger.add(await confirmedStaple([trigger], network.representatives));
+			expect(await gcBatchOf(storage, 2)).toBe(false);
+			expect(storage._Testing(TESTING_KEY).retryRecords().failed).toHaveLength(2);
+			// A staple applied since makes both failures due.
+			await ledger.add(await confirmedStaple([await sendFromGenesis(network, 3, 5n)], network.representatives));
+			restore();
+			log.errors.splice(0);
+
+			expect(await gcBatchOf(storage, 2)).toBe(false);
+
+			expect(hashOf(await ledger.getBlock(requireAt(applying.blocks, 0).hash, 'main'))).toBe(hashOf(requireAt(applying.blocks, 0)));
+			expect(await ledger.getBlock(requireAt(killed.blocks, 0).hash, 'main')).toBeNull();
+			expect(await deferredWaitingOn(storage, trigger.hash)).toEqual([]);
+			expect(log.errorsMentioning(killed)).toEqual([`ledger network integrity alarm: dropped deferred staple ${killed.blocksHash.toString()}, which conflicts with confirmed history and can never apply`]);
+			expect(storage._Testing(TESTING_KEY).retryRecords()).toEqual({ failed: [], askedToRunAgain: [] });
+		});
+
+		test('nothing is kept of a failed retry once an add applies its staple, or gc drops it as dead', async function() {
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0 });
+			await ledger.add(network.genesis);
+			const waiting = await deferredSeconds(network, ledger, 2);
+			const [added, killed] = waiting;
+			if (added === undefined || killed === undefined) {
+				throw(new Error('two waiting staples expected'));
+			}
+			await releaseHeldBack(network, storage, ledger, waiting);
+			const { restore } = failingRetries(storage, [added.staple, killed.staple]);
+			expect(await ledger.gc()).toBe(false);
+			expect(storage._Testing(TESTING_KEY).retryRecords().failed).toHaveLength(2);
+			restore();
+
+			expect(blocksHashesOf(await ledger.add(added.staple))).toEqual(blocksHashesOf([added.staple]));
+			const killedKey = killed.staple.blocksHash.toString();
+			expect(storage._Testing(TESTING_KEY).retryRecords()).toEqual({ failed: [killedKey], askedToRunAgain: [] });
+			// Due again since the add, its retry meets a failure the transaction is to run again for.
+			const restoreConflict = afterPersisting(storage, [killed.staple], function(blocksHash): void {
+				throw(createLedgerError('LEDGER_TRANSACTION_ABORTED', `injected conflict after persisting ${blocksHash}`, { retry: true }));
+			});
+			expect(await ledger.gc()).toBe(true);
+			expect(storage._Testing(TESTING_KEY).retryRecords()).toEqual({ failed: [killedKey], askedToRunAgain: [killedKey] });
+			restoreConflict();
+			const killer = network.users.findIndex(function(user): boolean {
+				return(user.comparePublicKey(killed.first.account));
+			});
+			await ledger.add(await confirmedStaple([await sendFrom(network, killer, killed.first.hash, 9n)], network.representatives));
+			expect(await ledger.gc()).toBe(false);
+			expect(await deferredWaitingOn(storage, killed.first.hash)).toEqual([]);
+			expect(storage._Testing(TESTING_KEY).retryRecords()).toEqual({ failed: [], askedToRunAgain: [] });
+		});
+
+		test('a retry that fails with an error that asks for the transaction to run again is warned of, and nothing of it is kept once its staple applies', async function() {
+			const log = new RecordingLog();
+			const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0, log });
+			await ledger.add(network.genesis);
+			const [waiting] = await deferredSeconds(network, ledger, 1);
+			if (waiting === undefined) {
+				throw(new Error('a waiting staple expected'));
+			}
+			await releaseHeldBack(network, storage, ledger, [waiting]);
+			// The zero window warns of the replay it leaves.
+			log.warnings.splice(0);
+			const key = waiting.staple.blocksHash.toString();
+			const restore = afterPersisting(storage, [waiting.staple], function(blocksHash): void {
+				throw(createLedgerError('LEDGER_TRANSACTION_ABORTED', `injected conflict after persisting ${blocksHash}`, { retry: true }));
+			});
+
+			expect(await ledger.gc()).toBe(true);
+			const warnings = log.warningsMentioning(waiting.staple);
+			expect(warnings).toHaveLength(1);
+			expect(warnings[0]).toContain(`ledger retrying deferred staple ${key} met a failure the transaction is to run again for; it stays deferred, the gc ends here, and the next gc retries it`);
+			expect(storage._Testing(TESTING_KEY).retryRecords()).toEqual({ failed: [], askedToRunAgain: [key] });
+			restore();
+			expect(await ledger.gc()).toBe(false);
+			expect(await appliedOf(ledger, [waiting])).toBe(1);
+			expect(storage._Testing(TESTING_KEY).retryRecords()).toEqual({ failed: [], askedToRunAgain: [] });
+		});
+
 		test.each([2, 4])('%i released staples whose slow retries fail, ahead of an applicable one, hold it back one gc each at most, and gc ends once each was retried after the last staple applied', async function(failing) {
 			const { network, startNode } = await startNetwork(Array.from({ length: failing + 1 }, function(): bigint {
 				return(100n);
@@ -1048,5 +1350,44 @@ export function defineGcCases(driver: DriverUnderTest): void {
 			expect(await ledger.gc()).toBe(false);
 			expect(await deferredWaitingOn(storage, trigger.hash)).toEqual([]);
 		});
+
+		switch (driver.sharing.kind) {
+			case 'process-local':
+				break;
+			case 'shared':
+				defineCrossProcessCases(startNetwork, driver.sharing);
+				break;
+			default:
+				assertNever(driver.sharing);
+		}
+	});
+}
+
+/* Two instances on one store stand for two processes of one representative, each with its own Ledger. */
+function defineCrossProcessCases(startNetwork: FixtureFactory, sharing: Extract<StoreSharing, { kind: 'shared' }>): void {
+	test('a failed staple that another process has since applied is forgotten once due, and takes no place from a failure that is', async function() {
+		const { network, storage, ledger } = await startNetwork(DEFAULT_WEIGHTS, { heapProcessWindowMs: 0 });
+		const other = network.createLedger(await sharing.openSibling(storage), requireAt(network.representatives, 0));
+		await ledger.add(network.genesis);
+		const waiting = await deferredSeconds(network, ledger, 2);
+		const [appliedElsewhere, failing] = waiting;
+		if (appliedElsewhere === undefined || failing === undefined) {
+			throw(new Error('two waiting staples expected'));
+		}
+		await releaseHeldBack(network, storage, ledger, waiting);
+		const both = failingRetries(storage, [appliedElsewhere.staple, failing.staple]);
+		expect(await ledger.gc()).toBe(false);
+		expect(both.retried).toHaveLength(2);
+		both.restore();
+		expect(blocksHashesOf(await other.add(appliedElsewhere.staple))).toEqual(blocksHashesOf([appliedElsewhere.staple]));
+		// A staple this process applies makes both failures due, the one applied elsewhere first.
+		await ledger.add(await confirmedStaple([await sendFromGenesis(network, 2, 5n)], network.representatives));
+		const { retried } = failingRetries(storage, [failing.staple]);
+
+		expect(await gcBatchOf(storage, 1)).toBe(true);
+		expect(retried).toEqual([]);
+		expect(await gcBatchOf(storage, 1)).toBe(false);
+		expect(retried).toEqual([failing.staple.blocksHash.toString()]);
+		expect(storage._Testing(TESTING_KEY).retryRecords()).toEqual({ failed: [failing.staple.blocksHash.toString()], askedToRunAgain: [] });
 	});
 }
