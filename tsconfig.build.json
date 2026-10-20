@@ -3,6 +3,7 @@
 	"exclude": [
 		"src/**/*.test.ts",
 		"src/testing/**",
+		"src/explorer/testing.ts",
 		"src/conformance/**",
 		"src/devnet/**",
 		"src/parity/**",

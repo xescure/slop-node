@@ -51,6 +51,7 @@ stdenv.mkDerivation {
       ../tsconfig.build.json
       ../src
       ../schema/migrations
+      ../schema/explorer
       ../patches
       ../utils/apply-patches
     ];
@@ -119,6 +120,7 @@ stdenv.mkDerivation {
     cp -r dist "$root/dist"
     rm "$root/dist/.done" "$root/dist/.tsbuildinfo"
     cp -r schema/migrations "$root/schema/migrations"
+    cp -r schema/explorer "$root/schema/explorer"
     cp -r node_modules package.json "$root/"
 
     makeBinaryWrapper ${lib.getExe nodejs-slim_24} "$out/bin/slop-node" \

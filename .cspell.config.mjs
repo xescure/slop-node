@@ -40,6 +40,9 @@ export default {
 		'plpgsql',
 		'pkey',
 		'cmdline',
+		'regnamespace',
+		'rolname',
+		'xact',
 		// Planner settings, which tests turn off to see the index a query can use.
 		'seqscan',
 		'bitmapscan',
@@ -55,6 +58,8 @@ export default {
 		'secp',
 		// The migration lock key, 0x6b656574616c6467, read as ASCII.
 		'keetaldg',
+		// The explorer's migration lock key, 0x6b65657461657870, read as ASCII.
+		'keetaexp',
 		// The image's init, its labels' namespace, and the settings a container runs with.
 		'tini',
 		'opencontainers',
