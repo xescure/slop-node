@@ -44,6 +44,13 @@ const rowsOf = function(answer: SQLAnswer): Extract<SQLAnswer, { kind: 'rows' }>
 	return(answer);
 };
 
+const refusalOf = function(answer: SQLAnswer): Extract<SQLAnswer, { kind: 'refused' }> {
+	if (answer.kind !== 'refused') {
+		throw(new Error(`Expected a refusal, got ${JSON.stringify(answer)}`));
+	}
+	return(answer);
+};
+
 const limits = function(overrides: Partial<SQLLimits>): SQLLimits {
 	return({ ...DEFAULT_SQL_LIMITS, ...overrides });
 };
@@ -130,6 +137,41 @@ describe('runReadOnlySQL', function() {
 		expect(answer.truncated).toBeNull();
 	});
 
+	test('refuses a row too large for the client before any of it is sent, and serves the next call', async function() {
+		const { reader } = await explorerDatabase();
+		// The longest timeout, so that the guard, not the timeout, stops a slow machine's query.
+		const answer = await runReadOnlySQL(reader, `SELECT repeat('x', 600000000) AS text`, DEFAULT_SQL_LIMITS, DEFAULT_SQL_LIMITS.maxTimeoutMilliseconds);
+		expect(refusalOf(answer).reason).toBe('byte-cap');
+		expect(refusalOf(answer).message).toMatch(/^a row of \d+ bytes is over the cap of 2000000 bytes$/);
+		expect(rowsOf(await runReadOnlySQL(reader, 'SELECT 1 AS one', DEFAULT_SQL_LIMITS)).rows).toEqual([{ one: 1 }]);
+	});
+
+	test('measures a row of bytes by the hex it is written in', async function() {
+		const { reader } = await explorerDatabase();
+		const answer = await runReadOnlySQL(reader, `SELECT decode(repeat('ab', 1500000), 'hex') AS bytes`, DEFAULT_SQL_LIMITS);
+		expect(answer).toMatchObject({ kind: 'refused', reason: 'byte-cap' });
+	});
+
+	test('stops many rows that each fit at the byte cap of their total', async function() {
+		const { reader } = await explorerDatabase();
+		const answer = rowsOf(await runReadOnlySQL(reader, `SELECT n, repeat('x', 100000) AS text FROM generate_series(1, 50) AS n`, DEFAULT_SQL_LIMITS));
+		expect(answer.truncated).toBe('byte-cap');
+		expect(answer.rows).toHaveLength(19);
+		expect(answer.rows.at(-1)).toMatchObject({ n: 19 });
+	});
+
+	test('reads a column named q, the name of the wrapping subquery', async function() {
+		const { reader } = await explorerDatabase();
+		const answer = rowsOf(await runReadOnlySQL(reader, 'SELECT 1 AS q, 2 AS r', DEFAULT_SQL_LIMITS));
+		expect(answer.rows).toEqual([{ q: 1, r: 2 }]);
+	});
+
+	test('returns json as its exact text', async function() {
+		const { reader } = await explorerDatabase();
+		const answer = rowsOf(await runReadOnlySQL(reader, `SELECT jsonb_build_object('amount', 1000000000000000000000000000001::numeric) AS j, json_build_array(1, 'a') AS k, ARRAY[jsonb_build_object('a', 1)] AS l`, DEFAULT_SQL_LIMITS));
+		expect(answer.rows).toEqual([{ j: '{"amount": 1000000000000000000000000000001}', k: '[1, "a"]', l: '{"{\\"a\\": 1}"}' }]);
+	});
+
 	test('keeps a column named __proto__ as an ordinary column', async function() {
 		const { reader } = await explorerDatabase();
 		const answer = rowsOf(await runReadOnlySQL(reader, 'SELECT 1 AS "__proto__"', DEFAULT_SQL_LIMITS));
@@ -179,9 +221,15 @@ describe('runReadOnlySQL', function() {
 		const { reader, admin } = await explorerDatabase();
 		await withHoldings(admin);
 		const answer = await runReadOnlySQL(reader, 'WITH d AS (DELETE FROM explorer.holdings RETURNING 1) SELECT * FROM d', DEFAULT_SQL_LIMITS);
-		expect(answer).toMatchObject({ kind: 'refused', reason: 'sql-error' });
+		expect(refusalOf(answer)).toEqual({ kind: 'refused', reason: 'sql-error', message: 'WITH clause containing a data-modifying statement must be at the top level (at character 6)' });
 		const count = await admin.query<{ count: string }>('SELECT count(*) FROM explorer.holdings');
 		expect(count.rows[0]?.count).toBe(String(HOLDERS.length));
+	});
+
+	test('runs the query in a read-only transaction', async function() {
+		const { reader } = await explorerDatabase();
+		const answer = await runReadOnlySQL(reader, 'SELECT lo_create(0)', DEFAULT_SQL_LIMITS);
+		expect(answer).toEqual({ kind: 'refused', reason: 'sql-error', message: 'cannot execute lo_create() in a read-only transaction' });
 	});
 
 	test('refuses the node tables', async function() {
@@ -200,6 +248,22 @@ describe('runReadOnlySQL', function() {
 		const { reader } = await explorerDatabase();
 		const answer = await runReadOnlySQL(reader, 'SELECT pg_sleep(2)', DEFAULT_SQL_LIMITS, 200);
 		expect(answer).toEqual({ kind: 'refused', reason: 'timeout', message: 'canceling statement due to statement timeout' });
+	});
+
+	test('stops a query that lifts its own timeout', async function() {
+		const { reader } = await explorerDatabase();
+		const answer = await runReadOnlySQL(reader, `SELECT set_config('statement_timeout', '0', true), pg_sleep(1)`, DEFAULT_SQL_LIMITS, 200);
+		expect(answer).toMatchObject({ kind: 'refused', reason: 'timeout' });
+	});
+
+	test('bounds the whole call by the timeout, not each batch of rows it fetches', async function() {
+		const { reader } = await explorerDatabase();
+		// Each batch of ten rows sleeps 900 ms, under the timeout, so a second
+		// batch given the whole timeout again would end the call after 1.8 s.
+		const started = performance.now();
+		const answer = await runReadOnlySQL(reader, 'SELECT n, pg_sleep(0.09) FROM generate_series(1, 60) AS n', DEFAULT_SQL_LIMITS, 1_000);
+		expect(answer).toMatchObject({ kind: 'refused', reason: 'timeout' });
+		expect(performance.now() - started).toBeLessThan(1_600);
 	});
 
 	test('stops a query at the default timeout', async function() {

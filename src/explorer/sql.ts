@@ -21,17 +21,31 @@ export type SQLRow = Readonly<Record<string, JSONValue>>;
 
 export type SQLAnswer =
 	| { readonly kind: 'rows'; readonly columns: readonly string[]; readonly rows: readonly SQLRow[]; readonly truncated: 'row-cap' | 'byte-cap' | null; readonly milliseconds: number }
-	| { readonly kind: 'refused'; readonly reason: 'timeout' | 'sql-error' | 'empty'; readonly message: string };
+	| { readonly kind: 'refused'; readonly reason: 'timeout' | 'sql-error' | 'byte-cap' | 'empty'; readonly message: string };
 
 type Refusal = Extract<SQLAnswer, { kind: 'refused' }>;
 
 const QUERY_CANCELED = '57014';
 
+/** Raised by explorer.row_fits (schema/explorer/migrations/0003_sql_guard.sql) for a row over the byte cap. */
+const ROW_OVER_CAP = 'XE001';
+
+const TIMEOUT_MESSAGE = 'canceling statement due to statement timeout';
+
+const CURSOR = 'explorer_sql';
+
 /*
- * The newlines keep a trailing line comment in the agent's text from
- * commenting out the closing parenthesis.
+ * Rows are fetched a few at a time, so the client holds at most this many
+ * rows, each within the byte cap, beyond the rows it keeps.
  */
-const WRAP_PREFIX = 'SELECT * FROM (\n';
+const FETCH_ROWS = 10;
+
+/*
+ * The cursor's query is the one statement the agent's text is parsed into.
+ * The newlines keep a trailing line comment in the text from commenting out
+ * the closing parenthesis.
+ */
+const WRAP_PREFIX = `DECLARE ${CURSOR} NO SCROLL CURSOR FOR SELECT q.* FROM (\n`;
 
 /*
  * pg sends a query without values through the simple protocol, which runs
@@ -39,7 +53,19 @@ const WRAP_PREFIX = 'SELECT * FROM (\n';
  * prepared statement, so a second statement is an error. pg reads queryMode,
  * which its types leave out.
  */
-type ExtendedArrayQuery = pg.QueryArrayConfig & { readonly queryMode: 'extended' };
+type ExtendedQuery = pg.QueryConfig & { readonly queryMode: 'extended' };
+
+/*
+ * pg parses json with JSON.parse, which rounds numbers past 2^53, so json,
+ * jsonb, json[] and jsonb[] come back as the text Postgres wrote, digits
+ * intact; every other type keeps pg's parser.
+ */
+const RESULT_TYPES = new pg.TypeOverrides();
+for (const oid of [114, 3802, 199, 3807]) {
+	RESULT_TYPES.setTypeParser(oid, 'text', function(text: string): string {
+		return(text);
+	});
+}
 
 const isPlainObject = function(value: object): boolean {
 	const prototype: unknown = Object.getPrototypeOf(value);
@@ -58,7 +84,11 @@ const textOf = function(value: { toString: () => string }): string {
 	return(value.toString());
 };
 
-/** A value pg returned, in a form JSON carries without losing digits or bytes. */
+/**
+ * A value pg returned, in a form JSON carries without losing digits or bytes.
+ * The runner reads json and jsonb columns as their JSON text, which this
+ * keeps as a string.
+ */
 export function toJSONValue(value: unknown): JSONValue {
 	switch (typeof value) {
 		case 'undefined':
@@ -128,6 +158,9 @@ const refusalOf = function(error: pg.DatabaseError, statement: string): Refusal 
 	if (error.code === QUERY_CANCELED) {
 		return({ kind: 'refused', reason: 'timeout', message: error.message });
 	}
+	if (error.code === ROW_OVER_CAP) {
+		return({ kind: 'refused', reason: 'byte-cap', message: error.message });
+	}
 
 	const position = Number(error.position) - WRAP_PREFIX.length;
 	if (!Number.isInteger(position) || position < 1 || position > statement.length) {
@@ -142,45 +175,73 @@ const duplicateColumn = function(columns: readonly string[]): string | undefined
 	}));
 };
 
-const answerOf = function(result: pg.QueryArrayResult, limits: SQLLimits, milliseconds: number): SQLAnswer {
-	const columns = result.fields.map(function(field) {
-		return(field.name);
-	});
-	const duplicate = duplicateColumn(columns);
-	if (duplicate !== undefined) {
-		return({ kind: 'refused', reason: 'sql-error', message: `column "${duplicate}" appears more than once; give each column its own name` });
+type Collected = { readonly done: false } | { readonly done: true; readonly truncated: 'row-cap' | 'byte-cap' | null };
+
+/** Rows kept so far, within the row cap and the byte cap. */
+class Collection {
+	readonly rows: SQLRow[] = [];
+	readonly #limits: SQLLimits;
+	#bytes = 0;
+
+	constructor(limits: SQLLimits) {
+		this.#limits = limits;
 	}
 
-	const rows: SQLRow[] = [];
-	let bytes = 0;
-	for (const values of result.rows.slice(0, limits.rowCap)) {
-		const row = Object.fromEntries(columns.map(function(column, index) {
-			return([column, toJSONValue(values[index])]);
-		}));
-		bytes += Buffer.byteLength(JSON.stringify(row));
-		if (bytes > limits.byteCap) {
-			return({ kind: 'rows', columns, rows, truncated: 'byte-cap', milliseconds });
+	add(columns: readonly string[], batch: readonly (readonly unknown[])[]): Collected {
+		for (const values of batch) {
+			if (this.rows.length >= this.#limits.rowCap) {
+				return({ done: true, truncated: 'row-cap' });
+			}
+			const row = Object.fromEntries(columns.map(function(column, index) {
+				return([column, toJSONValue(values[index])]);
+			}));
+			this.#bytes += Buffer.byteLength(JSON.stringify(row));
+			if (this.#bytes > this.#limits.byteCap) {
+				return({ done: true, truncated: 'byte-cap' });
+			}
+			this.rows.push(row);
 		}
-		rows.push(row);
+		if (batch.length < FETCH_ROWS) {
+			return({ done: true, truncated: null });
+		}
+		return({ done: false });
 	}
-	if (result.rows.length > limits.rowCap) {
-		return({ kind: 'rows', columns, rows, truncated: 'row-cap', milliseconds });
-	}
-	return({ kind: 'rows', columns, rows, truncated: null, milliseconds });
-};
+}
 
+/*
+ * The statement timeout bounds each statement, and the query runs across one
+ * FETCH per batch, so each FETCH gets only what is left of the call's time.
+ */
 const answerOn = async function(client: pg.PoolClient, statement: string, limits: SQLLimits, timeout: number): Promise<SQLAnswer> {
-	const query: ExtendedArrayQuery = {
-		text: `${WRAP_PREFIX}${statement}\n) AS q LIMIT ${(limits.rowCap + 1).toString()}`,
-		rowMode: 'array',
+	const declare: ExtendedQuery = {
+		text: `${WRAP_PREFIX}${statement}\n) AS q WHERE explorer.row_fits(octet_length(ROW(q.*)::text), ${limits.byteCap.toString()}) LIMIT ${(limits.rowCap + 1).toString()}`,
 		queryMode: 'extended'
 	};
+	const started = performance.now();
 	try {
 		await client.query('BEGIN READ ONLY');
 		await client.query(`SET LOCAL statement_timeout = ${timeout.toString()}`);
-		const started = performance.now();
-		const result = await client.query(query);
-		return(answerOf(result, limits, Math.round(performance.now() - started)));
+		await client.query(declare);
+		const collection = new Collection(limits);
+		for (;;) {
+			const left = Math.ceil(timeout - (performance.now() - started));
+			if (left < 1) {
+				return({ kind: 'refused', reason: 'timeout', message: TIMEOUT_MESSAGE });
+			}
+			await client.query(`SET LOCAL statement_timeout = ${left.toString()}`);
+			const batch = await client.query<unknown[]>({ text: `FETCH ${FETCH_ROWS.toString()} FROM ${CURSOR}`, rowMode: 'array', types: RESULT_TYPES });
+			const columns = batch.fields.map(function(field) {
+				return(field.name);
+			});
+			const duplicate = duplicateColumn(columns);
+			if (duplicate !== undefined) {
+				return({ kind: 'refused', reason: 'sql-error', message: `column "${duplicate}" appears more than once; give each column its own name` });
+			}
+			const collected = collection.add(columns, batch.rows);
+			if (collected.done) {
+				return({ kind: 'rows', columns, rows: collection.rows, truncated: collected.truncated, milliseconds: Math.round(performance.now() - started) });
+			}
+		}
 	} catch (error) {
 		if (error instanceof pg.DatabaseError) {
 			return(refusalOf(error, statement));
@@ -190,17 +251,19 @@ const answerOn = async function(client: pg.PoolClient, statement: string, limits
 };
 
 /*
- * DISCARD ALL drops the session advisory locks, settings and prepared
- * statements a query left behind, so the next borrower of the connection
- * starts clean; a held lock could otherwise block the node's migrations.
+ * ROLLBACK closes the cursor. DISCARD ALL then drops the session advisory
+ * locks, settings and prepared statements a query left behind, so the next
+ * borrower of the connection starts clean; a held lock could otherwise block
+ * the node's migrations. The failure, if any, goes to the pool with the client,
+ * which destroys a client released with an error.
  */
-const cleaned = async function(client: pg.PoolClient): Promise<boolean> {
+const cleanupFailure = async function(client: pg.PoolClient): Promise<Error | undefined> {
 	try {
 		await client.query('ROLLBACK');
 		await client.query('DISCARD ALL');
-		return(true);
-	} catch {
-		return(false);
+		return(undefined);
+	} catch (error) {
+		return(new Error('Could not clean the connection after an agent query', { cause: error }));
 	}
 };
 
@@ -225,8 +288,8 @@ export async function runReadOnlySQL(reader: pg.Pool, sql: string, limits: SQLLi
 	try {
 		return(await answerOn(client, statement, limits, timeoutOf(limits, requestedTimeout)));
 	} finally {
-		const clean = await cleaned(client);
+		const failure = await cleanupFailure(client);
 		client.removeListener('error', ignore);
-		client.release(!clean);
+		client.release(failure);
 	}
 }

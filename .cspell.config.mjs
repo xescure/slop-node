@@ -45,6 +45,8 @@ export default {
 		'xact',
 		// The column of pg_stat_activity that names a session's role.
 		'usename',
+		// The PL/pgSQL option that gives a raised error its SQLSTATE.
+		'errcode',
 		// Planner settings, which tests turn off to see the index a query can use.
 		'seqscan',
 		'bitmapscan',
