@@ -180,8 +180,8 @@ const ACCOUNT_KEY_BYTES = 128;
 
 /*
  * Marks due the entries that await a staple on any of the accounts. Read
- * from the entries themselves, at most MAX_QUEUED_STAPLES of them, so that
- * nothing names a staple once it has left the queue.
+ * from the entries themselves, so that nothing names a staple once it has
+ * left the queue.
  */
 function land(entries: ReadonlyMap<string, Waiting>, accounts: readonly string[]): void {
 	const landedOn = new Set(accounts);

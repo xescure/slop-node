@@ -687,7 +687,11 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * What the gc retries keep of staples that are no longer deferred, as
 	 * they applied or were dropped: kept, it would last as long as the
 	 * process, and a failure on record would take a place among the staples
-	 * a batch retries again.
+	 * a batch retries again. It is forgotten before the transaction commits,
+	 * as #staplesApplied counts before it: a staple whose transaction then
+	 * rolls back stays deferred with no record, and the next gc retries it
+	 * as one that never failed, which costs that one retry, and counts its
+	 * failures that ask for a rerun from none again.
 	 */
 	#forgetRetries(staples: readonly VoteStaple[]): void {
 		for (const staple of staples) {
