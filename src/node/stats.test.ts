@@ -74,6 +74,26 @@ class SlowStore extends KVInternals.KVStorageProviderMemory {
 	}
 }
 
+/** A store whose first counter write fails, only once the test lets it, and whose later writes succeed. */
+class FailingOnceStore extends KVInternals.KVStorageProviderMemory {
+	readonly #outage = new Error('connect ENOENT /tmp/postgres/socket');
+	readonly #failFirst = deferred();
+	#failed = false;
+
+	failFirst(): void {
+		this.#failFirst.resolve();
+	}
+
+	override async incr(arena: string, key: string, change: number): Promise<bigint> {
+		if (!this.#failed) {
+			this.#failed = true;
+			await this.#failFirst.promise;
+			throw(this.#outage);
+		}
+		return(await super.incr(arena, key, change));
+	}
+}
+
 async function refusal(promise: Promise<unknown>): Promise<unknown> {
 	try {
 		await promise;
@@ -135,6 +155,23 @@ describe('the node\'s statistics', function() {
 		const fresh = new NodeStats({ kv: store });
 		expect(await fresh.get('ledger', 'staples')).toBe(2);
 		expect((await fresh.getXor(CHECKSUM_KEY)).toBigInt()).toBe(0b0001n);
+	});
+
+	test('a sync made while the one before it is failing writes its own changes, and the next writes the failed one\'s', async function() {
+		const store = new FailingOnceStore();
+		const stats = new NodeStats({ kv: store });
+		stats.incr('ledger', 'staples', 2);
+		const failing = refusal(stats.sync());
+		stats.incr('ledger', 'staples', 1);
+		const following = stats.sync();
+
+		store.failFirst();
+
+		expect(await failing).toBeInstanceOf(Error);
+		await expect(following).resolves.toBeUndefined();
+		expect(await new NodeStats({ kv: store }).get('ledger', 'staples')).toBe(1);
+		await stats.sync();
+		expect(await new NodeStats({ kv: store }).get('ledger', 'staples')).toBe(3);
 	});
 
 	test('a read waits for every write of a sync that failed, not only for the first to fail', async function() {
