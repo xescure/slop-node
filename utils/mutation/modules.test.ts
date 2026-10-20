@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 const CONFIG = 'src/node/config.ts';
 
@@ -20,23 +20,47 @@ const CLOSURE_DECLARATIONS = [
 	'function refuseWhereClosed('
 ] as const;
 
+/* The modules are the mutation runs' own JavaScript, which the suite's TypeScript does not type, so they are read by a path the compiler does not follow. */
+async function exportOfModules(name: string): Promise<unknown> {
+	const modules: unknown = await import(pathToFileURL(resolve('mutation/modules.js')).href);
+	if (typeof modules !== 'object' || modules === null) {
+		throw(new Error('mutation/modules.js is no module'));
+	}
+	return(Reflect.get(modules, name));
+}
+
 type RangeReader = (source: string) => string[];
 
 function isRangeReader(candidate: unknown): candidate is RangeReader {
 	return(typeof candidate === 'function');
 }
 
-/* The modules are the mutation runs' own JavaScript, which the suite's TypeScript does not type, so they are read by a path the compiler does not follow. */
 async function closureRangesOf(source: string): Promise<string[]> {
-	const modules: unknown = await import(pathToFileURL(resolve('mutation/modules.js')).href);
-	if (typeof modules !== 'object' || modules === null) {
-		throw(new Error('mutation/modules.js is no module'));
-	}
-	const reader: unknown = Reflect.get(modules, 'closureRanges');
+	const reader = await exportOfModules('closureRanges');
 	if (!isRangeReader(reader)) {
 		throw(new Error('mutation/modules.js exports no closureRanges'));
 	}
 	return(reader(source));
+}
+
+type ModuleSelector = () => { readonly mutate: readonly string[] };
+
+function isModuleSelector(candidate: unknown): candidate is ModuleSelector {
+	return(typeof candidate === 'function');
+}
+
+/** What the module mutates, as Stryker's configuration reads it from the environment. */
+async function mutateOf(module: string): Promise<readonly string[]> {
+	const selector = await exportOfModules('selectedModule');
+	if (!isModuleSelector(selector)) {
+		throw(new Error('mutation/modules.js exports no selectedModule'));
+	}
+	vi.stubEnv('SLOP_NODE_MUTATION_MODULE', module);
+	try {
+		return(selector().mutate);
+	} finally {
+		vi.unstubAllEnvs();
+	}
 }
 
 type LineRange = { readonly first: number; readonly last: number };
@@ -66,6 +90,26 @@ describe('the parts of config.ts the peer-to-peer module mutates', function() {
 		for (const range of ranges) {
 			expect(lines[range.last - 1]).toMatch(/^\}\)?;?$/u);
 		}
+	});
+
+	test('and the config module the rest, each line of the file in exactly one of the two', async function() {
+		const lineCount = readFileSync(CONFIG, 'utf8').split('\n').length - 1;
+		const modules = ['p2p', 'config'] as const;
+		const timesMutated = new Array<number>(lineCount + 1).fill(0);
+
+		for (const module of modules) {
+			const ofConfig = (await mutateOf(module)).filter(function(pattern): boolean {
+				return(pattern.startsWith(CONFIG));
+			});
+			expect(ofConfig.length, module).toBeGreaterThan(0);
+			for (const range of ofConfig.map(lineRangeOf)) {
+				for (let line = range.first; line <= range.last; line++) {
+					timesMutated[line] = (timesMutated[line] ?? 0) + 1;
+				}
+			}
+		}
+
+		expect(timesMutated.slice(1)).toEqual(new Array<number>(lineCount).fill(1));
 	});
 
 	test('stop the run when a part is no longer there', async function() {
