@@ -78,13 +78,20 @@ const mintedToken = async function(context: Fixture, minting: Minting = { decima
 	return({ token, first, second });
 };
 
-/** The plan of a query with sequential scans priced out, so that it shows whether an index path exists at all. */
+/**
+ * The plan of a query with sequential scans, bitmap scans and sorts priced
+ * out. The test tables are so small that either would win on cost; priced
+ * out, the plan shows whether a path that reads an index in its order exists
+ * at all.
+ */
 const planOf = async function(pool: pg.Pool, query: string, values: readonly unknown[]): Promise<string> {
 	const client = await pool.connect();
 	try {
 		await client.query('BEGIN');
 		await client.query('SET LOCAL enable_seqscan = off');
-		const plan = await client.query<{ 'QUERY PLAN': string }>(`EXPLAIN ${query}`, [...values]);
+		await client.query('SET LOCAL enable_bitmapscan = off');
+		await client.query('SET LOCAL enable_sort = off');
+		const plan = await client.query<{ 'QUERY PLAN': string }>(`EXPLAIN (COSTS OFF) ${query}`, [...values]);
 		await client.query('ROLLBACK');
 		return(plan.rows.map(function(row) {
 			return(row['QUERY PLAN']);
@@ -95,6 +102,11 @@ const planOf = async function(pool: pg.Pool, query: string, values: readonly unk
 };
 
 const EXPLORER_INDEXED_TABLES = /Seq Scan on (decoded_operations|decoded_blocks|holdings)\b/;
+
+const SEQUENTIAL_SCAN = /Seq Scan/;
+
+/** A Sort node; a Merge Append's own "Sort Key" line is not one. */
+const SORT_NODE = /^\s*(->\s+)?(Incremental )?Sort$/m;
 
 describe('the explorer views', function() {
 	test('the reader reads every view', async function() {
@@ -204,10 +216,68 @@ describe('the explorer views', function() {
 
 		for (const [name, plan] of Object.entries(plans)) {
 			expect(plan, name).not.toMatch(EXPLORER_INDEXED_TABLES);
-			expect(plan, name).toMatch(/Index (Only )?Scan (using|on) (accounts_public_key_key|blocks_hash_text)/);
+			expect(plan, name).toMatch(/Index (Only )?Scan (using|on) (accounts_public_key_key|decoded_blocks_hash_text)/);
 		}
 		const withoutHash = await planOf(context.reader, 'SELECT type, amount FROM operations WHERE account = $1', [someAccount]);
 		expect(withoutHash).not.toMatch(/decoded_blocks/);
+	});
+
+	test('a filter on an id or a raw hash reads the explorer\'s indexes in their order', async function() {
+		const context = await fixture();
+		const { token, first } = await mintedToken(context);
+		await indexAll(context.writer);
+		const [someToken, someAccount] = [addressOf(token), addressOf(first)];
+		const someHash = requireAt(context.network.genesis.blocks, 0).hash.toString();
+		const someStaple = (await context.reader.query<{ blocks_hash: string }>('SELECT blocks_hash FROM staples LIMIT 1')).rows[0]?.blocks_hash;
+
+		const ordered = {
+			holders: await planOf(context.reader, 'SELECT * FROM holders WHERE token_id = explorer.id_of($1) ORDER BY amount DESC LIMIT 5', [someToken]),
+			operations: await planOf(context.reader, 'SELECT * FROM operations WHERE account_id = explorer.id_of($1) ORDER BY staple_time DESC LIMIT 5', [someAccount]),
+			history: await planOf(context.reader, 'SELECT * FROM account_history WHERE account_id = explorer.id_of($1) ORDER BY staple_time DESC LIMIT 5', [someAccount])
+		};
+		const keyed = {
+			staples: await planOf(context.reader, 'SELECT * FROM staples WHERE blocks_hash_bytes = decode($1, \'hex\')', [someStaple]),
+			votes: await planOf(context.reader, 'SELECT * FROM votes WHERE staple_bytes = decode($1, \'hex\')', [someStaple]),
+			stapleBlocks: await planOf(context.reader, 'SELECT * FROM blocks WHERE staple_bytes = decode($1, \'hex\') ORDER BY position', [someStaple]),
+			block: await planOf(context.reader, 'SELECT * FROM blocks WHERE hash_bytes = decode($1, \'hex\')', [someHash]),
+			blockOperations: await planOf(context.reader, 'SELECT * FROM operations WHERE block_hash_bytes = decode($1, \'hex\') ORDER BY idx', [someHash])
+		};
+
+		for (const [name, plan] of Object.entries(ordered)) {
+			expect(plan, name).toMatch(/^Limit/);
+			expect(plan, name).not.toMatch(SORT_NODE);
+		}
+		expect(ordered.holders).toMatch(/Index Scan using holdings_token_balance on holdings/);
+		expect(ordered.operations).toMatch(/Index Scan using decoded_operations_account_time on decoded_operations/);
+		expect(ordered.history).toMatch(/Merge Append[\s\S]*Index Scan using decoded_operations_account_time[\s\S]*Index Scan using decoded_operations_counterparty_time/);
+		expect(keyed.staples).toMatch(/Index Scan using staples_pkey on staples/);
+		expect(keyed.votes).toMatch(/Index Scan using votes_main on votes/);
+		expect(keyed.stapleBlocks).toMatch(/Index Scan using decoded_blocks_staple on decoded_blocks/);
+		expect(keyed.block).toMatch(/Index Scan using decoded_blocks_pkey on decoded_blocks/);
+		expect(keyed.blockOperations).toMatch(/Index Scan using decoded_operations_pkey on decoded_operations/);
+		for (const [name, plan] of Object.entries(keyed)) {
+			expect(plan, name).not.toMatch(SEQUENTIAL_SCAN);
+			expect(plan, name).not.toMatch(SORT_NODE);
+		}
+	});
+
+	test('an account\'s kind names its key type', async function() {
+		const context = await fixture();
+		const keyTypes = [0, 1, 2, 3, 4, 5, 6, 7];
+		await context.admin.query('INSERT INTO public.accounts (public_key, key_type) SELECT \'kind_\' || key_type, key_type FROM unnest($1::smallint[]) AS key_type', [keyTypes]);
+
+		const kinds = await context.reader.query('SELECT account, kind FROM accounts WHERE account LIKE \'kind\\_%\' ORDER BY account');
+
+		expect(kinds.rows).toEqual([
+			{ account: 'kind_0', kind: 'ECDSA_SECP256K1' },
+			{ account: 'kind_1', kind: 'ED25519' },
+			{ account: 'kind_2', kind: 'NETWORK' },
+			{ account: 'kind_3', kind: 'TOKEN' },
+			{ account: 'kind_4', kind: 'STORAGE' },
+			{ account: 'kind_5', kind: '5' },
+			{ account: 'kind_6', kind: 'ECDSA_SECP256R1' },
+			{ account: 'kind_7', kind: 'MULTISIG' }
+		]);
 	});
 });
 

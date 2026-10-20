@@ -22,7 +22,7 @@ CREATE TABLE explorer.indexed_staples (
 
 CREATE INDEX indexed_staples_sequence ON explorer.indexed_staples (sequence);
 
-CREATE TABLE explorer.blocks (
+CREATE TABLE explorer.decoded_blocks (
 	hash bytea PRIMARY KEY,
 	account_id bigint NOT NULL,
 	height bigint NOT NULL,
@@ -36,9 +36,13 @@ CREATE TABLE explorer.blocks (
 	operation_count integer NOT NULL
 );
 
-CREATE INDEX blocks_account_height ON explorer.blocks (account_id, height DESC);
+CREATE INDEX decoded_blocks_account_height ON explorer.decoded_blocks (account_id, height DESC);
+CREATE INDEX decoded_blocks_staple ON explorer.decoded_blocks (staple, position);
+-- The views spell a hash as upper-case hex; a filter on that text finds the
+-- block through this index.
+CREATE INDEX decoded_blocks_hash_text ON explorer.decoded_blocks (upper(encode(hash, 'hex')));
 
-CREATE TABLE explorer.operations (
+CREATE TABLE explorer.decoded_operations (
 	block_hash bytea NOT NULL,
 	idx integer NOT NULL,
 	type text NOT NULL,
@@ -51,9 +55,9 @@ CREATE TABLE explorer.operations (
 	PRIMARY KEY (block_hash, idx)
 );
 
-CREATE INDEX operations_account_time ON explorer.operations (account_id, staple_time DESC);
-CREATE INDEX operations_counterparty_time ON explorer.operations (counterparty_id, staple_time DESC) WHERE counterparty_id IS NOT NULL;
-CREATE INDEX operations_token_time ON explorer.operations (token_id, staple_time DESC) WHERE token_id IS NOT NULL;
+CREATE INDEX decoded_operations_account_time ON explorer.decoded_operations (account_id, staple_time DESC);
+CREATE INDEX decoded_operations_counterparty_time ON explorer.decoded_operations (counterparty_id, staple_time DESC) WHERE counterparty_id IS NOT NULL;
+CREATE INDEX decoded_operations_token_time ON explorer.decoded_operations (token_id, staple_time DESC) WHERE token_id IS NOT NULL;
 
 CREATE TABLE explorer.holdings (
 	token_id bigint NOT NULL,
