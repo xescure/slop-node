@@ -26,7 +26,6 @@ import {
 	DEFAULT_INDEXER_SETTINGS,
 	freshness,
 	indexBatch,
-	Indexer,
 	IndexerError,
 	knownNodeVersions,
 	reconcile,
@@ -34,6 +33,7 @@ import {
 	type IndexerFault,
 	type IndexerState
 } from './indexer.js';
+import { Indexer } from './indexer-loop.js';
 import { explorerDatabase } from './testing.js';
 import { GAP_GRACE_MILLISECONDS, toStapleSequence } from './watermark.js';
 
@@ -168,6 +168,18 @@ const refuseIndexedStaples = async function(admin: pg.Pool): Promise<void> {
 	await admin.query(`
 		CREATE FUNCTION explorer.refuse_for_test() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'refused for the test'; END $$;
 		CREATE TRIGGER refuse_for_test BEFORE INSERT ON explorer.indexed_staples FOR EACH ROW EXECUTE FUNCTION explorer.refuse_for_test()`);
+};
+
+const LOCK_HOLDER = `
+	SELECT pid FROM pg_locks
+	WHERE locktype = 'advisory' AND granted AND classid = x'6b656574'::int::oid AND objid = x'61696478'::int::oid
+		AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`;
+
+const lockHolders = async function(admin: pg.Pool): Promise<readonly number[]> {
+	const rows = await admin.query<{ pid: number }>(LOCK_HOLDER);
+	return(rows.rows.map(function(row) {
+		return(row.pid);
+	}));
 };
 
 const pause = function(milliseconds: number): Promise<void> {
@@ -655,5 +667,121 @@ describe('the indexer', function() {
 		expect(firstTarget.messages()).toEqual([]);
 		expect(secondTarget.messages()).toEqual(['another indexer holds the indexer lock; waiting for it to stop']);
 		expect(Object.values(await indexedCounts(context.admin))).toEqual([1, 1, 1]);
+	});
+
+	test('an indexer whose lock connection is ended takes the lock again and goes on indexing', async function() {
+		const context = await fixture();
+		vi.useRealTimers();
+		const target = recordingTarget();
+		const indexer = new Indexer(context.writer, { ...DEFAULT_INDEXER_SETTINGS, pollMilliseconds: 5 }, target);
+
+		indexer.start();
+		await vi.waitFor(async function() {
+			expect(await indexedCounts(context.admin)).toEqual({ [context.network.genesis.blocksHash.toString()]: 1 });
+		});
+		const [holder] = await lockHolders(context.admin);
+		await context.admin.query('SELECT pg_terminate_backend($1)', [holder]);
+		await vi.waitFor(async function() {
+			const holders = await lockHolders(context.admin);
+			expect(holders).toHaveLength(1);
+			expect(holders).not.toContain(holder);
+		});
+		const sendStaple = await context.apply([context.cursor.append(await sendFrom(context, requireAt(context.network.users, 0), requireAt(context.network.users, 1), 1n))]);
+		await vi.waitFor(async function() {
+			expect(await indexedCounts(context.admin)).toMatchObject({ [sendStaple.blocksHash.toString()]: 1 });
+		});
+		await indexer.stop();
+
+		expect(target.messages()).toEqual(['the indexer lock was lost with its connection; indexing stops until it is taken again']);
+		expect(await lockHolders(context.admin)).toEqual([]);
+	});
+
+	test('when the lock connection of one indexer is ended, the waiting indexer takes the lock and the first waits', async function() {
+		const context = await fixture();
+		vi.useRealTimers();
+		const [firstTarget, secondTarget] = [recordingTarget(), recordingTarget()];
+		const first = new Indexer(context.writer, { ...DEFAULT_INDEXER_SETTINGS, pollMilliseconds: 200 }, firstTarget);
+		const second = new Indexer(context.writer, { ...DEFAULT_INDEXER_SETTINGS, pollMilliseconds: 5 }, secondTarget);
+
+		first.start();
+		await vi.waitFor(async function() {
+			expect(await indexedCounts(context.admin)).toEqual({ [context.network.genesis.blocksHash.toString()]: 1 });
+		});
+		second.start();
+		await vi.waitFor(function() {
+			expect(secondTarget.messages()).toEqual(['another indexer holds the indexer lock; waiting for it to stop']);
+		});
+		const [holder] = await lockHolders(context.admin);
+		await context.admin.query('SELECT pg_terminate_backend($1)', [holder]);
+		await vi.waitFor(function() {
+			expect(firstTarget.messages()).toEqual([
+				'the indexer lock was lost with its connection; indexing stops until it is taken again',
+				'another indexer holds the indexer lock; waiting for it to stop'
+			]);
+		}, { timeout: 3000 });
+		const sendStaple = await context.apply([context.cursor.append(await sendFrom(context, requireAt(context.network.users, 0), requireAt(context.network.users, 1), 1n))]);
+		await vi.waitFor(async function() {
+			expect(await indexedCounts(context.admin)).toMatchObject({ [sendStaple.blocksHash.toString()]: 1 });
+		});
+		await Promise.all([first.stop(), second.stop()]);
+
+		expect(secondTarget.messages()).toEqual(['another indexer holds the indexer lock; waiting for it to stop']);
+		expect(Object.values(await indexedCounts(context.admin))).toEqual([1, 1]);
+	});
+
+	test('the holdings check waits while the indexer is behind', async function() {
+		const context = await fixture();
+		vi.useRealTimers();
+		const sendStaple = await context.apply([context.cursor.append(await sendFrom(context, requireAt(context.network.users, 0), requireAt(context.network.users, 1), 1n))]);
+		const target = recordingTarget();
+		const indexer = new Indexer(context.writer, { ...DEFAULT_INDEXER_SETTINGS, batchStaples: 1, batchPauseMilliseconds: 60_000, pollMilliseconds: 5, holdingsCheckMilliseconds: 0 }, target);
+
+		indexer.start();
+		await vi.waitFor(async function() {
+			expect(await indexedCounts(context.admin)).toEqual({ [context.network.genesis.blocksHash.toString()]: 1 });
+		});
+		await pause(100);
+		await indexer.stop();
+
+		// A check run after the full batch would have indexed the send in its catch-up.
+		expect(await indexedCounts(context.admin)).not.toHaveProperty(sendStaple.blocksHash.toString());
+		expect(target.messages()).toEqual([]);
+	});
+
+	test('a holdings check stopped during its catch-up reports and repairs nothing', async function() {
+		const context = await fixture();
+		await indexAll(context.writer);
+		const sends = [];
+		for (let index = 0; index < 2; index++) {
+			sends.push(await context.apply([context.cursor.append(await sendFrom(context, requireAt(context.network.users, 0), requireAt(context.network.users, 1), 1n))]));
+		}
+		const corrupted = await idOf(context.admin, requireAt(context.network.users, 2));
+		await context.admin.query('UPDATE explorer.holdings SET balance = balance + 1 WHERE account_id = $1', [corrupted]);
+		const heldBy = function() {
+			return(context.admin.query('SELECT token_id, balance::text FROM explorer.holdings WHERE account_id = $1 ORDER BY token_id', [corrupted]));
+		};
+		const before = await heldBy();
+		let stopping = false;
+		const faults: IndexerFault[] = [];
+
+		const repaired = await checkHoldings(context.writer, function(fault) {
+			faults.push(fault);
+		}, {
+			settings: { ...DEFAULT_INDEXER_SETTINGS, batchStaples: 1 },
+			stopping: function() {
+				return(stopping);
+			},
+			sleep: function() {
+				stopping = true;
+				return(Promise.resolve());
+			}
+		});
+
+		expect([repaired, faults]).toEqual([0, []]);
+		expect((await heldBy()).rows).toEqual(before.rows);
+		const counts = await indexedCounts(context.admin);
+		expect([sends.map(function(staple) {
+			return(counts[staple.blocksHash.toString()] ?? 0);
+		})]).toEqual([[1, 0]]);
 	});
 });

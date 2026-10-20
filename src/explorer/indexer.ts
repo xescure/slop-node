@@ -1,8 +1,5 @@
 import { readdir } from 'node:fs/promises';
 import type pg from 'pg';
-import type { LogEntry, LogTarget } from '@keetanetwork/keetanet-client/lib/log/common.js';
-import type { LogLevel } from '@keetanetwork/keetanet-client/lib/log/index.js';
-import { describeError } from '../ledger/storage/errors.js';
 import { SCHEMA_MIGRATIONS } from '../ledger/storage/postgres/migrations.js';
 import { assertNever } from '../util/assert-never.js';
 import { addressesOf, decodeBlock, type Address, type DecodedBlock } from './decode.js';
@@ -40,7 +37,8 @@ export type Freshness = {
 /** What a backstop found that the indexing of each staple should have prevented. */
 export type IndexerFault =
 	| { readonly kind: 'missed-staple'; readonly blocksHash: string; readonly sequence: bigint }
-	| { readonly kind: 'holding-differs'; readonly accountID: string; readonly tokenID: string; readonly node: string | null; readonly explorer: string | null };
+	| { readonly kind: 'holding-differs'; readonly accountID: string; readonly tokenID: string; readonly node: string | null; readonly explorer: string | null }
+	| { readonly kind: 'holdings-unchecked'; readonly remaining: number };
 
 export type IndexerProblem =
 	| { readonly kind: 'undecodable-block'; readonly staple: string; readonly block: string }
@@ -107,7 +105,8 @@ const inTransaction = async function<Result>(pool: pg.Pool, work: (client: pg.Po
 	}
 };
 
-const pausedReason = function(nodeVersion: number, newestKnown: number): string {
+/** What the progress row and the log say while indexing is paused. */
+export const pausedReason = function(nodeVersion: number, newestKnown: number): string {
 	return(`node schema ${String(nodeVersion)} is newer than this build, which knows up to ${String(newestKnown)}`);
 };
 
@@ -395,17 +394,35 @@ const pairsOf = function(rows: readonly HoldingDifference[]): HoldingPairs {
 	});
 };
 
-// With no pairs given, every row of both tables is compared.
-const holdingDifferences = async function(client: pg.PoolClient, pairs: HoldingPairs | null): Promise<readonly HoldingDifference[]> {
+/** How many differing rows one check compares again and repairs; the rest wait for the next check. */
+export const HOLDINGS_CHECK_LIMIT = 10_000;
+
+const DIFFERENCES = `
+	SELECT coalesce(node.account_id, held.account_id) AS account_id, coalesce(node.token_id, held.token_id) AS token_id,
+		node.balance::text AS node, held.balance::text AS explorer
+	FROM (SELECT account_id, token_id, balance FROM public.balances WHERE balance <> 0) node
+	FULL JOIN explorer.holdings held ON held.account_id = node.account_id AND held.token_id = node.token_id
+	WHERE node.balance IS DISTINCT FROM held.balance`;
+
+type Suspects = { readonly rows: readonly HoldingDifference[]; readonly total: number; readonly pending: number };
+
+const suspectHoldings = async function(client: pg.PoolClient): Promise<Suspects> {
+	const rows = await client.query<HoldingDifference & { total: string }>(`
+		SELECT *, count(*) OVER () AS total FROM (${DIFFERENCES}) difference
+		ORDER BY account_id, token_id LIMIT $1`, [HOLDINGS_CHECK_LIMIT]);
+	// The staples the node had applied by the scan, which the catch-up indexes and no more.
+	const pending = await client.query<{ pending: string }>(`
+		SELECT count(*) AS pending FROM public.staples staple, explorer.progress progress
+		WHERE staple.sequence > progress.watermark
+			AND NOT EXISTS (SELECT FROM explorer.indexed_staples indexed WHERE indexed.blocks_hash = staple.blocks_hash)`);
+	return({ rows: rows.rows, total: Number(rows.rows[0]?.total ?? 0), pending: Number(pending.rows[0]?.pending ?? 0) });
+};
+
+const stillDiffering = async function(client: pg.PoolClient, pairs: HoldingPairs): Promise<readonly HoldingDifference[]> {
 	const rows = await client.query<HoldingDifference>(`
-		SELECT coalesce(node.account_id, held.account_id) AS account_id, coalesce(node.token_id, held.token_id) AS token_id,
-			node.balance::text AS node, held.balance::text AS explorer
-		FROM (SELECT account_id, token_id, balance FROM public.balances WHERE balance <> 0) node
-		FULL JOIN explorer.holdings held ON held.account_id = node.account_id AND held.token_id = node.token_id
-		WHERE node.balance IS DISTINCT FROM held.balance
-			AND ($1::bigint[] IS NULL OR (coalesce(node.account_id, held.account_id), coalesce(node.token_id, held.token_id)) IN (
-				SELECT pair.account_id, pair.token_id FROM unnest($1::bigint[], $2::bigint[]) AS pair (account_id, token_id)))`,
-	[pairs?.accounts ?? null, pairs?.tokens ?? null]);
+		SELECT difference.* FROM (${DIFFERENCES}) difference
+		JOIN unnest($1::bigint[], $2::bigint[]) AS pair (account_id, token_id)
+			ON pair.account_id = difference.account_id AND pair.token_id = difference.token_id`, [pairs.accounts, pairs.tokens]);
 	return(rows.rows);
 };
 
@@ -421,33 +438,67 @@ const repairHoldings = async function(client: pg.PoolClient, pairs: HoldingPairs
 		WHERE node.balance <> 0`, [pairs.accounts, pairs.tokens]);
 };
 
-/*
- * A staple the node applied that the loop has not reached yet differs from
- * the holdings without any fault, so the staples pending are indexed and only
- * the rows that still differ after it are faults.
- */
-export const checkHoldings = async function(writer: pg.Pool, report: (fault: IndexerFault) => void = ignoreFault): Promise<number> {
-	const suspects = await inTransaction(writer, function(client) {
-		return(holdingDifferences(client, null));
-	});
-	if (suspects.length === 0) {
-		return(0);
+/** How a holdings check indexes the staples pending before it compares again, as the indexer it runs beside would. */
+export type HoldingsCatchUp = {
+	readonly settings: IndexerSettings;
+	readonly stopping: () => boolean;
+	readonly sleep: (milliseconds: number) => Promise<void>;
+};
+
+const DEFAULT_CATCH_UP: HoldingsCatchUp = {
+	settings: DEFAULT_INDEXER_SETTINGS,
+	stopping: function() {
+		return(false);
+	},
+	sleep: function(milliseconds) {
+		return(new Promise(function(resolve) {
+			setTimeout(resolve, milliseconds);
+		}));
 	}
+};
+
+// Whether the staples the scan saw pending are indexed; false when the catch-up was stopped or paused first.
+const caughtUp = async function(writer: pg.Pool, pending: number, catchUp: HoldingsCatchUp): Promise<boolean> {
+	const { settings } = catchUp;
 	let state = await startingState(writer);
-	for (;;) {
-		const result = await indexBatch(writer, state, DEFAULT_INDEXER_SETTINGS, Date.now);
+	for (let batches = Math.ceil(pending / settings.batchStaples); batches > 0; batches--) {
+		if (catchUp.stopping()) {
+			return(false);
+		}
+		const result = await indexBatch(writer, state, settings, Date.now);
 		state = result.state;
-		if (result.indexed < DEFAULT_INDEXER_SETTINGS.batchStaples) {
+		if (state.kind === 'paused') {
+			return(false);
+		}
+		if (result.indexed < settings.batchStaples) {
 			break;
 		}
+		await catchUp.sleep(settings.batchPauseMilliseconds);
+	}
+	return(!catchUp.stopping());
+};
+
+/*
+ * A staple the node applied that the indexer has not reached yet differs from
+ * the holdings without any fault, so the staples pending at the scan are
+ * indexed first and only the rows that still differ after it are faults. A
+ * check that cannot finish its catch-up reports and repairs nothing.
+ */
+export const checkHoldings = async function(writer: pg.Pool, report: (fault: IndexerFault) => void = ignoreFault, catchUp: HoldingsCatchUp = DEFAULT_CATCH_UP): Promise<number> {
+	const suspects = await inTransaction(writer, suspectHoldings);
+	if (suspects.rows.length === 0 || !await caughtUp(writer, suspects.pending, catchUp)) {
+		return(0);
 	}
 	const differences = await inTransaction(writer, async function(client) {
-		const still = await holdingDifferences(client, pairsOf(suspects));
+		const still = await stillDiffering(client, pairsOf(suspects.rows));
 		await repairHoldings(client, pairsOf(still));
 		return(still);
 	});
 	for (const row of differences) {
 		report({ kind: 'holding-differs', accountID: row.account_id, tokenID: row.token_id, node: row.node, explorer: row.explorer });
+	}
+	if (suspects.total > suspects.rows.length) {
+		report({ kind: 'holdings-unchecked', remaining: suspects.total - suspects.rows.length });
 	}
 	return(differences.length);
 };
@@ -483,200 +534,3 @@ export const freshness = async function(pool: pg.Pool): Promise<Freshness> {
 		});
 	}));
 };
-
-const LOG_FROM = 'explorer/indexer';
-
-const describeFault = function(fault: IndexerFault): string {
-	switch (fault.kind) {
-		case 'missed-staple':
-			return(`indexer fault: staple ${fault.blocksHash} at sequence ${fault.sequence.toString()} was passed by the watermark but not indexed`);
-		case 'holding-differs':
-			return(`indexer fault: holding of token ${fault.tokenID} by account ${fault.accountID} was ${fault.explorer ?? 'absent'}, the node holds ${fault.node ?? 'none'}`);
-		default:
-			return(assertNever(fault));
-	}
-};
-
-/*
- * A deploy starts the new container before it stops the old one, and two
- * indexers would race on the watermark, so one session lock, held on a
- * connection of its own for the indexer's life, lets one index at a time.
- * Its key is ASCII keetaidx, distinct from both migration locks.
- */
-const INDEXER_LOCK_KEY = 0x6b65657461696478n;
-
-type Step = 'index' | 'reconcile' | 'holdings';
-
-const STEP_FAILURES: Readonly<Record<Step, string>> = {
-	index: 'indexing stopped',
-	reconcile: 'the reconcile failed',
-	holdings: 'the holdings check failed'
-};
-
-/** Runs the batches, the reconcile and the holdings check on their schedules until stopped, while it holds the indexer lock. */
-export class Indexer {
-	readonly #writer: pg.Pool;
-	readonly #settings: IndexerSettings;
-	readonly #log: LogTarget;
-	#running: Promise<void> | null = null;
-	#stopping = false;
-	#wake: (() => void) | null = null;
-	readonly #lastErrors = new Map<Step, string>();
-
-	constructor(writer: pg.Pool, settings: IndexerSettings, log: LogTarget) {
-		this.#writer = writer;
-		this.#settings = settings;
-		this.#log = log;
-	}
-
-	start(): void {
-		if (this.#running !== null) {
-			return;
-		}
-		this.#stopping = false;
-		this.#running = this.#run();
-	}
-
-	async stop(): Promise<void> {
-		this.#stopping = true;
-		this.#wake?.();
-		await this.#running;
-		this.#running = null;
-	}
-
-	#emit(level: LogLevel, message: string): void {
-		const entry: LogEntry = { options: {}, level, from: LOG_FROM, args: [message] };
-		this.#log.emitLogs([entry]).catch(function() {
-			// A target that cannot write has nowhere to report that it cannot.
-		});
-	}
-
-	#fault = (fault: IndexerFault): void => {
-		this.#emit('ERROR', describeFault(fault));
-	};
-
-	// A failure that persists is logged once, not once a poll, until the step succeeds or fails otherwise.
-	async #attempt<Result>(step: Step, work: () => Promise<Result>): Promise<Result | undefined> {
-		try {
-			const result = await work();
-			this.#lastErrors.delete(step);
-			return(result);
-		} catch (error: unknown) {
-			const message = describeError(error);
-			if (this.#lastErrors.get(step) !== message) {
-				this.#emit('ERROR', `${STEP_FAILURES[step]}: ${message}`);
-			}
-			this.#lastErrors.set(step, message);
-			return(undefined);
-		}
-	}
-
-	// A stop during a batch finds no sleep to wake, so the sleep that follows the batch ends at once.
-	#sleep(milliseconds: number): Promise<void> {
-		return(new Promise((resolve) => {
-			if (this.#stopping) {
-				resolve();
-				return;
-			}
-			const timer = setTimeout(resolve, milliseconds);
-			this.#wake = function() {
-				clearTimeout(timer);
-				resolve();
-			};
-		}));
-	}
-
-	async #lock(client: pg.PoolClient): Promise<boolean> {
-		let waiting = false;
-		while (!this.#stopping) {
-			const held = await client.query<{ locked: boolean }>('SELECT pg_try_advisory_lock($1::bigint) AS locked', [INDEXER_LOCK_KEY.toString()]);
-			if (held.rows[0]?.locked === true) {
-				return(true);
-			}
-			if (!waiting) {
-				this.#emit('INFO', 'another indexer holds the indexer lock; waiting for it to stop');
-				waiting = true;
-			}
-			await this.#sleep(this.#settings.pollMilliseconds);
-		}
-		return(false);
-	}
-
-	async #connect(): Promise<pg.PoolClient | undefined> {
-		while (!this.#stopping) {
-			const client = await this.#attempt('index', () => {
-				return(this.#writer.connect());
-			});
-			if (client !== undefined) {
-				return(client);
-			}
-			await this.#sleep(this.#settings.pollMilliseconds);
-		}
-		return(undefined);
-	}
-
-	async #run(): Promise<void> {
-		const client = await this.#connect();
-		if (client === undefined) {
-			return;
-		}
-		let locked = false;
-		try {
-			locked = await this.#lock(client);
-			if (locked) {
-				await this.#index();
-			}
-		} finally {
-			if (locked) {
-				await client.query('SELECT pg_advisory_unlock($1::bigint)', [INDEXER_LOCK_KEY.toString()]).catch(function() {
-					// The lock ends with the session if the connection is gone.
-				});
-			}
-			client.release();
-		}
-	}
-
-	async #batch(state: IndexerState | undefined): Promise<BatchResult> {
-		const before = state ?? await startingState(this.#writer);
-		const result = await indexBatch(this.#writer, before, this.#settings, Date.now);
-		if (result.state.kind === 'paused' && before.kind !== 'paused') {
-			this.#emit('ERROR', `indexing paused: ${pausedReason(result.state.nodeVersion, result.state.newestKnown)}`);
-		}
-		return(result);
-	}
-
-	// A full batch leaves more to index, so the next comes after the short pause that throttles a backfill.
-	#pauseAfter(result: BatchResult | undefined): number {
-		if (result !== undefined && result.indexed >= this.#settings.batchStaples) {
-			return(this.#settings.batchPauseMilliseconds);
-		}
-		return(this.#settings.pollMilliseconds);
-	}
-
-	async #index(): Promise<void> {
-		let state: IndexerState | undefined;
-		let reconciled = Date.now();
-		let holdingsChecked = Date.now();
-		while (!this.#stopping) {
-			const result = await this.#attempt('index', () => {
-				return(this.#batch(state));
-			});
-			state = result?.state ?? state;
-			// Under a node schema this build does not know, nothing is written.
-			const running = state?.kind === 'running';
-			if (running && Date.now() - reconciled >= this.#settings.reconcileMilliseconds) {
-				reconciled = Date.now();
-				await this.#attempt('reconcile', () => {
-					return(reconcile(this.#writer, this.#fault));
-				});
-			}
-			if (running && Date.now() - holdingsChecked >= this.#settings.holdingsCheckMilliseconds) {
-				holdingsChecked = Date.now();
-				await this.#attempt('holdings', () => {
-					return(checkHoldings(this.#writer, this.#fault));
-				});
-			}
-			await this.#sleep(this.#pauseAfter(result));
-		}
-	}
-}
