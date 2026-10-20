@@ -1,6 +1,6 @@
 import { describe, expect, inject, onTestFinished, test } from 'vitest';
 import pg from 'pg';
-import { DEFAULT_SQL_LIMITS, runReadOnlySQL, toJSONValue } from './sql.js';
+import { DEFAULT_SQL_LIMITS, runFixedQueries, runReadOnlySQL, toJSONValue } from './sql.js';
 import type { SQLAnswer, SQLLimits } from './sql.js';
 import { explorerDatabase } from './testing.js';
 
@@ -332,5 +332,39 @@ describe('runReadOnlySQL', function() {
 	test.each(['', ';', '  ;  ', '\n\t'])('refuses the empty query %j', async function(sql) {
 		const { reader } = await explorerDatabase();
 		expect(await runReadOnlySQL(reader, sql, DEFAULT_SQL_LIMITS)).toMatchObject({ kind: 'refused', reason: 'empty' });
+	});
+});
+
+describe('runFixedQueries', function() {
+	test('answers each parameterized query in order, amounts exact and json as its text', async function() {
+		const { admin, reader } = await explorerDatabase();
+		await withHoldings(admin);
+		const answer = await runFixedQueries(reader, [
+			{ text: 'SELECT account, amount FROM explorer.holders WHERE token_id = explorer.id_of($1) ORDER BY amount DESC LIMIT $2', values: [TOKEN, 2] },
+			{ text: `SELECT $1::jsonb AS details`, values: ['{"amount": 123456789012345678901234567890}'] }
+		], DEFAULT_SQL_LIMITS);
+		expect(answer).toEqual({ kind: 'rows', results: [
+			[{ account: 'keeta_holder_one', amount: LARGE_BALANCE }, { account: 'keeta_holder_three', amount: '2' }],
+			[{ details: '{"amount": 123456789012345678901234567890}' }]
+		] });
+	});
+
+	test('runs read-only and refuses a write with its error', async function() {
+		const { reader } = await explorerDatabase();
+		const answer = await runFixedQueries(reader, [{ text: 'SELECT pg_advisory_xact_lock(1)', values: [] }, { text: 'DELETE FROM explorer.holdings', values: [] }], DEFAULT_SQL_LIMITS);
+		expect(answer).toEqual({ kind: 'refused', reason: 'sql-error', message: 'cannot execute DELETE in a read-only transaction' });
+	});
+
+	test('stops at the default timeout', async function() {
+		const { reader } = await explorerDatabase();
+		const answer = await runFixedQueries(reader, [{ text: 'SELECT pg_sleep(2)', values: [] }], limits({ timeoutMilliseconds: 200 }));
+		expect(answer).toMatchObject({ kind: 'refused', reason: 'timeout' });
+	});
+
+	test('leaves no setting behind on the connection', async function() {
+		const { database } = await explorerDatabase();
+		const reader = singleReader(database.name);
+		await runFixedQueries(reader, [{ text: `SELECT set_config('application_name', 'left behind', false)`, values: [] }], DEFAULT_SQL_LIMITS);
+		expect(rowsOf(await runReadOnlySQL(reader, `SELECT current_setting('application_name') AS name`, DEFAULT_SQL_LIMITS)).rows).toEqual([{ name: '' }]);
 	});
 });

@@ -77,7 +77,11 @@ export default {
 		'nofile',
 		'devnet',
 		// A Postgres setting the follower's cluster runs with.
-		'autovacuum'
+		'autovacuum',
+		// The MCP SDK's package and transport, and the explorer's health route.
+		'modelcontextprotocol',
+		'streamable',
+		'healthz'
 	],
 	// Account strings are base32 public keys, not words, and a Unix socket
 	// directory as the host of a Postgres URL has each "/" written %2F.

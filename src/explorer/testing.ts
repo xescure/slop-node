@@ -1,9 +1,19 @@
 import { readFile } from 'node:fs/promises';
+import * as KeetaNet from '@keetanetwork/keetanet-client';
+import type { Account, GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
+import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import pg from 'pg';
 import { inject, onTestFinished } from 'vitest';
+import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
+import { ChainCursor, DEFAULT_WEIGHTS, GENESIS_MOMENT, requireAt } from '../ledger/storage/suite/support.js';
+import { confirmedStaple, createTokenBlock, sendBlock, setInfoBlock, tokenSupplyBlock } from '../testing/blocks.js';
+import { createTestNetwork, freezeClock, type TestNetwork } from '../testing/network.js';
 import { createDatabase } from '../testing/postgres.js';
 import type { ClusterConnection, TestDatabase } from '../testing/postgres.js';
+import { DEFAULT_INDEXER_SETTINGS, indexBatch, startingState } from './indexer.js';
 import { applyExplorerMigrations } from './migrations.js';
+
+const lib = KeetaNet.lib;
 
 const EXPLORER_SETUP = new URL('../../schema/explorer/setup.sql', import.meta.url);
 
@@ -74,4 +84,71 @@ export const explorerDatabase = async function(): Promise<{ database: TestDataba
 	await runSetup(cluster, admin);
 	await applyExplorerMigrations(writer);
 	return({ database, writer, reader, admin });
+};
+
+export type LedgerFixture = {
+	readonly writer: pg.Pool;
+	readonly reader: pg.Pool;
+	readonly admin: pg.Pool;
+	readonly network: TestNetwork;
+	readonly cursor: ChainCursor;
+	readonly apply: (blocks: readonly Block[]) => Promise<void>;
+};
+
+/** An explorer database whose node tables a real ledger fills, from a test network's genesis. */
+export const ledgerFixture = async function(): Promise<LedgerFixture> {
+	const { database, writer, reader, admin } = await explorerDatabase();
+	const storage = new PostgresLedgerStorage({ kind: 'connection-string', connectionString: database.connectionString });
+	onTestFinished(function() {
+		return(storage.destroy());
+	});
+	freezeClock(GENESIS_MOMENT);
+	const network = await createTestNetwork({ representativeWeights: DEFAULT_WEIGHTS });
+	const ledger = network.createLedger(storage, requireAt(network.representatives, 0));
+	await ledger.add(network.genesis);
+	const cursor = new ChainCursor(network.genesis);
+	const apply = async function(blocks: readonly Block[]): Promise<void> {
+		await ledger.add(await confirmedStaple(blocks, network.representatives));
+	};
+	return({ writer, reader, admin, network, cursor, apply });
+};
+
+/** Indexes every staple the node has stored. */
+export const indexAll = async function(writer: pg.Pool): Promise<void> {
+	let state = await startingState(writer);
+	for (;;) {
+		const result = await indexBatch(writer, state, DEFAULT_INDEXER_SETTINGS, function() {
+			return(GENESIS_MOMENT.getTime());
+		});
+		state = result.state;
+		if (result.indexed === 0) {
+			return;
+		}
+	}
+};
+
+export const addressOf = function(account: GenericAccount): string {
+	return(account.publicKeyString.get());
+};
+
+export const base64Of = function(text: string): string {
+	return(Buffer.from(text, 'utf-8').toString('base64'));
+};
+
+export type Minting = { readonly decimals: number; readonly first: bigint; readonly second: bigint };
+
+/** A token whose metadata gives it its decimals, minted and sent out whole to two holders. */
+export const mintedToken = async function(context: LedgerFixture, minting: Minting = { decimals: 2, first: 100n, second: 50n }): Promise<{ token: GenericAccount; first: Account; second: Account }> {
+	const { network, cursor } = context;
+	const owner = requireAt(network.users, 0);
+	const [first, second] = [requireAt(network.users, 1), requireAt(network.users, 2)];
+	const created = await createTokenBlock({ owner, previous: cursor.previous(owner), network: network.network });
+	const { token } = created;
+	cursor.append(created.block);
+	const named = cursor.append(await setInfoBlock({ account: token, signer: owner, previous: cursor.previous(token), network: network.network, name: 'CENT', description: 'a token of two decimals', metadata: base64Of(JSON.stringify({ decimalPlaces: minting.decimals })), defaultPermission: new lib.Permissions(['ACCESS']) }));
+	const minted = cursor.append(await tokenSupplyBlock({ owner, token, amount: minting.first + minting.second, previous: cursor.previous(token), network: network.network }));
+	const toSecond = cursor.append(await sendBlock({ from: token, signer: owner, to: second, amount: minting.second, token, previous: cursor.previous(token), network: network.network }));
+	const toFirst = cursor.append(await sendBlock({ from: token, signer: owner, to: first, amount: minting.first, token, previous: cursor.previous(token), network: network.network }));
+	await context.apply([created.block, named, minted, toSecond, toFirst]);
+	return({ token, first, second });
 };

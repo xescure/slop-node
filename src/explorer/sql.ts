@@ -24,7 +24,13 @@ export type SQLAnswer =
 	| { readonly kind: 'rows'; readonly columns: readonly string[]; readonly rows: readonly SQLRow[]; readonly truncated: 'row-cap' | 'byte-cap' | null; readonly milliseconds: number }
 	| { readonly kind: 'refused'; readonly reason: 'timeout' | 'sql-error' | 'byte-cap' | 'empty'; readonly message: string };
 
-type Refusal = Extract<SQLAnswer, { kind: 'refused' }>;
+export type SQLRefusal = Extract<SQLAnswer, { kind: 'refused' }>;
+
+export type FixedQuery = { readonly text: string; readonly values: readonly unknown[] };
+
+export type FixedAnswer =
+	| { readonly kind: 'rows'; readonly results: readonly (readonly SQLRow[])[] }
+	| SQLRefusal;
 
 const QUERY_CANCELED = '57014';
 
@@ -172,7 +178,7 @@ const timeoutOf = function(limits: SQLLimits, requested: number | undefined): nu
 	return(Math.max(1, Math.min(Math.floor(wanted), limits.maxTimeoutMilliseconds)));
 };
 
-const refusalOf = function(error: pg.DatabaseError, statement: string, prefix: string): Refusal {
+const refusalOf = function(error: pg.DatabaseError, statement: string, prefix: string): SQLRefusal {
 	if (error.code === QUERY_CANCELED) {
 		return({ kind: 'refused', reason: 'timeout', message: error.message });
 	}
@@ -290,29 +296,64 @@ const cleanupFailure = async function(client: pg.PoolClient): Promise<Error | un
 	}
 };
 
+/*
+ * The pool listens for errors only on idle clients, and a connection the
+ * query ended (pg_terminate_backend on its own backend) emits one while
+ * borrowed; without a listener that error would end the process. The failed
+ * query already reports it.
+ */
+const onReaderConnection = async function<T>(reader: pg.Pool, work: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+	const client = await reader.connect();
+	const ignore = function(): void {
+		// Reported through the query's rejection.
+	};
+	client.on('error', ignore);
+	try {
+		return(await work(client));
+	} finally {
+		const failure = await cleanupFailure(client);
+		client.removeListener('error', ignore);
+		client.release(failure);
+	}
+};
+
 /** Runs one agent statement read-only under a timeout, a row cap and a byte cap, leaving nothing on the connection. */
 export async function runReadOnlySQL(reader: pg.Pool, sql: string, limits: SQLLimits, requestedTimeout?: number): Promise<SQLAnswer> {
 	const statement = statementOf(sql);
 	if (statement === null) {
 		return({ kind: 'refused', reason: 'empty', message: 'The query is empty.' });
 	}
+	return(await onReaderConnection(reader, function(client) {
+		return(answerOn(client, statement, limits, timeoutOf(limits, requestedTimeout)));
+	}));
+}
 
-	const client = await reader.connect();
-	/*
-	 * The pool listens for errors only on idle clients, and a connection the
-	 * query ended (pg_terminate_backend on its own backend) emits one while
-	 * borrowed; without a listener that error would end the process. The
-	 * failed query already reports it.
-	 */
-	const ignore = function(): void {
-		// Reported through the query's rejection.
-	};
-	client.on('error', ignore);
-	try {
-		return(await answerOn(client, statement, limits, timeoutOf(limits, requestedTimeout)));
-	} finally {
-		const failure = await cleanupFailure(client);
-		client.removeListener('error', ignore);
-		client.release(failure);
-	}
+/**
+ * Runs the explorer's own parameterized queries in one read-only transaction
+ * under the default timeout, with the rows in the form the agent's queries
+ * take. Their text is fixed and bounded by its own LIMIT, so no cap applies.
+ */
+export async function runFixedQueries(reader: pg.Pool, queries: readonly FixedQuery[], limits: SQLLimits): Promise<FixedAnswer> {
+	return(await onReaderConnection(reader, async function(client): Promise<FixedAnswer> {
+		try {
+			await client.query('BEGIN READ ONLY');
+			await client.query(`SET LOCAL statement_timeout = ${timeoutOf(limits, undefined).toString()}`);
+			const results: SQLRow[][] = [];
+			for (const query of queries) {
+				const answer = await client.query<Record<string, unknown>>({ text: query.text, values: [...query.values], types: RESULT_TYPES });
+				results.push(answer.rows.map(function(row) {
+					return(Object.fromEntries(Object.entries(row).map(function([column, value]) {
+						return([column, toJSONValue(value)]);
+					})));
+				}));
+			}
+			return({ kind: 'rows', results });
+		} catch (error) {
+			if (error instanceof pg.DatabaseError) {
+				// A position in the explorer's own text would mean nothing to the agent.
+				return(refusalOf(error, '', ''));
+			}
+			throw(error);
+		}
+	}));
 }
