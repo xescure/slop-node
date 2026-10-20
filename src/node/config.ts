@@ -346,7 +346,7 @@ const UNSPECIFIED_HOSTS: ReadonlySet<string> = new Set(['0.0.0.0', '[::]']);
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /** A secret value is left out of the error, and so is the cause, which may quote it. */
-function invalid(variable: ConfigVariable, expected: string, value: string, options?: ErrorOptions): ConfigError {
+export function invalid(variable: ConfigVariable, expected: string, value: string, options?: ErrorOptions): ConfigError {
 	if (SECRET_VARIABLES.has(variable)) {
 		return(new ConfigError({ kind: 'invalid', variable, expected }));
 	}

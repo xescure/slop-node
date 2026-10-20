@@ -9,7 +9,7 @@ import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { requireAt } from '../ledger/storage/suite/support.js';
 import { deriveTestKeys, TEST_NETWORK_SEEDS } from '../testing/network.js';
 import { bootstrapEndpointsOf, bootstrapPacingOf } from './bootstrap-peers.js';
-import { ConfigError, DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, formatManualPeer, getConfigFromEnv, LEDGER_WRITE_MODES, localNodeConfig, LOG_FORMATS, MANUAL_PEER_FORM, manualPeerOf, MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, MAX_FEE_SEED_ACCOUNTS, nodeNetworkClosedToP2P, PUBLIC_NETWORKS, publicNetworkOf } from './config.js';
+import { ConfigError, DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, formatManualPeer, getConfigFromEnv, invalid, LEDGER_WRITE_MODES, localNodeConfig, LOG_FORMATS, MANUAL_PEER_FORM, manualPeerOf, MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, MAX_FEE_SEED_ACCOUNTS, nodeNetworkClosedToP2P, PUBLIC_NETWORKS, publicNetworkOf } from './config.js';
 import type { ConfigProblem, Environment, EnvironmentConfig, LedgerWriteMode } from './config.js';
 import { LocalNode } from './local.js';
 import { MAX_PEER_LIMIT } from './peer-limits.js';
@@ -926,6 +926,14 @@ describe('a value the node cannot read', function() {
 	])('that the client or the runtime refuses as %s keeps their reason, for DEBUG to show', function(_ignored, extra, reason) {
 		expect(errorOf(extra).cause).toBeInstanceOf(reason);
 	});
+
+	/* No secret variable's refusal is given a cause today; this keeps the next one, such as a URL whose parse error carries the whole URL, from showing it at DEBUG. */
+	test.each(['KEETANET_LOCAL_NODE_SEED', 'KEETANET_LOCAL_NODE_FEE_SEED', 'KEETANET_LOCAL_NODE_POSTGRES_URL', 'KEETANET_GENESIS_TRUSTED_SEED'] as const)('of the secret %s is refused without its value or a reason that may quote it', function(variable) {
+		const error = invalid(variable, 'a secret', 'hunter2', { cause: new Error('hunter2') });
+		expect(error.problem).toEqual({ kind: 'invalid', variable, expected: 'a secret' });
+		expect(error.cause).toBeUndefined();
+		expect(error.message).toBe(`${variable} must be a secret`);
+	});
 });
 
 describe('the environment as a whole', function() {
@@ -1109,13 +1117,14 @@ describe('the node configuration', function() {
 		['KEETANET_LOCAL_NODE_ENDPOINT_API', 'http://127.0.0.1:7000/api', { api: 'http://127.0.0.1:7000/api' }]
 	] as const)('carries %s alone, leaving the other endpoint to the node', function(variable, value, endpoints) {
 		const node = localNodeConfig(parse({ [variable]: value }), { storageDriver: new MemoryLedgerStorage(), kv: null, log: new lib.Log() });
-		expect(node.endpoints).toEqual(endpoints);
+		expect(node.endpoints).toStrictEqual(endpoints);
 	});
 
-	test('gives the local network the alias the test helpers give network 0', function() {
+	test('gives the local network the alias the test helpers give network 0, and names no endpoint where none is given', function() {
 		const node = localNodeConfig(parse({}), { storageDriver: new MemoryLedgerStorage(), kv: null, log: new lib.Log() });
 		expect(node.network).toBe(0n);
 		expect(node.networkAlias).toBe('test');
+		expect('endpoints' in node).toBe(false);
 		expect(node.stats.kv).toBeNull();
 		// Without a store of its own the switch keeps its peers in memory [Keeta TS] index.js:73658-73663.
 		expect(node.p2p).toEqual({ useHTTPRepublish: false });

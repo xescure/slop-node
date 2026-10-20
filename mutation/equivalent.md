@@ -607,9 +607,7 @@ client's reason where the variable is not secret. The entries are:
 
 * the unreachable defaults of switches;
 * the fallbacks of the two endpoints of a manual peer, which the count of its
-  fields already ensures;
-* endpoints written as absent rather than left out, which every reader of the
-  node's endpoints takes alike.
+  fields already ensures.
 
 - src/node/config.ts:222:3-223:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of problem is unreachable.
 - src/node/config.ts:556:3-557:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
@@ -619,6 +617,3 @@ client's reason where the variable is not secret. The entries are:
 - src/node/config.ts:930:3-931:34 ConditionalExpression "default:" equivalent: the default of a switch that has handled both fee schedules is unreachable.
 - src/node/config.ts:1128:3-1129:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
 - src/node/config.ts:1140:3-1141:36 ConditionalExpression "default:" equivalent: the default of a switch that has handled both ways of receiving updates is unreachable.
-- src/node/config.ts:1148:6-1148:33 ConditionalExpression "true" equivalent: an API endpoint written as undefined reads as one left out: the node reads its endpoints only as possibly undefined (src/node/local.ts:196, 387, 455; src/node/bootstrap-peers.ts:56, 111), and with one endpoint undefined it fills that one in where it listens (src/node/local.ts:454-456) before upstream's switch reads them, only to greet [Keeta TS] index.js:74656-74673.
-- src/node/config.ts:1151:6-1151:33 ConditionalExpression "true" equivalent: a p2p endpoint written as undefined reads as one left out: the node reads its endpoints only as possibly undefined (src/node/local.ts:196, 387, 456; src/node/bootstrap-peers.ts:56), and with one endpoint undefined it fills that one in where it listens (src/node/local.ts:454-456) before upstream's switch reads them, only to greet [Keeta TS] index.js:74656-74673.
-- src/node/config.ts:1189:6-1189:29 ConditionalExpression "true" equivalent: endpoints written as undefined read as none given: the node reads them only through optional chaining (src/node/local.ts:196, 387, 455-456; src/node/bootstrap-peers.ts:56, 111), and with none given it sets both where it listens (src/node/local.ts:454-456) before upstream's switch reads them, only to greet [Keeta TS] index.js:74656-74673.
