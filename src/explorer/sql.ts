@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import pg from 'pg';
+import { parse as parseArray } from 'postgres-array';
 
 export type SQLLimits = {
 	readonly timeoutMilliseconds: number;
@@ -34,6 +35,8 @@ const TIMEOUT_MESSAGE = 'canceling statement due to statement timeout';
 
 const CURSOR = 'explorer_sql';
 
+const PROBE = 'explorer_probe';
+
 /*
  * Rows are fetched a few at a time, so the client holds at most this many
  * rows, each within the byte cap, beyond the rows it keeps.
@@ -41,10 +44,15 @@ const CURSOR = 'explorer_sql';
 const FETCH_ROWS = 10;
 
 /*
- * The cursor's query is the one statement the agent's text is parsed into.
- * The newlines keep a trailing line comment in the text from commenting out
- * the closing parenthesis.
+ * The probe proves the agent's text a complete query on its own before it is
+ * pasted inside the guard's parentheses: text that closes them and goes on
+ * (`...) AS q UNION ALL SELECT ... FROM (SELECT 1`) would put a branch outside
+ * the guard, and is no complete query alone. Declaring a cursor plans the
+ * query without running it. The newlines keep a trailing line comment in the
+ * text from commenting out what follows.
  */
+const PROBE_PREFIX = `DECLARE ${PROBE} NO SCROLL CURSOR FOR\n`;
+
 const WRAP_PREFIX = `DECLARE ${CURSOR} NO SCROLL CURSOR FOR SELECT q.* FROM (\n`;
 
 /*
@@ -56,14 +64,24 @@ const WRAP_PREFIX = `DECLARE ${CURSOR} NO SCROLL CURSOR FOR SELECT q.* FROM (\n`
 type ExtendedQuery = pg.QueryConfig & { readonly queryMode: 'extended' };
 
 /*
- * pg parses json with JSON.parse, which rounds numbers past 2^53, so json,
- * jsonb, json[] and jsonb[] come back as the text Postgres wrote, digits
- * intact; every other type keeps pg's parser.
+ * pg parses json with JSON.parse, which rounds numbers past 2^53, so json and
+ * jsonb come back as the text Postgres wrote, digits intact, and json[] and
+ * jsonb[] as arrays of that text; every other type keeps pg's parser.
  */
 const RESULT_TYPES = new pg.TypeOverrides();
-for (const oid of [114, 3802, 199, 3807]) {
-	RESULT_TYPES.setTypeParser(oid, 'text', function(text: string): string {
-		return(text);
+const keepText = function(text: string): string {
+	return(text);
+};
+/** json and jsonb. */
+for (const oid of [114, 3802]) {
+	RESULT_TYPES.setTypeParser(oid, 'text', keepText);
+}
+/** json[] and jsonb[]. */
+for (const oid of [199, 3807]) {
+	RESULT_TYPES.setTypeParser(oid, 'text', function(text: string): unknown {
+		// Typed as unknown: the entries can also be null or nested arrays, which the package's types leave out.
+		const entries: unknown = parseArray(text, keepText);
+		return(entries);
 	});
 }
 
@@ -154,7 +172,7 @@ const timeoutOf = function(limits: SQLLimits, requested: number | undefined): nu
 	return(Math.max(1, Math.min(Math.floor(wanted), limits.maxTimeoutMilliseconds)));
 };
 
-const refusalOf = function(error: pg.DatabaseError, statement: string): Refusal {
+const refusalOf = function(error: pg.DatabaseError, statement: string, prefix: string): Refusal {
 	if (error.code === QUERY_CANCELED) {
 		return({ kind: 'refused', reason: 'timeout', message: error.message });
 	}
@@ -162,7 +180,7 @@ const refusalOf = function(error: pg.DatabaseError, statement: string): Refusal 
 		return({ kind: 'refused', reason: 'byte-cap', message: error.message });
 	}
 
-	const position = Number(error.position) - WRAP_PREFIX.length;
+	const position = Number(error.position) - prefix.length;
 	if (!Number.isInteger(position) || position < 1 || position > statement.length) {
 		return({ kind: 'refused', reason: 'sql-error', message: error.message });
 	}
@@ -213,14 +231,19 @@ class Collection {
  * FETCH per batch, so each FETCH gets only what is left of the call's time.
  */
 const answerOn = async function(client: pg.PoolClient, statement: string, limits: SQLLimits, timeout: number): Promise<SQLAnswer> {
+	const probe: ExtendedQuery = { text: `${PROBE_PREFIX}${statement}\n`, queryMode: 'extended' };
 	const declare: ExtendedQuery = {
 		text: `${WRAP_PREFIX}${statement}\n) AS q WHERE explorer.row_fits(octet_length(ROW(q.*)::text), ${limits.byteCap.toString()}) LIMIT ${(limits.rowCap + 1).toString()}`,
 		queryMode: 'extended'
 	};
 	const started = performance.now();
+	let prefix = PROBE_PREFIX;
 	try {
 		await client.query('BEGIN READ ONLY');
 		await client.query(`SET LOCAL statement_timeout = ${timeout.toString()}`);
+		await client.query(probe);
+		await client.query(`CLOSE ${PROBE}`);
+		prefix = WRAP_PREFIX;
 		await client.query(declare);
 		const collection = new Collection(limits);
 		for (;;) {
@@ -244,7 +267,7 @@ const answerOn = async function(client: pg.PoolClient, statement: string, limits
 		}
 	} catch (error) {
 		if (error instanceof pg.DatabaseError) {
-			return(refusalOf(error, statement));
+			return(refusalOf(error, statement, prefix));
 		}
 		throw(error);
 	}
