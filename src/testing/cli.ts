@@ -23,8 +23,8 @@ export type CLIProcess = {
 };
 
 /** The built command, with nothing of this process's environment but the search path. */
-export function startCLI(args: readonly string[], environment: Environment): CLIProcess {
-	const child = spawn(process.execPath, [BUILT_CLI.pathname, ...args], {
+export function startCLI(args: readonly string[], environment: Environment, command: URL = BUILT_CLI): CLIProcess {
+	const child = spawn(process.execPath, [command.pathname, ...args], {
 		env: { PATH: process.env['PATH'], ...environment },
 		stdio: ['ignore', 'pipe', 'pipe']
 	});

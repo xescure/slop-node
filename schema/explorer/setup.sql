@@ -23,10 +23,11 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO explorer_wri
 GRANT USAGE ON SCHEMA explorer TO explorer_reader;
 ALTER DEFAULT PRIVILEGES FOR ROLE explorer_writer IN SCHEMA explorer GRANT SELECT ON TABLES TO explorer_reader;
 
-ALTER ROLE explorer_writer CONNECTION LIMIT 4;
+-- A deploy runs two explorers at once, each with up to 4 writer and 8 reader connections.
+ALTER ROLE explorer_writer CONNECTION LIMIT 8;
 ALTER ROLE explorer_writer SET idle_in_transaction_session_timeout = '60s';
 
-ALTER ROLE explorer_reader CONNECTION LIMIT 8;
+ALTER ROLE explorer_reader CONNECTION LIMIT 16;
 ALTER ROLE explorer_reader SET default_transaction_read_only = on;
 ALTER ROLE explorer_reader SET statement_timeout = '30s';
 ALTER ROLE explorer_reader SET idle_in_transaction_session_timeout = '10s';

@@ -109,7 +109,7 @@ node_modules: node_modules/.patched
 dist/.done: $(shell find src -type f -name '*.ts' -not -name '*.test.ts' -not -path 'src/testing/*' -not -path 'src/explorer/testing.ts' -not -path 'src/conformance/*' -not -path 'src/devnet/*' -not -path 'src/parity/*' -not -path '*/suite/*') tsconfig.json tsconfig.build.json node_modules/.patched
 	@[ -e dist/.done ] || rm -f dist/.tsbuildinfo
 	npm run tsc -- -p tsconfig.build.json
-	chmod +x dist/main.js
+	chmod +x dist/main.js dist/explorer/main.js
 	@touch dist/.done
 
 dist: dist/.done
