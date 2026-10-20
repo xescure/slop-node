@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { MINIMUM_SCORE, assess, parseReport, parseTriage, passes } from './triage.js';
+import { MINIMUM_SCORE, assess, mutatedRangesOf, parseReport, parseTriage, passes } from './triage.js';
 import type { Assessment, ModuleAssessment } from './triage.js';
 
 const usage = 'usage: main.js --report <Stryker JSON report> --triage <triage list>';
@@ -64,8 +64,8 @@ function describe(assessment: Assessment): string[] {
 
 async function run(): Promise<boolean> {
 	const options = parseOptions();
-	const mutants = parseReport(JSON.parse(await readFile(options.report, 'utf-8')));
-	const assessment = assess(mutants, parseTriage(await readFile(options.triage, 'utf-8')));
+	const report: unknown = JSON.parse(await readFile(options.report, 'utf-8'));
+	const assessment = assess(parseReport(report), parseTriage(await readFile(options.triage, 'utf-8')), mutatedRangesOf(report));
 	for (const line of describe(assessment)) {
 		console.log(line);
 	}
