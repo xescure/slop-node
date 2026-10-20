@@ -43,6 +43,8 @@ export default {
 		'regnamespace',
 		'rolname',
 		'xact',
+		// The column of pg_stat_activity that names a session's role.
+		'usename',
 		// Planner settings, which tests turn off to see the index a query can use.
 		'seqscan',
 		'bitmapscan',
