@@ -60,6 +60,8 @@ export default {
 		'keetaldg',
 		// The explorer's migration lock key, 0x6b65657461657870, read as ASCII.
 		'keetaexp',
+		// The explorer's indexer lock key, 0x6b65657461696478, read as ASCII.
+		'keetaidx',
 		// The image's init, its labels' namespace, and the settings a container runs with.
 		'tini',
 		'opencontainers',

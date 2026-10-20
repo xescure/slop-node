@@ -169,16 +169,18 @@ const insertBlocks = async function(client: pg.PoolClient, staple: StapleRow, ro
 		}
 		return(row.height);
 	});
-	// A reconcile may index a staple again whose rows were left in part; its rows are the same bytes decoded again.
+	// A reconcile may index again a staple whose rows were left in part, so they are written afresh.
+	const hashes = rows.map(function(row) {
+		return(row.hash);
+	});
+	await client.query('DELETE FROM explorer.operations WHERE block_hash = ANY($1::bytea[])', [hashes]);
+	await client.query('DELETE FROM explorer.blocks WHERE hash = ANY($1::bytea[])', [hashes]);
 	await client.query(`
 		INSERT INTO explorer.blocks (hash, account_id, height, date, version, purpose, signer_id, staple, staple_time, position, operation_count)
 		SELECT hash, account_id, height, date, version, purpose, signer_id, $8, $9, position, operation_count
 		FROM unnest($1::bytea[], $2::bigint[], $3::bigint[], $4::timestamptz[], $5::smallint[], $6::smallint[], $7::bigint[], $10::integer[], $11::integer[])
-			AS block (hash, account_id, height, date, version, purpose, signer_id, position, operation_count)
-		ON CONFLICT DO NOTHING`, [
-		rows.map(function(row) {
-			return(row.hash);
-		}),
+			AS block (hash, account_id, height, date, version, purpose, signer_id, position, operation_count)`, [
+		hashes,
 		blocks.map(function(block) {
 			return(idOf(ids, block.account));
 		}),
@@ -213,8 +215,7 @@ const insertBlocks = async function(client: pg.PoolClient, staple: StapleRow, ro
 		INSERT INTO explorer.operations (block_hash, idx, type, account_id, counterparty_id, token_id, amount, staple_time, details)
 		SELECT block_hash, idx, type, account_id, counterparty_id, token_id, amount, $8, details::jsonb
 		FROM unnest($1::bytea[], $2::integer[], $3::text[], $4::bigint[], $5::bigint[], $6::bigint[], $7::numeric[], $9::text[])
-			AS operation (block_hash, idx, type, account_id, counterparty_id, token_id, amount, details)
-		ON CONFLICT DO NOTHING`, [
+			AS operation (block_hash, idx, type, account_id, counterparty_id, token_id, amount, details)`, [
 		operations.map(function(row) {
 			return(row.blockHash);
 		}),
@@ -358,7 +359,8 @@ export const indexBatch = async function(writer: pg.Pool, state: IndexerState, s
 		return(toStapleSequence(BigInt(row.sequence)));
 	}), now());
 	if (watermark.through !== current.through) {
-		await writer.query('UPDATE explorer.progress SET watermark = $1', [watermark.through]);
+		// A second indexer may have run for a while during a deploy; the watermark never moves back.
+		await writer.query('UPDATE explorer.progress SET watermark = GREATEST(watermark, $1)', [watermark.through]);
 	}
 	return({ indexed: staples.length, state: { kind: 'running', watermark } });
 };
@@ -380,31 +382,69 @@ export const reconcile = async function(writer: pg.Pool, report: (fault: Indexer
 
 type HoldingDifference = { readonly account_id: string; readonly token_id: string; readonly node: string | null; readonly explorer: string | null };
 
-/** Makes the holdings equal the node's non-zero balances, reporting each row that differed. */
-export const checkHoldings = async function(writer: pg.Pool, report: (fault: IndexerFault) => void = ignoreFault): Promise<number> {
-	const differences = await inTransaction(writer, async function(client) {
-		const rows = await client.query<HoldingDifference>(`
-			SELECT coalesce(node.account_id, held.account_id) AS account_id, coalesce(node.token_id, held.token_id) AS token_id,
-				node.balance::text AS node, held.balance::text AS explorer
-			FROM (SELECT account_id, token_id, balance FROM public.balances WHERE balance <> 0) node
-			FULL JOIN explorer.holdings held ON held.account_id = node.account_id AND held.token_id = node.token_id
-			WHERE node.balance IS DISTINCT FROM held.balance`);
-		const accounts = rows.rows.map(function(row) {
+type HoldingPairs = { readonly accounts: readonly string[]; readonly tokens: readonly string[] };
+
+const pairsOf = function(rows: readonly HoldingDifference[]): HoldingPairs {
+	return({
+		accounts: rows.map(function(row) {
 			return(row.account_id);
-		});
-		const tokens = rows.rows.map(function(row) {
+		}),
+		tokens: rows.map(function(row) {
 			return(row.token_id);
-		});
-		await client.query(`
-			DELETE FROM explorer.holdings held USING unnest($1::bigint[], $2::bigint[]) AS pair (account_id, token_id)
-			WHERE held.account_id = pair.account_id AND held.token_id = pair.token_id`, [accounts, tokens]);
-		await client.query(`
-			INSERT INTO explorer.holdings (token_id, account_id, balance)
-			SELECT node.token_id, node.account_id, node.balance
-			FROM public.balances node JOIN unnest($1::bigint[], $2::bigint[]) AS pair (account_id, token_id)
-				ON node.account_id = pair.account_id AND node.token_id = pair.token_id
-			WHERE node.balance <> 0`, [accounts, tokens]);
-		return(rows.rows);
+		})
+	});
+};
+
+// With no pairs given, every row of both tables is compared.
+const holdingDifferences = async function(client: pg.PoolClient, pairs: HoldingPairs | null): Promise<readonly HoldingDifference[]> {
+	const rows = await client.query<HoldingDifference>(`
+		SELECT coalesce(node.account_id, held.account_id) AS account_id, coalesce(node.token_id, held.token_id) AS token_id,
+			node.balance::text AS node, held.balance::text AS explorer
+		FROM (SELECT account_id, token_id, balance FROM public.balances WHERE balance <> 0) node
+		FULL JOIN explorer.holdings held ON held.account_id = node.account_id AND held.token_id = node.token_id
+		WHERE node.balance IS DISTINCT FROM held.balance
+			AND ($1::bigint[] IS NULL OR (coalesce(node.account_id, held.account_id), coalesce(node.token_id, held.token_id)) IN (
+				SELECT pair.account_id, pair.token_id FROM unnest($1::bigint[], $2::bigint[]) AS pair (account_id, token_id)))`,
+	[pairs?.accounts ?? null, pairs?.tokens ?? null]);
+	return(rows.rows);
+};
+
+const repairHoldings = async function(client: pg.PoolClient, pairs: HoldingPairs): Promise<void> {
+	await client.query(`
+		DELETE FROM explorer.holdings held USING unnest($1::bigint[], $2::bigint[]) AS pair (account_id, token_id)
+		WHERE held.account_id = pair.account_id AND held.token_id = pair.token_id`, [pairs.accounts, pairs.tokens]);
+	await client.query(`
+		INSERT INTO explorer.holdings (token_id, account_id, balance)
+		SELECT node.token_id, node.account_id, node.balance
+		FROM public.balances node JOIN unnest($1::bigint[], $2::bigint[]) AS pair (account_id, token_id)
+			ON node.account_id = pair.account_id AND node.token_id = pair.token_id
+		WHERE node.balance <> 0`, [pairs.accounts, pairs.tokens]);
+};
+
+/*
+ * A staple the node applied that the loop has not reached yet differs from
+ * the holdings without any fault, so the staples pending are indexed and only
+ * the rows that still differ after it are faults.
+ */
+export const checkHoldings = async function(writer: pg.Pool, report: (fault: IndexerFault) => void = ignoreFault): Promise<number> {
+	const suspects = await inTransaction(writer, function(client) {
+		return(holdingDifferences(client, null));
+	});
+	if (suspects.length === 0) {
+		return(0);
+	}
+	let state = await startingState(writer);
+	for (;;) {
+		const result = await indexBatch(writer, state, DEFAULT_INDEXER_SETTINGS, Date.now);
+		state = result.state;
+		if (result.indexed < DEFAULT_INDEXER_SETTINGS.batchStaples) {
+			break;
+		}
+	}
+	const differences = await inTransaction(writer, async function(client) {
+		const still = await holdingDifferences(client, pairsOf(suspects));
+		await repairHoldings(client, pairsOf(still));
+		return(still);
 	});
 	for (const row of differences) {
 		report({ kind: 'holding-differs', accountID: row.account_id, tokenID: row.token_id, node: row.node, explorer: row.explorer });
@@ -457,7 +497,23 @@ const describeFault = function(fault: IndexerFault): string {
 	}
 };
 
-/** Runs the batches, the reconcile and the holdings check on their schedules until stopped. */
+/*
+ * A deploy starts the new container before it stops the old one, and two
+ * indexers would race on the watermark, so one session lock, held on a
+ * connection of its own for the indexer's life, lets one index at a time.
+ * Its key is ASCII keetaidx, distinct from both migration locks.
+ */
+const INDEXER_LOCK_KEY = 0x6b65657461696478n;
+
+type Step = 'index' | 'reconcile' | 'holdings';
+
+const STEP_FAILURES: Readonly<Record<Step, string>> = {
+	index: 'indexing stopped',
+	reconcile: 'the reconcile failed',
+	holdings: 'the holdings check failed'
+};
+
+/** Runs the batches, the reconcile and the holdings check on their schedules until stopped, while it holds the indexer lock. */
 export class Indexer {
 	readonly #writer: pg.Pool;
 	readonly #settings: IndexerSettings;
@@ -465,7 +521,7 @@ export class Indexer {
 	#running: Promise<void> | null = null;
 	#stopping = false;
 	#wake: (() => void) | null = null;
-	#lastError: string | null = null;
+	readonly #lastErrors = new Map<Step, string>();
 
 	constructor(writer: pg.Pool, settings: IndexerSettings, log: LogTarget) {
 		this.#writer = writer;
@@ -490,20 +546,29 @@ export class Indexer {
 
 	#emit(level: LogLevel, message: string): void {
 		const entry: LogEntry = { options: {}, level, from: LOG_FROM, args: [message] };
-		void this.#log.emitLogs([entry]);
+		this.#log.emitLogs([entry]).catch(function() {
+			// A target that cannot write has nowhere to report that it cannot.
+		});
 	}
 
 	#fault = (fault: IndexerFault): void => {
 		this.#emit('ERROR', describeFault(fault));
 	};
 
-	// A failure that persists is logged once, not once a poll, until another takes its place.
-	#failed(error: unknown): void {
-		const message = describeError(error);
-		if (message !== this.#lastError) {
-			this.#emit('ERROR', `indexing stopped: ${message}`);
+	// A failure that persists is logged once, not once a poll, until the step succeeds or fails otherwise.
+	async #attempt<Result>(step: Step, work: () => Promise<Result>): Promise<Result | undefined> {
+		try {
+			const result = await work();
+			this.#lastErrors.delete(step);
+			return(result);
+		} catch (error: unknown) {
+			const message = describeError(error);
+			if (this.#lastErrors.get(step) !== message) {
+				this.#emit('ERROR', `${STEP_FAILURES[step]}: ${message}`);
+			}
+			this.#lastErrors.set(step, message);
+			return(undefined);
 		}
-		this.#lastError = message;
 	}
 
 	// A stop during a batch finds no sleep to wake, so the sleep that follows the batch ends at once.
@@ -521,35 +586,97 @@ export class Indexer {
 		}));
 	}
 
+	async #lock(client: pg.PoolClient): Promise<boolean> {
+		let waiting = false;
+		while (!this.#stopping) {
+			const held = await client.query<{ locked: boolean }>('SELECT pg_try_advisory_lock($1::bigint) AS locked', [INDEXER_LOCK_KEY.toString()]);
+			if (held.rows[0]?.locked === true) {
+				return(true);
+			}
+			if (!waiting) {
+				this.#emit('INFO', 'another indexer holds the indexer lock; waiting for it to stop');
+				waiting = true;
+			}
+			await this.#sleep(this.#settings.pollMilliseconds);
+		}
+		return(false);
+	}
+
+	async #connect(): Promise<pg.PoolClient | undefined> {
+		while (!this.#stopping) {
+			const client = await this.#attempt('index', () => {
+				return(this.#writer.connect());
+			});
+			if (client !== undefined) {
+				return(client);
+			}
+			await this.#sleep(this.#settings.pollMilliseconds);
+		}
+		return(undefined);
+	}
+
 	async #run(): Promise<void> {
-		let state: IndexerState | null = null;
+		const client = await this.#connect();
+		if (client === undefined) {
+			return;
+		}
+		let locked = false;
+		try {
+			locked = await this.#lock(client);
+			if (locked) {
+				await this.#index();
+			}
+		} finally {
+			if (locked) {
+				await client.query('SELECT pg_advisory_unlock($1::bigint)', [INDEXER_LOCK_KEY.toString()]).catch(function() {
+					// The lock ends with the session if the connection is gone.
+				});
+			}
+			client.release();
+		}
+	}
+
+	async #batch(state: IndexerState | undefined): Promise<BatchResult> {
+		const before = state ?? await startingState(this.#writer);
+		const result = await indexBatch(this.#writer, before, this.#settings, Date.now);
+		if (result.state.kind === 'paused' && before.kind !== 'paused') {
+			this.#emit('ERROR', `indexing paused: ${pausedReason(result.state.nodeVersion, result.state.newestKnown)}`);
+		}
+		return(result);
+	}
+
+	// A full batch leaves more to index, so the next comes after the short pause that throttles a backfill.
+	#pauseAfter(result: BatchResult | undefined): number {
+		if (result !== undefined && result.indexed >= this.#settings.batchStaples) {
+			return(this.#settings.batchPauseMilliseconds);
+		}
+		return(this.#settings.pollMilliseconds);
+	}
+
+	async #index(): Promise<void> {
+		let state: IndexerState | undefined;
 		let reconciled = Date.now();
 		let holdingsChecked = Date.now();
 		while (!this.#stopping) {
-			let pauseFor = this.#settings.pollMilliseconds;
-			try {
-				state ??= await startingState(this.#writer);
-				const result = await indexBatch(this.#writer, state, this.#settings, Date.now);
-				if (result.state.kind === 'paused' && state.kind !== 'paused') {
-					this.#emit('ERROR', `indexing paused: ${pausedReason(result.state.nodeVersion, result.state.newestKnown)}`);
-				}
-				state = result.state;
-				this.#lastError = null;
-				if (result.indexed >= this.#settings.batchStaples) {
-					pauseFor = this.#settings.batchPauseMilliseconds;
-				}
-				if (Date.now() - reconciled >= this.#settings.reconcileMilliseconds) {
-					await reconcile(this.#writer, this.#fault);
-					reconciled = Date.now();
-				}
-				if (Date.now() - holdingsChecked >= this.#settings.holdingsCheckMilliseconds) {
-					await checkHoldings(this.#writer, this.#fault);
-					holdingsChecked = Date.now();
-				}
-			} catch (error: unknown) {
-				this.#failed(error);
+			const result = await this.#attempt('index', () => {
+				return(this.#batch(state));
+			});
+			state = result?.state ?? state;
+			// Under a node schema this build does not know, nothing is written.
+			const running = state?.kind === 'running';
+			if (running && Date.now() - reconciled >= this.#settings.reconcileMilliseconds) {
+				reconciled = Date.now();
+				await this.#attempt('reconcile', () => {
+					return(reconcile(this.#writer, this.#fault));
+				});
 			}
-			await this.#sleep(pauseFor);
+			if (running && Date.now() - holdingsChecked >= this.#settings.holdingsCheckMilliseconds) {
+				holdingsChecked = Date.now();
+				await this.#attempt('holdings', () => {
+					return(checkHoldings(this.#writer, this.#fault));
+				});
+			}
+			await this.#sleep(this.#pauseAfter(result));
 		}
 	}
 }

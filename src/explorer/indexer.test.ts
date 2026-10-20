@@ -1,12 +1,12 @@
 import { randomBytes } from 'node:crypto';
-import { afterEach, describe, expect, onTestFinished, test, vi } from 'vitest';
+import { afterEach, describe, expect, inject, onTestFinished, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { LogEntry, LogEntryFilled, LogTarget } from '@keetanetwork/keetanet-client/lib/log/common.js';
 import type { Ledger } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
-import type pg from 'pg';
+import pg from 'pg';
 import { PostgresLedgerStorage } from '../ledger/storage/postgres/driver.js';
 import { certificateFor, certificateIssuedBy, ChainCursor, DEFAULT_WEIGHTS, GENESIS_MOMENT, requireAt } from '../ledger/storage/suite/support.js';
 import {
@@ -35,7 +35,7 @@ import {
 	type IndexerState
 } from './indexer.js';
 import { explorerDatabase } from './testing.js';
-import { GAP_GRACE_MILLISECONDS } from './watermark.js';
+import { GAP_GRACE_MILLISECONDS, toStapleSequence } from './watermark.js';
 
 const lib = KeetaNet.lib;
 
@@ -143,6 +143,38 @@ const sendFrom = function(context: Fixture, from: Account, to: GenericAccount, a
 afterEach(function() {
 	vi.useRealTimers();
 });
+
+type RecordingTarget = LogTarget & { readonly messages: () => unknown[] };
+
+const recordingTarget = function(): RecordingTarget {
+	const entries: (LogEntry | LogEntryFilled)[] = [];
+	return({
+		logLevel: 'ALL',
+		filter: null,
+		emitLogs(logs) {
+			entries.push(...logs);
+			return(Promise.resolve());
+		},
+		messages() {
+			return(entries.map(function(entry) {
+				return(entry.args[0]);
+			}));
+		}
+	});
+};
+
+/** Makes every insert into explorer.indexed_staples fail, after a staple's blocks and operations are written. */
+const refuseIndexedStaples = async function(admin: pg.Pool): Promise<void> {
+	await admin.query(`
+		CREATE FUNCTION explorer.refuse_for_test() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'refused for the test'; END $$;
+		CREATE TRIGGER refuse_for_test BEFORE INSERT ON explorer.indexed_staples FOR EACH ROW EXECUTE FUNCTION explorer.refuse_for_test()`);
+};
+
+const pause = function(milliseconds: number): Promise<void> {
+	return(new Promise(function(resolve) {
+		setTimeout(resolve, milliseconds);
+	}));
+};
 
 describe('the indexer', function() {
 	test('genesis then a send are indexed', async function() {
@@ -450,5 +482,178 @@ describe('the indexer', function() {
 		expect(entries.map(function(entry) {
 			return({ level: entry.level, args: entry.args });
 		})).toEqual([{ level: 'ERROR', args: [`indexing paused: node schema ${String(newest + 1)} is newer than this build, which knows up to ${String(newest)}`] }]);
+	});
+
+	test('a staple whose indexing fails after its rows are written leaves none of them', async function() {
+		const context = await fixture();
+		await indexAll(context.writer);
+		const sent = context.cursor.append(await sendFrom(context, requireAt(context.network.users, 0), requireAt(context.network.users, 1), 1n));
+		await context.apply([sent]);
+		await refuseIndexedStaples(context.admin);
+
+		const failure = await indexAll(context.writer).catch(function(error: unknown) {
+			return(error);
+		});
+
+		expect(failure).toMatchObject({ message: 'refused for the test' });
+		const blocks = await context.admin.query('SELECT FROM explorer.blocks WHERE hash = $1', [sent.hash.getBuffer()]);
+		const operations = await context.admin.query('SELECT FROM explorer.operations WHERE block_hash = $1', [sent.hash.getBuffer()]);
+		expect([blocks.rows.length, operations.rows.length]).toEqual([0, 0]);
+	});
+
+	test('every read of the node tables runs in READ COMMITTED, whatever the writer role defaults to', async function() {
+		const context = await fixture();
+		await context.admin.query(`ALTER ROLE explorer_writer IN DATABASE ${pg.escapeIdentifier(context.database.name)} SET default_transaction_isolation = 'serializable'`);
+		const cluster = inject('postgresCluster');
+		const writer = new pg.Pool({ host: cluster.socketDirectory, port: cluster.port, user: 'explorer_writer', database: context.database.name });
+		writer.on('error', function() {
+			// Dropping the database terminates idle connections.
+		});
+		onTestFinished(function() {
+			return(writer.end());
+		});
+		const levels: string[] = [];
+		writer.on('connect', function(client) {
+			const query = client.query.bind(client) as unknown as (...args: unknown[]) => unknown;
+			const show = client.query.bind(client) as unknown as (text: string) => Promise<pg.QueryResult<{ transaction_isolation: string }>>;
+			// The client runs its queries in order, so the level shown is the one the next query runs at.
+			(client as unknown as { query: (...args: unknown[]) => unknown }).query = function(...args: unknown[]) {
+				if (JSON.stringify(args[0]).includes('public.')) {
+					show('SHOW transaction_isolation').then(function(result) {
+						levels.push(requireAt(result.rows, 0).transaction_isolation);
+					}, function() {
+						levels.push('unreadable');
+					});
+				}
+				return(query(...args));
+			};
+		});
+		const defaults = await writer.query<{ transaction_isolation: string }>('SHOW transaction_isolation');
+		await context.apply([context.cursor.append(await sendFrom(context, requireAt(context.network.users, 0), requireAt(context.network.users, 1), 1n))]);
+
+		await indexAll(writer);
+		await context.admin.query('UPDATE explorer.holdings SET balance = balance + 1');
+		await checkHoldings(writer);
+		await reconcile(writer);
+		await freshness(writer);
+
+		expect(defaults.rows).toEqual([{ transaction_isolation: 'serializable' }]);
+		expect(levels.length).toBeGreaterThan(0);
+		expect(new Set(levels)).toEqual(new Set(['read committed']));
+	});
+
+	test('checkHoldings reports no fault for a staple the node applied that is not indexed yet', async function() {
+		const context = await fixture();
+		await indexAll(context.writer);
+		const sendStaple = await context.apply([context.cursor.append(await sendFrom(context, requireAt(context.network.users, 0), requireAt(context.network.users, 1), 1n))]);
+		const faults: IndexerFault[] = [];
+
+		const repaired = await checkHoldings(context.writer, function(fault) {
+			faults.push(fault);
+		});
+
+		expect([repaired, faults]).toEqual([0, []]);
+		const holdings = await holdingsOf(context.admin);
+		expect(holdings.explorer).toEqual(holdings.node);
+		expect(await indexedCounts(context.admin)).toMatchObject({ [sendStaple.blocksHash.toString()]: 1 });
+	});
+
+	test('a stale indexer never moves the stored watermark back', async function() {
+		const context = await fixture();
+		const stale = await startingState(context.writer);
+		await indexAll(context.writer);
+		await context.admin.query('UPDATE explorer.progress SET watermark = 100');
+
+		const result = await indexBatch(context.writer, stale, SETTINGS, clock(GENESIS_MOMENT.getTime()));
+
+		expect(throughOf(result.state)).toBe(toStapleSequence(BigInt(await sequenceOf(context.admin, context.network.genesis))));
+		const stored = await context.admin.query<{ watermark: string }>('SELECT watermark FROM explorer.progress');
+		expect(stored.rows).toEqual([{ watermark: '100' }]);
+	});
+
+	test('a paused indexer neither reconciles nor checks the holdings', async function() {
+		const context = await fixture();
+		await indexAll(context.writer);
+		vi.useRealTimers();
+		await context.admin.query('INSERT INTO public.schema_version (version, sha256, applied_at) VALUES ($1, $2, $3)', [await knownNodeVersions() + 1, Buffer.alloc(32), GENESIS_MOMENT]);
+		await context.admin.query('DELETE FROM explorer.indexed_staples');
+		await context.admin.query('UPDATE explorer.holdings SET balance = balance + 1');
+		const before = await holdingsOf(context.admin);
+		const target = recordingTarget();
+		const indexer = new Indexer(context.writer, { ...DEFAULT_INDEXER_SETTINGS, pollMilliseconds: 5, reconcileMilliseconds: 0, holdingsCheckMilliseconds: 0 }, target);
+
+		indexer.start();
+		await vi.waitFor(function() {
+			expect(target.messages()).toHaveLength(1);
+		});
+		await pause(50);
+		await indexer.stop();
+
+		expect(await indexedCounts(context.admin)).toEqual({});
+		expect(await holdingsOf(context.admin)).toEqual(before);
+		expect(target.messages()).toEqual([expect.stringMatching(/^indexing paused: /u)]);
+	});
+
+	test('a backstop that keeps failing is logged once, and the other backstop still runs', async function() {
+		const context = await fixture();
+		await indexAll(context.writer);
+		vi.useRealTimers();
+		await context.admin.query('DELETE FROM explorer.indexed_staples');
+		await context.admin.query('UPDATE explorer.holdings SET balance = balance + 1 WHERE (account_id, token_id) IN (SELECT account_id, token_id FROM explorer.holdings LIMIT 1)');
+		await refuseIndexedStaples(context.admin);
+		const target = recordingTarget();
+		const indexer = new Indexer(context.writer, { ...DEFAULT_INDEXER_SETTINGS, pollMilliseconds: 5, reconcileMilliseconds: 0, holdingsCheckMilliseconds: 0 }, target);
+
+		indexer.start();
+		await vi.waitFor(async function() {
+			const holdings = await holdingsOf(context.admin);
+			expect(holdings.explorer).toEqual(holdings.node);
+		});
+		await pause(50);
+		await indexer.stop();
+
+		const messages = target.messages() as string[];
+		expect(messages.filter(function(message) {
+			return(message.startsWith('the reconcile failed: '));
+		})).toEqual(['the reconcile failed: refused for the test']);
+		expect(messages.filter(function(message) {
+			return(message.startsWith('indexer fault: holding'));
+		})).toHaveLength(1);
+		expect(messages.some(function(message) {
+			return(message.startsWith('indexing stopped'));
+		})).toBe(false);
+	});
+
+	test('of two indexers on one database one indexes, and the other takes over once it stops', async function() {
+		const context = await fixture();
+		vi.useRealTimers();
+		const settings = { ...DEFAULT_INDEXER_SETTINGS, pollMilliseconds: 5 };
+		const [firstTarget, secondTarget] = [recordingTarget(), recordingTarget()];
+		const first = new Indexer(context.writer, settings, firstTarget);
+		const second = new Indexer(context.writer, settings, secondTarget);
+		const indexedSend = async function(): Promise<VoteStaple> {
+			const staple = await context.apply([context.cursor.append(await sendFrom(context, requireAt(context.network.users, 0), requireAt(context.network.users, 1), 1n))]);
+			await vi.waitFor(async function() {
+				expect(await indexedCounts(context.admin)).toMatchObject({ [staple.blocksHash.toString()]: 1 });
+			});
+			return(staple);
+		};
+
+		first.start();
+		await vi.waitFor(async function() {
+			expect(await indexedCounts(context.admin)).toEqual({ [context.network.genesis.blocksHash.toString()]: 1 });
+		});
+		second.start();
+		await vi.waitFor(function() {
+			expect(secondTarget.messages()).toEqual(['another indexer holds the indexer lock; waiting for it to stop']);
+		});
+		await indexedSend();
+		await first.stop();
+		await indexedSend();
+		await second.stop();
+
+		expect(firstTarget.messages()).toEqual([]);
+		expect(secondTarget.messages()).toEqual(['another indexer holds the indexer lock; waiting for it to stop']);
+		expect(Object.values(await indexedCounts(context.admin))).toEqual([1, 1, 1]);
 	});
 });
