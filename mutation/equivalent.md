@@ -531,8 +531,6 @@ or requests it takes, how much memory it keeps, or a count it logs.
 - src/node/bootstrap-stage.ts:353:73-353:91 ArrayDeclaration "[]" harmless: a staple still leaving the stage may be read again, found held or queued, and counted as leaving twice in the log line's count.
 - src/node/bootstrap-stage.ts:381:30-383:4 BlockStatement "{}" harmless: a staple still leaving the stage may be read again, found held or queued, and counted as leaving twice in the log line's count.
 - src/node/bootstrap-stage.ts:382:4-382:27 CallExpression ";" harmless: a staple still leaving the stage may be read again, found held or queued, and counted as leaving twice in the log line's count.
-- src/node/bootstrap-stage.ts:397:13-401:4 BlockStatement "{}" equivalent: a key left in the set names a staple the stage no longer holds, which no read can return.
-- src/node/bootstrap-stage.ts:398:28-400:5 BlockStatement "{}" equivalent: a key left in the set names a staple the stage no longer holds, which no read can return.
 - src/node/bootstrap-stage.ts:409:15-409:20 BooleanLiteral "true" harmless: the queue is then offered again after a round that added nothing, which offers only the staples due anyway.
 - src/node/bootstrap-stage.ts:425:14-425:33 ConditionalExpression "true" harmless: the queue is then offered again after a round that added nothing, which offers only the staples due anyway.
 - src/node/bootstrap-stage.ts:429:7-429:26 ConditionalExpression "true" equivalent: with no batch read ahead, the batch to add next is undefined either way.
