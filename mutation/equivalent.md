@@ -597,3 +597,28 @@ entries are:
 - src/node/connections.ts:124:3-124:37 CallExpression ";" equivalent: whether a connection is released is read only while it is not tracked, and it stops being tracked only as it is marked released again.
 - src/node/connections.ts:128:20-128:25 BooleanLiteral "true" equivalent: a registration marks its connection to be unregistered as it ends, and nothing reads the mark before: #settle returns while a registration is in flight, and #unregister, the only other caller of #track, never reaches it (see the entry for line 106).
 - src/node/peer-store.ts:57:44-57:158 ObjectLiteral "{}" equivalent: the loop below sets the count of every arena of PEER_ARENAS, so no starting zero is ever read.
+
+## config
+
+How the node reads its environment, and the node upstream is given from it:
+the rest of config.ts, beside the parts that close a network to peers, which
+the p2p section holds. Every refusal says what it says, and keeps the
+client's reason where the variable is not secret. The entries are:
+
+* the unreachable defaults of switches;
+* the fallbacks of the two endpoints of a manual peer, which the count of its
+  fields already ensures;
+* endpoints written as absent rather than left out, which every reader of the
+  node's endpoints takes alike.
+
+- src/node/config.ts:222:3-223:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of problem is unreachable.
+- src/node/config.ts:556:3-557:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
+- src/node/config.ts:689:15-689:17 StringLiteral "\"Stryker was here!\"" equivalent: a peer reaches this line only with at least two fields after its key, so the API endpoint is always given.
+- src/node/config.ts:689:25-689:27 StringLiteral "\"Stryker was here!\"" equivalent: a peer reaches this line only with at least two fields after its key, so the p2p endpoint is always given.
+- src/node/config.ts:805:3-806:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
+- src/node/config.ts:930:3-931:34 ConditionalExpression "default:" equivalent: the default of a switch that has handled both fee schedules is unreachable.
+- src/node/config.ts:1128:3-1129:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
+- src/node/config.ts:1140:3-1141:36 ConditionalExpression "default:" equivalent: the default of a switch that has handled both ways of receiving updates is unreachable.
+- src/node/config.ts:1148:6-1148:33 ConditionalExpression "true" equivalent: an API endpoint written as undefined reads as one left out: the node reads its endpoints only as possibly undefined (src/node/local.ts:196, 387, 455; src/node/bootstrap-peers.ts:56, 111), and with one endpoint undefined it fills that one in where it listens (src/node/local.ts:454-456) before upstream's switch reads them, only to greet [Keeta TS] index.js:74656-74673.
+- src/node/config.ts:1151:6-1151:33 ConditionalExpression "true" equivalent: a p2p endpoint written as undefined reads as one left out: the node reads its endpoints only as possibly undefined (src/node/local.ts:196, 387, 456; src/node/bootstrap-peers.ts:56), and with one endpoint undefined it fills that one in where it listens (src/node/local.ts:454-456) before upstream's switch reads them, only to greet [Keeta TS] index.js:74656-74673.
+- src/node/config.ts:1189:6-1189:29 ConditionalExpression "true" equivalent: endpoints written as undefined read as none given: the node reads them only through optional chaining (src/node/local.ts:196, 387, 455-456; src/node/bootstrap-peers.ts:56, 111), and with none given it sets both where it listens (src/node/local.ts:454-456) before upstream's switch reads them, only to greet [Keeta TS] index.js:74656-74673.
