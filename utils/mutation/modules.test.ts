@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { describe, expect, test, vi } from 'vitest';
+import { describe, expect, test } from 'vitest';
 
 const CONFIG = 'src/node/config.ts';
 
@@ -43,24 +43,19 @@ async function closureRangesOf(source: string): Promise<string[]> {
 	return(reader(source));
 }
 
-type ModuleSelector = () => { readonly mutate: readonly string[] };
+type ModuleReader = (name: string) => { readonly mutate: readonly string[] };
 
-function isModuleSelector(candidate: unknown): candidate is ModuleSelector {
+function isModuleReader(candidate: unknown): candidate is ModuleReader {
 	return(typeof candidate === 'function');
 }
 
-/** What the module mutates, as Stryker's configuration reads it from the environment. */
+/** What the module mutates, as Stryker's configuration reads it. */
 async function mutateOf(module: string): Promise<readonly string[]> {
-	const selector = await exportOfModules('selectedModule');
-	if (!isModuleSelector(selector)) {
-		throw(new Error('mutation/modules.js exports no selectedModule'));
+	const reader = await exportOfModules('moduleNamed');
+	if (!isModuleReader(reader)) {
+		throw(new Error('mutation/modules.js exports no moduleNamed'));
 	}
-	vi.stubEnv('SLOP_NODE_MUTATION_MODULE', module);
-	try {
-		return(selector().mutate);
-	} finally {
-		vi.unstubAllEnvs();
-	}
+	return(reader(module).mutate);
 }
 
 type LineRange = { readonly first: number; readonly last: number };

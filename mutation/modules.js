@@ -247,9 +247,11 @@ const MODULES = {
 	}
 };
 
-/** The module the environment names, as make passes it to both configurations. */
-export function selectedModule() {
-	const name = process.env.SLOP_NODE_MUTATION_MODULE ?? '';
+/**
+ * The module of the name.
+ * @param {string} name
+ */
+export function moduleNamed(name) {
 	const module = MODULES[name];
 	if (module === undefined) {
 		throw(new Error(`unknown mutation module '${name}'; the modules are: ${Object.keys(MODULES).join(', ')}`));
@@ -264,4 +266,9 @@ export function selectedModule() {
 		ignorers: module.ignorers,
 		selectedCases: module.selectedCases
 	});
+}
+
+/** The module the environment names, as make passes it to both configurations. */
+export function selectedModule() {
+	return(moduleNamed(process.env.SLOP_NODE_MUTATION_MODULE ?? ''));
 }
