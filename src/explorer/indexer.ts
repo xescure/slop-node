@@ -172,10 +172,10 @@ const insertBlocks = async function(client: pg.PoolClient, staple: StapleRow, ro
 	const hashes = rows.map(function(row) {
 		return(row.hash);
 	});
-	await client.query('DELETE FROM explorer.operations WHERE block_hash = ANY($1::bytea[])', [hashes]);
-	await client.query('DELETE FROM explorer.blocks WHERE hash = ANY($1::bytea[])', [hashes]);
+	await client.query('DELETE FROM explorer.decoded_operations WHERE block_hash = ANY($1::bytea[])', [hashes]);
+	await client.query('DELETE FROM explorer.decoded_blocks WHERE hash = ANY($1::bytea[])', [hashes]);
 	await client.query(`
-		INSERT INTO explorer.blocks (hash, account_id, height, date, version, purpose, signer_id, staple, staple_time, position, operation_count)
+		INSERT INTO explorer.decoded_blocks (hash, account_id, height, date, version, purpose, signer_id, staple, staple_time, position, operation_count)
 		SELECT hash, account_id, height, date, version, purpose, signer_id, $8, $9, position, operation_count
 		FROM unnest($1::bytea[], $2::bigint[], $3::bigint[], $4::timestamptz[], $5::smallint[], $6::smallint[], $7::bigint[], $10::integer[], $11::integer[])
 			AS block (hash, account_id, height, date, version, purpose, signer_id, position, operation_count)`, [
@@ -211,7 +211,7 @@ const insertBlocks = async function(client: pg.PoolClient, staple: StapleRow, ro
 		}));
 	});
 	await client.query(`
-		INSERT INTO explorer.operations (block_hash, idx, type, account_id, counterparty_id, token_id, amount, staple_time, details)
+		INSERT INTO explorer.decoded_operations (block_hash, idx, type, account_id, counterparty_id, token_id, amount, staple_time, details)
 		SELECT block_hash, idx, type, account_id, counterparty_id, token_id, amount, $8, details::jsonb
 		FROM unnest($1::bytea[], $2::integer[], $3::text[], $4::bigint[], $5::bigint[], $6::bigint[], $7::numeric[], $9::text[])
 			AS operation (block_hash, idx, type, account_id, counterparty_id, token_id, amount, details)`, [

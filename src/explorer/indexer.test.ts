@@ -199,7 +199,7 @@ describe('the indexer', function() {
 		await indexAll(context.writer);
 
 		const operations = await context.admin.query<{ block_hash: Buffer; idx: number; type: string; account_id: string; counterparty_id: string | null; token_id: string | null; amount: string | null }>(
-			'SELECT block_hash, idx, type, account_id, counterparty_id, token_id, amount::text FROM explorer.operations ORDER BY block_hash, idx');
+			'SELECT block_hash, idx, type, account_id, counterparty_id, token_id, amount::text FROM explorer.decoded_operations ORDER BY block_hash, idx');
 		const expected = [];
 		for (const block of [...context.network.genesis.blocks, ...sendStaple.blocks]) {
 			const accountID = await idOf(context.admin, block.account);
@@ -221,7 +221,7 @@ describe('the indexer', function() {
 			amount: '7'
 		});
 		const heights = await context.admin.query<{ explorer: string; node: string }>(
-			'SELECT block.height AS explorer, chain.height AS node FROM explorer.blocks block JOIN public.chain chain ON chain.block_hash = block.hash');
+			'SELECT block.height AS explorer, chain.height AS node FROM explorer.decoded_blocks block JOIN public.chain chain ON chain.block_hash = block.hash');
 		expect(heights.rows).toHaveLength(context.network.genesis.blocks.length + 1);
 		for (const row of heights.rows) {
 			expect(row.explorer).toBe(row.node);
@@ -303,12 +303,12 @@ describe('the indexer', function() {
 		const context = await fixture();
 		const sendStaple = await context.apply([context.cursor.append(await sendFrom(context, requireAt(context.network.users, 0), requireAt(context.network.users, 1), 1n))]);
 		await indexAll(context.writer);
-		const operationsBefore = await context.admin.query('SELECT * FROM explorer.operations ORDER BY block_hash, idx');
+		const operationsBefore = await context.admin.query('SELECT * FROM explorer.decoded_operations ORDER BY block_hash, idx');
 		const blockHashes = sendStaple.blocks.map(function(block) {
 			return(block.hash.getBuffer());
 		});
 		await context.admin.query('DELETE FROM explorer.indexed_staples WHERE blocks_hash = $1', [sendStaple.blocksHash.getBuffer()]);
-		await context.admin.query('DELETE FROM explorer.operations WHERE block_hash = ANY($1::bytea[])', [blockHashes]);
+		await context.admin.query('DELETE FROM explorer.decoded_operations WHERE block_hash = ANY($1::bytea[])', [blockHashes]);
 		const faults: IndexerFault[] = [];
 
 		const found = await reconcile(context.writer, function(fault) {
@@ -317,7 +317,7 @@ describe('the indexer', function() {
 
 		expect(found).toBe(1);
 		expect(faults).toEqual([{ kind: 'missed-staple', blocksHash: sendStaple.blocksHash.toString(), sequence: BigInt(await sequenceOf(context.admin, sendStaple)) }]);
-		const operationsAfter = await context.admin.query('SELECT * FROM explorer.operations ORDER BY block_hash, idx');
+		const operationsAfter = await context.admin.query('SELECT * FROM explorer.decoded_operations ORDER BY block_hash, idx');
 		expect(operationsAfter.rows).toEqual(operationsBefore.rows);
 		expect(await indexedCounts(context.admin)).toEqual({ [context.network.genesis.blocksHash.toString()]: 1, [sendStaple.blocksHash.toString()]: 1 });
 		expect(await reconcile(context.writer)).toBe(0);
@@ -339,7 +339,7 @@ describe('the indexer', function() {
 
 		expect(paused).toEqual({ indexed: 0, state: { kind: 'paused', reason: 'node-schema-newer', nodeVersion: newest + 1, newestKnown: newest } });
 		expect(await indexedCounts(context.admin)).toEqual({});
-		const operations = await context.admin.query('SELECT FROM explorer.operations');
+		const operations = await context.admin.query('SELECT FROM explorer.decoded_operations');
 		expect(operations.rows).toHaveLength(0);
 		expect((await freshness(context.writer)).paused).toBe(`node schema ${String(newest + 1)} is newer than this build, which knows up to ${String(newest)}`);
 
@@ -418,7 +418,7 @@ describe('the indexer', function() {
 
 		await indexAll(context.writer);
 
-		const types = await context.admin.query<{ type: string }>('SELECT DISTINCT type FROM explorer.operations ORDER BY type');
+		const types = await context.admin.query<{ type: string }>('SELECT DISTINCT type FROM explorer.decoded_operations ORDER BY type');
 		expect(types.rows.map(function(row) {
 			return(row.type);
 		})).toEqual(['CREATE_IDENTIFIER', 'MANAGE_CERTIFICATE', 'MODIFY_PERMISSIONS', 'RECEIVE', 'SEND', 'SET_INFO', 'SET_REP', 'TOKEN_ADMIN_MODIFY_BALANCE', 'TOKEN_ADMIN_SUPPLY']);
@@ -508,8 +508,8 @@ describe('the indexer', function() {
 		});
 
 		expect(failure).toMatchObject({ message: 'refused for the test' });
-		const blocks = await context.admin.query('SELECT FROM explorer.blocks WHERE hash = $1', [sent.hash.getBuffer()]);
-		const operations = await context.admin.query('SELECT FROM explorer.operations WHERE block_hash = $1', [sent.hash.getBuffer()]);
+		const blocks = await context.admin.query('SELECT FROM explorer.decoded_blocks WHERE hash = $1', [sent.hash.getBuffer()]);
+		const operations = await context.admin.query('SELECT FROM explorer.decoded_operations WHERE block_hash = $1', [sent.hash.getBuffer()]);
 		expect([blocks.rows.length, operations.rows.length]).toEqual([0, 0]);
 	});
 
