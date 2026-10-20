@@ -339,8 +339,17 @@ const staplesToIndex = async function(writer: pg.Pool, range: StapleRange): Prom
 	return(rows.rows);
 };
 
-/** Indexes the next staples past the watermark, then advances the watermark over every sequence indexed or long missing. */
-export const indexBatch = async function(writer: pg.Pool, state: IndexerState, settings: IndexerSettings, now: () => number): Promise<BatchResult> {
+const neverStopping = function(): boolean {
+	return(false);
+};
+
+/**
+ * Indexes the next staples past the watermark, then advances the watermark
+ * over every sequence indexed or long missing. Each staple is indexed in a
+ * transaction of its own, so a stop asked for between two leaves the batch
+ * with those before it indexed whole and the rest for the next.
+ */
+export const indexBatch = async function(writer: pg.Pool, state: IndexerState, settings: IndexerSettings, now: () => number, stopping: () => boolean = neverStopping): Promise<BatchResult> {
 	const nodeVersion = await nodeVersionOf(writer);
 	const newestKnown = await knownNodeVersions();
 	if (nodeVersion > newestKnown) {
@@ -349,8 +358,13 @@ export const indexBatch = async function(writer: pg.Pool, state: IndexerState, s
 	const current = await resume(writer, state);
 
 	const staples = await staplesToIndex(writer, { kind: 'above', through: current.through, limit: settings.batchStaples });
+	let indexed = 0;
 	for (const staple of staples) {
+		if (stopping()) {
+			break;
+		}
 		await indexStaple(writer, staple, now);
+		indexed++;
 	}
 
 	const above = await writer.query<{ sequence: string }>('SELECT sequence FROM explorer.indexed_staples WHERE sequence > $1 ORDER BY sequence', [current.through]);
@@ -361,7 +375,7 @@ export const indexBatch = async function(writer: pg.Pool, state: IndexerState, s
 		// A second indexer may have run for a while during a deploy; the watermark never moves back.
 		await writer.query('UPDATE explorer.progress SET watermark = GREATEST(watermark, $1)', [watermark.through]);
 	}
-	return({ indexed: staples.length, state: { kind: 'running', watermark } });
+	return({ indexed, state: { kind: 'running', watermark } });
 };
 
 const ignoreFault = function(): void {
@@ -465,7 +479,7 @@ const caughtUp = async function(writer: pg.Pool, pending: number, catchUp: Holdi
 		if (catchUp.stopping()) {
 			return(false);
 		}
-		const result = await indexBatch(writer, state, settings, Date.now);
+		const result = await indexBatch(writer, state, settings, Date.now, catchUp.stopping);
 		state = result.state;
 		if (state.kind === 'paused') {
 			return(false);

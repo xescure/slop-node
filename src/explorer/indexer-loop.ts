@@ -235,7 +235,9 @@ export class Indexer {
 
 	async #batch(state: IndexerState | undefined): Promise<BatchResult> {
 		const before = state ?? await startingState(this.#writer);
-		const result = await indexBatch(this.#writer, before, this.#settings, Date.now);
+		const result = await indexBatch(this.#writer, before, this.#settings, Date.now, () => {
+			return(this.#stopping);
+		});
 		if (result.state.kind === 'paused' && before.kind !== 'paused') {
 			this.#emit('ERROR', `indexing paused: ${pausedReason(result.state.nodeVersion, result.state.newestKnown)}`);
 		}

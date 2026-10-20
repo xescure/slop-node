@@ -299,6 +299,38 @@ describe('the indexer', function() {
 		expect(throughOf(passed).toString()).toBe(await sequenceOf(context.admin, sendStaple));
 	});
 
+	test('a stop asked for during a batch ends it after the staple under way, leaving each staple indexed whole or not at all', async function() {
+		const context = await fixture();
+		const sender = requireAt(context.network.users, 0);
+		const recipient = requireAt(context.network.users, 1);
+		const first = await context.apply([context.cursor.append(await sendFrom(context, sender, recipient, 1n))]);
+		const second = await context.apply([context.cursor.append(await sendFrom(context, sender, recipient, 2n))]);
+		let checks = 0;
+		const stopAfterTwo = function(): boolean {
+			checks++;
+			return(checks > 2);
+		};
+
+		const stopped = await indexBatch(context.writer, await startingState(context.writer), { ...SETTINGS, batchStaples: 10 }, clock(GENESIS_MOMENT.getTime()), stopAfterTwo);
+
+		expect(stopped.indexed).toBe(2);
+		expect(checks).toBe(3);
+		expect(await indexedCounts(context.admin)).toEqual({
+			[context.network.genesis.blocksHash.toString()]: 1,
+			[first.blocksHash.toString()]: 1
+		});
+		expect(throughOf(stopped.state).toString()).toBe(await sequenceOf(context.admin, first));
+		const blocks = await context.admin.query<{ hash: Buffer }>('SELECT hash FROM explorer.decoded_blocks');
+		expect(blocks.rows.map(function(row) {
+			return(row.hash.toString('hex').toUpperCase());
+		}).sort()).toEqual([...context.network.genesis.blocks, ...first.blocks].map(function(block) {
+			return(block.hash.toString());
+		}).sort());
+
+		const rest = await indexAll(context.writer, stopped.state);
+		expect(throughOf(rest).toString()).toBe(await sequenceOf(context.admin, second));
+	});
+
 	test('reconcile finds a staple the watermark passed', async function() {
 		const context = await fixture();
 		const sendStaple = await context.apply([context.cursor.append(await sendFrom(context, requireAt(context.network.users, 0), requireAt(context.network.users, 1), 1n))]);

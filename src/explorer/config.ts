@@ -141,13 +141,13 @@ const integerFrom = function(minimum: number, maximum: number): Parser<number> {
 
 const MAX_PORT = 65535;
 
-/** A batch is read and written in one transaction, so a larger one holds its locks and its rows in memory for longer. */
-const MAX_BATCH_STAPLES = 10_000;
+/** A batch's staples are listed at once and its watermark advances only at its end, so a larger one waits longer to show its progress. */
+const MAX_BATCH_STAPLES = 2000;
 
 const MAX_BATCH_PAUSE_MILLISECONDS = 60_000;
 
-/** The largest statement_timeout Postgres accepts. */
-const MAX_STATEMENT_TIMEOUT_MILLISECONDS = 2_147_483_647;
+/** An agent's query holds one of the few reader connections for as long as it runs. */
+const MAX_SQL_TIMEOUT_MILLISECONDS = 300_000;
 
 const MAX_ROW_CAP = 1_000_000;
 
@@ -235,8 +235,8 @@ export function explorerConfigFromEnv(env: NodeJS.ProcessEnv): ExplorerConfig | 
 	const logFormat = reading.optional('SLOP_EXPLORER_LOG_FORMAT', parseLogFormat, DEFAULT_LOG_FORMAT);
 	const batchStaples = reading.optional('SLOP_EXPLORER_BATCH_STAPLES', integerFrom(1, MAX_BATCH_STAPLES), DEFAULT_INDEXER_SETTINGS.batchStaples);
 	const batchPause = reading.optional('SLOP_EXPLORER_BATCH_PAUSE_MS', integerFrom(0, MAX_BATCH_PAUSE_MILLISECONDS), DEFAULT_INDEXER_SETTINGS.batchPauseMilliseconds);
-	const timeout = reading.optional('SLOP_EXPLORER_SQL_TIMEOUT_MS', integerFrom(1, MAX_STATEMENT_TIMEOUT_MILLISECONDS), DEFAULT_SQL_LIMITS.timeoutMilliseconds);
-	const maxTimeout = reading.optional('SLOP_EXPLORER_SQL_MAX_TIMEOUT_MS', integerFrom(1, MAX_STATEMENT_TIMEOUT_MILLISECONDS), DEFAULT_SQL_LIMITS.maxTimeoutMilliseconds);
+	const timeout = reading.optional('SLOP_EXPLORER_SQL_TIMEOUT_MS', integerFrom(1, MAX_SQL_TIMEOUT_MILLISECONDS), DEFAULT_SQL_LIMITS.timeoutMilliseconds);
+	const maxTimeout = reading.optional('SLOP_EXPLORER_SQL_MAX_TIMEOUT_MS', integerFrom(1, MAX_SQL_TIMEOUT_MILLISECONDS), DEFAULT_SQL_LIMITS.maxTimeoutMilliseconds);
 	const rowCap = reading.optional('SLOP_EXPLORER_SQL_ROW_CAP', integerFrom(1, MAX_ROW_CAP), DEFAULT_SQL_LIMITS.rowCap);
 	const maxConcurrentQueries = reading.optional('SLOP_EXPLORER_MAX_CONCURRENT_QUERIES', integerFrom(1, MAX_CONCURRENT_QUERIES), DEFAULT_MAX_CONCURRENT_QUERIES);
 	if (timeout !== undefined && maxTimeout !== undefined && timeout > maxTimeout) {

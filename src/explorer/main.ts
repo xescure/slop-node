@@ -192,9 +192,17 @@ export async function main(env: NodeJS.ProcessEnv): Promise<number> {
 	}
 }
 
+// A REPL or an evaluated script has no file of its own to compare.
 const isEntry = function(): boolean {
 	const script = process.argv[1];
-	return(script !== undefined && realpathSync(script) === fileURLToPath(import.meta.url));
+	if (script === undefined) {
+		return(false);
+	}
+	try {
+		return(realpathSync(script) === fileURLToPath(import.meta.url));
+	} catch {
+		return(false);
+	}
 };
 
 if (isEntry()) {
