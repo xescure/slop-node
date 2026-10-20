@@ -62,9 +62,16 @@ export class QuerySlots {
 	}
 }
 
-export type ToolContext = { readonly reader: pg.Pool; readonly limits: SQLLimits; readonly slots: QuerySlots };
+/** Where a failure was met: the tool's name, or null outside any tool. */
+export type FailureSite = { readonly tool: string | null };
+
+export type ReportFailure = (error: unknown, site: FailureSite) => void;
+
+export type ToolContext = { readonly reader: pg.Pool; readonly limits: SQLLimits; readonly slots: QuerySlots; readonly report: ReportFailure };
 
 class InvalidInput extends Error {}
+
+export const INTERNAL_ERROR_MESSAGE = 'internal error: the explorer could not answer; try again';
 
 const OPERATION_TYPES = [
 	'SEND', 'SET_REP', 'SET_INFO', 'MODIFY_PERMISSIONS', 'CREATE_IDENTIFIER',
@@ -177,9 +184,9 @@ const resultOf = function(outcome: ToolOutcome): CallToolResult {
 
 /*
  * Any failure but a refusal is the explorer's own, such as a lost database
- * connection, and its text is no help to the agent.
+ * connection: the operator hears of it, and the agent only that it failed.
  */
-const guarded = function<Input>(handler: (input: Input) => Promise<ToolOutcome>): (input: Input) => Promise<CallToolResult> {
+const guarded = function<Input>(context: ToolContext, tool: string, handler: (input: Input) => Promise<ToolOutcome>): (input: Input) => Promise<CallToolResult> {
 	return(async function(input) {
 		try {
 			return(resultOf(await handler(input)));
@@ -187,7 +194,8 @@ const guarded = function<Input>(handler: (input: Input) => Promise<ToolOutcome>)
 			if (error instanceof InvalidInput) {
 				return(resultOf({ kind: 'refused', message: error.message }));
 			}
-			return(resultOf({ kind: 'refused', message: 'internal error: the explorer could not answer; try again' }));
+			context.report(error, { tool });
+			return(resultOf({ kind: 'refused', message: INTERNAL_ERROR_MESSAGE }));
 		}
 	});
 };
@@ -284,7 +292,7 @@ export function registerTools(server: McpServer, context: ToolContext): void {
 			timeout_ms: z.number().int().positive().optional().describe('The statement timeout, up to the server\'s maximum.')
 		},
 		annotations: { readOnlyHint: true, openWorldHint: false }
-	}, guarded(async function({ query, timeout_ms: timeout }): Promise<ToolOutcome> {
+	}, guarded(context, 'sql', async function({ query, timeout_ms: timeout }): Promise<ToolOutcome> {
 		const answer = await context.slots.run(function() {
 			return(runReadOnlySQL(context.reader, query, context.limits, timeout));
 		});
@@ -301,7 +309,7 @@ export function registerTools(server: McpServer, context: ToolContext): void {
 	server.registerTool('describe', {
 		description: 'Lists the explorer views with their columns, and the rules for querying them with sql.',
 		annotations: { readOnlyHint: true, openWorldHint: false }
-	}, guarded(function(): Promise<ToolOutcome> {
+	}, guarded(context, 'describe', function(): Promise<ToolOutcome> {
 		return(fixed(context, [{ text: VIEWS_QUERY, values: [] }, { text: COLUMNS_QUERY, values: [] }], function(results) {
 			return({ views: describedViews(required(results, 0), required(results, 1)), rules: DESCRIBE_RULES });
 		}));
@@ -310,7 +318,7 @@ export function registerTools(server: McpServer, context: ToolContext): void {
 	server.registerTool('status', {
 		description: 'How far indexing trails the node: the newest staple indexed, the newest the node holds, how many are not yet indexed, and why indexing paused, if it did.',
 		annotations: { readOnlyHint: true, openWorldHint: false }
-	}, guarded(function(): Promise<ToolOutcome> {
+	}, guarded(context, 'status', function(): Promise<ToolOutcome> {
 		return(fixed(context, [{
 			text: 'SELECT *, trim_scale(extract(epoch FROM newest_node_staple_time - newest_indexed_staple_time))::text AS lag_seconds FROM explorer.status',
 			values: []
@@ -323,7 +331,7 @@ export function registerTools(server: McpServer, context: ToolContext): void {
 		description: 'The holders of a token, largest balance first, in base units and token units.',
 		inputSchema: { token: addressSchema, limit: limitSchema },
 		annotations: { readOnlyHint: true, openWorldHint: false }
-	}, guarded(function({ token, limit }): Promise<ToolOutcome> {
+	}, guarded(context, 'holders', function({ token, limit }): Promise<ToolOutcome> {
 		const address = parseAddress('token', token);
 		return(fixed(context, [{
 			text: 'SELECT account, amount, decimals, amount_units FROM explorer.holders WHERE token_id = explorer.id_of($1) ORDER BY amount DESC LIMIT $2',
@@ -337,7 +345,7 @@ export function registerTools(server: McpServer, context: ToolContext): void {
 		description: 'An account\'s info, head block and representative, and its balances.',
 		inputSchema: { account: addressSchema },
 		annotations: { readOnlyHint: true, openWorldHint: false }
-	}, guarded(function({ account }): Promise<ToolOutcome> {
+	}, guarded(context, 'account', function({ account }): Promise<ToolOutcome> {
 		const address = parseAddress('account', account);
 		const cap = context.limits.rowCap;
 		return(fixed(context, [
@@ -366,7 +374,7 @@ export function registerTools(server: McpServer, context: ToolContext): void {
 			before: z.string().optional().describe('The next_before of the previous page.')
 		},
 		annotations: { readOnlyHint: true, openWorldHint: false }
-	}, guarded(function(input): Promise<ToolOutcome> {
+	}, guarded(context, 'history', function(input): Promise<ToolOutcome> {
 		const account = parseAddress('account', input.account);
 		return(fixed(context, [historyQuery(account, input)], function(results) {
 			return(historyAnswer(account, required(results, 0), input.limit));
@@ -377,7 +385,7 @@ export function registerTools(server: McpServer, context: ToolContext): void {
 		description: 'A block by its hash, with its operations.',
 		inputSchema: { hash: hashSchema },
 		annotations: { readOnlyHint: true, openWorldHint: false }
-	}, guarded(function({ hash }): Promise<ToolOutcome> {
+	}, guarded(context, 'block', function({ hash }): Promise<ToolOutcome> {
 		const key = parseHash('hash', hash);
 		return(fixed(context, [
 			{
@@ -397,7 +405,7 @@ export function registerTools(server: McpServer, context: ToolContext): void {
 		description: 'A staple by its blocks hash or the hash of any block in it, with its blocks in order and its votes.',
 		inputSchema: { hash: hashSchema },
 		annotations: { readOnlyHint: true, openWorldHint: false }
-	}, guarded(function({ hash }): Promise<ToolOutcome> {
+	}, guarded(context, 'staple', function({ hash }): Promise<ToolOutcome> {
 		const key = parseHash('hash', hash);
 		return(fixed(context, [
 			{ text: `SELECT blocks_hash, staple_time, sequence, indexed FROM explorer.staples WHERE blocks_hash_bytes = ${STAPLE_KEY}`, values: [key] },
@@ -416,7 +424,7 @@ export function registerTools(server: McpServer, context: ToolContext): void {
 		description: 'The representatives by voting weight, heaviest first.',
 		inputSchema: { limit: limitSchema },
 		annotations: { readOnlyHint: true, openWorldHint: false }
-	}, guarded(function({ limit }): Promise<ToolOutcome> {
+	}, guarded(context, 'rep_weights', function({ limit }): Promise<ToolOutcome> {
 		return(fixed(context, [{ text: 'SELECT rep, weight FROM explorer.rep_weights ORDER BY weight DESC, rep LIMIT $1', values: [limit] }], function(results) {
 			return({ rep_weights: required(results, 0) });
 		}));

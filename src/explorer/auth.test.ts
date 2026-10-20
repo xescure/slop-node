@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { authorized, MINIMUM_TOKEN_LENGTH, parseBearerTokens } from './auth.js';
+import { authorized, authorizer, MINIMUM_TOKEN_LENGTH, parseBearerTokens } from './auth.js';
 import type { BearerToken } from './auth.js';
 
 const FIRST = 'a'.repeat(MINIMUM_TOKEN_LENGTH);
@@ -53,5 +53,12 @@ describe('authorized', function() {
 
 	test('refuses everything when there are no tokens', function() {
 		expect(authorized(`Bearer ${FIRST}`, [])).toBe(false);
+	});
+
+	test('answers as authorized does once its digests are computed', function() {
+		const check = authorizer(tokens);
+		for (const header of [`Bearer ${FIRST}`, `Bearer ${SECOND}`, `Bearer ${FIRST}a`, undefined]) {
+			expect(check(header), JSON.stringify(header)).toBe(authorized(header, tokens));
+		}
 	});
 });

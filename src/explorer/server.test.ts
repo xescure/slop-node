@@ -2,13 +2,15 @@ import { describe, expect, onTestFinished, test } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type pg from 'pg';
+import pg from 'pg';
 import { requireAt } from '../ledger/storage/suite/support.js';
 import { sendBlock } from '../testing/blocks.js';
 import { close, listen } from '../node/server.js';
 import { parseBearerTokens } from './auth.js';
 import type { BearerToken } from './auth.js';
 import { explorerApp } from './server.js';
+import { INTERNAL_ERROR_MESSAGE } from './tools.js';
+import type { FailureSite } from './tools.js';
 import { DEFAULT_SQL_LIMITS } from './sql.js';
 import { addressOf, explorerDatabase, indexAll, ledgerFixture, mintedToken } from './testing.js';
 import type { LedgerFixture } from './testing.js';
@@ -23,8 +25,20 @@ const tokens = function(): readonly BearerToken[] {
 	return(parsed);
 };
 
-const serve = async function(reader: pg.Pool, maxConcurrentQueries = 4): Promise<URL> {
-	const { app } = explorerApp({ reader, tokens: tokens(), limits: DEFAULT_SQL_LIMITS, maxConcurrentQueries });
+type Failure = { readonly error: unknown; readonly site: FailureSite };
+
+/** Serves the explorer; unless the test collects the failures reported, it expects none. */
+const serve = async function(reader: pg.Pool, options: { readonly maxConcurrentQueries?: number; readonly failures?: Failure[] } = {}): Promise<URL> {
+	const failures = options.failures ?? [];
+	if (options.failures === undefined) {
+		onTestFinished(function() {
+			expect(failures).toEqual([]);
+		});
+	}
+	const report = function(error: unknown, site: FailureSite): void {
+		failures.push({ error, site });
+	};
+	const { app } = explorerApp({ reader, tokens: tokens(), limits: DEFAULT_SQL_LIMITS, maxConcurrentQueries: options.maxConcurrentQueries ?? 4, report });
 	const { server, address } = await listen(app, { host: '127.0.0.1', port: 0 });
 	onTestFinished(function() {
 		return(close(server));
@@ -117,6 +131,39 @@ describe('the explorer MCP server', function() {
 		await expect(connect(base, `Bearer ${TOKEN.slice(1)}`)).rejects.toThrow();
 
 		expect(reader.totalCount).toBe(0);
+	});
+
+	test('refuses an unauthenticated request before reading its body', async function() {
+		const { reader } = await explorerDatabase();
+		const base = await serve(reader);
+
+		const response = await fetch(new URL('/mcp', base), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"jsonrpc":' });
+		expect(response.status).toBe(401);
+		expect(await response.text()).toBe('');
+	});
+
+	test('answers a body over the limit with 413 and a message of its own', async function() {
+		const { reader } = await explorerDatabase();
+		const base = await serve(reader);
+
+		const response = await fetch(new URL('/mcp', base), { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` }, body: JSON.stringify({ ...INITIALIZE, padding: 'x'.repeat(256 * 1024) }) });
+		expect(response.status).toBe(413);
+		expect(await response.json()).toEqual({ jsonrpc: '2.0', error: { code: -32600, message: 'Request body over 262144 bytes' }, id: null });
+	});
+
+	test('reports a tool\'s own failure to the operator and tells the agent only that it failed', async function() {
+		const unreachable = new pg.Pool({ host: '127.0.0.1', port: 1, connectionTimeoutMillis: 2_000 });
+		onTestFinished(function() {
+			return(unreachable.end());
+		});
+		const failures: Failure[] = [];
+		const client = await connect(await serve(unreachable, { failures }));
+
+		const result = await call(client, 'status', {});
+		expect(result).toEqual({ isError: true, text: INTERNAL_ERROR_MESSAGE, structured: undefined });
+		expect(failures).toHaveLength(1);
+		expect(failures[0]?.site).toEqual({ tool: 'status' });
+		expect(failures[0]?.error).toBeInstanceOf(Error);
 	});
 
 	test('answers health checks without a token and other methods on /mcp with 405', async function() {
@@ -293,7 +340,7 @@ describe('the explorer MCP server', function() {
 
 	test('makes calls beyond the concurrent query cap wait rather than fail', async function() {
 		const { reader } = await explorerDatabase();
-		const client = await connect(await serve(reader, 1));
+		const client = await connect(await serve(reader, { maxConcurrentQueries: 1 }));
 
 		const answers = await Promise.all([1, 2, 3].map(function() {
 			return(call(client, 'sql', { query: 'SELECT pg_sleep(0.2) IS NULL AS slept' }));

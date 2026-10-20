@@ -35,16 +35,28 @@ const digestOf = function(text: string): Buffer {
  * same time for every candidate, and every token is compared, so the time
  * says nothing of which one matched.
  */
-export function authorized(header: string | undefined, tokens: readonly BearerToken[]): boolean {
+const matchesAny = function(header: string | undefined, digests: readonly Buffer[]): boolean {
 	if (header === undefined || !header.startsWith(SCHEME)) {
 		return(false);
 	}
 	const candidate = digestOf(header.slice(SCHEME.length));
 	let matched = false;
-	for (const token of tokens) {
-		if (timingSafeEqual(candidate, digestOf(token))) {
+	for (const digest of digests) {
+		if (timingSafeEqual(candidate, digest)) {
 			matched = true;
 		}
 	}
 	return(matched);
+};
+
+/** A check of Authorization headers against the tokens, whose digests it computes once. */
+export function authorizer(tokens: readonly BearerToken[]): (header: string | undefined) => boolean {
+	const digests = tokens.map(digestOf);
+	return(function(header) {
+		return(matchesAny(header, digests));
+	});
+}
+
+export function authorized(header: string | undefined, tokens: readonly BearerToken[]): boolean {
+	return(authorizer(tokens)(header));
 }
