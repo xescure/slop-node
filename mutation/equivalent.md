@@ -503,26 +503,16 @@ or requests it takes, how much memory it keeps, or a count it logs.
 - src/node/bootstrap-ranges.ts:552:18-552:29 StringLiteral "\"\"" equivalent: a range whose pass completed is dropped from the layout as the pass settles, so the pace recorded for it is never read.
 - src/node/bootstrap-retry.ts:172:3-173:31 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of Awaited is unreachable.
 - src/node/bootstrap-retry.ts:173:4-173:31 CallExpression ";" equivalent: the default of a switch that has handled every kind of Awaited is unreachable.
-- src/node/bootstrap-retry.ts:267:4-268:30 ConditionalExpression "default:" equivalent: the default of a switch that has handled every QueueUse is unreachable.
-- src/node/bootstrap-retry.ts:327:4-328:34 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of Offered is unreachable.
-- src/node/bootstrap-retry.ts:377:7-377:25 ConditionalExpression "true" equivalent: the ledger answers whether the weight of no set of voters suffices with no answer, so nothing more is due.
-- src/node/bootstrap-retry.ts:377:7-377:25 EqualityOperator "weighed.length >= 0" equivalent: the ledger answers whether the weight of no set of voters suffices with no answer, so nothing more is due.
-- src/node/bootstrap-retry.ts:413:5-414:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of Offered is unreachable.
-- src/node/bootstrap-retry.ts:424:53-424:55 ArrayDeclaration "[\"Stryker was here\"]" equivalent: the placeholder then marks as landed a key no entry has, which #due never finds.
-- src/node/bootstrap-retry.ts:470:7-470:28 ConditionalExpression "false" equivalent: #put is called only for an entry the queue holds, by retries that run one at a time, so the entry is always found.
-- src/node/bootstrap-retry.ts:470:30-472:4 BlockStatement "{}" equivalent: #put is called only for an entry the queue holds, by retries that run one at a time, so the entry is always found.
-- src/node/bootstrap-retry.ts:480:7-480:28 ConditionalExpression "false" equivalent: #remove is called only for an entry the queue holds, by retries that run one at a time, so the entry is always found.
-- src/node/bootstrap-retry.ts:480:30-482:4 BlockStatement "{}" equivalent: #remove is called only for an entry the queue holds, by retries that run one at a time, so the entry is always found.
-- src/node/bootstrap-retry.ts:485:3-485:28 CallExpression ";" equivalent: a staple leaves the queue only once the ledger holds its blocks, so add never queues it again, and the key left marked as landed names no entry.
-- src/node/bootstrap-retry.ts:510:7-510:40 ConditionalExpression "true" harmless: the watchers of a staple that left the queue are kept: a landing then marks its key, which names no entry, so only memory is spent, at most a key per account per staple ever queued.
-- src/node/bootstrap-retry.ts:510:30-510:40 StringLiteral "\"\"" harmless: the watchers of a staple that left the queue are kept: a landing then marks its key, which names no entry, so only memory is spent, at most a key per account per staple ever queued.
-- src/node/bootstrap-retry.ts:513:49-519:4 BlockStatement "{}" harmless: the watchers of a staple that left the queue are kept: a landing then marks its key, which names no entry, so only memory is spent, at most a key per account per staple ever queued.
-- src/node/bootstrap-retry.ts:515:4-515:20 OptionalChaining "watchers.delete" equivalent: an entry that awaits accounts was tracked, which made a set of watchers for each of them.
-- src/node/bootstrap-retry.ts:516:8-516:28 ConditionalExpression "false" harmless: an account's empty set of watchers is kept, which costs memory only: a landing on it marks nothing.
-- src/node/bootstrap-retry.ts:516:8-516:22 OptionalChaining "watchers.size" equivalent: an entry that awaits accounts was tracked, which made a set of watchers for each of them.
-- src/node/bootstrap-retry.ts:516:30-518:5 BlockStatement "{}" harmless: an account's empty set of watchers is kept, which costs memory only: a landing on it marks nothing.
-- src/node/bootstrap-retry.ts:517:5-517:36 CallExpression ";" harmless: an account's empty set of watchers is kept, which costs memory only: a landing on it marks nothing.
-- src/node/bootstrap-retry.ts:537:8-537:33 ConditionalExpression "true" equivalent: nothing sets the load kept while it is under way, so a load that fails is always the one kept.
+- src/node/bootstrap-retry.ts:282:4-283:30 ConditionalExpression "default:" equivalent: the default of a switch that has handled every QueueUse is unreachable.
+- src/node/bootstrap-retry.ts:342:4-343:34 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of Offered is unreachable.
+- src/node/bootstrap-retry.ts:392:7-392:25 ConditionalExpression "true" equivalent: the ledger answers whether the weight of no set of voters suffices with no answer, so nothing more is due.
+- src/node/bootstrap-retry.ts:392:7-392:25 EqualityOperator "weighed.length >= 0" equivalent: the ledger answers whether the weight of no set of voters suffices with no answer, so nothing more is due.
+- src/node/bootstrap-retry.ts:428:5-429:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of Offered is unreachable.
+- src/node/bootstrap-retry.ts:476:7-476:28 ConditionalExpression "false" equivalent: #put is called only for an entry the queue holds, by retries that run one at a time, so the entry is always found.
+- src/node/bootstrap-retry.ts:476:30-478:4 BlockStatement "{}" equivalent: #put is called only for an entry the queue holds, by retries that run one at a time, so the entry is always found.
+- src/node/bootstrap-retry.ts:486:7-486:28 ConditionalExpression "false" equivalent: #remove is called only for an entry the queue holds, by retries that run one at a time, so the entry is always found.
+- src/node/bootstrap-retry.ts:486:30-488:4 BlockStatement "{}" equivalent: #remove is called only for an entry the queue holds, by retries that run one at a time, so the entry is always found.
+- src/node/bootstrap-retry.ts:519:8-519:33 ConditionalExpression "true" equivalent: nothing sets the load kept while it is under way, so a load that fails is always the one kept.
 - src/node/bootstrap-stage.ts:227:8-227:31 ConditionalExpression "true" equivalent: the counts kept after a read are only ever changes chained on that read, which fail with it, so a failed read is always the one kept or its successors fail too; a read after clearing them reads the stage again.
 - src/node/bootstrap-stage.ts:291:34-291:49 ObjectLiteral "{}" equivalent: the flag is read as false until the work ends either way, undefined being falsy.
 - src/node/bootstrap-stage.ts:312:22-312:54 ConditionalExpression "true" equivalent: the one case it differs in, the work done with staples left and the queue not full nor the time up, continued the loop on the line before.
