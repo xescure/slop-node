@@ -2,6 +2,7 @@
   pkgs,
   slop-node,
   image,
+  explorerImage,
   devenvLock,
   nixpkgsRev,
 }:
@@ -68,6 +69,39 @@ let
       ${script}
       touch $out
     '';
+
+  # An image's configuration checked against the expected one, which it may
+  # extend, and its layers unpacked in order into one root.
+  unpackImage = image: expected: ''
+    mkdir image root
+    tar --extract --gzip --file=${image} --directory=image
+    config=image/$(jq --raw-output '.[0].Config' image/manifest.json)
+
+    echo "config:"
+    jq --sort-keys .config "$config"
+    jq --exit-status --argjson expected ${lib.escapeShellArg (builtins.toJSON expected)} '
+      .config as $config
+      | ($expected | del(.Labels) | to_entries | all(.value == $config[.key]))
+        and ($expected.Labels | to_entries | all(.value == $config.Labels[.key]))
+    ' "$config" >/dev/null || fail "the image's configuration is not the expected one"
+
+    layers=$(jq --raw-output '.[0].Layers[]' image/manifest.json)
+    for layer in $layers; do
+      tar --extract --file="image/$layer" --directory=root --no-same-owner 2>/dev/null
+    done
+    echo "layers: $(echo "$layers" | wc -l), unpacked: $(du --summarize --human-readable root | cut -f1)"
+
+    # A path as it resolves in the image, whose links name its own store.
+    inside() {
+      local target=$1
+      while [ -L "root$target" ]; do
+        target=$(readlink "root$target")
+      done
+      echo "root$target"
+    }
+    passwd=$(inside /etc/passwd)
+    group=$(inside /etc/group)
+  '';
 in
 {
   help = nodeCheck "help" [ ] ''
@@ -127,6 +161,7 @@ in
   image =
     let
       package = lib.importJSON ../package.json;
+      packageLock = lib.importJSON ../package-lock.json;
       expected = {
         Entrypoint = [
           (lib.getExe pkgs.tini)
@@ -151,7 +186,10 @@ in
           "org.opencontainers.image.licenses" = "LicenseRef-Keeta-Token-Network-Community-License-v1.0";
         };
       };
-      devDependencies = lib.concatStringsSep " " (lib.attrNames package.devDependencies);
+      # A development package that a runtime one also depends on, as the MCP
+      # SDK does ajv, is installed for that one.
+      devOnly = name: packageLock.packages."node_modules/${name}".dev or false;
+      devDependencies = lib.concatStringsSep " " (lib.filter devOnly (lib.attrNames package.devDependencies));
     in
     nodeCheck "image" [ pkgs.bubblewrap pkgs.curl pkgs.jq ] ''
       fail() {
@@ -160,34 +198,7 @@ in
         exit 1
       }
 
-      mkdir image root
-      tar --extract --gzip --file=${image} --directory=image
-      config=image/$(jq --raw-output '.[0].Config' image/manifest.json)
-
-      echo "config:"
-      jq --sort-keys .config "$config"
-      jq --exit-status --argjson expected ${lib.escapeShellArg (builtins.toJSON expected)} '
-        .config as $config
-        | ($expected | del(.Labels) | to_entries | all(.value == $config[.key]))
-          and ($expected.Labels | to_entries | all(.value == $config.Labels[.key]))
-      ' "$config" >/dev/null || fail "the image's configuration is not the expected one"
-
-      layers=$(jq --raw-output '.[0].Layers[]' image/manifest.json)
-      for layer in $layers; do
-        tar --extract --file="image/$layer" --directory=root --no-same-owner 2>/dev/null
-      done
-      echo "layers: $(echo "$layers" | wc -l), unpacked: $(du --summarize --human-readable root | cut -f1)"
-
-      # A path as it resolves in the image, whose links name its own store.
-      inside() {
-        local target=$1
-        while [ -L "root$target" ]; do
-          target=$(readlink "root$target")
-        done
-        echo "root$target"
-      }
-      passwd=$(inside /etc/passwd)
-      group=$(inside /etc/group)
+      ${unpackImage image expected}
 
       # Owners survive only in the layer itself, since unpacking takes the build user's.
       tar --list --verbose --numeric-owner --file="image/$(echo "$layers" | tail -n 1)" \
@@ -267,6 +278,83 @@ in
       wait "$container" || status=$?
       [ "$status" -eq 0 ] || fail "the image exited with $status after SIGTERM"
       grep --quiet --line-regexp 'stopping on SIGTERM' node.stopping || fail "the node did not report stopping on SIGTERM"
+    '';
+
+  # Without its configuration the explorer refuses to start, naming what it lacks.
+  explorer-refusal = nodeCheck "explorer-refusal" [ ] ''
+    status=0
+    env --ignore-environment ${lib.getExe' slop-node "slop-explorer"} >refusal 2>&1 || status=$?
+    cat refusal
+    [ "$status" -eq 1 ]
+    grep --quiet 'SLOP_EXPLORER_WRITER_URL is not set' refusal
+  '';
+
+  # The explorer's image runs its entrypoint from its own root, as its user and
+  # as PID 1, with the image's environment; with no database or tokens given,
+  # the entrypoint is reached when the explorer refuses that configuration.
+  explorer-image =
+    let
+      expected = {
+        Entrypoint = [
+          (lib.getExe pkgs.tini)
+          "--"
+          "${slop-node}/bin/slop-explorer"
+        ];
+        User = "10001:10001";
+        WorkingDir = "/";
+        ExposedPorts."8080/tcp" = { };
+        Env = [
+          "SLOP_EXPLORER_LISTEN_IP=0.0.0.0"
+          "SLOP_EXPLORER_LISTEN_PORT=8080"
+          "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+          "TZ=UTC"
+          "TZDIR=/etc/zoneinfo"
+        ];
+        Labels = {
+          "org.opencontainers.image.title" = "slop-explorer";
+          "org.opencontainers.image.version" = "${slop-node.version}+slop-node";
+          "org.opencontainers.image.source" = "https://github.com/xescure/slop-node";
+          "org.opencontainers.image.licenses" = "LicenseRef-Keeta-Token-Network-Community-License-v1.0";
+        };
+      };
+    in
+    nodeCheck "explorer-image" [ pkgs.bubblewrap pkgs.jq ] ''
+      fail() {
+        echo "$*" >&2
+        [ -e explorer.output ] && cat explorer.output >&2
+        exit 1
+      }
+
+      ${unpackImage explorerImage expected}
+
+      jq --exit-status '.config | has("Cmd") | not' "$config" >/dev/null || fail "the image has a command of its own"
+      grep --quiet --line-regexp 'slop-explorer:x:10001:10001:slop-explorer:/var/empty:/noshell' "$passwd" \
+        || fail "/etc/passwd has no slop-explorer user"
+      grep --quiet --line-regexp 'slop-explorer:x:10001:' "$group" || fail "/etc/group has no slop-explorer group"
+      [ -x "$(inside /bin/slop-explorer)" ] || fail "/bin/slop-explorer is not in the image"
+      grep --quiet 'BEGIN CERTIFICATE' "$(inside /etc/ssl/certs/ca-bundle.crt)" || fail "the CA bundle is not in the image"
+      [ -e "$(inside /etc/zoneinfo)/UTC" ] || fail "the time zones are not in the image"
+      # src/explorer/migrations.ts finds its migrations next to dist/explorer.
+      diff <(ls ${../schema/explorer/migrations}) <(ls "root${root}/schema/explorer/migrations") \
+        || fail "the explorer migrations in the image differ"
+      [ -f "root${root}/schema/explorer/setup.sql" ] || fail "schema/explorer/setup.sql is not in the image"
+
+      mapfile -t command < <(jq --raw-output '.config.Entrypoint[]' "$config")
+      environment=()
+      while IFS= read -r variable; do
+        environment+=(--setenv "''${variable%%=*}" "''${variable#*=}")
+      done < <(jq --raw-output '.config.Env[]' "$config")
+      user=$(jq --raw-output '.config.User' "$config")
+      workdir=$(jq --raw-output '.config.WorkingDir' "$config")
+
+      status=0
+      bwrap --unshare-user --uid "''${user%%:*}" --gid "''${user#*:}" --unshare-pid --as-pid-1 --unshare-ipc --unshare-uts \
+        --bind root / --dev /dev --chdir "$workdir" --clearenv "''${environment[@]}" \
+        -- "''${command[@]}" >explorer.output 2>&1 || status=$?
+      cat explorer.output
+      [ "$status" -eq 1 ] || fail "the image's entrypoint exited with $status, not 1"
+      grep --quiet 'SLOP_EXPLORER_WRITER_URL is not set' explorer.output \
+        || fail "the image's entrypoint did not refuse for want of SLOP_EXPLORER_WRITER_URL"
     '';
 
   nixpkgs-pin =

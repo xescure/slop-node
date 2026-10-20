@@ -125,6 +125,8 @@ stdenv.mkDerivation {
 
     makeBinaryWrapper ${lib.getExe nodejs-slim_24} "$out/bin/slop-node" \
       --add-flags "$root/dist/main.js"
+    makeBinaryWrapper ${lib.getExe nodejs-slim_24} "$out/bin/slop-explorer" \
+      --add-flags "$root/dist/explorer/main.js"
 
     runHook postInstall
   '';

@@ -11,6 +11,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/xescure/slop-node
+  EXPLORER_IMAGE: ghcr.io/xescure/slop-explorer
 
 jobs:
   image:
@@ -31,6 +32,7 @@ jobs:
           primary-key: nix-image-v1-${{ runner.os }}-${{ hashFiles('flake.lock', 'package-lock.json') }}
           restore-prefixes-first-match: nix-image-v1-${{ runner.os }}-
       - run: nix build .#image -L
+      - run: nix build .#explorer-image -L --out-link result-explorer
       # The checks run the package and the image as built above, so they add
       # little beyond the build.
       - run: nix flake check -L
@@ -51,3 +53,6 @@ jobs:
           skopeo copy "docker-archive:$(readlink -f result)" "docker://$IMAGE:sha-$GITHUB_SHA"
           skopeo copy "docker://$IMAGE:sha-$GITHUB_SHA" "docker://$IMAGE:latest"
           echo "pushed $IMAGE@$(skopeo inspect --format '{{.Digest}}' "docker://$IMAGE:latest") as sha-$GITHUB_SHA and latest"
+          skopeo copy "docker-archive:$(readlink -f result-explorer)" "docker://$EXPLORER_IMAGE:sha-$GITHUB_SHA"
+          skopeo copy "docker://$EXPLORER_IMAGE:sha-$GITHUB_SHA" "docker://$EXPLORER_IMAGE:latest"
+          echo "pushed $EXPLORER_IMAGE@$(skopeo inspect --format '{{.Digest}}' "docker://$EXPLORER_IMAGE:latest") as sha-$GITHUB_SHA and latest"
