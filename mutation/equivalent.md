@@ -533,13 +533,10 @@ or requests it takes, how much memory it keeps, or a count it logs.
 - src/node/bootstrap-stage.ts:382:4-382:27 CallExpression ";" harmless: a staple still leaving the stage may be read again, found held or queued, and counted as leaving twice in the log line's count.
 - src/node/bootstrap-stage.ts:397:13-401:4 BlockStatement "{}" equivalent: a key left in the set names a staple the stage no longer holds, which no read can return.
 - src/node/bootstrap-stage.ts:398:28-400:5 BlockStatement "{}" equivalent: a key left in the set names a staple the stage no longer holds, which no read can return.
-- src/node/bootstrap-stage.ts:399:5-399:31 CallExpression ";" equivalent: a key left in the set names a staple the stage no longer holds, which no read can return.
 - src/node/bootstrap-stage.ts:409:15-409:20 BooleanLiteral "true" harmless: the queue is then offered again after a round that added nothing, which offers only the staples due anyway.
-- src/node/bootstrap-stage.ts:422:12-422:16 BooleanLiteral "false" harmless: a queue with no room then ends the adding a round later, after the batch is read again and refused again.
 - src/node/bootstrap-stage.ts:425:14-425:33 ConditionalExpression "true" harmless: the queue is then offered again after a round that added nothing, which offers only the staples due anyway.
 - src/node/bootstrap-stage.ts:429:7-429:26 ConditionalExpression "true" equivalent: with no batch read ahead, the batch to add next is undefined either way.
 - src/node/bootstrap-stage.ts:435:7-435:20 ConditionalExpression "true" harmless: the queue is then offered again after a round that added nothing, which offers only the staples due anyway.
-- src/node/bootstrap-stage.ts:438:40-438:61 ConditionalExpression "false" harmless: a queue with no room then ends the adding a round later, after the batch is read again and refused again.
 
 ## api
 

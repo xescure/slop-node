@@ -88,15 +88,22 @@ describe('a bootstrap retry queue', function() {
 		expect(idsOf(await queue.staples())).toEqual([refused.id]);
 	});
 
-	test('queues nothing of a staple whose record fails to be stored, so that the next pass sent it offers it again', async function() {
+	test('queues nothing of a staple whose record fails to be stored, nor keeps the room it took, so that the next pass sent it offers it again', async function() {
 		const [refused] = staples([[1]]);
 		if (refused === undefined) {
 			throw(new Error('no staple'));
 		}
+		// The room the staple's record takes, read from a queue that stored it.
+		const sizing = new Harness();
+		expect(await sizing.queue().add(refused, 'deep')).toBe('queued');
+		const [record] = await sizing.store.load();
+		if (record === undefined) {
+			throw(new Error('no record'));
+		}
 		const harness = new Harness();
 		vi.spyOn(harness.store, 'put').mockRejectedValueOnce(new Error('the write failed'));
 		const offer = vi.spyOn(harness.node, 'offer');
-		const queue = harness.queue({ staples: 1, bytes: 1024 * 1024 });
+		const queue = harness.queue({ staples: 1, bytes: sizeOf(record) });
 
 		await expect(queue.add(refused, 'deep')).rejects.toThrow('the write failed');
 		expect(await queue.size()).toBe(0);

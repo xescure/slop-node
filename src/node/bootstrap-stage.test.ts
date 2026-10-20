@@ -214,9 +214,10 @@ describe('staging what the ranges read', function() {
 		expect(events.slice(0, 3)).toEqual(['read leaving out 0', 'read leaving out 64', 'add 0']);
 		expect(events.slice(events.indexOf('add 63'), events.indexOf('add 64') + 1)).toEqual(['add 63', 'remove 64', 'add 64']);
 		expect(events.slice(events.indexOf('add 99'), events.indexOf('add 99') + 2)).toEqual(['add 99', 'remove 36']);
+		// Once removed, a staple is left out of no read.
 		expect(events.filter(function(event): boolean {
-			return(event.startsWith('remove'));
-		})).toEqual(['remove 64', 'remove 36']);
+			return(!event.startsWith('add'));
+		})).toEqual(['read leaving out 0', 'read leaving out 64', 'remove 64', 'remove 36', 'read leaving out 0', 'read leaving out 0']);
 		expect(node.size).toBe(100);
 		expect(await staging.isEmpty()).toBe(true);
 	});
