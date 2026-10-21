@@ -66,8 +66,8 @@ export const rolePool = function(cluster: ClusterConnection, database: TestDatab
 };
 
 /**
- * A copy of the node's ledger template with the explorer set up as the owner
- * of the node tables would set it up, and migrated as the writer. The cluster
+ * A copy of the node's ledger template with the explorer set up by a
+ * superuser, as the setup needs, and migrated as the writer. The cluster
  * user, which ran the node migrations into the template, owns the node tables
  * here as the node's role does in a deployment.
  */
