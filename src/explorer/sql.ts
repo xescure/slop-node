@@ -88,7 +88,8 @@ export class MessageFrames {
 				offset += skipped;
 				continue;
 			}
-			const copied = chunk.copy(this.#header, this.#headerBytes, offset, offset + MESSAGE_HEADER_BYTES - this.#headerBytes);
+			// The copy stops where the header ends.
+			const copied = chunk.copy(this.#header, this.#headerBytes, offset);
 			this.#headerBytes += copied;
 			offset += copied;
 			if (this.#headerBytes === MESSAGE_HEADER_BYTES) {

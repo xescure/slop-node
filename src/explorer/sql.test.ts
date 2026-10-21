@@ -1,6 +1,6 @@
 import { describe, expect, inject, onTestFinished, test, vi } from 'vitest';
 import pg from 'pg';
-import { DEFAULT_SQL_LIMITS, MessageFrames, boundedReaderOptions, messageBoundOf, runFixedQueries, runReadOnlySQL, toJSONValue } from './sql.js';
+import { DEFAULT_SQL_LIMITS, MessageFrames, OversizedMessage, boundedReaderOptions, messageBoundOf, runFixedQueries, runReadOnlySQL, toJSONValue } from './sql.js';
 import type { SQLAnswer, SQLLimits } from './sql.js';
 import { interceptQueries, serverError } from '../testing/query-faults.js';
 import { explorerDatabase } from './testing.js';
@@ -120,6 +120,11 @@ describe('MessageFrames', function() {
 		const stream = Buffer.concat([message('D', 6), message('E', 11, Buffer.alloc(0))]);
 		expect(frames.overBound(stream.subarray(0, 9))).toBeUndefined();
 		expect(frames.overBound(stream.subarray(9))).toBe(11);
+	});
+
+	test('names the length and the bound of a message over it', function() {
+		const failure = new OversizedMessage(11, 10);
+		expect([failure.name, failure.message, failure.bound]).toEqual(['OversizedMessage', 'a backend message declared 11 bytes, over the bound of 10', 10]);
 	});
 
 	test('reads a negative length as one over any bound', function() {
