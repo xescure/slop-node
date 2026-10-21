@@ -41,17 +41,17 @@ async function templatesIn(tree: string, file: string): Promise<readonly TitleTe
 	return(titleTemplatesOf(source, file));
 }
 
-/** Why the tree no longer holds the named test, if it does not: its file is gone, or no titles there name it. */
+/** Why the tree no longer holds the named test, if it does not: its file is gone, or no titles there name it as nested, all of it run. */
 export async function testProblem(test: CanaryTest, tree: string): Promise<string | undefined> {
-	const templates: TitleTemplate[] = [];
+	const templates = new Map<string, readonly TitleTemplate[]>();
 	for (const file of new Set([test.file, ...test.titlesIn])) {
 		const found = await templatesIn(tree, file);
 		if (found === undefined) {
 			return(`the test file ${file} no longer exists`);
 		}
-		templates.push(...found);
+		templates.set(file, found);
 	}
-	if (!definesTest(templates, test.name)) {
+	if (!definesTest(templates, test.file, test.name)) {
 		return(`no test ${describeName(test.name)} is defined in ${[test.file, ...test.titlesIn.filter(function(file): boolean {
 			return(file !== test.file);
 		})].join(' or ')}`);
