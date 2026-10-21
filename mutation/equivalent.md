@@ -597,3 +597,79 @@ entries are:
 - src/node/connections.ts:124:3-124:37 CallExpression ";" equivalent: whether a connection is released is read only while it is not tracked, and it stops being tracked only as it is marked released again.
 - src/node/connections.ts:128:20-128:25 BooleanLiteral "true" equivalent: a registration marks its connection to be unregistered as it ends, and nothing reads the mark before: #settle returns while a registration is in flight, and #unregister, the only other caller of #track, never reaches it (see the entry for line 106).
 - src/node/peer-store.ts:57:44-57:158 ObjectLiteral "{}" equivalent: the loop below sets the count of every arena of PEER_ARENAS, so no starting zero is ever read.
+
+## explorer
+
+The explorer's decoding, watermark, read-only SQL, bearer tokens and
+configuration. A harmless mutant here changes nothing an agent or the
+operator can observe through the MCP tools or the configuration's refusals.
+The entries are:
+
+* the unreachable defaults of switches, and cases that fall through to
+  code that writes the same value;
+* in the configuration, checks of a value that the problem its reading
+  added already decides;
+* in the SQL runner, steps the probe, the closing ROLLBACK or pg-pool
+  already take care of, and a refusal of a call with a millisecond left;
+* a gap the watermark never stops on.
+
+- src/explorer/auth.ts:30:43-30:50 StringLiteral "\"\"" equivalent: Node's Hash.update reads text under an empty encoding as UTF-8, so every digest is the same.
+- src/explorer/config.ts:33:122-33:144 StringLiteral "\"\"" equivalent: the tokens are refused through parseTokens, which reports the parser's reason and never the value, so no refusal of them repeats a token either way.
+- src/explorer/config.ts:69:3-70:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of problem is unreachable.
+- src/explorer/config.ts:97:10-99:3 BlockStatement "{}" equivalent: a URL that does not parse leaves the protocol unset, which is no Postgres protocol, so the URL is refused the same way.
+- src/explorer/config.ts:188:4-189:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of result is unreachable.
+- src/explorer/config.ts:218:8-218:41 ConditionalExpression "true" equivalent: an empty value has already added its problem, so reading it as its fallback still refuses the configuration with the same problems.
+- src/explorer/config.ts:242:6-242:27 ConditionalExpression "true" equivalent: a timeout that failed to parse is undefined, and a comparison with undefined is false, so no problem is added either way.
+- src/explorer/config.ts:242:6-242:55 ConditionalExpression "true" equivalent: a timeout that failed to parse is undefined, and a comparison with undefined is false, so no problem is added either way.
+- src/explorer/config.ts:242:6-242:55 LogicalOperator "timeout !== undefined || maxTimeout !== undefined" equivalent: a timeout that failed to parse is undefined, and a comparison with undefined is false, so no problem is added either way.
+- src/explorer/config.ts:242:31-242:55 ConditionalExpression "true" equivalent: a timeout that failed to parse is undefined, and a comparison with undefined is false, so no problem is added either way.
+- src/explorer/config.ts:245:6-245:29 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:56 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:56 LogicalOperator "writerURL === undefined && readerURL === undefined" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:80 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:80 LogicalOperator "(writerURL === undefined || readerURL === undefined) && tokens === undefined" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:102 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:102 LogicalOperator "(writerURL === undefined || readerURL === undefined || tokens === undefined) && host === undefined" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:124 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:124 LogicalOperator "(writerURL === undefined || readerURL === undefined || tokens === undefined || host === undefined) && port === undefined" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:151 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:151 LogicalOperator "(writerURL === undefined || readerURL === undefined || tokens === undefined || host === undefined || port === undefined) && logFormat === undefined" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:181 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:181 LogicalOperator "(writerURL === undefined || readerURL === undefined || tokens === undefined || host === undefined || port === undefined || logFormat === undefined) && batchStaples === undefined" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:209 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:209 LogicalOperator "(writerURL === undefined || readerURL === undefined || tokens === undefined || host === undefined || port === undefined || logFormat === undefined || batchStaples === undefined) && batchPause === undefined" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:234 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:234 LogicalOperator "(writerURL === undefined || readerURL === undefined || tokens === undefined || host === undefined || port === undefined || logFormat === undefined || batchStaples === undefined || batchPause === undefined) && timeout === undefined" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:262 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:262 LogicalOperator "(writerURL === undefined || readerURL === undefined || tokens === undefined || host === undefined || port === undefined || logFormat === undefined || batchStaples === undefined || batchPause === undefined || timeout === undefined) && maxTimeout === undefined" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:286 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:286 LogicalOperator "(writerURL === undefined || readerURL === undefined || tokens === undefined || host === undefined || port === undefined || logFormat === undefined || batchStaples === undefined || batchPause === undefined || timeout === undefined || maxTimeout === undefined) && rowCap === undefined" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:324 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:6-245:324 LogicalOperator "(writerURL === undefined || readerURL === undefined || tokens === undefined || host === undefined || port === undefined || logFormat === undefined || batchStaples === undefined || batchPause === undefined || timeout === undefined || maxTimeout === undefined || rowCap === undefined) && maxConcurrentQueries === undefined" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:33-245:56 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:60-245:80 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:84-245:102 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:106-245:124 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:128-245:151 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:155-245:181 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:185-245:209 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:213-245:234 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:238-245:262 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:266-245:286 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/config.ts:245:290-245:324 ConditionalExpression "false" equivalent: each value is undefined only once its reading has added a problem, so the count of problems alone decides the refusal.
+- src/explorer/decode.ts:69:3-70:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled every adjust method is unreachable.
+- src/explorer/decode.ts:179:3-180:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled every operation type is unreachable.
+- src/explorer/sql.ts:128:3-129:29 ConditionalExpression "case 'bigint':" equivalent: a bigint then falls through to the case of symbols and functions, whose String(value) writes the same decimal digits as toString.
+- src/explorer/sql.ts:131:8-131:18 StringLiteral "\"\"" equivalent: a function then misses every case and every object branch and reaches textOf, whose toString is the text String(value) gives.
+- src/explorer/sql.ts:133:3-134:10 ConditionalExpression "case 'object':" equivalent: an object then leaves the switch at its end rather than by its break, and goes on to the same branches.
+- src/explorer/sql.ts:133:8-133:16 StringLiteral "\"\"" equivalent: an object then leaves the switch at its end rather than by its break, and goes on to the same branches.
+- src/explorer/sql.ts:190:37-190:49 ConditionalExpression "false" equivalent: the prefixes are fixed text in which no error arises, so Postgres places every error it positions in the agent's statement or after it, never below the statement's first character.
+- src/explorer/sql.ts:231:10-231:25 ObjectLiteral "{}" equivalent: the caller reads only done, which an empty object leaves undefined and so as false.
+- src/explorer/sql.ts:243:14-243:24 StringLiteral "\"\"" equivalent: the probe has already run the same statement under the extended protocol, which refuses a second statement, so the cursor's text holds one statement under either protocol.
+- src/explorer/sql.ts:251:22-251:38 StringLiteral "``" equivalent: the probe's cursor has its own name, nothing reads it, and the ROLLBACK that ends the call closes it.
+- src/explorer/sql.ts:257:8-257:16 EqualityOperator "left <= 1" harmless: a call with a millisecond left is then refused as timed out rather than given a one-millisecond FETCH, which a batch of rows can rarely finish within.
+- src/explorer/sql.ts:294:18-296:3 BlockStatement "{}" equivalent: ROLLBACK and DISCARD ALL fail only on a connection that has ended, and pg-pool destroys a client that is no longer queryable however it is released (pg-pool index.js:392).
+- src/explorer/sql.ts:295:20-295:73 StringLiteral "\"\"" equivalent: pg-pool reads only whether a release carries an error (pg-pool index.js:392), never its message or cause.
+- src/explorer/sql.ts:295:75-295:91 ObjectLiteral "{}" equivalent: pg-pool reads only whether a release carries an error (pg-pool index.js:392), never its message or cause.
+- src/explorer/sql.ts:354:33-354:35 StringLiteral "\"Stryker was here!\"" equivalent: with an empty statement no position is ever within it, so no position is given whatever the prefix.
+- src/explorer/watermark.ts:54:7-54:21 EqualityOperator "key < through" equivalent: through is the watermark it started from or an indexed sequence, never a gap the walk recorded, so no recorded gap equals it.

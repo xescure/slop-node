@@ -44,9 +44,8 @@ export function advanceWatermark(current: Watermark, indexedAbove: readonly Stap
 
 		const since = current.missingSince.get(key) ?? now;
 		missingSince.set(key, since);
-		if (passable && now - since >= grace) {
-			through = key;
-		} else {
+		// A gap past its grace is passed by the next sequence indexed, which the walk always ends on.
+		if (now - since < grace) {
 			passable = false;
 		}
 	}

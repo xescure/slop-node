@@ -22,7 +22,7 @@ describe('toStapleSequence', function() {
 		expect(toStapleSequence(7n)).toBe(7n);
 		expect(function() {
 			return(toStapleSequence(-1n));
-		}).toThrow();
+		}).toThrow(new RangeError('A staple sequence is not negative: -1'));
 	});
 });
 

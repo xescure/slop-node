@@ -35,17 +35,26 @@ describe('parseBearerTokens', function() {
 		expect(parsed.refused).toContain(String(MINIMUM_TOKEN_LENGTH));
 		expect(parsed.refused).not.toContain(short);
 	});
+
+	test('names the entry it refuses for a character a bearer token cannot hold', function() {
+		expect(parseBearerTokens(`${FIRST},${SECOND} `)).toEqual({ refused: 'token 2 of 2 holds a character a bearer token cannot, such as whitespace' });
+	});
 });
 
 describe('authorized', function() {
-	const tokens = tokensOf(`${FIRST},${SECOND}`);
+	// Read in each case, so that a parser that refuses them fails the cases rather than the file.
+	const both = function(): readonly BearerToken[] {
+		return(tokensOf(`${FIRST},${SECOND}`));
+	};
 
 	test('accepts exactly Bearer and one of the tokens', function() {
+		const tokens = both();
 		expect(authorized(`Bearer ${FIRST}`, tokens)).toBe(true);
 		expect(authorized(`Bearer ${SECOND}`, tokens)).toBe(true);
 	});
 
 	test('refuses no header, a wrong token, a prefix, one more character, a lower-case scheme and two spaces', function() {
+		const tokens = both();
 		for (const header of [undefined, '', 'Bearer', 'Bearer ', `Bearer ${'c'.repeat(MINIMUM_TOKEN_LENGTH)}`, `Bearer ${FIRST.slice(1)}`, `Bearer ${FIRST}a`, `bearer ${FIRST}`, `Bearer  ${FIRST}`, `Basic ${FIRST}`, `Bearer ${FIRST},${SECOND}`, FIRST]) {
 			expect(authorized(header, tokens), JSON.stringify(header)).toBe(false);
 		}
@@ -56,6 +65,7 @@ describe('authorized', function() {
 	});
 
 	test('answers as authorized does once its digests are computed', function() {
+		const tokens = both();
 		const check = authorizer(tokens);
 		for (const header of [`Bearer ${FIRST}`, `Bearer ${SECOND}`, `Bearer ${FIRST}a`, undefined]) {
 			expect(check(header), JSON.stringify(header)).toBe(authorized(header, tokens));

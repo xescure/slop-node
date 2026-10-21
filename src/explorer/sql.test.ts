@@ -1,7 +1,8 @@
-import { describe, expect, inject, onTestFinished, test } from 'vitest';
+import { describe, expect, inject, onTestFinished, test, vi } from 'vitest';
 import pg from 'pg';
 import { DEFAULT_SQL_LIMITS, runFixedQueries, runReadOnlySQL, toJSONValue } from './sql.js';
 import type { SQLAnswer, SQLLimits } from './sql.js';
+import { interceptQueries } from '../testing/query-faults.js';
 import { explorerDatabase } from './testing.js';
 
 const TOKEN = 'keeta_token_fixture';
@@ -82,6 +83,23 @@ describe('toJSONValue', function() {
 		expect(toJSONValue(Number.POSITIVE_INFINITY)).toBe('Infinity');
 		expect(toJSONValue(new Date(Number.NaN))).toBe('Invalid Date');
 		expect(toJSONValue(new Uint16Array([1, 2]))).toBe('1,2');
+		expect(toJSONValue(Symbol('mark'))).toBe('Symbol(mark)');
+		expect(toJSONValue(String)).toBe('function String() { [native code] }');
+	});
+
+	test('converts an object without a prototype member by member', function() {
+		expect(toJSONValue(Object.assign(Object.create(null), { amount: 1n }))).toEqual({ amount: '1' });
+	});
+
+	test('writes an object whose toISOString is not a method as its own text', function() {
+		class Marked {
+			readonly toISOString = 'not a method';
+
+			toString(): string {
+				return('marked');
+			}
+		}
+		expect(toJSONValue(new Marked())).toBe('marked');
 	});
 });
 
@@ -98,6 +116,13 @@ describe('runReadOnlySQL', function() {
 		]);
 		expect(answer.truncated).toBeNull();
 		expect(answer.milliseconds).toBeGreaterThanOrEqual(0);
+	});
+
+	test('measures the time of the call alone', async function() {
+		const { reader } = await explorerDatabase();
+		const started = performance.now();
+		const answer = rowsOf(await runReadOnlySQL(reader, 'SELECT 1 AS one', DEFAULT_SQL_LIMITS));
+		expect(answer.milliseconds).toBeLessThanOrEqual(Math.ceil(performance.now() - started));
 	});
 
 	test('gives the columns of a query that returns no rows', async function() {
@@ -245,10 +270,79 @@ describe('runReadOnlySQL', function() {
 		expect(answer).toEqual({ kind: 'refused', reason: 'sql-error', message: 'relation "nowhere" does not exist (at character 15)' });
 	});
 
+	test.each([
+		['SHOUT 1', 'syntax error at or near "SHOUT" (at character 1)'],
+		['  SHOUT 1', 'syntax error at or near "SHOUT" (at character 3)'],
+		['SELECT 1 a b', 'syntax error at or near "b" (at character 12)'],
+		['SELECT (1', 'syntax error at end of input']
+	])('gives the position of an error in %j only when it falls within the text', async function(sql, message) {
+		const { reader } = await explorerDatabase();
+		expect(await runReadOnlySQL(reader, sql, DEFAULT_SQL_LIMITS)).toEqual({ kind: 'refused', reason: 'sql-error', message });
+	});
+
 	test('stops a query at the requested timeout', async function() {
 		const { reader } = await explorerDatabase();
 		const answer = await runReadOnlySQL(reader, 'SELECT pg_sleep(2)', DEFAULT_SQL_LIMITS, 200);
 		expect(answer).toEqual({ kind: 'refused', reason: 'timeout', message: 'canceling statement due to statement timeout' });
+	});
+
+	test('stops a query whose planning alone outlasts the timeout', async function() {
+		const { reader } = await explorerDatabase();
+		// Planning folds the constant factorials, each about half a second, once for the probe and once for the cursor.
+		const started = performance.now();
+		const answer = await runReadOnlySQL(reader, 'SELECT factorial(30000) = factorial(30001) AS equal', DEFAULT_SQL_LIMITS, 100);
+		expect(answer).toEqual({ kind: 'refused', reason: 'timeout', message: 'canceling statement due to statement timeout' });
+		expect(performance.now() - started).toBeLessThan(800);
+	});
+
+	test('stops a call whose time runs out between batches of rows', async function() {
+		const { database } = await explorerDatabase();
+		const reader = singleReader(database.name);
+		let offset = 0;
+		const now = performance.now.bind(performance);
+		const clock = vi.spyOn(performance, 'now').mockImplementation(function() {
+			return(now() + offset);
+		});
+		onTestFinished(function() {
+			clock.mockRestore();
+		});
+		interceptQueries(reader, async function(issued, run) {
+			const result = await run();
+			if (issued.text.startsWith('FETCH')) {
+				offset += 1_000;
+			}
+			return(result);
+		});
+		const answer = await runReadOnlySQL(reader, 'SELECT n FROM generate_series(1, 30) AS n', DEFAULT_SQL_LIMITS, 1_000);
+		expect(answer).toEqual({ kind: 'refused', reason: 'timeout', message: 'canceling statement due to statement timeout' });
+	});
+
+	test('throws a failure that is not the server\'s rather than answer it', async function() {
+		const { database } = await explorerDatabase();
+		const reader = singleReader(database.name);
+		const failure = new Error('the connection broke');
+		interceptQueries(reader, function(issued, run) {
+			if (issued.text.startsWith('FETCH')) {
+				return(Promise.reject(failure));
+			}
+			return(run());
+		});
+		await expect(runReadOnlySQL(reader, 'SELECT 1 AS one', DEFAULT_SQL_LIMITS)).rejects.toBe(failure);
+	});
+
+	test('leaves no listener of its own on the connection', async function() {
+		const { database } = await explorerDatabase();
+		const reader = singleReader(database.name);
+		const listenersOfConnection = async function(): Promise<number> {
+			const client = await reader.connect();
+			const count = client.listenerCount('error');
+			client.release();
+			return(count);
+		};
+		const before = await listenersOfConnection();
+		rowsOf(await runReadOnlySQL(reader, 'SELECT 1 AS one', DEFAULT_SQL_LIMITS));
+		rowsOf(await runReadOnlySQL(reader, 'SELECT 1 AS one', DEFAULT_SQL_LIMITS));
+		expect(await listenersOfConnection()).toBe(before);
 	});
 
 	test('stops a query that lifts its own timeout', async function() {
@@ -331,7 +425,7 @@ describe('runReadOnlySQL', function() {
 
 	test.each(['', ';', '  ;  ', '\n\t'])('refuses the empty query %j', async function(sql) {
 		const { reader } = await explorerDatabase();
-		expect(await runReadOnlySQL(reader, sql, DEFAULT_SQL_LIMITS)).toMatchObject({ kind: 'refused', reason: 'empty' });
+		expect(await runReadOnlySQL(reader, sql, DEFAULT_SQL_LIMITS)).toEqual({ kind: 'refused', reason: 'empty', message: 'The query is empty.' });
 	});
 });
 
@@ -353,6 +447,25 @@ describe('runFixedQueries', function() {
 		const { reader } = await explorerDatabase();
 		const answer = await runFixedQueries(reader, [{ text: 'SELECT pg_advisory_xact_lock(1)', values: [] }, { text: 'DELETE FROM explorer.holdings', values: [] }], DEFAULT_SQL_LIMITS);
 		expect(answer).toEqual({ kind: 'refused', reason: 'sql-error', message: 'cannot execute DELETE in a read-only transaction' });
+	});
+
+	test('refuses an error without its position in the explorer\'s own text', async function() {
+		const { reader } = await explorerDatabase();
+		const answer = await runFixedQueries(reader, [{ text: 'SHOUT 1', values: [] }], DEFAULT_SQL_LIMITS);
+		expect(answer).toEqual({ kind: 'refused', reason: 'sql-error', message: 'syntax error at or near "SHOUT"' });
+	});
+
+	test('throws a failure that is not the server\'s rather than answer it', async function() {
+		const { database } = await explorerDatabase();
+		const reader = singleReader(database.name);
+		const failure = new Error('the connection broke');
+		interceptQueries(reader, function(issued, run) {
+			if (issued.text === 'SELECT 1 AS one') {
+				return(Promise.reject(failure));
+			}
+			return(run());
+		});
+		await expect(runFixedQueries(reader, [{ text: 'SELECT 1 AS one', values: [] }], DEFAULT_SQL_LIMITS)).rejects.toBe(failure);
 	});
 
 	test('stops at the default timeout', async function() {

@@ -163,7 +163,7 @@ export function toJSONValue(value: unknown): JSONValue {
 
 const statementOf = function(sql: string): string | null {
 	const text = sql.trimEnd().replace(/;$/, '').trimEnd();
-	if (text.trim() === '') {
+	if (text === '') {
 		return(null);
 	}
 	return(text);

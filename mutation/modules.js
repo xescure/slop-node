@@ -189,6 +189,34 @@ const MODULES = {
 		],
 		ignorers: [],
 		selectedCases: {}
+	},
+	/*
+	 * The explorer's logic: decoding a block into rows, the watermark over the
+	 * staples it has indexed, the read-only SQL tool, the bearer tokens and the
+	 * configuration, measured by every explorer test that runs in-process. The
+	 * command's own test runs the built command, which holds no mutant.
+	 */
+	explorer: {
+		mutate: [
+			'src/explorer/decode.ts',
+			'src/explorer/watermark.ts',
+			'src/explorer/sql.ts',
+			'src/explorer/auth.ts',
+			'src/explorer/config.ts'
+		],
+		tests: [
+			'src/explorer/auth.test.ts',
+			'src/explorer/config.test.ts',
+			'src/explorer/decode.test.ts',
+			'src/explorer/indexer.test.ts',
+			'src/explorer/migrations.test.ts',
+			'src/explorer/server.test.ts',
+			'src/explorer/sql.test.ts',
+			'src/explorer/views.test.ts',
+			'src/explorer/watermark.test.ts'
+		],
+		ignorers: [],
+		selectedCases: {}
 	}
 };
 

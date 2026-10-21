@@ -358,15 +358,16 @@ describe('the addresses of a block', function() {
 
 	test('a permission change names its target and a receive names its forward', async function() {
 		const [account, principal, forward] = [user(0), user(1), user(2)];
+		const { token: target } = await createTokenBlock({ ...BASE, owner: account });
 		const block = await operationsBlock({
 			...BASE,
 			account,
 			operations: [
-				{ type: lib.Block.OperationType.MODIFY_PERMISSIONS, principal, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['SEND_ON_BEHALF']), target: network.baseToken },
+				{ type: lib.Block.OperationType.MODIFY_PERMISSIONS, principal, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['SEND_ON_BEHALF']), target },
 				{ type: lib.Block.OperationType.RECEIVE, from: principal, token: network.baseToken, amount: 1n, exact: true, forward }
 			]
 		});
 
-		expect(addressesOf(decoded(block))).toEqual(new Set([account, principal, network.baseToken, forward].map(addressOf)));
+		expect(addressesOf(decoded(block))).toEqual(new Set([account, principal, network.baseToken, forward, target].map(addressOf)));
 	});
 });
