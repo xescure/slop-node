@@ -601,17 +601,14 @@ entries are:
 ## explorer
 
 The explorer's decoding, watermark, read-only SQL, bearer tokens and
-configuration. A harmless mutant here changes nothing an agent or the
-operator can observe through the MCP tools or the configuration's refusals.
-The entries are:
+configuration. Every entry is equivalent. The entries are:
 
 * the unreachable defaults of switches, and cases that fall through to
   code that writes the same value;
 * in the configuration, checks of a value that the problem its reading
   added already decides;
-* in the SQL runner, steps the probe, the closing ROLLBACK or pg-pool
-  already take care of, and a refusal of a call with a millisecond left;
-* a gap the watermark never stops on.
+* in the SQL runner, steps that the probe, the closing ROLLBACK or pg-pool
+  already take care of.
 
 - src/explorer/auth.ts:30:43-30:50 StringLiteral "\"\"" equivalent: Node's Hash.update reads text under an empty encoding as UTF-8, so every digest is the same.
 - src/explorer/config.ts:33:122-33:144 StringLiteral "\"\"" equivalent: the tokens are refused through parseTokens, which reports the parser's reason and never the value, so no refusal of them repeats a token either way.
@@ -663,13 +660,9 @@ The entries are:
 - src/explorer/sql.ts:131:8-131:18 StringLiteral "\"\"" equivalent: a function then misses every case and every object branch and reaches textOf, whose toString is the text String(value) gives.
 - src/explorer/sql.ts:133:3-134:10 ConditionalExpression "case 'object':" equivalent: an object then leaves the switch at its end rather than by its break, and goes on to the same branches.
 - src/explorer/sql.ts:133:8-133:16 StringLiteral "\"\"" equivalent: an object then leaves the switch at its end rather than by its break, and goes on to the same branches.
-- src/explorer/sql.ts:190:37-190:49 ConditionalExpression "false" equivalent: the prefixes are fixed text in which no error arises, so Postgres places every error it positions in the agent's statement or after it, never below the statement's first character.
 - src/explorer/sql.ts:231:10-231:25 ObjectLiteral "{}" equivalent: the caller reads only done, which an empty object leaves undefined and so as false.
 - src/explorer/sql.ts:243:14-243:24 StringLiteral "\"\"" equivalent: the probe has already run the same statement under the extended protocol, which refuses a second statement, so the cursor's text holds one statement under either protocol.
 - src/explorer/sql.ts:251:22-251:38 StringLiteral "``" equivalent: the probe's cursor has its own name, nothing reads it, and the ROLLBACK that ends the call closes it.
-- src/explorer/sql.ts:257:8-257:16 EqualityOperator "left <= 1" harmless: a call with a millisecond left is then refused as timed out rather than given a one-millisecond FETCH, which a batch of rows can rarely finish within.
-- src/explorer/sql.ts:294:18-296:3 BlockStatement "{}" equivalent: ROLLBACK and DISCARD ALL fail only on a connection that has ended, and pg-pool destroys a client that is no longer queryable however it is released (pg-pool index.js:392).
 - src/explorer/sql.ts:295:20-295:73 StringLiteral "\"\"" equivalent: pg-pool reads only whether a release carries an error (pg-pool index.js:392), never its message or cause.
 - src/explorer/sql.ts:295:75-295:91 ObjectLiteral "{}" equivalent: pg-pool reads only whether a release carries an error (pg-pool index.js:392), never its message or cause.
 - src/explorer/sql.ts:354:33-354:35 StringLiteral "\"Stryker was here!\"" equivalent: with an empty statement no position is ever within it, so no position is given whatever the prefix.
-- src/explorer/watermark.ts:54:7-54:21 EqualityOperator "key < through" equivalent: through is the watermark it started from or an indexed sequence, never a gap the walk recorded, so no recorded gap equals it.

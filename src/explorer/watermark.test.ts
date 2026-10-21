@@ -69,6 +69,10 @@ describe('advanceWatermark', function() {
 		expect(advanceWatermark(second, sequences(3, 5), GAP_GRACE_MILLISECONDS)).toEqual(watermark(3, { 4: 30_000 }));
 	});
 
+	test('an expired gap is passed though a fresh gap right after it stops through', function() {
+		expect(advanceWatermark(watermark(0, { 2: 0 }), sequences(1, 4), GAP_GRACE_MILLISECONDS)).toEqual(watermark(2, { 3: GAP_GRACE_MILLISECONDS }));
+	});
+
 	test('missingSince keeps only gaps above the new through', function() {
 		const advanced = advanceWatermark(watermark(1, { 2: 0 }), sequences(3, 5), GAP_GRACE_MILLISECONDS);
 		expect(advanced).toEqual(watermark(3, { 4: GAP_GRACE_MILLISECONDS }));

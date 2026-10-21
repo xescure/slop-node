@@ -2,7 +2,7 @@ import { describe, expect, inject, onTestFinished, test, vi } from 'vitest';
 import pg from 'pg';
 import { DEFAULT_SQL_LIMITS, runFixedQueries, runReadOnlySQL, toJSONValue } from './sql.js';
 import type { SQLAnswer, SQLLimits } from './sql.js';
-import { interceptQueries } from '../testing/query-faults.js';
+import { interceptQueries, serverError } from '../testing/query-faults.js';
 import { explorerDatabase } from './testing.js';
 
 const TOKEN = 'keeta_token_fixture';
@@ -286,13 +286,78 @@ describe('runReadOnlySQL', function() {
 		expect(answer).toEqual({ kind: 'refused', reason: 'timeout', message: 'canceling statement due to statement timeout' });
 	});
 
-	test('stops a query whose planning alone outlasts the timeout', async function() {
-		const { reader } = await explorerDatabase();
-		// Planning folds the constant factorials, each about half a second, once for the probe and once for the cursor.
-		const started = performance.now();
-		const answer = await runReadOnlySQL(reader, 'SELECT factorial(30000) = factorial(30001) AS equal', DEFAULT_SQL_LIMITS, 100);
-		expect(answer).toEqual({ kind: 'refused', reason: 'timeout', message: 'canceling statement due to statement timeout' });
-		expect(performance.now() - started).toBeLessThan(800);
+	test('sets the timeout before the probe plans the query', async function() {
+		const { database } = await explorerDatabase();
+		const reader = singleReader(database.name);
+		const issued: string[] = [];
+		interceptQueries(reader, function(query, run) {
+			issued.push(query.text);
+			return(run());
+		});
+		rowsOf(await runReadOnlySQL(reader, 'SELECT 1 AS one', DEFAULT_SQL_LIMITS, 100));
+		expect(issued.slice(0, 3)).toEqual(['BEGIN READ ONLY', 'SET LOCAL statement_timeout = 100', 'DECLARE explorer_probe NO SCROLL CURSOR FOR\nSELECT 1 AS one\n']);
+	});
+
+	test('fetches the next batch with the last millisecond of the call', async function() {
+		const { database } = await explorerDatabase();
+		const reader = singleReader(database.name);
+		let now = 0;
+		const clock = vi.spyOn(performance, 'now').mockImplementation(function() {
+			return(now);
+		});
+		onTestFinished(function() {
+			clock.mockRestore();
+		});
+		const timeouts: string[] = [];
+		interceptQueries(reader, async function(query, run) {
+			if (query.text.startsWith('SET LOCAL statement_timeout')) {
+				timeouts.push(query.text);
+			}
+			// Skipped, so that the FETCH it would bound cannot run out of time on a slow machine.
+			if (query.text === 'SET LOCAL statement_timeout = 1') {
+				return({});
+			}
+			const result = await run();
+			if (query.text.startsWith('FETCH')) {
+				now = 999;
+			}
+			return(result);
+		});
+		const answer = rowsOf(await runReadOnlySQL(reader, 'SELECT n FROM generate_series(1, 15) AS n', DEFAULT_SQL_LIMITS, 1_000));
+		expect(answer.rows).toHaveLength(15);
+		expect(timeouts).toEqual(['SET LOCAL statement_timeout = 1000', 'SET LOCAL statement_timeout = 1000', 'SET LOCAL statement_timeout = 1']);
+	});
+
+	test('gives no position for an error the server places in the explorer\'s own text before the query', async function() {
+		const { database } = await explorerDatabase();
+		const reader = singleReader(database.name);
+		interceptQueries(reader, function(query, run) {
+			if (query.text.startsWith('DECLARE explorer_probe')) {
+				const error = serverError('42601', 'syntax error');
+				error.position = '5';
+				return(Promise.reject(error));
+			}
+			return(run());
+		});
+		expect(await runReadOnlySQL(reader, 'SELECT 1 AS one', DEFAULT_SQL_LIMITS)).toEqual({ kind: 'refused', reason: 'sql-error', message: 'syntax error' });
+	});
+
+	test('discards a connection whose cleaning failed while it was still open', async function() {
+		const { database } = await explorerDatabase();
+		const reader = singleReader(database.name);
+		let failDiscard = true;
+		interceptQueries(reader, function(query, run) {
+			if (query.text === 'DISCARD ALL' && failDiscard) {
+				failDiscard = false;
+				return(Promise.reject(serverError('57014', 'canceling statement due to statement timeout')));
+			}
+			return(run());
+		});
+		const pidOf = async function(): Promise<unknown> {
+			return(rowsOf(await runReadOnlySQL(reader, 'SELECT pg_backend_pid() AS pid', DEFAULT_SQL_LIMITS)).rows[0]?.['pid']);
+		};
+		const first = await pidOf();
+		expect(await pidOf()).not.toBe(first);
 	});
 
 	test('stops a call whose time runs out between batches of rows', async function() {
