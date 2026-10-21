@@ -368,8 +368,12 @@ describe('requests a representative answers without a failure', function() {
 		const pending = node.pending.hash.toString();
 		const confirmed = node.keyedSend.hash.toString();
 
-		expect(text(field((await blockAt(pending, 'both')).body, 'block'), '$binary')).toBe(base64(node.pending.toBytes()));
-		expect(text(field((await blockAt(confirmed, 'both')).body, 'block'), '$binary')).toBe(base64(node.keyedSend.toBytes()));
+		const fromSide = await blockAt(pending, 'both');
+		const fromMain = await blockAt(confirmed, 'both');
+
+		expect([fromSide.status, fromMain.status]).toEqual([200, 200]);
+		expect(text(field(fromSide.body, 'block'), '$binary')).toBe(base64(node.pending.toBytes()));
+		expect(text(field(fromMain.body, 'block'), '$binary')).toBe(base64(node.keyedSend.toBytes()));
 		expect((await blockAt(pending, 'main')).body).toEqual({ blockhash: pending, block: null });
 		expectDocumented('GET', `/node/ledger/block/${pending}?side=both`, await blockAt(pending, 'both'));
 	});
