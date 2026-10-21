@@ -355,6 +355,33 @@ describe('the indexer', function() {
 		expect(await reconcile(context.writer)).toBe(0);
 	});
 
+	test('a stop asked for during a reconcile ends it after the staple under way, and the next reconcile indexes the rest', async function() {
+		const context = await fixture();
+		const sender = requireAt(context.network.users, 0);
+		const recipient = requireAt(context.network.users, 1);
+		const first = await context.apply([context.cursor.append(await sendFrom(context, sender, recipient, 1n))]);
+		const second = await context.apply([context.cursor.append(await sendFrom(context, sender, recipient, 2n))]);
+		await indexAll(context.writer);
+		await context.admin.query('DELETE FROM explorer.indexed_staples WHERE blocks_hash = ANY($1::bytea[])', [[first.blocksHash.getBuffer(), second.blocksHash.getBuffer()]]);
+		let checks = 0;
+		const stopAfterOne = function(): boolean {
+			checks++;
+			return(checks > 1);
+		};
+		const faults: IndexerFault[] = [];
+
+		const found = await reconcile(context.writer, function(fault) {
+			faults.push(fault);
+		}, stopAfterOne);
+
+		expect(found).toBe(1);
+		expect(checks).toBe(2);
+		expect(faults).toEqual([{ kind: 'missed-staple', blocksHash: first.blocksHash.toString(), sequence: BigInt(await sequenceOf(context.admin, first)) }]);
+		expect(await indexedCounts(context.admin)).toEqual({ [context.network.genesis.blocksHash.toString()]: 1, [first.blocksHash.toString()]: 1 });
+		expect(await reconcile(context.writer)).toBe(1);
+		expect(await indexedCounts(context.admin)).toEqual({ [context.network.genesis.blocksHash.toString()]: 1, [first.blocksHash.toString()]: 1, [second.blocksHash.toString()]: 1 });
+	});
+
 	test('a staple past the watermark is not one reconcile reports', async function() {
 		const context = await fixture();
 

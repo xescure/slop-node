@@ -283,7 +283,9 @@ export class Indexer {
 			if (running && Date.now() - reconciled >= this.#settings.reconcileMilliseconds) {
 				reconciled = Date.now();
 				await this.#attempt('reconcile', () => {
-					return(reconcile(this.#writer, this.#fault));
+					return(reconcile(this.#writer, this.#fault, () => {
+						return(this.#stopping || lock.lost);
+					}));
 				});
 			}
 			// While a backfill runs the check waits: its catch-up would be the backfill.

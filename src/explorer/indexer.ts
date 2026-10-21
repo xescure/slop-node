@@ -382,15 +382,24 @@ const ignoreFault = function(): void {
 	// A caller that passes no report counts the faults by the result alone.
 };
 
-/** Indexes every staple at or below the watermark that is not indexed; each one is a fault of the watermark. */
-export const reconcile = async function(writer: pg.Pool, report: (fault: IndexerFault) => void = ignoreFault): Promise<number> {
+/**
+ * Indexes every staple at or below the watermark that is not indexed; each
+ * one is a fault of the watermark. A stop asked for between two staples
+ * leaves the rest for the next reconcile, and the count is of those indexed.
+ */
+export const reconcile = async function(writer: pg.Pool, report: (fault: IndexerFault) => void = ignoreFault, stopping: () => boolean = neverStopping): Promise<number> {
 	const through = await storedWatermark(writer);
 	const missed = await staplesToIndex(writer, { kind: 'passed', through });
+	let indexed = 0;
 	for (const staple of missed) {
+		if (stopping()) {
+			break;
+		}
 		report({ kind: 'missed-staple', blocksHash: hexOf(staple.blocks_hash), sequence: BigInt(staple.sequence) });
 		await indexStaple(writer, staple, Date.now);
+		indexed++;
 	}
-	return(missed.length);
+	return(indexed);
 };
 
 type HoldingDifference = { readonly account_id: string; readonly token_id: string; readonly node: string | null; readonly explorer: string | null };
