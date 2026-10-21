@@ -169,8 +169,8 @@ const MAX_BATCH_STAPLES = 2000;
 
 const MAX_BATCH_PAUSE_MILLISECONDS = 60_000;
 
-/** An agent's query holds one of the few reader connections for as long as it runs. */
-const MAX_SQL_TIMEOUT_MILLISECONDS = 300_000;
+/** An agent's query holds one of the few reader connections, a snapshot and its locks on the node tables for as long as it runs. */
+const MAX_SQL_TIMEOUT_MILLISECONDS = 60_000;
 
 const MAX_ROW_CAP = 1_000_000;
 

@@ -59,8 +59,8 @@ describe('explorerConfigFromEnv', function() {
 			SLOP_EXPLORER_LOG_FORMAT: 'json',
 			SLOP_EXPLORER_BATCH_STAPLES: '2000',
 			SLOP_EXPLORER_BATCH_PAUSE_MS: '0',
-			SLOP_EXPLORER_SQL_TIMEOUT_MS: '300000',
-			SLOP_EXPLORER_SQL_MAX_TIMEOUT_MS: '300000',
+			SLOP_EXPLORER_SQL_TIMEOUT_MS: '60000',
+			SLOP_EXPLORER_SQL_MAX_TIMEOUT_MS: '60000',
 			SLOP_EXPLORER_SQL_ROW_CAP: '1',
 			SLOP_EXPLORER_MAX_CONCURRENT_QUERIES: '8'
 		})).toEqual({
@@ -70,7 +70,7 @@ describe('explorerConfigFromEnv', function() {
 			listen: { host: '::', port: 0 },
 			logFormat: 'json',
 			indexer: { ...DEFAULT_INDEXER_SETTINGS, batchStaples: 2000, batchPauseMilliseconds: 0 },
-			sql: { ...DEFAULT_SQL_LIMITS, timeoutMilliseconds: 300_000, maxTimeoutMilliseconds: 300_000, rowCap: 1 },
+			sql: { ...DEFAULT_SQL_LIMITS, timeoutMilliseconds: 60_000, maxTimeoutMilliseconds: 60_000, rowCap: 1 },
 			maxConcurrentQueries: 8
 		});
 	});
@@ -144,10 +144,10 @@ describe('explorerConfigFromEnv', function() {
 		['SLOP_EXPLORER_BATCH_STAPLES', '2001', 'a whole number from 1 to 2000'],
 		['SLOP_EXPLORER_BATCH_PAUSE_MS', '60001', 'a whole number from 0 to 60000'],
 		['SLOP_EXPLORER_BATCH_PAUSE_MS', '1.5', 'a whole number from 0 to 60000'],
-		['SLOP_EXPLORER_SQL_TIMEOUT_MS', '0', 'a whole number from 1 to 300000'],
-		['SLOP_EXPLORER_SQL_TIMEOUT_MS', '300001', 'a whole number from 1 to 300000'],
-		['SLOP_EXPLORER_SQL_MAX_TIMEOUT_MS', '0', 'a whole number from 1 to 300000'],
-		['SLOP_EXPLORER_SQL_MAX_TIMEOUT_MS', '300001', 'a whole number from 1 to 300000'],
+		['SLOP_EXPLORER_SQL_TIMEOUT_MS', '0', 'a whole number from 1 to 60000'],
+		['SLOP_EXPLORER_SQL_TIMEOUT_MS', '60001', 'a whole number from 1 to 60000'],
+		['SLOP_EXPLORER_SQL_MAX_TIMEOUT_MS', '0', 'a whole number from 1 to 60000'],
+		['SLOP_EXPLORER_SQL_MAX_TIMEOUT_MS', '60001', 'a whole number from 1 to 60000'],
 		['SLOP_EXPLORER_SQL_ROW_CAP', '0', 'a whole number from 1 to 1000000'],
 		['SLOP_EXPLORER_SQL_ROW_CAP', '1000001', 'a whole number from 1 to 1000000'],
 		['SLOP_EXPLORER_MAX_CONCURRENT_QUERIES', '0', 'a whole number from 1 to 8'],
