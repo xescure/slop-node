@@ -561,5 +561,35 @@ export function defineDeferralCases(driver: DriverUnderTest): void {
 				return(staple.blocksHash.toString());
 			})).toEqual([byKey[1]?.blocksHash.toString()]);
 		});
+
+		test('lists a stranded staple as of the latest of its votes, with only the blocks it lacks from outside it', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			await ledger.add(network.genesis);
+			const [missing, waiting, after] = await sendsAfter(network, headOf(network.genesis, requireAt(network.users, 0)), [5n, 7n, 9n]);
+			if (missing === undefined || waiting === undefined || after === undefined) {
+				throw(new Error('three blocks expected'));
+			}
+			// One representative votes two seconds after the others; the second block's previous is the first, in the staple.
+			const staple = await confirmedStaple([waiting, after], network.representatives, { voteDelays: network.representatives.map(function(_representative, index): number {
+				if (index === 1) {
+					return(2000);
+				}
+				return(0);
+			}) });
+			expect(await ledger.add(staple)).toEqual([]);
+			const voteTimes = staple.votes.map(function(vote): number {
+				return(vote.validityFrom.getTime());
+			});
+			const latest = Math.max(...voteTimes);
+			expect(latest - Math.min(...voteTimes)).toBe(2000);
+			const listed = async function(before: Date): Promise<[string, (string | null)[], number][]> {
+				return((await storage.listStrandedDeferredStaples(before, 10)).map(function({ staple: stranded, lacks, latestVote }): [string, (string | null)[], number] {
+					return([stranded.blocksHash.toString(), lacks.map(hashOf), latestVote.getTime()]);
+				}));
+			};
+
+			expect(await listed(new Date(latest))).toEqual([]);
+			expect(await listed(new Date(latest + 1))).toEqual([[staple.blocksHash.toString(), [missing.hash.toString()], latest]]);
+		});
 	});
 }

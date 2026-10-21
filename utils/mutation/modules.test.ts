@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect, test } from 'vitest';
+import { parseTriage } from './triage.js';
 
 const CONFIG = 'src/node/config.ts';
 
@@ -20,23 +21,42 @@ const CLOSURE_DECLARATIONS = [
 	'function refuseWhereClosed('
 ] as const;
 
+/* The modules are the mutation runs' own JavaScript, which the suite's TypeScript does not type, so they are read by a path the compiler does not follow. */
+async function exportOfModules(name: string): Promise<unknown> {
+	const modules: unknown = await import(pathToFileURL(resolve('mutation/modules.js')).href);
+	if (typeof modules !== 'object' || modules === null) {
+		throw(new Error('mutation/modules.js is no module'));
+	}
+	return(Reflect.get(modules, name));
+}
+
 type RangeReader = (source: string) => string[];
 
 function isRangeReader(candidate: unknown): candidate is RangeReader {
 	return(typeof candidate === 'function');
 }
 
-/* The modules are the mutation runs' own JavaScript, which the suite's TypeScript does not type, so they are read by a path the compiler does not follow. */
 async function closureRangesOf(source: string): Promise<string[]> {
-	const modules: unknown = await import(pathToFileURL(resolve('mutation/modules.js')).href);
-	if (typeof modules !== 'object' || modules === null) {
-		throw(new Error('mutation/modules.js is no module'));
-	}
-	const reader: unknown = Reflect.get(modules, 'closureRanges');
+	const reader = await exportOfModules('closureRanges');
 	if (!isRangeReader(reader)) {
 		throw(new Error('mutation/modules.js exports no closureRanges'));
 	}
 	return(reader(source));
+}
+
+type ModuleReader = (name: string) => { readonly mutate: readonly string[] };
+
+function isModuleReader(candidate: unknown): candidate is ModuleReader {
+	return(typeof candidate === 'function');
+}
+
+/** What the module mutates, as Stryker's configuration reads it. */
+async function mutateOf(module: string): Promise<readonly string[]> {
+	const reader = await exportOfModules('moduleNamed');
+	if (!isModuleReader(reader)) {
+		throw(new Error('mutation/modules.js exports no moduleNamed'));
+	}
+	return(reader(module).mutate);
 }
 
 type LineRange = { readonly first: number; readonly last: number };
@@ -66,6 +86,57 @@ describe('the parts of config.ts the peer-to-peer module mutates', function() {
 		for (const range of ranges) {
 			expect(lines[range.last - 1]).toMatch(/^\}\)?;?$/u);
 		}
+	});
+
+	test('and the config module the rest, each line of the file in exactly one of the two', async function() {
+		const lineCount = readFileSync(CONFIG, 'utf8').split('\n').length - 1;
+		const modules = ['p2p', 'config'] as const;
+		const timesMutated = new Array<number>(lineCount + 1).fill(0);
+
+		for (const module of modules) {
+			const ofConfig = (await mutateOf(module)).filter(function(pattern): boolean {
+				return(pattern.startsWith(CONFIG));
+			});
+			expect(ofConfig.length, module).toBeGreaterThan(0);
+			for (const range of ofConfig.map(lineRangeOf)) {
+				for (let line = range.first; line <= range.last; line++) {
+					timesMutated[line] = (timesMutated[line] ?? 0) + 1;
+				}
+			}
+		}
+
+		expect(timesMutated.slice(1)).toEqual(new Array<number>(lineCount).fill(1));
+	});
+
+	test('hold each entry of config.ts in mutation/equivalent.md wholly, in the module whose section it is under', async function() {
+		const modules = ['p2p', 'config'] as const;
+		const rangesOf = new Map<string, readonly LineRange[]>();
+		for (const module of modules) {
+			rangesOf.set(module, (await mutateOf(module)).filter(function(pattern): boolean {
+				return(pattern.startsWith(CONFIG));
+			}).map(lineRangeOf));
+		}
+		let section = '';
+		let entries = 0;
+		for (const line of readFileSync('mutation/equivalent.md', 'utf8').split('\n')) {
+			if (line.startsWith('## ')) {
+				section = line.slice(3);
+				continue;
+			}
+			const [entry] = parseTriage(line);
+			if (entry?.file !== CONFIG) {
+				continue;
+			}
+			entries++;
+			const holding = modules.filter(function(module): boolean {
+				return((rangesOf.get(module) ?? []).some(function(range): boolean {
+					return(range.first <= entry.start.line && entry.end.line <= range.last);
+				}));
+			});
+			// An entry no module's lines hold wholly is judged by no run, and would stay however stale it became.
+			expect(holding, entry.place).toEqual([section]);
+		}
+		expect(entries).toBeGreaterThan(0);
 	});
 
 	test('stop the run when a part is no longer there', async function() {

@@ -9,7 +9,7 @@ import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { requireAt } from '../ledger/storage/suite/support.js';
 import { deriveTestKeys, TEST_NETWORK_SEEDS } from '../testing/network.js';
 import { bootstrapEndpointsOf, bootstrapPacingOf } from './bootstrap-peers.js';
-import { ConfigError, DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, formatManualPeer, getConfigFromEnv, LEDGER_WRITE_MODES, localNodeConfig, LOG_FORMATS, MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, MAX_FEE_SEED_ACCOUNTS, nodeNetworkClosedToP2P, PUBLIC_NETWORKS, publicNetworkOf } from './config.js';
+import { ConfigError, DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, formatManualPeer, getConfigFromEnv, invalid, LEDGER_WRITE_MODES, localNodeConfig, LOG_FORMATS, MANUAL_PEER_FORM, manualPeerOf, MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, MAX_FEE_SEED_ACCOUNTS, nodeNetworkClosedToP2P, PUBLIC_NETWORKS, publicNetworkOf } from './config.js';
 import type { ConfigProblem, Environment, EnvironmentConfig, LedgerWriteMode } from './config.js';
 import { LocalNode } from './local.js';
 import { MAX_PEER_LIMIT } from './peer-limits.js';
@@ -65,6 +65,18 @@ function messageOf(extra: Environment, base: Environment = BASE): string {
 	} catch (error: unknown) {
 		if (error instanceof ConfigError) {
 			return(error.message);
+		}
+		throw(error);
+	}
+	throw(new Error('the configuration was accepted'));
+}
+
+function errorOf(extra: Environment, base: Environment = BASE): ConfigError {
+	try {
+		parse(extra, base);
+	} catch (error: unknown) {
+		if (error instanceof ConfigError) {
+			return(error);
 		}
 		throw(error);
 	}
@@ -229,13 +241,16 @@ describe('KEETANET_LOCAL_NODE_NETWORK', function() {
 	});
 
 	/* The client refuses to validate a block of any other network ID [Keeta TS] index.js:62327-62355. */
-	test.each(['12345', '0x1', 'mainnet', 'Main', '-1', '1.5', ''])('refuses %j', function(network) {
+	test.each(['12345', '0x1', 'mainnet', 'Main', '-1', '1.5', '00x1', '0x1g', ''])('refuses %j', function(network) {
+		expect(function() {
+			return(parse({ KEETANET_LOCAL_NODE_NETWORK: network }));
+		}).toThrow(ConfigError);
 		const problem = problemOf({ KEETANET_LOCAL_NODE_NETWORK: network });
 		if (network === '') {
 			expect(problem).toEqual({ kind: 'empty', variable: 'KEETANET_LOCAL_NODE_NETWORK' });
 			return;
 		}
-		expect(problem).toMatchObject({ kind: 'invalid', variable: 'KEETANET_LOCAL_NODE_NETWORK', value: network });
+		expect(problem).toEqual({ kind: 'invalid', variable: 'KEETANET_LOCAL_NODE_NETWORK', expected: 'local, main, staging, test, dev, or the ID of one of them', value: network });
 	});
 });
 
@@ -427,6 +442,14 @@ describe('the fee accounts', function() {
 		expect(fee.payTo.every(function(account) {
 			return(!account.hasPrivateKey);
 		})).toBe(true);
+	});
+
+	test('derive the one key of a range that starts and ends at the same index', function() {
+		const { fee } = parse({ ...SEEDED, KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX: '3', KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX: '3' });
+		if (fee.kind !== 'flat') {
+			throw(new Error('the fee schedule is not flat'));
+		}
+		expect(fee.payTo.map(keyOf)).toEqual([keyOf(lib.Account.fromSeed(FEE_SEED, 3))]);
 	});
 
 	test('need the whole fee seed range', function() {
@@ -644,8 +667,17 @@ describe('KEETANET_LOCAL_NODE_MANUAL_PEERS', function() {
 		expect(problemOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: text })).toEqual({ kind: 'peer-signature-invalid', key });
 	});
 
-	test.each(['AAAA', '////'])('refuses the signature %j, which is base64 but no signature', function(signature) {
-		expect(problemOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: `${PEER}|websocket|${signature}` })).toEqual({ kind: 'peer-signature-invalid', key: PEER_KEY });
+	test.each(['AAAA', '////'])('refuses the signature %j, which is base64 but no signature, giving upstream\'s reason at DEBUG', function(signature) {
+		const error = errorOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: `${PEER}|websocket|${signature}` });
+		expect(error.problem).toEqual({ kind: 'peer-signature-invalid', key: PEER_KEY });
+		expect(error.cause).toBeInstanceOf(Error);
+	});
+
+	test('refuses a signature that does not hold with no reason beyond its own', async function() {
+		const signature = stringField(await advertisementOf(PEER_NODE), 'signature');
+		const error = errorOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: `${PEER}|http|${signature}` });
+		expect(error.problem).toEqual({ kind: 'peer-signature-invalid', key: PEER_KEY });
+		expect(error.cause).toBeUndefined();
 	});
 
 	test.each(['auto', 'AUTO', ` auto `, `${PEER},auto`])('refuses %j: this node finds no peers by itself', function(value) {
@@ -653,20 +685,35 @@ describe('KEETANET_LOCAL_NODE_MANUAL_PEERS', function() {
 		expect(messageOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: value })).toBe('KEETANET_LOCAL_NODE_MANUAL_PEERS=auto is not supported: this node finds no peers by itself, so list each as <keeta_ account>@<api URL>|<p2p URL>[|http or websocket[|signature]]');
 	});
 
+	const SIGNATURE_IN_BASE64 = `${MANUAL_PEER_FORM}, the signature in base64`;
 	test.each([
-		['no key', `${PEER_API}|${PEER_P2P}`],
-		['no p2p endpoint', `${PEER_KEY}@${PEER_API}`],
-		['an empty endpoint', `${PEER_KEY}@${PEER_API}|`],
-		['too many fields', `${PEER}|websocket|c2ln|more`],
-		['an unknown preference', `${PEER}|HTTP`],
-		['an empty signature', `${PEER}|websocket|`],
-		['a signature that is no base64', `${PEER}|websocket|not base64!`],
-		['an API endpoint that is no URL', `${PEER_KEY}@127.0.0.1:7001|${PEER_P2P}`],
-		['an API endpoint over the WebSocket', `${PEER_KEY}@ws://127.0.0.1:7001/api|${PEER_P2P}`],
-		['a p2p endpoint over HTTP', `${PEER_KEY}@${PEER_API}|http://127.0.0.1:7001/p2p`],
-		['the key of a token', `${TOKEN.publicKeyString.get()}@${PEER_API}|${PEER_P2P}`]
-	])('refuses a peer with %s', function(_ignored, value) {
-		expect(problemOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: value })).toMatchObject({ kind: 'invalid', variable: 'KEETANET_LOCAL_NODE_MANUAL_PEERS' });
+		['no key', `${PEER_API}|${PEER_P2P}`, MANUAL_PEER_FORM],
+		['an empty key', `@${PEER_API}|${PEER_P2P}`, MANUAL_PEER_FORM],
+		['no p2p endpoint', `${PEER_KEY}@${PEER_API}`, MANUAL_PEER_FORM],
+		['no p2p endpoint, whatever its key', `keeta_none@${PEER_API}`, MANUAL_PEER_FORM],
+		['an empty endpoint', `${PEER_KEY}@${PEER_API}|`, MANUAL_PEER_FORM],
+		['too many fields', `${PEER}|websocket|c2ln|more`, MANUAL_PEER_FORM],
+		['an unknown preference', `${PEER}|HTTP`, MANUAL_PEER_FORM],
+		['an empty signature', `${PEER}|websocket|`, SIGNATURE_IN_BASE64],
+		['a signature that is no base64', `${PEER}|websocket|not base64!`, SIGNATURE_IN_BASE64],
+		['a signature that is no base64 before its end', `${PEER}|websocket|!c2ln`, SIGNATURE_IN_BASE64],
+		['an API endpoint that is no URL', `${PEER_KEY}@127.0.0.1:7001|${PEER_P2P}`, MANUAL_PEER_FORM],
+		['an API endpoint over the WebSocket', `${PEER_KEY}@ws://127.0.0.1:7001/api|${PEER_P2P}`, MANUAL_PEER_FORM],
+		['a p2p endpoint over HTTP', `${PEER_KEY}@${PEER_API}|http://127.0.0.1:7001/p2p`, MANUAL_PEER_FORM]
+	])('refuses a peer with %s, saying what it must be', function(_ignored, value, expected) {
+		expect(problemOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: value })).toEqual({ kind: 'invalid', variable: 'KEETANET_LOCAL_NODE_MANUAL_PEERS', expected, value });
+	});
+
+	test('refuses a peer with the key of a token, naming the key', function() {
+		const key = TOKEN.publicKeyString.get();
+		expect(problemOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: `${key}@${PEER_API}|${PEER_P2P}` })).toEqual({ kind: 'invalid', variable: 'KEETANET_LOCAL_NODE_MANUAL_PEERS', expected: 'the public key of an account, not of an identifier', value: key });
+	});
+
+	test('reads a representative\'s advertisement only if its signature holds, and no other node\'s', async function() {
+		const advertisement = await advertisementOf(PEER_NODE);
+		expect(manualPeerOf(advertisement)?.key.publicKeyString.get()).toBe(PEER_KEY);
+		expect(manualPeerOf({ ...advertisement, preferUpdates: 'http' })).toBeUndefined();
+		expect(manualPeerOf({ kind: lib.Node.Kind.PARTICIPANT, id: 'a participant' })).toBeUndefined();
 	});
 
 	test('says what a peer is written as', function() {
@@ -748,6 +795,11 @@ describe('KEETANET_LOCAL_NODE_ENDPOINT_API and KEETANET_LOCAL_NODE_ENDPOINT_P2P'
 	test('advertise where peers and clients reach the node, as written', function() {
 		const endpoints = { KEETANET_LOCAL_NODE_ENDPOINT_API: 'https://rep.example/keeta/api', KEETANET_LOCAL_NODE_ENDPOINT_P2P: 'wss://rep.example:8443/p2p' };
 		expect(parse(endpoints).endpoints).toEqual({ api: 'https://rep.example/keeta/api', p2p: 'wss://rep.example:8443/p2p' });
+	});
+
+	test('refuse a user or password only before the host, not in the path', function() {
+		const api = 'https://rep.example/keeta/api://mirror@a';
+		expect(parse({ KEETANET_LOCAL_NODE_ENDPOINT_API: api }).endpoints.api).toBe(api);
 	});
 
 	test('may be given one at a time when the node listens on one address', function() {
@@ -836,6 +888,54 @@ describe('KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE', function() {
 	});
 });
 
+describe('a value the node cannot read', function() {
+	const flat: Environment = { KEETANET_LOCAL_NODE_FEE_SCHEDULE: 'flat:10' };
+	const fullRange: Environment = { ...flat, KEETANET_LOCAL_NODE_FEE_SEED: FEE_SEED, KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX: '2', KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX: '4' };
+	test.each<[string, Environment, string]>([
+		['a seed index', { KEETANET_LOCAL_NODE_SEED_INDEX: '-1' }, 'KEETANET_LOCAL_NODE_SEED_INDEX must be a whole number from 0 to 4294967295 (it is "-1")'],
+		['a public key', { KEETANET_INITIAL_TRUSTED_ACCOUNT: 'keeta_none' }, 'KEETANET_INITIAL_TRUSTED_ACCOUNT must be a public key (keeta_...) (it is "keeta_none")'],
+		['the key of an account', { KEETANET_INITIAL_TRUSTED_ACCOUNT: keyOf(TOKEN) }, `KEETANET_INITIAL_TRUSTED_ACCOUNT must be the public key of an account, not of an identifier (it is "${keyOf(TOKEN) ?? ''}")`],
+		['a log level', { KEETANET_LOCAL_NODE_LOG_LEVEL: 'loud' }, 'KEETANET_LOCAL_NODE_LOG_LEVEL must be one of ALL, DEBUG, INFO, WARN, ERROR, NONE (it is "loud")'],
+		['a log filter', { KEETANET_LOCAL_NODE_LOG_FILTER: '(' }, 'KEETANET_LOCAL_NODE_LOG_FILTER must be a regular expression (it is "(")'],
+		['a log format', { KEETANET_LOCAL_NODE_LOG_FORMAT: 'yaml' }, 'KEETANET_LOCAL_NODE_LOG_FORMAT must be one of text, json (it is "yaml")'],
+		['a write mode', { KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'voting' }, 'KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE must be one of read-write, read-only, bootstrap-only, no-voting (it is "voting")'],
+		['a network', { KEETANET_LOCAL_NODE_NETWORK: 'mainnet' }, 'KEETANET_LOCAL_NODE_NETWORK must be local, main, staging, test, dev, or the ID of one of them (it is "mainnet")'],
+		['a Postgres URL, which it does not repeat', { KEETANET_LOCAL_NODE_POSTGRES_URL: 'db.invalid/ledger' }, 'KEETANET_LOCAL_NODE_POSTGRES_URL must be a postgres:// or postgresql:// URL'],
+		['an address to listen on', { KEETANET_LOCAL_NODE_LISTEN_IP: 'localhost' }, 'KEETANET_LOCAL_NODE_LISTEN_IP must be an IPv4 or IPv6 address (it is "localhost")'],
+		['a port to listen on', { KEETANET_LOCAL_NODE_LISTEN_PORT: '65536' }, 'KEETANET_LOCAL_NODE_LISTEN_PORT must be a port from 0 to 65535 (it is "65536")'],
+		['a preference for updates', { KEETANET_LOCAL_NODE_PREFER_UPDATES: 'ws' }, 'KEETANET_LOCAL_NODE_PREFER_UPDATES must be http or websocket (it is "ws")'],
+		['a list of peers', { KEETANET_LOCAL_NODE_MANUAL_PEERS: ' , ' }, 'KEETANET_LOCAL_NODE_MANUAL_PEERS must be a comma-separated list of <keeta_ account>@<api URL>|<p2p URL>[|http or websocket[|signature]] (it is " , ")'],
+		['a peer\'s signature', { KEETANET_LOCAL_NODE_MANUAL_PEERS: `${PEER}|websocket|!c2ln` }, `KEETANET_LOCAL_NODE_MANUAL_PEERS must be <keeta_ account>@<api URL>|<p2p URL>[|http or websocket[|signature]], the signature in base64 (it is "${PEER}|websocket|!c2ln")`],
+		['a list of endpoints to bootstrap from', { KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: ' , ' }, 'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS must be a comma-separated list, each an http:// or https:// API URL without a user, password, query, fragment, "|" or "," (it is " , ")'],
+		['a pacing of the bootstrap', { KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS: 'second' }, 'KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS must be a whole number of milliseconds from 0 to 60000 (it is "second")'],
+		['a peer limit', { KEETANET_LOCAL_NODE_MAX_PEER_SOCKETS: '0' }, `KEETANET_LOCAL_NODE_MAX_PEER_SOCKETS must be a whole number from 1 to ${String(MAX_PEER_LIMIT)} (it is "0")`],
+		['a switch', { KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE: 'yes' }, 'KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE must be true or false (it is "yes")'],
+		['a fee schedule', { KEETANET_LOCAL_NODE_FEE_SCHEDULE: 'daily' }, 'KEETANET_LOCAL_NODE_FEE_SCHEDULE must be free, or flat:<base units per block> (it is "daily")'],
+		['a list of fee accounts', { ...flat, KEETANET_LOCAL_NODE_FEE_ACCOUNTS: ' , ' }, 'KEETANET_LOCAL_NODE_FEE_ACCOUNTS must be a comma-separated list of public keys (it is " , ")'],
+		['a fee account', { ...flat, KEETANET_LOCAL_NODE_FEE_ACCOUNTS: keyOf(TOKEN) }, `KEETANET_LOCAL_NODE_FEE_ACCOUNTS must be public keys of accounts or storage accounts (it is "${keyOf(TOKEN) ?? ''}")`],
+		['the first fee seed index', { ...fullRange, KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX: 'two' }, 'KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX must be a whole number from 0 to 4294967295 (it is "two")'],
+		['the last fee seed index', { ...fullRange, KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX: '1' }, 'KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX must be at least KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX (2) (it is "1")'],
+		['a fee token', { ...flat, KEETANET_LOCAL_NODE_FEE_TOKEN: keyOf(USER) }, `KEETANET_LOCAL_NODE_FEE_TOKEN must be the public key of a token (it is "${keyOf(USER) ?? ''}")`]
+	])('is refused as %s, saying what it must be', function(_ignored, extra, message) {
+		expect(messageOf(extra)).toBe(message);
+	});
+
+	test.each<[string, Environment, ErrorConstructor]>([
+		['a public key', { KEETANET_INITIAL_TRUSTED_ACCOUNT: 'keeta_none' }, Error],
+		['a log filter', { KEETANET_LOCAL_NODE_LOG_FILTER: '(' }, SyntaxError]
+	])('that the client or the runtime refuses as %s keeps their reason, for DEBUG to show', function(_ignored, extra, reason) {
+		expect(errorOf(extra).cause).toBeInstanceOf(reason);
+	});
+
+	/* No secret variable's refusal is given a cause today; this keeps the next one, such as a URL whose parse error carries the whole URL, from showing it at DEBUG. */
+	test.each(['KEETANET_LOCAL_NODE_SEED', 'KEETANET_LOCAL_NODE_FEE_SEED', 'KEETANET_LOCAL_NODE_POSTGRES_URL', 'KEETANET_GENESIS_TRUSTED_SEED'] as const)('of the secret %s is refused without its value or a reason that may quote it', function(variable) {
+		const error = invalid(variable, 'a secret', 'hunter2', { cause: new Error('hunter2') });
+		expect(error.problem).toEqual({ kind: 'invalid', variable, expected: 'a secret' });
+		expect(error.cause).toBeUndefined();
+		expect(error.message).toBe(`${variable} must be a secret`);
+	});
+});
+
 describe('the environment as a whole', function() {
 	test('refuses a variable of the node that it does not know, so a misspelling is not silently ignored', function() {
 		expect(problemOf({ KEETANET_LOCAL_NODE_POSTGRES_URI: POSTGRES_URL })).toEqual({ kind: 'unknown-variable', variable: 'KEETANET_LOCAL_NODE_POSTGRES_URI' });
@@ -843,6 +943,107 @@ describe('the environment as a whole', function() {
 
 	test('ignores everything else', function() {
 		expect(parse({ PATH: '/bin', KEETANET_DEBUG: 'true' }).storage).toEqual({ kind: 'memory' });
+	});
+});
+
+/** One refusal of each kind, with what it says. */
+const DESCRIBED_PROBLEMS: { readonly [Kind in ConfigProblem['kind']]: { readonly problem: Extract<ConfigProblem, { readonly kind: Kind }>; readonly message: string } } = {
+	'unknown-variable': {
+		problem: { kind: 'unknown-variable', variable: 'KEETANET_LOCAL_NODE_POSTGRES_URI' },
+		message: 'KEETANET_LOCAL_NODE_POSTGRES_URI is not a setting of this node'
+	},
+	missing: {
+		problem: { kind: 'missing', variable: 'KEETANET_LOCAL_NODE_SEED' },
+		message: 'KEETANET_LOCAL_NODE_SEED is not set'
+	},
+	empty: {
+		problem: { kind: 'empty', variable: 'KEETANET_LOCAL_NODE_NETWORK' },
+		message: 'KEETANET_LOCAL_NODE_NETWORK is set but empty'
+	},
+	invalid: {
+		problem: { kind: 'invalid', variable: 'KEETANET_LOCAL_NODE_SEED', expected: '64 hexadecimal digits' },
+		message: 'KEETANET_LOCAL_NODE_SEED must be 64 hexadecimal digits'
+	},
+	'private-key-given': {
+		problem: { kind: 'private-key-given', variable: 'KEETANET_INITIAL_TRUSTED_ACCOUNT' },
+		message: 'KEETANET_INITIAL_TRUSTED_ACCOUNT holds a seed; give the public key (keeta_...) instead'
+	},
+	conflicting: {
+		problem: { kind: 'conflicting', variables: ['KEETANET_LOCAL_NODE_FEE_SEED', 'KEETANET_LOCAL_NODE_FEE_ACCOUNTS'] },
+		message: 'KEETANET_LOCAL_NODE_FEE_SEED and KEETANET_LOCAL_NODE_FEE_ACCOUNTS cannot both be set'
+	},
+	'fee-recipient-without-fee': {
+		problem: { kind: 'fee-recipient-without-fee', variable: 'KEETANET_LOCAL_NODE_FEE_TOKEN' },
+		message: 'KEETANET_LOCAL_NODE_FEE_TOKEN says where fees go, but KEETANET_LOCAL_NODE_FEE_SCHEDULE charges nothing'
+	},
+	'too-many-fee-accounts': {
+		problem: { kind: 'too-many-fee-accounts', count: 1025, maximum: 1024 },
+		message: 'KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX and KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX name 1025 fee accounts, but at most 1024 are derived'
+	},
+	'voting-on-public-network': {
+		problem: { kind: 'voting-on-public-network', network: 'main', ledgerWriteMode: 'read-write' },
+		message: 'the main network is public, so the node may not vote on it: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to read-only, bootstrap-only or no-voting (it is read-write)'
+	},
+	'peers-on-keeta-network': {
+		problem: { kind: 'peers-on-keeta-network', network: 'dev', ledgerWriteMode: 'read-write', variable: 'KEETANET_LOCAL_NODE_MANUAL_PEERS' },
+		message: 'the dev network is Keeta\'s, so a node with peers on it may not vote: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to read-only, bootstrap-only or no-voting (it is read-write), or leave KEETANET_LOCAL_NODE_MANUAL_PEERS unset'
+	},
+	'peers-on-public-network': {
+		problem: { kind: 'peers-on-public-network', network: 'test', ledgerWriteMode: 'read-only' },
+		message: 'the test network is public, so a node only following it keeps its peer-to-peer surface closed there and reads it only by its bootstrap: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to no-voting to peer with it (it is read-only), or leave KEETANET_LOCAL_NODE_MANUAL_PEERS unset'
+	},
+	'remembered-peers': {
+		problem: { kind: 'remembered-peers', network: 'main', ledgerWriteMode: 'bootstrap-only', arenas: ['knownPeers', 'manualPeerCheckIn'] },
+		message: 'the main network is Keeta\'s, and the store of KEETANET_LOCAL_NODE_POSTGRES_URL remembers peers (in knownPeers, manualPeerCheckIn), which the node would reach even without KEETANET_LOCAL_NODE_MANUAL_PEERS: run "slop-node clear-peers" with the same environment to forget them, or set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to no-voting (it is bootstrap-only)'
+	},
+	'peers-in-memory': {
+		problem: { kind: 'peers-in-memory' },
+		message: 'clear-peers needs KEETANET_LOCAL_NODE_POSTGRES_URL: a node in memory forgets its peers when it stops'
+	},
+	'history-in-memory': {
+		problem: { kind: 'history-in-memory' },
+		message: 'reindex-history needs KEETANET_LOCAL_NODE_POSTGRES_URL: a node in memory writes its history anew each time it starts'
+	},
+	'automatic-peers': {
+		problem: { kind: 'automatic-peers' },
+		message: 'KEETANET_LOCAL_NODE_MANUAL_PEERS=auto is not supported: this node finds no peers by itself, so list each as <keeta_ account>@<api URL>|<p2p URL>[|http or websocket[|signature]]'
+	},
+	'peer-signature-invalid': {
+		problem: { kind: 'peer-signature-invalid', key: PEER_KEY },
+		message: `KEETANET_LOCAL_NODE_MANUAL_PEERS gives ${PEER_KEY} a signature that does not cover the key, endpoints and preference written with it`
+	},
+	'duplicate-peer': {
+		problem: { kind: 'duplicate-peer', key: PEER_KEY },
+		message: `KEETANET_LOCAL_NODE_MANUAL_PEERS names ${PEER_KEY} more than once`
+	},
+	'peer-is-self': {
+		problem: { kind: 'peer-is-self', key: PEER_KEY },
+		message: `KEETANET_LOCAL_NODE_MANUAL_PEERS names ${PEER_KEY}, which is this node`
+	},
+	'endpoints-required': {
+		problem: { kind: 'endpoints-required', listenIP: '::', missing: ['KEETANET_LOCAL_NODE_ENDPOINT_API', 'KEETANET_LOCAL_NODE_ENDPOINT_P2P'] },
+		message: 'the node listens on every interface (::), so it cannot tell peers where to reach it: set KEETANET_LOCAL_NODE_ENDPOINT_API and KEETANET_LOCAL_NODE_ENDPOINT_P2P'
+	},
+	'genesis-on-public-network': {
+		problem: { kind: 'genesis-on-public-network', network: 'test' },
+		message: 'the test network is public and already has its genesis'
+	},
+	'genesis-in-memory': {
+		problem: { kind: 'genesis-in-memory' },
+		message: 'genesis needs KEETANET_LOCAL_NODE_POSTGRES_URL: a ledger in memory is gone when the command ends'
+	},
+	'trusted-seed-mismatch': {
+		problem: { kind: 'trusted-seed-mismatch', derived: PEER_KEY, trusted: TRUSTED },
+		message: `KEETANET_GENESIS_TRUSTED_SEED derives ${PEER_KEY}, but the node trusts ${TRUSTED}`
+	}
+};
+
+describe('a refusal', function() {
+	test.each(Object.values(DESCRIBED_PROBLEMS))('of the kind $problem.kind says what is wrong and what to set', function({ problem, message }) {
+		const error = new ConfigError(problem);
+		expect(error.message).toBe(message);
+		expect(error.name).toBe('ConfigError');
+		expect(error.problem).toBe(problem);
 	});
 });
 
@@ -911,15 +1112,19 @@ describe('the node configuration', function() {
 		expect(node.bootstrap).toBeUndefined();
 	});
 
-	test('carries one advertised endpoint alone, leaving the other to the node', function() {
-		const node = localNodeConfig(parse({ KEETANET_LOCAL_NODE_ENDPOINT_P2P: 'ws://127.0.0.1:7000/p2p' }), { storageDriver: new MemoryLedgerStorage(), kv: null, log: new lib.Log() });
-		expect(node.endpoints).toEqual({ p2p: 'ws://127.0.0.1:7000/p2p' });
+	test.each([
+		['KEETANET_LOCAL_NODE_ENDPOINT_P2P', 'ws://127.0.0.1:7000/p2p', { p2p: 'ws://127.0.0.1:7000/p2p' }],
+		['KEETANET_LOCAL_NODE_ENDPOINT_API', 'http://127.0.0.1:7000/api', { api: 'http://127.0.0.1:7000/api' }]
+	] as const)('carries %s alone, leaving the other endpoint to the node', function(variable, value, endpoints) {
+		const node = localNodeConfig(parse({ [variable]: value }), { storageDriver: new MemoryLedgerStorage(), kv: null, log: new lib.Log() });
+		expect(node.endpoints).toStrictEqual(endpoints);
 	});
 
-	test('gives the local network the alias the test helpers give network 0', function() {
+	test('gives the local network the alias the test helpers give network 0, and names no endpoint where none is given', function() {
 		const node = localNodeConfig(parse({}), { storageDriver: new MemoryLedgerStorage(), kv: null, log: new lib.Log() });
 		expect(node.network).toBe(0n);
 		expect(node.networkAlias).toBe('test');
+		expect('endpoints' in node).toBe(false);
 		expect(node.stats.kv).toBeNull();
 		// Without a store of its own the switch keeps its peers in memory [Keeta TS] index.js:73658-73663.
 		expect(node.p2p).toEqual({ useHTTPRepublish: false });

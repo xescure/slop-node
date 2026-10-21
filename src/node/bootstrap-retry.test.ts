@@ -88,15 +88,22 @@ describe('a bootstrap retry queue', function() {
 		expect(idsOf(await queue.staples())).toEqual([refused.id]);
 	});
 
-	test('queues nothing of a staple whose record fails to be stored, so that the next pass sent it offers it again', async function() {
+	test('queues nothing of a staple whose record fails to be stored, nor keeps the room it took, so that the next pass sent it offers it again', async function() {
 		const [refused] = staples([[1]]);
 		if (refused === undefined) {
 			throw(new Error('no staple'));
 		}
+		// The room the staple's record takes, read from a queue that stored it.
+		const sizing = new Harness();
+		expect(await sizing.queue().add(refused, 'deep')).toBe('queued');
+		const [record] = await sizing.store.load();
+		if (record === undefined) {
+			throw(new Error('no record'));
+		}
 		const harness = new Harness();
 		vi.spyOn(harness.store, 'put').mockRejectedValueOnce(new Error('the write failed'));
 		const offer = vi.spyOn(harness.node, 'offer');
-		const queue = harness.queue({ staples: 1, bytes: 1024 * 1024 });
+		const queue = harness.queue({ staples: 1, bytes: sizeOf(record) });
 
 		await expect(queue.add(refused, 'deep')).rejects.toThrow('the write failed');
 		expect(await queue.size()).toBe(0);
@@ -390,6 +397,25 @@ describe('a bootstrap retry queue', function() {
 		expect(idsOf(await queue.staples())).toEqual([]);
 	});
 
+	test('offers at once only the staples awaiting an account a staple lands on, and leaves the others to their backoff', async function() {
+		// Each debit needs its own credit, so each awaits the account of that credit alone.
+		const list = staples([[], [0], [0], [1], [2]]);
+		const harness = new Harness(new Set([3, 4]));
+		const queue = harness.queue();
+		freezeClock(new Date(NOW));
+		await harness.node.add(at(list, 0));
+		for (const debit of [at(list, 3), at(list, 4)]) {
+			expect(await queue.add(debit, 'deep')).toBe('queued');
+		}
+		expect(await queue.add(at(list, 1), 'deep')).toBe('added');
+		const offer = vi.spyOn(harness.node, 'offer');
+
+		expect(await queue.retry()).toBe(1);
+
+		expect(offer).toHaveBeenCalledTimes(1);
+		expect(idsOf(await queue.staples())).toEqual([4]);
+	});
+
 	test('waits out the backoff for a staple an account it awaits landed on but the ledger refused again', async function() {
 		// A debit needs a credit and a staple no peer has sent; the credit lands, and it is refused again for the other.
 		const list = staples([[], [0], [0], [1, 9]]);
@@ -407,6 +433,24 @@ describe('a bootstrap retry queue', function() {
 
 		expect(offer).toHaveBeenCalledTimes(1);
 		expect(await queue.size()).toBe(1);
+	});
+
+	test('waits as one refused once for a staple it loads from the store, until its first backoff is over', async function() {
+		const [refused] = staples([[9]]);
+		if (refused === undefined) {
+			throw(new Error('no staple'));
+		}
+		freezeClock(new Date(NOW));
+		const harness = new Harness();
+		await harness.store.put({ key: 'staple-0', bytes: refused.toBytes(), queuedAt: NOW, code: 'LEDGER_INSUFFICIENT_VOTING_WEIGHT', reported: false, awaited: { kind: 'accounts', accounts: ['staple-9'] } });
+		const queue = harness.queue();
+		const offer = vi.spyOn(harness.node, 'offer');
+
+		await queue.retry();
+		expect(offer).not.toHaveBeenCalled();
+		advanceClock(FIRST_BACKOFF_MILLISECONDS);
+		await queue.retry();
+		expect(offer).toHaveBeenCalledTimes(1);
 	});
 
 	test('records what a staple awaits once it is refused again for another reason, or when it was kept without it, and only then', async function() {

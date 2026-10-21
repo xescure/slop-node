@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { MemoryBootstrapStage } from '../ledger/storage/stage.js';
 import type { BootstrapStage } from '../ledger/storage/stage.js';
@@ -214,9 +215,10 @@ describe('staging what the ranges read', function() {
 		expect(events.slice(0, 3)).toEqual(['read leaving out 0', 'read leaving out 64', 'add 0']);
 		expect(events.slice(events.indexOf('add 63'), events.indexOf('add 64') + 1)).toEqual(['add 63', 'remove 64', 'add 64']);
 		expect(events.slice(events.indexOf('add 99'), events.indexOf('add 99') + 2)).toEqual(['add 99', 'remove 36']);
+		// Once removed, a staple is left out of no read.
 		expect(events.filter(function(event): boolean {
-			return(event.startsWith('remove'));
-		})).toEqual(['remove 64', 'remove 36']);
+			return(!event.startsWith('add'));
+		})).toEqual(['read leaving out 0', 'read leaving out 64', 'remove 64', 'remove 36', 'read leaving out 0', 'read leaving out 0']);
 		expect(node.size).toBe(100);
 		expect(await staging.isEmpty()).toBe(true);
 	});
@@ -306,6 +308,58 @@ describe('staging what the ranges read', function() {
 		})).rejects.toThrow('the stage failed');
 		expect(node.size).toBe(2);
 		expect((await stage.counts()).staples).toBe(2);
+	});
+
+	test('fails when reading the stage fails only once the work has settled, so that nothing it runs outlives the adding', async function() {
+		const node = new SimulatedNode();
+		const stage = new MemoryBootstrapStage();
+		const failing: BootstrapStage = {
+			put: function(staged) {
+				return(stage.put(staged));
+			},
+			holds: function(key) {
+				return(stage.holds(key));
+			},
+			firstBefore: function() {
+				return(Promise.reject(new Error('the stage failed')));
+			},
+			lastFrom: function(moment, count) {
+				return(stage.lastFrom(moment, count));
+			},
+			remove: function(keys) {
+				return(stage.remove(keys));
+			},
+			counts: function() {
+				return(stage.counts());
+			}
+		};
+		const staging = new Staging(failing, simulatedRetries(node, new SimulatedRetryStore(), []), {
+			holds: function(staple): Promise<boolean> {
+				return(Promise.resolve(node.holds(staple)));
+			},
+			decode: decodeSimulatedStaple
+		});
+		const work: { finish?: () => void } = {};
+		const pending = new Promise<void>(function(resolve): void {
+			work.finish = resolve;
+		});
+		const outcome: { settled: boolean } = { settled: false };
+
+		const adding = staging.alongside(pending, function(): number {
+			return(8.64e15);
+		}, Number.POSITIVE_INFINITY, function(): boolean {
+			return(false);
+		}).finally(function(): void {
+			outcome.settled = true;
+		});
+		adding.catch(function(): void {
+			// Heard below.
+		});
+		await delay(20);
+		expect(outcome.settled).toBe(false);
+		work.finish?.();
+
+		await expect(adding).rejects.toThrow('the stage failed');
 	});
 
 	test('adds only the staples whose earliest vote was made before the frontier, and the rest once it moves past them', async function() {

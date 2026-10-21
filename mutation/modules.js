@@ -20,7 +20,7 @@ const PIPELINE_SIMULATION_CASES = {
 	]
 };
 
-/** The configuration, of which the peer-to-peer module mutates only the parts that close a network to peers. */
+/** The configuration, of which the peer-to-peer module mutates the parts that close a network to peers, and the config module the rest. */
 const CONFIG = 'src/node/config.ts';
 
 /**
@@ -49,12 +49,12 @@ const CLOSURE_PARTS = [
 ];
 
 /**
- * The ranges of config.ts Stryker mutates for its parts that close a network
- * to peers, read from that source.
+ * The lines of config.ts that hold its parts that close a network to peers,
+ * in the order of the file, read from that source.
  * @param {string} source
- * @returns {string[]}
+ * @returns {{ first: number; last: number }[]}
  */
-export function closureRanges(source) {
+function closureLines(source) {
 	const lines = source.split('\n');
 	/** @param {string} text */
 	function onlyLine(text) {
@@ -70,8 +70,43 @@ export function closureRanges(source) {
 		if (last < 0) {
 			throw(new Error(`${CONFIG} has no line '${part.to}' to end the part from '${part.from}'`));
 		}
-		return(`${CONFIG}:${String(first + 1)}-${String(last + 1)}`);
+		return({ first: first + 1, last: last + 1 });
+	}).sort(function(left, right) {
+		return(left.first - right.first);
 	}));
+}
+
+/**
+ * The ranges of config.ts Stryker mutates for its parts that close a network
+ * to peers, read from that source.
+ * @param {string} source
+ * @returns {string[]}
+ */
+export function closureRanges(source) {
+	return(closureLines(source).map(function({ first, last }) {
+		return(`${CONFIG}:${String(first)}-${String(last)}`);
+	}));
+}
+
+/**
+ * The ranges of config.ts Stryker mutates for the rest of it: every line the
+ * parts that close a network to peers leave, so that no mutant of the file
+ * is in both modules, nor in neither.
+ * @param {string} source
+ * @returns {string[]}
+ */
+export function restOfConfigRanges(source) {
+	const lineCount = source.split('\n').length - (source.endsWith('\n') ? 1 : 0);
+	/** @type {string[]} */
+	const ranges = [];
+	let next = 1;
+	for (const { first, last } of [...closureLines(source), { first: lineCount + 1, last: lineCount }]) {
+		if (first > next) {
+			ranges.push(`${CONFIG}:${String(next)}-${String(first - 1)}`);
+		}
+		next = last + 1;
+	}
+	return(ranges);
 }
 
 /**
@@ -217,12 +252,34 @@ const MODULES = {
 		],
 		ignorers: [],
 		selectedCases: {}
+	},
+	/*
+	 * How the node reads its environment, and the node upstream is given from
+	 * it: the rest of config.ts, measured by its own tests, by the genesis
+	 * command's, which reads the node's variables through it, and by the
+	 * follower's, which is a node configured through it.
+	 */
+	config: {
+		/* Read only when asked, as the peer-to-peer module's is. */
+		get mutate() {
+			return(restOfConfigRanges(readFileSync(CONFIG, 'utf8')));
+		},
+		tests: [
+			'src/node/config.test.ts',
+			'src/node/configured-peers.test.ts',
+			'src/node/genesis.test.ts',
+			'src/parity/follower-config.test.ts'
+		],
+		ignorers: [],
+		selectedCases: {}
 	}
 };
 
-/** The module the environment names, as make passes it to both configurations. */
-export function selectedModule() {
-	const name = process.env.SLOP_NODE_MUTATION_MODULE ?? '';
+/**
+ * The module of the name.
+ * @param {string} name
+ */
+export function moduleNamed(name) {
 	const module = MODULES[name];
 	if (module === undefined) {
 		throw(new Error(`unknown mutation module '${name}'; the modules are: ${Object.keys(MODULES).join(', ')}`));
@@ -237,4 +294,9 @@ export function selectedModule() {
 		ignorers: module.ignorers,
 		selectedCases: module.selectedCases
 	});
+}
+
+/** The module the environment names, as make passes it to both configurations. */
+export function selectedModule() {
+	return(moduleNamed(process.env.SLOP_NODE_MUTATION_MODULE ?? ''));
 }

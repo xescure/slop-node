@@ -64,8 +64,11 @@ export function createIdempotentKeyError(input: { readonly blockHash: BlockHash;
 	return(error);
 }
 
+/** An error of upstream's own classes, as its guard names them. */
+export type KeetaNetError = typeof KeetaNet.lib.Error.isInstance extends (error: unknown) => error is infer Guarded ? Guarded : never;
+
 /** Domain errors carry codes that callers and the API depend on. */
-export function isKeetaNetError(error: unknown): boolean {
+export function isKeetaNetError(error: unknown): error is KeetaNetError {
 	return(lib.Error.isInstance(error));
 }
 

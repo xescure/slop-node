@@ -346,7 +346,7 @@ const UNSPECIFIED_HOSTS: ReadonlySet<string> = new Set(['0.0.0.0', '[::]']);
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /** A secret value is left out of the error, and so is the cause, which may quote it. */
-function invalid(variable: ConfigVariable, expected: string, value: string, options?: ErrorOptions): ConfigError {
+export function invalid(variable: ConfigVariable, expected: string, value: string, options?: ErrorOptions): ConfigError {
 	if (SECRET_VARIABLES.has(variable)) {
 		return(new ConfigError({ kind: 'invalid', variable, expected }));
 	}
@@ -415,7 +415,7 @@ export function parseSeed(variable: ConfigVariable, text: string): string {
 	if (!SEED.test(text)) {
 		throw(invalid(variable, SEED_EXPECTED, text));
 	}
-	return(text.toLowerCase());
+	return(text);
 }
 
 export function parseSeedIndex(variable: ConfigVariable, text: string): number {
@@ -563,8 +563,8 @@ function parsePostgresURL(text: string): StorageChoice {
 	let url: URL;
 	try {
 		url = new URL(text);
-	} catch (error: unknown) {
-		throw(invalid('KEETANET_LOCAL_NODE_POSTGRES_URL', expected, text, { cause: error }));
+	} catch {
+		throw(invalid('KEETANET_LOCAL_NODE_POSTGRES_URL', expected, text));
 	}
 	if (!POSTGRES_PROTOCOLS.has(url.protocol)) {
 		throw(invalid('KEETANET_LOCAL_NODE_POSTGRES_URL', expected, text));
@@ -682,7 +682,7 @@ function parseManualPeer(entry: string): ManualPeer {
 	const variable = 'KEETANET_LOCAL_NODE_MANUAL_PEERS';
 	const at = entry.indexOf('@');
 	const fields = entry.slice(at + 1).split('|');
-	if (at < 0 || fields.length < MIN_PEER_FIELDS || fields.length > MAX_PEER_FIELDS) {
+	if (at <= 0 || fields.length < MIN_PEER_FIELDS || fields.length > MAX_PEER_FIELDS) {
 		throw(invalid(variable, MANUAL_PEER_FORM, entry));
 	}
 	const key = parseAccountKey(variable, entry.slice(0, at));

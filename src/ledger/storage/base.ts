@@ -17,6 +17,7 @@ import { assertNever } from '../../util/assert-never.js';
 import { blockHeightsOf, computeConfirmedStapleChange } from './confirmed.js';
 import type { ConfirmedStapleChange } from './confirmed.js';
 import { createLedgerError, describeError, isKeetaNetError } from './errors.js';
+import type { KeetaNetError } from './errors.js';
 import { toBlockHashKey, toStapleKey } from './keys.js';
 import type { BlockHashKey, StapleKey } from './keys.js';
 import type { BootstrapStage } from './stage.js';
@@ -238,9 +239,9 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 		});
 		recordSettlement(transaction, applied);
 		this.#staplesApplied += applied.length;
-		return(applied.map(function({ staple }): VoteStaple {
-			return(staple);
-		}));
+		const staples = applied.map(stapleOf);
+		this.#forgetRetries(staples);
+		return(staples);
 	}
 
 	/**
@@ -250,7 +251,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * only for failures a driver knows to be transient.
 	 * [Keeta TS] index.js:71361-71411
 	 */
-	evaluateError(error: unknown): Promise<unknown> {
+	evaluateError(error: unknown): Promise<KeetaNetError> {
 		if (isKeetaNetError(error)) {
 			return(Promise.resolve(error));
 		}
@@ -374,6 +375,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 		isolatedInTurn(transaction: Transaction, unit: () => Promise<void>): Promise<void>;
 		orphanedSideRows(transaction: Transaction): Promise<number>;
 		persist(transaction: Transaction, change: ConfirmedStapleChange): Promise<void>;
+		retryRecords(): { readonly failed: readonly StapleKey[]; readonly askedToRunAgain: readonly StapleKey[] };
 	} {
 		if (key !== TESTING_KEY) {
 			throw(new Error('This is a testing only method'));
@@ -393,6 +395,9 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			},
 			persist: (transaction, change) => {
 				return(this.persistConfirmedStaple(transaction, change));
+			},
+			retryRecords: () => {
+				return({ failed: [...this.#failedRetries.keys()], askedToRunAgain: [...this.#retryableFailures.keys()] });
 			}
 		});
 	}
@@ -674,7 +679,26 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 		for (const staple of collected) {
 			this.#reportDeadDeferredStaple(staple);
 		}
+		this.#forgetRetries(collected);
 		return(more);
+	}
+
+	/*
+	 * What the gc retries keep of staples that are no longer deferred, as
+	 * they applied or were dropped: kept, it would last as long as the
+	 * process, and a failure on record would take a place among the staples
+	 * a batch retries again. It is forgotten before the transaction commits,
+	 * as #staplesApplied counts before it: a staple whose transaction then
+	 * rolls back stays deferred with no record, and the next gc retries it
+	 * as one that never failed, which costs that one retry, and counts its
+	 * failures that ask for a rerun from none again.
+	 */
+	#forgetRetries(staples: readonly VoteStaple[]): void {
+		for (const staple of staples) {
+			const stapleKey = toStapleKey(staple.blocksHash);
+			this.#failedRetries.delete(stapleKey);
+			this.#retryableFailures.delete(stapleKey);
+		}
 	}
 
 	#reportDeadDeferredStaple(staple: VoteStaple): void {
@@ -731,8 +755,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 			retried.add(stapleKey);
 			if (await this.#isDead(transaction, staple)) {
 				await this.removeDeferredStaple(transaction, stapleKey);
-				this.#failedRetries.delete(stapleKey);
-				this.#retryableFailures.delete(stapleKey);
+				this.#forgetRetries([staple]);
 				this.#reportDeadDeferredStaple(staple);
 				continue;
 			}
@@ -740,8 +763,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 				const applied = await this.#applyIsolated(transaction, staple, replay);
 				recordSettlement(transaction, applied);
 				this.#staplesApplied += applied.length;
-				this.#failedRetries.delete(stapleKey);
-				this.#retryableFailures.delete(stapleKey);
+				this.#forgetRetries(applied.map(stapleOf));
 			} catch (error: unknown) {
 				const inARow = (this.#retryableFailures.get(stapleKey) ?? 0) + 1;
 				if (await this.#asksToRunAgain(error) && inARow < RETRYABLE_FAILURES_LIMIT) {
@@ -766,11 +788,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * [Keeta TS] index.js:71396-71406
 	 */
 	async #asksToRunAgain(error: unknown): Promise<boolean> {
-		const evaluated = await this.evaluateError(error);
-		if (!isKeetaNetError(evaluated) || typeof evaluated !== 'object' || evaluated === null) {
-			return(false);
-		}
-		return(Reflect.get(evaluated, 'shouldRetry') === true);
+		return(Reflect.get(await this.evaluateError(error), 'shouldRetry') === true);
 	}
 
 	/** The staples whose last retry failed, and of them those due again, a staple applied since, or those not, oldest failure first. */
@@ -812,7 +830,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 		const again = due.flatMap((stapleKey): VoteStaple[] => {
 			const staple = listed.get(stapleKey);
 			if (staple === undefined) {
-				// Released once, it stays released, so it is no longer deferred: a replay or an add applied it.
+				// Released once, it stays released, so it is no longer deferred: another driver over the same store applied or dropped it.
 				this.#failedRetries.delete(stapleKey);
 				return([]);
 			}
@@ -891,6 +909,10 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 		this.initialized.config.log?.error(LOG_SOURCE, `network integrity alarm: ${message}`);
 		return(createLedgerError('LEDGER_PREVIOUS_ALREADY_USED', message));
 	}
+}
+
+function stapleOf({ staple }: AppliedStaple): VoteStaple {
+	return(staple);
 }
 
 /*

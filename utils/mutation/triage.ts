@@ -47,6 +47,8 @@ export type TriageClass = 'equivalent' | 'harmless';
 export type TriageEntry = {
 	readonly place: MutantPlace;
 	readonly file: string;
+	readonly start: SourcePosition;
+	readonly end: SourcePosition;
 	readonly triage: TriageClass;
 	readonly reason: string;
 };
@@ -71,7 +73,7 @@ export type Assessment = {
 	readonly unaccounted: readonly ReportedMutant[];
 	/** Mutants reported as surviving a run that completed no test, which the scores leave out as Stryker leaves out a run that failed. */
 	readonly ranNoTest: readonly ReportedMutant[];
-	/** Entries for a reported module that name no surviving mutant: the code moved, or a test now kills it. */
+	/** Entries for code the run mutated that name no surviving mutant: the code moved, or a test now kills it. */
 	readonly stale: readonly TriageEntry[];
 };
 
@@ -209,6 +211,61 @@ export function parseReport(report: unknown): ReportedMutant[] {
 	return(mutants);
 }
 
+/** Lines of a file, both one-based and inclusive. */
+export type LineRange = {
+	readonly first: number;
+	readonly last: number;
+};
+
+/**
+ * The lines a run mutated of each file its mutate list names with line
+ * ranges, as "<file>:<first>-<last>". A file the list names by a pattern
+ * alone, such as a glob, the run mutated whole, and it has no ranges here.
+ */
+export type MutatedRanges = ReadonlyMap<string, readonly LineRange[]>;
+
+// Stryker 10.0.0's own form of a pattern with a range, so that no pattern it reads as a range is taken for a file name.
+const MUTATE_RANGE = /^(.*?):((\d+)(?::(\d+))?-(\d+)(?::(\d+))?)$/u;
+
+/**
+ * The line ranges of the mutate list the report's run was configured with. A
+ * file named both with ranges and plainly Stryker mutates whole, which the
+ * ranges would hide, so such a list is refused; a glob that also matches a
+ * file named with ranges is not looked for.
+ */
+export function mutatedRangesOf(report: unknown): MutatedRanges {
+	if (!isObject(report)) {
+		throw(new Error('the report is not an object'));
+	}
+	const patterns = field(objectAt(report, 'config', 'the report'), 'mutate', 'the report\'s config');
+	if (!Array.isArray(patterns)) {
+		throw(new Error('the report\'s config.mutate is not a list'));
+	}
+	const ranges = new Map<string, LineRange[]>();
+	const plain = new Set<string>();
+	for (const [index, pattern] of patterns.entries()) {
+		if (typeof pattern !== 'string') {
+			throw(new Error(`the report's config.mutate[${String(index)}] is not a string`));
+		}
+		const [, file, , first, firstColumn, last, lastColumn] = MUTATE_RANGE.exec(pattern) ?? [];
+		if (file === undefined || first === undefined || last === undefined) {
+			plain.add(pattern);
+			continue;
+		}
+		// A column would need Stryker's zero-based columns set against the report's one-based ones, and no module mutates by column.
+		if (firstColumn !== undefined || lastColumn !== undefined) {
+			throw(new Error(`the report's config.mutate[${String(index)}] names columns, of which only lines are read: ${pattern}`));
+		}
+		ranges.set(file, [...ranges.get(file) ?? [], { first: Number(first), last: Number(last) }]);
+	}
+	for (const file of ranges.keys()) {
+		if (plain.has(file)) {
+			throw(new Error(`the report's config.mutate names ${file} both with ranges and whole, which Stryker mutates whole`));
+		}
+	}
+	return(ranges);
+}
+
 const POSITION = '([1-9][0-9]*):([1-9][0-9]*)';
 
 const ENTRY = new RegExp(`^- ([^\\s:]+):${POSITION}-${POSITION} ([A-Za-z]+) ("(?:[^"\\\\]|\\\\.)*") (equivalent|harmless): (\\S.*)$`);
@@ -269,7 +326,7 @@ export function parseTriage(text: string): TriageEntry[] {
 			throw(new Error(`${where} names ${place} again`));
 		}
 		seen.add(place);
-		entries.push({ place, file, triage, reason });
+		entries.push({ place, file, start: { line: Number(startLine), column: Number(startColumn) }, end: { line: Number(endLine), column: Number(endColumn) }, triage, reason });
 	}
 	return(entries);
 }
@@ -331,7 +388,25 @@ function assessModule(file: string, mutants: readonly ReportedMutant[], entries:
 	});
 }
 
-export function assess(mutants: readonly ReportedMutant[], entries: readonly TriageEntry[]): Assessment {
+/**
+ * Whether the run mutated the code an entry names: its file was reported, and
+ * where the run mutated the file by ranges, the entry lies inside one, as
+ * Stryker makes only the mutants that do. Another module may mutate the rest
+ * of the file, and its entries are its own run's to judge.
+ */
+function mutatedBy(files: readonly string[], ranges: MutatedRanges): (entry: TriageEntry) => boolean {
+	return(function(entry): boolean {
+		if (!files.includes(entry.file)) {
+			return(false);
+		}
+		const fileRanges = ranges.get(entry.file);
+		return(fileRanges === undefined || fileRanges.some(function(range): boolean {
+			return(range.first <= entry.start.line && entry.end.line <= range.last);
+		}));
+	});
+}
+
+export function assess(mutants: readonly ReportedMutant[], entries: readonly TriageEntry[], ranges: MutatedRanges): Assessment {
 	const byPlace = new Map<MutantPlace, TriageEntry>(entries.map(function(entry): [MutantPlace, TriageEntry] {
 		return([entry.place, entry]);
 	}));
@@ -353,8 +428,8 @@ export function assess(mutants: readonly ReportedMutant[], entries: readonly Tri
 		ranNoTest: mutants.filter(function(mutant): boolean {
 			return(mutant.ranNoTest);
 		}),
-		stale: entries.filter(function(entry): boolean {
-			return(files.includes(entry.file) && !surviving.has(entry.place));
+		stale: entries.filter(mutatedBy(files, ranges)).filter(function(entry): boolean {
+			return(!surviving.has(entry.place));
 		})
 	});
 }
