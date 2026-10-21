@@ -1,0 +1,18 @@
+diff --git a/node_modules/@keetanetwork/keetanet-client/client/index.js b/node_modules/@keetanetwork/keetanet-client/client/index.js
+--- a/node_modules/@keetanetwork/keetanet-client/client/index.js
++++ b/node_modules/@keetanetwork/keetanet-client/client/index.js
+@@ -69092,14 +69092,6 @@
+     const alreadyAdded = principalFields.fields.permissions ?? [];
+     const foundAddedMatch = alreadyAdded.find(function ({ entity, target, permissions, method }) {
+         /*
+-         * Only a grant that adds or sets a permission can satisfy a requirement. A
+-         * SUBTRACT records the removed flag in `permissions`, so ignoring the method
+-         * would let a removal satisfy a later requirement for that same flag.
+-         */
+-        if (method === block_1.Block.AdjustMethod.SUBTRACT) {
+-            return (false);
+-        }
+-        /*
+          * The accumulated grant must apply to the same entity the requirement is scoped to.
+          */
+         if (!entity.comparePublicKey(requirement.entity)) {

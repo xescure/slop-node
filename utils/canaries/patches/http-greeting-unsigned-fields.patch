@@ -1,0 +1,20 @@
+diff --git a/src/api/p2p.ts b/src/api/p2p.ts
+index 30fa344..3d44599 100644
+--- a/src/api/p2p.ts
++++ b/src/api/p2p.ts
+@@ -215,12 +215,13 @@ function handleMessage(request: APIRequest, body: unknown): Promise<DeclaredResu
+ 	}
+ 	const payload = asPayload(body);
+ 	const text = requiredString(payload, 'message');
+-	const advertisement = signedAdvertisementOf(requiredObject(payload, 'greeting'));
++	const greeting = requiredObject(payload, 'greeting');
++	const advertisement = signedAdvertisementOf(greeting);
+ 	if (advertisement === undefined) {
+ 		return(Promise.resolve({ success: false }));
+ 	}
+ 	const connection = new P2PInternals.HTTPConnection(advertisement.peer, node.switch);
+-	deliver(node, connection, greetingMessage(advertisement));
++	deliver(node, connection, greetingMessage({ peer: advertisement.peer, serialized: greeting }));
+ 	const message = republishedMessage(text);
+ 	if (message === undefined) {
+ 		return(Promise.resolve({ success: false }));

@@ -64,6 +64,11 @@ help:
 	@echo "                   not part of test"
 	@echo "                   Specify MODULE=<name>, a module of mutation/modules.js,"
 	@echo "                   and FULL=1 to rerun every mutant"
+	@echo "  canaries       - Reverts each safety fix in a clone of HEAD, one at a"
+	@echo "                   time, and checks that the tests utils/canaries/list.ts"
+	@echo "                   names fail by assertion; it runs for a quarter of an"
+	@echo "                   hour, so it is not part of test"
+	@echo "                   Specify CANARY=<name> to run one canary"
 	@echo "  parity         - Compares the running follower with the main network's"
 	@echo "                   representatives and prints the parity report; it reads"
 	@echo "                   from them, so it is not part of test"
@@ -173,6 +178,13 @@ mutation: $(if $(MODULE),node_modules/.patched build/utils/.done,mutation-usage)
 	SLOP_NODE_MUTATION_MODULE='$(MODULE)' npm run stryker -- run stryker.config.mjs $(if $(FULL),--force)
 	node build/utils/mutation/main.js --report '.stryker/$(MODULE)/report.json' --triage mutation/equivalent.md
 
+# Each canary clones HEAD into build/canaries, copies the patched
+# dependencies there, applies its revert and runs the test files that must
+# catch it, one canary at a time for memory; "make test" checks only that
+# every patch still applies and every test it names is still there.
+canaries: node_modules/.patched build/utils/.done
+	node build/utils/canaries/main.js $(if $(CANARY),--canary '$(CANARY)')
+
 # The parity report reads from the main network's representatives and needs
 # the follower running, so it is never part of test.
 parity: build/parity/.done
@@ -254,6 +266,6 @@ clean:
 distclean: clean
 	rm -rf node_modules .nvmrc reference .stryker
 
-.PHONY: all help test devnet-test conformance mutation mutation-usage parity do-lint lock-integrity reference reference-diff reference-diff-usage clean distclean
+.PHONY: all help test devnet-test conformance mutation mutation-usage canaries parity do-lint lock-integrity reference reference-diff reference-diff-usage clean distclean
 
 endif

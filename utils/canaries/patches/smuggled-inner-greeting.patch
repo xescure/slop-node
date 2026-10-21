@@ -1,0 +1,12 @@
+diff --git a/src/api/p2p.ts b/src/api/p2p.ts
+index 30fa344..89421e9 100644
+--- a/src/api/p2p.ts
++++ b/src/api/p2p.ts
+@@ -125,6 +125,7 @@ function republishedMessage(text: string): Buffer | undefined {
+ 	}
+ 	switch (message.type) {
+ 		case 'add':
++		case 'greeting':
+ 			return(buffer);
+ 		case 'peer':
+ 			return(republishedPeer(message));

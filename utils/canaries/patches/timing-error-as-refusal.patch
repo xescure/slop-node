@@ -1,0 +1,13 @@
+diff --git a/src/api/errors.ts b/src/api/errors.ts
+index 1ac0396..f5a9c6b 100644
+--- a/src/api/errors.ts
++++ b/src/api/errors.ts
+@@ -124,7 +124,7 @@ function refusalOf(error: unknown): RefusalBody | undefined {
+ 	const type = stringField(json, 'type');
+ 	const code = stringField(json, 'code');
+ 	const message = stringField(json, 'message');
+-	if (type === undefined || code === undefined || message === undefined || code === DRIVER_WRAPPING_CODE || type === TIMING_ERROR_TYPE) {
++	if (type === undefined || code === undefined || message === undefined || code === DRIVER_WRAPPING_CODE) {
+ 		return(undefined);
+ 	}
+ 	return({ error: true, type, code, message, ...optionalFields(json) });

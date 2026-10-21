@@ -1,0 +1,26 @@
+diff --git a/src/node/stats.ts b/src/node/stats.ts
+index b66dfaa..e1f7631 100644
+--- a/src/node/stats.ts
++++ b/src/node/stats.ts
+@@ -45,7 +45,7 @@ export class NodeStats extends ClientStats {
+ 		const previous = this.#syncing;
+ 		const syncing = (async (): Promise<void> => {
+ 			await previous?.catch(ignoreFailure);
+-			const writes = await Promise.allSettled([
++			await Promise.all([
+ 				...Object.entries(incrChanges).map(async ([key, change]): Promise<void> => {
+ 					try {
+ 						await this.#kv.incr('stats', key, change);
+@@ -63,12 +63,6 @@ export class NodeStats extends ClientStats {
+ 					}
+ 				})
+ 			]);
+-			// Every write has ended, and each failed one is back in the changes, before the first refusal is thrown.
+-			for (const write of writes) {
+-				if (write.status === 'rejected') {
+-					throw(write.reason);
+-				}
+-			}
+ 		})();
+ 		this.#syncing = syncing;
+ 		try {

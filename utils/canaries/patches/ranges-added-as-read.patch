@@ -1,0 +1,13 @@
+diff --git a/src/node/bootstrap-stage.ts b/src/node/bootstrap-stage.ts
+index c2dc6d6..eba96f7 100644
+--- a/src/node/bootstrap-stage.ts
++++ b/src/node/bootstrap-stage.ts
+@@ -61,7 +61,7 @@ function namedOf(staged: StagedStaple): NamedStaple {
+  * read, past every staple.
+  */
+ export function applyFrontier(layout: RangeLayout | undefined): number {
+-	if (layout === undefined || layout.ranges.length === 0) {
++	if (layout === undefined || layout.ranges.length >= 0) {
+ 		return(END_OF_TIME);
+ 	}
+ 	let earliest = Number.POSITIVE_INFINITY;

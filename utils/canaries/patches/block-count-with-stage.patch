@@ -1,0 +1,14 @@
+diff --git a/src/parity/checksum.ts b/src/parity/checksum.ts
+index 5c1404d..7e65af0 100644
+--- a/src/parity/checksum.ts
++++ b/src/parity/checksum.ts
+@@ -146,9 +146,6 @@ function blockCountRecordOf(at: string, progress: FollowerProgress, follower: Ch
+ 	if (completedPass === null) {
+ 		reasons.push('no-completed-pass');
+ 	}
+-	if (progress.staged > 0) {
+-		reasons.push('stage-not-empty');
+-	}
+ 	// Staples the ledger refused, or deferred behind a block it lacks, are held by the representatives and not counted by the follower, as for its being caught up (src/parity/follower-store.ts, caughtUp).
+ 	if (progress.queued > 0) {
+ 		reasons.push('retry-queued');

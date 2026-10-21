@@ -1,0 +1,13 @@
+diff --git a/src/node/bootstrap-evidence.ts b/src/node/bootstrap-evidence.ts
+index adbd890..2b343ea 100644
+--- a/src/node/bootstrap-evidence.ts
++++ b/src/node/bootstrap-evidence.ts
+@@ -210,7 +210,7 @@ export class KnownVotes {
+  * of a staple it listed twice, which the read listing it again followed.
+  */
+ export function wholeBelowOf(page: readonly PassStaple[], limit: number, longest: number): number {
+-	if (page.length < limit && page.length < longest) {
++	if (page.length < limit) {
+ 		return(page.length);
+ 	}
+ 	let below = Math.max(0, page.length - MAX_VOTES_PER_READ);

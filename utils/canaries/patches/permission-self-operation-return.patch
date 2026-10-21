@@ -1,0 +1,12 @@
+diff --git a/node_modules/@keetanetwork/keetanet-client/client/index.js b/node_modules/@keetanetwork/keetanet-client/client/index.js
+--- a/node_modules/@keetanetwork/keetanet-client/client/index.js
++++ b/node_modules/@keetanetwork/keetanet-client/client/index.js
+@@ -69702,7 +69702,7 @@
+             throw (new Error('Error computing permission effect: Permissions cannot be undefined'));
+         }
+         if (requirement.entity.comparePublicKey(requirement.principal)) {
+-            continue;
++            return;
+         }
+         /**
+          * The initialTrustedAccount is able to bypass all permission requirements signing opening blocks for the networkAddress and the baseToken

@@ -1,0 +1,14 @@
+diff --git a/src/node/bootstrap-pass.ts b/src/node/bootstrap-pass.ts
+index 14ee172..4545cb3 100644
+--- a/src/node/bootstrap-pass.ts
++++ b/src/node/bootstrap-pass.ts
+@@ -713,6 +713,9 @@ class Pass<Staple extends PassStaple> {
+ 				continue;
+ 			}
+ 			const short = page.length < listed.limit;
++			if (short) {
++				return({ kind: 'drained' });
++			}
+ 			if (short) {
+ 				shortPages++;
+ 			} else {
