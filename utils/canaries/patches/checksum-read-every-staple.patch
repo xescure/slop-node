@@ -1,0 +1,13 @@
+diff --git a/src/ledger/storage/postgres/confirmed-statements.ts b/src/ledger/storage/postgres/confirmed-statements.ts
+index 045f885..ad7b60b 100644
+--- a/src/ledger/storage/postgres/confirmed-statements.ts
++++ b/src/ledger/storage/postgres/confirmed-statements.ts
+@@ -257,7 +257,7 @@ export const mainLedgerCounts: Statement<[], LedgerCountsColumns> = statement('m
+ 
+ /** The ledger checksum's 256 bits, as text, folded from its rows in one statement, so one snapshot (D19). */
+ export const readLedgerChecksum: Statement<[], { readonly ledger_checksum: string }> = statement('read_ledger_checksum', `
+-	SELECT bit_xor(checksum)::text AS ledger_checksum FROM ledger_checksum`);
++	SELECT coalesce(bit_xor(checksum), repeat('0', 256)::bit(256))::text AS ledger_checksum FROM staples`);
+ 
+ /**
+  * Folds a staple's checksum, as 64 hexadecimal digits, into the row of the

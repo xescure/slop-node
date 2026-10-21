@@ -230,13 +230,13 @@ export const CANARIES: readonly Canary[] = [
 	{
 		name: 'checksum-after-commit',
 		fix: commit('407e8d1'),
-		reverts: 'the Postgres driver folds a staple\'s part of the ledger checksum after its transaction, apart from its blocks, as the node\'s statistics once kept the checksum',
+		reverts: 'the Postgres driver folds a staple\'s part of the ledger checksum in the next staple\'s transaction, apart from its blocks, as the node\'s statistics, which once kept the checksum, were written at a sync after the commit',
 		catchers: [caughtBy(POSTGRES_DRIVER, 'the Postgres driver', 'a node killed after its commits, before it writes its statistics, leaves a checksum covering every staple it committed')]
 	},
 	{
-		name: 'checksum-one-row',
+		name: 'checksum-read-every-staple',
 		fix: commit('521ed0b'),
-		reverts: 'the Postgres driver folds every staple\'s checksum into one row, which every write then conflicts on under serializable isolation',
+		reverts: 'the ledger checksum is read by folding every staple\'s checksum, as before the fold table, at a cost that grows with the ledger',
 		catchers: [caughtBy(POSTGRES_DRIVER, 'the Postgres driver', 'keeps the checksum folded in a row per first byte of the staples\' blocks hashes, which a read reads instead of the staples')]
 	},
 	{
