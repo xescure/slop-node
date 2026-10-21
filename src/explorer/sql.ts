@@ -1,3 +1,4 @@
+import { Socket } from 'node:net';
 import { performance } from 'node:perf_hooks';
 import pg from 'pg';
 import { parse as parseArray } from 'postgres-array';
@@ -33,6 +34,118 @@ export type FixedAnswer =
 	| SQLRefusal;
 
 const QUERY_CANCELED = '57014';
+
+/*
+ * A server message can quote its input whole, as a failed cast does, so one
+ * query could hand the agent an error as long as any value it can build.
+ */
+const MESSAGE_CHARACTERS = 4_096;
+
+/*
+ * Beyond the byte cap a row's message carries four bytes of length for each
+ * of at most 1664 columns, and the description of those columns comes to at
+ * most about 140 kB.
+ */
+const MESSAGE_MARGIN_BYTES = 1_048_576;
+
+/** A backend message is a type byte and then its length, which counts its own four bytes and the body. */
+const MESSAGE_HEADER_BYTES = 5;
+
+/** The length a backend message declares, which no reader connection takes past its bound. */
+export function messageBoundOf(limits: SQLLimits): number {
+	return(limits.byteCap + MESSAGE_MARGIN_BYTES);
+}
+
+/** The reader's connection ended on a backend message longer than it takes. */
+export class OversizedMessage extends Error {
+	readonly bound: number;
+
+	constructor(length: number, bound: number) {
+		super(`a backend message declared ${length.toString()} bytes, over the bound of ${bound.toString()}`);
+		this.name = 'OversizedMessage';
+		this.bound = bound;
+	}
+}
+
+/** Follows the backend's messages across the chunks a connection reads, to find the first that declares a length over the bound. */
+export class MessageFrames {
+	readonly #bound: number;
+	readonly #header = Buffer.alloc(MESSAGE_HEADER_BYTES);
+	#headerBytes = 0;
+	#bodyLeft = 0;
+
+	constructor(bound: number) {
+		this.#bound = bound;
+	}
+
+	/** The length the first message over the bound declares in this chunk, if one does. */
+	overBound(chunk: Buffer): number | undefined {
+		let offset = 0;
+		while (offset < chunk.length) {
+			if (this.#bodyLeft > 0) {
+				const skipped = Math.min(this.#bodyLeft, chunk.length - offset);
+				this.#bodyLeft -= skipped;
+				offset += skipped;
+				continue;
+			}
+			const copied = chunk.copy(this.#header, this.#headerBytes, offset, offset + MESSAGE_HEADER_BYTES - this.#headerBytes);
+			this.#headerBytes += copied;
+			offset += copied;
+			if (this.#headerBytes === MESSAGE_HEADER_BYTES) {
+				// Read unsigned, so that a negative length is a huge one rather than a short one.
+				const length = this.#header.readUInt32BE(1);
+				if (length > this.#bound) {
+					return(length);
+				}
+				this.#headerBytes = 0;
+				this.#bodyLeft = length - 4;
+			}
+		}
+		return(undefined);
+	}
+}
+
+/*
+ * pg buffers a whole message before it parses it, and fails inside the
+ * socket's data handler, beyond any caller, on a string past what V8 holds.
+ * The socket sees each chunk before pg does, and ends the connection at the
+ * header of a message over the bound, before its body arrives.
+ */
+class BoundedSocket extends Socket {
+	readonly #frames: MessageFrames;
+	readonly #bound: number;
+
+	constructor(bound: number) {
+		super();
+		this.#frames = new MessageFrames(bound);
+		this.#bound = bound;
+	}
+
+	override push(chunk: unknown, encoding?: BufferEncoding): boolean {
+		if (Buffer.isBuffer(chunk)) {
+			const length = this.#frames.overBound(chunk);
+			if (length !== undefined) {
+				this.destroy(new OversizedMessage(length, this.#bound));
+				return(false);
+			}
+		}
+		return(super.push(chunk, encoding));
+	}
+}
+
+/**
+ * Connection settings that bound every backend message a reader connection
+ * takes. The bound is seen only on a connection without TLS, so TLS is
+ * turned off here, where the environment could otherwise turn it on.
+ */
+export function boundedReaderOptions(bound: number): Pick<pg.PoolConfig, 'stream' | 'ssl'> {
+	return({
+		ssl: false,
+		stream: function() {
+			return(new BoundedSocket(bound));
+		}
+	});
+}
 
 /** Raised by explorer.row_fits (schema/explorer/migrations/0003_sql_guard.sql) for a row over the byte cap. */
 const ROW_OVER_CAP = 'XE001';
@@ -178,19 +291,40 @@ const timeoutOf = function(limits: SQLLimits, requested: number | undefined): nu
 	return(Math.max(1, Math.min(Math.floor(wanted), limits.maxTimeoutMilliseconds)));
 };
 
-const refusalOf = function(error: pg.DatabaseError, statement: string, prefix: string): SQLRefusal {
+const shortened = function(message: string): string {
+	if (message.length <= MESSAGE_CHARACTERS) {
+		return(message);
+	}
+	// A cut between the two halves of a surrogate pair would leave half a character.
+	const kept = message.slice(0, MESSAGE_CHARACTERS).replace(/[\uD800-\uDBFF]$/, '');
+	return(`${kept}... (cut from ${message.length.toString()} characters)`);
+};
+
+const databaseRefusalOf = function(error: pg.DatabaseError, statement: string, prefix: string): SQLRefusal {
+	const message = shortened(error.message);
 	if (error.code === QUERY_CANCELED) {
-		return({ kind: 'refused', reason: 'timeout', message: error.message });
+		return({ kind: 'refused', reason: 'timeout', message });
 	}
 	if (error.code === ROW_OVER_CAP) {
-		return({ kind: 'refused', reason: 'byte-cap', message: error.message });
+		return({ kind: 'refused', reason: 'byte-cap', message });
 	}
 
 	const position = Number(error.position) - prefix.length;
 	if (!Number.isInteger(position) || position < 1 || position > statement.length) {
-		return({ kind: 'refused', reason: 'sql-error', message: error.message });
+		return({ kind: 'refused', reason: 'sql-error', message });
 	}
-	return({ kind: 'refused', reason: 'sql-error', message: `${error.message} (at character ${position.toString()})` });
+	return({ kind: 'refused', reason: 'sql-error', message: `${message} (at character ${position.toString()})` });
+};
+
+/** The refusal a failure of a query is, or undefined for a failure that is not the server's answer. */
+const refusalOf = function(error: unknown, statement: string, prefix: string): SQLRefusal | undefined {
+	if (error instanceof pg.DatabaseError) {
+		return(databaseRefusalOf(error, statement, prefix));
+	}
+	if (error instanceof OversizedMessage) {
+		return({ kind: 'refused', reason: 'byte-cap', message: `a result or error exceeds ${error.bound.toString()} bytes` });
+	}
+	return(undefined);
 };
 
 const duplicateColumn = function(columns: readonly string[]): string | undefined {
@@ -272,10 +406,11 @@ const answerOn = async function(client: pg.PoolClient, statement: string, limits
 			}
 		}
 	} catch (error) {
-		if (error instanceof pg.DatabaseError) {
-			return(refusalOf(error, statement, prefix));
+		const refusal = refusalOf(error, statement, prefix);
+		if (refusal === undefined) {
+			throw(error);
 		}
-		throw(error);
+		return(refusal);
 	}
 };
 
@@ -349,11 +484,12 @@ export async function runFixedQueries(reader: pg.Pool, queries: readonly FixedQu
 			}
 			return({ kind: 'rows', results });
 		} catch (error) {
-			if (error instanceof pg.DatabaseError) {
-				// A position in the explorer's own text would mean nothing to the agent.
-				return(refusalOf(error, '', ''));
+			// A position in the explorer's own text would mean nothing to the agent.
+			const refusal = refusalOf(error, '', '');
+			if (refusal === undefined) {
+				throw(error);
 			}
-			throw(error);
+			return(refusal);
 		}
 	}));
 }

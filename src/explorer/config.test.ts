@@ -105,6 +105,18 @@ describe('explorerConfigFromEnv', function() {
 		]);
 	});
 
+	test.each(['ssl', 'sslmode', 'sslcert', 'sslkey', 'sslrootcert', 'sslnegotiation'])('refuses a reader URL that names %s, without repeating its password', function(parameter) {
+		expect(refusalsOf({ ...REQUIRED, SLOP_EXPLORER_READER_URL: `${REQUIRED.SLOP_EXPLORER_READER_URL}?application_name=x&${parameter}=require` })).toEqual([
+			`SLOP_EXPLORER_READER_URL must be a URL without ssl, sslmode, sslcert, sslkey, sslrootcert, sslnegotiation (it names ${parameter}): the reader bounds the size of the server's messages, which it can read only on a connection without TLS`
+		]);
+	});
+
+	test('takes a reader URL with parameters that ask for no TLS, and a writer URL that asks for it', function() {
+		const readerURL = `${REQUIRED.SLOP_EXPLORER_READER_URL}?application_name=explorer`;
+		const writerURL = `${REQUIRED.SLOP_EXPLORER_WRITER_URL}?sslmode=require`;
+		expect(configOf({ ...REQUIRED, SLOP_EXPLORER_READER_URL: readerURL, SLOP_EXPLORER_WRITER_URL: writerURL })).toMatchObject({ readerURL, writerURL });
+	});
+
 	test('refuses an empty value rather than reading it as unset', function() {
 		expect(refusalsOf({ ...REQUIRED, SLOP_EXPLORER_TOKENS: '', SLOP_EXPLORER_LOG_FORMAT: '' })).toEqual([
 			'SLOP_EXPLORER_TOKENS is set but empty',

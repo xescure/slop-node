@@ -1,6 +1,6 @@
 import { describe, expect, inject, onTestFinished, test, vi } from 'vitest';
 import pg from 'pg';
-import { DEFAULT_SQL_LIMITS, runFixedQueries, runReadOnlySQL, toJSONValue } from './sql.js';
+import { DEFAULT_SQL_LIMITS, MessageFrames, boundedReaderOptions, messageBoundOf, runFixedQueries, runReadOnlySQL, toJSONValue } from './sql.js';
 import type { SQLAnswer, SQLLimits } from './sql.js';
 import { interceptQueries, serverError } from '../testing/query-faults.js';
 import { explorerDatabase } from './testing.js';
@@ -31,9 +31,9 @@ const withHoldings = async function(admin: pg.Pool): Promise<void> {
  * the functions the reader is refused, to show that the runner also cleans
  * up after what they leave behind.
  */
-const singleReader = function(databaseName: string, user = 'explorer_reader'): pg.Pool {
+const singleReader = function(databaseName: string, user = 'explorer_reader', options: pg.PoolConfig = {}): pg.Pool {
 	const cluster = inject('postgresCluster');
-	const pool = new pg.Pool({ host: cluster.socketDirectory, port: cluster.port, user, database: databaseName, max: 1 });
+	const pool = new pg.Pool({ ...options, host: cluster.socketDirectory, port: cluster.port, user, database: databaseName, max: 1 });
 	pool.on('error', function() {
 		// Dropping the database terminates idle connections; the pool discards them.
 	});
@@ -61,9 +61,71 @@ const limits = function(overrides: Partial<SQLLimits>): SQLLimits {
 	return({ ...DEFAULT_SQL_LIMITS, ...overrides });
 };
 
+/** A reader of one connection that takes no backend message longer than the bound of these limits. */
+const boundedReader = function(databaseName: string, bounded: SQLLimits): pg.Pool {
+	return(singleReader(databaseName, 'explorer_reader', boundedReaderOptions(messageBoundOf(bounded))));
+};
+
 const superuserOf = function(): string {
 	return(inject('postgresCluster').user);
 };
+
+/** A backend message of the given type whose length field says it is the given length. */
+const message = function(type: string, length: number, body = Buffer.alloc(Math.max(0, length - 4))): Buffer {
+	const header = Buffer.alloc(5);
+	header.write(type, 0, 'latin1');
+	header.writeUInt32BE(length >>> 0, 1);
+	return(Buffer.concat([header, body]));
+};
+
+const byteChunks = function(buffer: Buffer): Buffer[] {
+	return(Array.from(buffer, function(byte) {
+		return(Buffer.from([byte]));
+	}));
+};
+
+const firstOverBound = function(frames: MessageFrames, chunks: readonly Buffer[]): number | undefined {
+	for (const chunk of chunks) {
+		const length = frames.overBound(chunk);
+		if (length !== undefined) {
+			return(length);
+		}
+	}
+	return(undefined);
+};
+
+describe('MessageFrames', function() {
+	test('passes messages up to the bound and finds the first over it', function() {
+		const frames = new MessageFrames(10);
+		expect(frames.overBound(Buffer.concat([message('D', 10), message('C', 4), message('E', 11), message('Z', 5)]))).toBe(11);
+	});
+
+	test('follows messages whose headers and bodies are split across chunks', function() {
+		const frames = new MessageFrames(10);
+		const chunks = byteChunks(Buffer.concat([message('D', 10), message('C', 7), message('E', 11)]));
+		// The last message's header is the 20th to the 24th byte.
+		expect(firstOverBound(frames, chunks.slice(0, 23))).toBeUndefined();
+		expect(frames.overBound(Buffer.alloc(0))).toBeUndefined();
+		expect(firstOverBound(frames, chunks.slice(23))).toBe(11);
+	});
+
+	test('reads a body that holds what looks like a header as the body it is', function() {
+		const frames = new MessageFrames(10);
+		const body = message('E', 0xffffff, Buffer.alloc(0));
+		expect(frames.overBound(Buffer.concat([message('D', 9, body), message('Z', 5)]))).toBeUndefined();
+	});
+
+	test('finds a message over the bound whose header ends a chunk', function() {
+		const frames = new MessageFrames(10);
+		const stream = Buffer.concat([message('D', 6), message('E', 11, Buffer.alloc(0))]);
+		expect(frames.overBound(stream.subarray(0, 9))).toBeUndefined();
+		expect(frames.overBound(stream.subarray(9))).toBe(11);
+	});
+
+	test('reads a negative length as one over any bound', function() {
+		expect(new MessageFrames(10).overBound(message('E', -1, Buffer.alloc(0)))).toBe(0xffffffff);
+	});
+});
 
 describe('toJSONValue', function() {
 	test('keeps numeric strings, writes bigints in decimal, bytes as upper-case hex and dates in ISO', function() {
@@ -498,6 +560,46 @@ describe('runReadOnlySQL', function() {
 		expect(rowsOf(await runReadOnlySQL(reader, 'SELECT 1 AS one', DEFAULT_SQL_LIMITS)).rows).toEqual([{ one: 1 }]);
 	});
 
+	test('cuts an error message that quotes a long value down to a few kilobytes', async function() {
+		const { database } = await explorerDatabase();
+		const reader = boundedReader(database.name, DEFAULT_SQL_LIMITS);
+		const answer = refusalOf(await runReadOnlySQL(reader, `SELECT repeat('x', 3000000)::int`, DEFAULT_SQL_LIMITS));
+		expect(answer.reason).toBe('sql-error');
+		expect(answer.message).toBe(`invalid input syntax for type integer: "${'x'.repeat(4_096 - 40)}... (cut from 3000041 characters)`);
+	});
+
+	test('keeps a message as long as the cut whole', async function() {
+		const { reader } = await explorerDatabase();
+		const answer = refusalOf(await runReadOnlySQL(reader, `SELECT repeat('x', ${(4_096 - 41).toString()})::int`, DEFAULT_SQL_LIMITS));
+		expect(answer.message).toBe(`invalid input syntax for type integer: "${'x'.repeat(4_096 - 41)}"`);
+	});
+
+	test('cuts a message before a character it would split in two', async function() {
+		const { reader } = await explorerDatabase();
+		const answer = refusalOf(await runReadOnlySQL(reader, `SELECT ('x' || repeat(U&'\\+01F600', 5000))::int`, DEFAULT_SQL_LIMITS));
+		expect(answer.message).toBe(`invalid input syntax for type integer: "x${'\u{1F600}'.repeat(2_027)}... (cut from 10042 characters)`);
+	});
+
+	test('refuses an error longer than the bound of the connection, which ends, and serves the next call', async function() {
+		const { database } = await explorerDatabase();
+		const bounded = limits({ byteCap: 100 });
+		const reader = boundedReader(database.name, bounded);
+		const pidOf = async function(): Promise<unknown> {
+			return(rowsOf(await runReadOnlySQL(reader, 'SELECT pg_backend_pid() AS pid', bounded)).rows[0]?.['pid']);
+		};
+		const first = await pidOf();
+		const answer = await runReadOnlySQL(reader, `SELECT repeat('x', 3000000)::int`, bounded);
+		expect(answer).toEqual({ kind: 'refused', reason: 'byte-cap', message: `a result or error exceeds ${messageBoundOf(bounded).toString()} bytes` });
+		expect(await pidOf()).not.toBe(first);
+	});
+
+	test('passes a row as large as the byte cap allows through the bound of the connection', async function() {
+		const { database } = await explorerDatabase();
+		const reader = boundedReader(database.name, DEFAULT_SQL_LIMITS);
+		const answer = rowsOf(await runReadOnlySQL(reader, `SELECT repeat('x', ${(DEFAULT_SQL_LIMITS.byteCap - 20).toString()}) AS text`, DEFAULT_SQL_LIMITS));
+		expect(answer.rows[0]?.['text']).toHaveLength(DEFAULT_SQL_LIMITS.byteCap - 20);
+	});
+
 	test.each(['', ';', '  ;  ', '\n\t'])('refuses the empty query %j', async function(sql) {
 		const { reader } = await explorerDatabase();
 		expect(await runReadOnlySQL(reader, sql, DEFAULT_SQL_LIMITS)).toEqual({ kind: 'refused', reason: 'empty', message: 'The query is empty.' });
@@ -541,6 +643,21 @@ describe('runFixedQueries', function() {
 			return(run());
 		});
 		await expect(runFixedQueries(reader, [{ text: 'SELECT 1 AS one', values: [] }], DEFAULT_SQL_LIMITS)).rejects.toBe(failure);
+	});
+
+	test('refuses an error longer than the bound of the connection, and serves the next call', async function() {
+		const { database } = await explorerDatabase();
+		const bounded = limits({ byteCap: 100 });
+		const reader = boundedReader(database.name, bounded);
+		const answer = await runFixedQueries(reader, [{ text: `SELECT repeat('x', 3000000)::int`, values: [] }], bounded);
+		expect(answer).toEqual({ kind: 'refused', reason: 'byte-cap', message: `a result or error exceeds ${messageBoundOf(bounded).toString()} bytes` });
+		expect(await runFixedQueries(reader, [{ text: 'SELECT 1 AS one', values: [] }], bounded)).toEqual({ kind: 'rows', results: [[{ one: 1 }]] });
+	});
+
+	test('cuts a long error message', async function() {
+		const { reader } = await explorerDatabase();
+		const answer = await runFixedQueries(reader, [{ text: `SELECT repeat('x', 10000)::int`, values: [] }], DEFAULT_SQL_LIMITS);
+		expect(answer).toEqual({ kind: 'refused', reason: 'sql-error', message: `invalid input syntax for type integer: "${'x'.repeat(4_096 - 40)}... (cut from 10041 characters)` });
 	});
 
 	test('stops at the default timeout', async function() {

@@ -15,6 +15,7 @@ import type { ExplorerConfig } from './config.js';
 import { Indexer } from './indexer-loop.js';
 import { applyExplorerMigrations } from './migrations.js';
 import { explorerApp } from './server.js';
+import { boundedReaderOptions, messageBoundOf } from './sql.js';
 import type { FailureSite } from './tools.js';
 
 const LOG_FROM = 'explorer';
@@ -52,8 +53,9 @@ const logTarget = function(format: LogFormat): LogTarget {
 type Role = 'writer' | 'reader';
 
 /** A pool's idle connection that fails is discarded by the pool, which reports it as an error event that would otherwise end the process. */
-const openPool = function(role: Role, connectionString: string, max: number, emit: Emit): pg.Pool {
+const openPool = function(role: Role, connectionString: string, max: number, emit: Emit, options: pg.PoolConfig = {}): pg.Pool {
 	const pool = new pg.Pool({
+		...options,
 		connectionString,
 		max,
 		connectionTimeoutMillis: CONNECTION_TIMEOUT_MILLISECONDS,
@@ -183,7 +185,7 @@ export async function main(env: NodeJS.ProcessEnv): Promise<number> {
 	const log = logTarget(config.logFormat);
 	const emit = emitterOf(log);
 	const writer = openPool('writer', config.writerURL, WRITER_POOL_SIZE, emit);
-	const reader = openPool('reader', config.readerURL, config.maxConcurrentQueries, emit);
+	const reader = openPool('reader', config.readerURL, config.maxConcurrentQueries, emit, boundedReaderOptions(messageBoundOf(config.sql)));
 	try {
 		return(await serve(config, log, emit, stopping, writer, reader));
 	} finally {

@@ -103,6 +103,29 @@ const parsePostgresURL: Parser<string> = function(variable, text) {
 	return(parsed(text));
 };
 
+/** pg turns TLS on for any of these in a URL. */
+const SSL_PARAMETERS = ['ssl', 'sslmode', 'sslcert', 'sslkey', 'sslrootcert', 'sslnegotiation'] as const;
+
+/*
+ * The reader bounds each message the server sends by reading the frames as
+ * they arrive, which TLS would hide, so a reader URL that asks for TLS is
+ * refused rather than run unbounded.
+ */
+const parseReaderURL: Parser<string> = function(variable, text) {
+	const url = parsePostgresURL(variable, text);
+	if (url.kind === 'refused') {
+		return(url);
+	}
+	const parameters = new URL(text).searchParams;
+	const asked = SSL_PARAMETERS.find(function(parameter) {
+		return(parameters.has(parameter));
+	});
+	if (asked !== undefined) {
+		return(invalid(variable, `a URL without ${SSL_PARAMETERS.join(', ')} (it names ${asked}): the reader bounds the size of the server's messages, which it can read only on a connection without TLS`, text));
+	}
+	return(url);
+};
+
 const parseTokens: Parser<readonly BearerToken[]> = function(_variable, text) {
 	const tokens = parseBearerTokens(text);
 	if ('refused' in tokens) {
@@ -228,7 +251,7 @@ class EnvironmentReading {
 export function explorerConfigFromEnv(env: NodeJS.ProcessEnv): ExplorerConfig | { readonly refused: readonly string[] } {
 	const reading = new EnvironmentReading(env);
 	const writerURL = reading.required('SLOP_EXPLORER_WRITER_URL', parsePostgresURL);
-	const readerURL = reading.required('SLOP_EXPLORER_READER_URL', parsePostgresURL);
+	const readerURL = reading.required('SLOP_EXPLORER_READER_URL', parseReaderURL);
 	const tokens = reading.required('SLOP_EXPLORER_TOKENS', parseTokens);
 	const host = reading.optional('SLOP_EXPLORER_LISTEN_IP', parseListenIP, DEFAULT_LISTEN_IP);
 	const port = reading.optional('SLOP_EXPLORER_LISTEN_PORT', integerFrom(0, MAX_PORT), DEFAULT_LISTEN_PORT);
