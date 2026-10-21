@@ -25,10 +25,15 @@ const withHoldings = async function(admin: pg.Pool): Promise<void> {
 	}
 };
 
-/** A reader pool of one connection, so every call reuses the connection the call before it left behind. */
-const singleReader = function(databaseName: string): pg.Pool {
+/**
+ * A pool of one connection, so every call reuses the connection the call
+ * before it left behind. The reader by default; the cluster's superuser for
+ * the functions the reader is refused, to show that the runner also cleans
+ * up after what they leave behind.
+ */
+const singleReader = function(databaseName: string, user = 'explorer_reader'): pg.Pool {
 	const cluster = inject('postgresCluster');
-	const pool = new pg.Pool({ host: cluster.socketDirectory, port: cluster.port, user: 'explorer_reader', database: databaseName, max: 1 });
+	const pool = new pg.Pool({ host: cluster.socketDirectory, port: cluster.port, user, database: databaseName, max: 1 });
 	pool.on('error', function() {
 		// Dropping the database terminates idle connections; the pool discards them.
 	});
@@ -54,6 +59,10 @@ const refusalOf = function(answer: SQLAnswer): Extract<SQLAnswer, { kind: 'refus
 
 const limits = function(overrides: Partial<SQLLimits>): SQLLimits {
 	return({ ...DEFAULT_SQL_LIMITS, ...overrides });
+};
+
+const superuserOf = function(): string {
+	return(inject('postgresCluster').user);
 };
 
 describe('toJSONValue', function() {
@@ -411,8 +420,9 @@ describe('runReadOnlySQL', function() {
 	});
 
 	test('stops a query that lifts its own timeout', async function() {
-		const { reader } = await explorerDatabase();
-		const answer = await runReadOnlySQL(reader, `SELECT set_config('statement_timeout', '0', true), pg_sleep(1)`, DEFAULT_SQL_LIMITS, 200);
+		const { database } = await explorerDatabase();
+		const superuser = singleReader(database.name, superuserOf());
+		const answer = await runReadOnlySQL(superuser, `SELECT set_config('statement_timeout', '0', true), pg_sleep(1)`, DEFAULT_SQL_LIMITS, 200);
 		expect(answer).toMatchObject({ kind: 'refused', reason: 'timeout' });
 	});
 
@@ -452,12 +462,12 @@ describe('runReadOnlySQL', function() {
 
 	test('leaves no setting a query changed to the next call on the connection', async function() {
 		const { database, admin } = await explorerDatabase();
-		const reader = singleReader(database.name);
-		rowsOf(await runReadOnlySQL(reader, `SELECT set_config('statement_timeout', '0', false)`, DEFAULT_SQL_LIMITS));
-		expect(await runReadOnlySQL(reader, 'SELECT pg_sleep(1)', limits({ timeoutMilliseconds: 200 }))).toMatchObject({ kind: 'refused', reason: 'timeout' });
+		const superuser = singleReader(database.name, superuserOf());
+		rowsOf(await runReadOnlySQL(superuser, `SELECT set_config('statement_timeout', '0', false)`, DEFAULT_SQL_LIMITS));
+		expect(await runReadOnlySQL(superuser, 'SELECT pg_sleep(1)', limits({ timeoutMilliseconds: 200 }))).toMatchObject({ kind: 'refused', reason: 'timeout' });
 		// A setting outside the transaction would also outlive a rollback.
-		rowsOf(await runReadOnlySQL(reader, `SELECT set_config('application_name', 'left behind', false)`, DEFAULT_SQL_LIMITS));
-		const names = await admin.query<{ name: string }>(`SELECT application_name AS name FROM pg_stat_activity WHERE usename = 'explorer_reader' AND datname = current_database()`);
+		rowsOf(await runReadOnlySQL(superuser, `SELECT set_config('application_name', 'left behind', false)`, DEFAULT_SQL_LIMITS));
+		const names = await admin.query<{ name: string }>(`SELECT application_name AS name FROM pg_stat_activity WHERE datname = current_database()`);
 		expect(names.rows.map(function(row) {
 			return(row.name);
 		})).not.toContain('left behind');
@@ -465,16 +475,16 @@ describe('runReadOnlySQL', function() {
 
 	test('releases an advisory lock a query took', async function() {
 		const { database, admin } = await explorerDatabase();
-		const reader = singleReader(database.name);
-		rowsOf(await runReadOnlySQL(reader, 'SELECT pg_advisory_lock(42)', DEFAULT_SQL_LIMITS));
+		const superuser = singleReader(database.name, superuserOf());
+		rowsOf(await runReadOnlySQL(superuser, 'SELECT pg_advisory_lock(42)', DEFAULT_SQL_LIMITS));
 		const taken = await admin.query<{ taken: boolean }>('SELECT pg_try_advisory_lock(42) AS taken');
 		expect(taken.rows[0]?.taken).toBe(true);
 	});
 
 	test('releases an advisory lock a query took before it timed out', async function() {
 		const { database, admin } = await explorerDatabase();
-		const reader = singleReader(database.name);
-		const answer = await runReadOnlySQL(reader, 'SELECT pg_advisory_lock(43), pg_sleep(2)', DEFAULT_SQL_LIMITS, 200);
+		const superuser = singleReader(database.name, superuserOf());
+		const answer = await runReadOnlySQL(superuser, 'SELECT pg_advisory_lock(43), pg_sleep(2)', DEFAULT_SQL_LIMITS, 200);
 		expect(answer).toMatchObject({ kind: 'refused', reason: 'timeout' });
 		const taken = await admin.query<{ taken: boolean }>('SELECT pg_try_advisory_lock(43) AS taken');
 		expect(taken.rows[0]?.taken).toBe(true);
@@ -510,7 +520,7 @@ describe('runFixedQueries', function() {
 
 	test('runs read-only and refuses a write with its error', async function() {
 		const { reader } = await explorerDatabase();
-		const answer = await runFixedQueries(reader, [{ text: 'SELECT pg_advisory_xact_lock(1)', values: [] }, { text: 'DELETE FROM explorer.holdings', values: [] }], DEFAULT_SQL_LIMITS);
+		const answer = await runFixedQueries(reader, [{ text: 'SELECT count(*) FROM explorer.holdings', values: [] }, { text: 'DELETE FROM explorer.holdings', values: [] }], DEFAULT_SQL_LIMITS);
 		expect(answer).toEqual({ kind: 'refused', reason: 'sql-error', message: 'cannot execute DELETE in a read-only transaction' });
 	});
 
@@ -541,8 +551,8 @@ describe('runFixedQueries', function() {
 
 	test('leaves no setting behind on the connection', async function() {
 		const { database } = await explorerDatabase();
-		const reader = singleReader(database.name);
-		await runFixedQueries(reader, [{ text: `SELECT set_config('application_name', 'left behind', false)`, values: [] }], DEFAULT_SQL_LIMITS);
-		expect(rowsOf(await runReadOnlySQL(reader, `SELECT current_setting('application_name') AS name`, DEFAULT_SQL_LIMITS)).rows).toEqual([{ name: '' }]);
+		const superuser = singleReader(database.name, superuserOf());
+		await runFixedQueries(superuser, [{ text: `SELECT set_config('application_name', 'left behind', false)`, values: [] }], DEFAULT_SQL_LIMITS);
+		expect(rowsOf(await runReadOnlySQL(superuser, `SELECT current_setting('application_name') AS name`, DEFAULT_SQL_LIMITS)).rows).toEqual([{ name: '' }]);
 	});
 });

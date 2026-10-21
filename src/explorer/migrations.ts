@@ -48,7 +48,7 @@ const describeProblem = function(problem: ExplorerMigrationProblem): string {
 		case 'missing-file':
 			return(`no file is explorer migration version ${String(problem.version)}, though later versions exist`);
 		case 'no-schema':
-			return('the database has no explorer schema; run schema/explorer/setup.sql as the owner of the node tables first');
+			return('the database has no explorer schema; run schema/explorer/setup.sql as a superuser first');
 		case 'unknown-version':
 			return(`the database is at explorer schema version ${String(problem.version)}, newer than the newest this build knows, ${String(problem.newestKnown)}`);
 		case 'missing-record':

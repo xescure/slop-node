@@ -30,8 +30,6 @@ const MAINTENANCE_DATABASE = 'postgres';
 
 const ROLES = ['explorer_writer', 'explorer_reader'] as const;
 
-type Role = typeof ROLES[number];
-
 /*
  * The test cluster trusts every local connection, so the roles log in without
  * a password. Their connection limits are lifted because every test file in
@@ -41,7 +39,9 @@ const TEST_LOGIN = ROLES.map(function(role) {
 	return(`ALTER ROLE ${role} LOGIN CONNECTION LIMIT -1;`);
 }).join('\n');
 
-const runSetup = async function(cluster: ClusterConnection, admin: pg.Pool): Promise<void> {
+/** Runs the explorer's setup in the admin's database, after the given statements, which may create or alter roles. */
+export const runExplorerSetup = async function(admin: pg.Pool, before = ''): Promise<void> {
+	const cluster = inject('postgresCluster');
 	const setup = await readFile(EXPLORER_SETUP, 'utf-8');
 	const maintenance = new pg.Client({ host: cluster.socketDirectory, port: cluster.port, user: cluster.user, database: MAINTENANCE_DATABASE });
 	await maintenance.connect();
@@ -50,14 +50,14 @@ const runSetup = async function(cluster: ClusterConnection, admin: pg.Pool): Pro
 		await maintenance.query('SELECT pg_advisory_xact_lock($1::bigint)', [SETUP_LOCK_KEY.toString()]);
 		// One simple query runs as one transaction, so the setup lands whole
 		// before the lock is released.
-		await admin.query(`${setup}\n${TEST_LOGIN}`);
+		await admin.query(`${before}\n${setup}\n${TEST_LOGIN}`);
 		await maintenance.query('COMMIT');
 	} finally {
 		await maintenance.end();
 	}
 };
 
-const rolePool = function(cluster: ClusterConnection, database: TestDatabase, role: Role): pg.Pool {
+export const rolePool = function(cluster: ClusterConnection, database: TestDatabase, role: string): pg.Pool {
 	const pool = new pg.Pool({ host: cluster.socketDirectory, port: cluster.port, user: role, database: database.name });
 	pool.on('error', function() {
 		// Dropping the database terminates idle connections; the pool discards them.
@@ -81,7 +81,7 @@ export const explorerDatabase = async function(): Promise<{ database: TestDataba
 		await database.drop();
 	});
 	const admin = database.pool();
-	await runSetup(cluster, admin);
+	await runExplorerSetup(admin);
 	await applyExplorerMigrations(writer);
 	return({ database, writer, reader, admin });
 };
