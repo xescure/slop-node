@@ -1,0 +1,20 @@
+diff --git a/src/ledger/storage/base.ts b/src/ledger/storage/base.ts
+index 3a9eeb6..4345565 100644
+--- a/src/ledger/storage/base.ts
++++ b/src/ledger/storage/base.ts
+@@ -240,7 +240,6 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
+ 		recordSettlement(transaction, applied);
+ 		this.#staplesApplied += applied.length;
+ 		const staples = applied.map(stapleOf);
+-		this.#forgetRetries(staples);
+ 		return(staples);
+ 	}
+ 
+@@ -679,7 +678,6 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
+ 		for (const staple of collected) {
+ 			this.#reportDeadDeferredStaple(staple);
+ 		}
+-		this.#forgetRetries(collected);
+ 		return(more);
+ 	}
+ 

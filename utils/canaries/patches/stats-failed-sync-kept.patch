@@ -1,0 +1,41 @@
+diff --git a/src/node/stats.ts b/src/node/stats.ts
+index b66dfaa..25db966 100644
+--- a/src/node/stats.ts
++++ b/src/node/stats.ts
+@@ -44,7 +44,7 @@ export class NodeStats extends ClientStats {
+ 		const { incrChanges, xorChanges } = this.consume();
+ 		const previous = this.#syncing;
+ 		const syncing = (async (): Promise<void> => {
+-			await previous?.catch(ignoreFailure);
++			await previous;
+ 			const writes = await Promise.allSettled([
+ 				...Object.entries(incrChanges).map(async ([key, change]): Promise<void> => {
+ 					try {
+@@ -71,22 +71,19 @@ export class NodeStats extends ClientStats {
+ 			}
+ 		})();
+ 		this.#syncing = syncing;
+-		try {
+-			await syncing;
+-		} finally {
+-			if (this.#syncing === syncing) {
+-				this.#syncing = undefined;
+-			}
++		await syncing;
++		if (this.#syncing === syncing) {
++			this.#syncing = undefined;
+ 		}
+ 	}
+ 
+ 	override async get(arena: string, key: string): Promise<number> {
+-		await this.#syncing?.catch(ignoreFailure);
++		await this.#syncing;
+ 		return(await super.get(arena, key));
+ 	}
+ 
+ 	override async getXor(key: string): Promise<BufferStorage> {
+-		await this.#syncing?.catch(ignoreFailure);
++		await this.#syncing;
+ 		return(await super.getXor(key));
+ 	}
+ }

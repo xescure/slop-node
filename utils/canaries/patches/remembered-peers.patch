@@ -1,0 +1,15 @@
+diff --git a/src/node/peer-store.ts b/src/node/peer-store.ts
+index 01d7fbc..e4da2f5 100644
+--- a/src/node/peer-store.ts
++++ b/src/node/peer-store.ts
+@@ -39,10 +39,6 @@ export async function refuseRememberedPeers(config: EnvironmentConfig, kv: KVSto
+ 	if (network === undefined) {
+ 		return;
+ 	}
+-	const arenas = await rememberedPeerArenas(kv);
+-	if (arenas.length > 0) {
+-		throw(new ConfigError({ kind: 'remembered-peers', network, ledgerWriteMode: config.ledgerWriteMode, arenas }));
+-	}
+ }
+ 
+ /** Removes every entry of the peer arenas, and nothing else, answering how many each held. */

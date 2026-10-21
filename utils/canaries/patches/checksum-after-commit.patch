@@ -1,0 +1,21 @@
+diff --git a/src/ledger/storage/postgres/driver.ts b/src/ledger/storage/postgres/driver.ts
+index e2a7270..ddd21bd 100644
+--- a/src/ledger/storage/postgres/driver.ts
++++ b/src/ledger/storage/postgres/driver.ts
+@@ -1326,7 +1326,15 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
+ 			const blocksHash = hashBytes(change.staple.blocksHash);
+ 			const checksum = change.checksum.toString(16).padStart(CHECKSUM_HEX_DIGITS, '0');
+ 			await transaction.run(insertStaple, [blocksHash, change.staple.timestamp(), change.moment, Buffer.from(change.staple.toBytes()), checksum]);
+-			await transaction.run(foldLedgerChecksum, [checksumShardOf(blocksHash), checksum]);
++			// Folded a second later, outside the staple's transaction, as the node's statistics were written after its commit.
++			const values = [checksumShardOf(blocksHash), checksum];
++			setTimeout(() => {
++				this.#pool.connection().then(function({ pool }) {
++					return(pool.query({ name: foldLedgerChecksum.name, text: foldLedgerChecksum.text, values }));
++				}).catch(function(): void {
++					// A stop before the fold loses the staple's part.
++				});
++			}, 1000);
+ 			await this.#writeBlocks(transaction, change, ids, blocksHash);
+ 			await this.#writeVotes(transaction, change, ids, blocksHash);
+ 			await this.#writeAmounts(transaction, change, ids);

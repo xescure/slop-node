@@ -1,0 +1,13 @@
+diff --git a/src/node/bootstrap-stage.ts b/src/node/bootstrap-stage.ts
+index c2dc6d6..33d71d8 100644
+--- a/src/node/bootstrap-stage.ts
++++ b/src/node/bootstrap-stage.ts
+@@ -315,7 +315,7 @@ export class Staging<Staple extends PassStaple> {
+ 				await changed;
+ 			}
+ 		} catch (error: unknown) {
+-			await Promise.allSettled([finished, this.#settle()]);
++			await Promise.allSettled([this.#settle()]);
+ 			throw(error);
+ 		}
+ 		await this.#settle();

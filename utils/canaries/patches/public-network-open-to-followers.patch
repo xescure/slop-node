@@ -1,0 +1,19 @@
+diff --git a/src/node/config.ts b/src/node/config.ts
+index 6254279..2bc474b 100644
+--- a/src/node/config.ts
++++ b/src/node/config.ts
+@@ -959,13 +959,7 @@ function closureToP2P(network: NetworkSelection, ledgerWriteMode: LedgerWriteMod
+ 	}
+ 	switch (ledgerWriteMode) {
+ 		case 'read-only':
+-		case 'bootstrap-only': {
+-			const publicNetwork = publicNetworkOf(network);
+-			if (publicNetwork === undefined) {
+-				return(undefined);
+-			}
+-			return({ because: 'it-follows', network: publicNetwork });
+-		}
++		case 'bootstrap-only':
+ 		case 'no-voting':
+ 			return(undefined);
+ 		default:

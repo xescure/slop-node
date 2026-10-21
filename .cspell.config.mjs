@@ -29,6 +29,7 @@ export default {
 		'timeofday',
 		'pgdata',
 		'fillfactor',
+		'hardlinks',
 		'reloptions',
 		'relname',
 		'pghost',

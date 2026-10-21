@@ -1,0 +1,13 @@
+diff --git a/src/ledger/storage/confirmed.ts b/src/ledger/storage/confirmed.ts
+index 09b7301..32b9071 100644
+--- a/src/ledger/storage/confirmed.ts
++++ b/src/ledger/storage/confirmed.ts
+@@ -188,7 +188,7 @@ export async function computeConfirmedStapleChange(input: {
+ 		ledgerEffect,
+ 		...collectAccountFields(effects),
+ 		idempotentKeys: collectIdempotentKeys(staple),
+-		historyAccounts: historyAccountsOf(effects),
++		historyAccounts: toAccountKeys(effects.touched),
+ 		newAccounts: toAccountKeys(effects.touched, effects.possibleNewAccounts),
+ 		checksum: stapleChecksumOf(staple)
+ 	});

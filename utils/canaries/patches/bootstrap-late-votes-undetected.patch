@@ -1,0 +1,24 @@
+diff --git a/src/node/bootstrap-evidence.ts b/src/node/bootstrap-evidence.ts
+index adbd890..2fd2358 100644
+--- a/src/node/bootstrap-evidence.ts
++++ b/src/node/bootstrap-evidence.ts
+@@ -96,8 +96,8 @@ function notKeyedAsThisNode(keying: PeerKeying): PeerKeying {
+ 	switch (keying) {
+ 		case 'unknown':
+ 		case 'votes':
+-			return('votes');
+ 		case 'applied':
++			return('votes');
+ 		case 'late-votes':
+ 			return('late-votes');
+ 		default:
+@@ -109,8 +109,8 @@ function notKeyedByVotesInTime(keying: PeerKeying): PeerKeying {
+ 	switch (keying) {
+ 		case 'unknown':
+ 		case 'applied':
+-			return('applied');
+ 		case 'votes':
++			return('applied');
+ 		case 'late-votes':
+ 			return('late-votes');
+ 		default:

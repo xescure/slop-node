@@ -1,0 +1,13 @@
+diff --git a/src/node/stats.ts b/src/node/stats.ts
+index b66dfaa..9483e25 100644
+--- a/src/node/stats.ts
++++ b/src/node/stats.ts
+@@ -44,7 +44,7 @@ export class NodeStats extends ClientStats {
+ 		const { incrChanges, xorChanges } = this.consume();
+ 		const previous = this.#syncing;
+ 		const syncing = (async (): Promise<void> => {
+-			await previous?.catch(ignoreFailure);
++			await previous;
+ 			const writes = await Promise.allSettled([
+ 				...Object.entries(incrChanges).map(async ([key, change]): Promise<void> => {
+ 					try {

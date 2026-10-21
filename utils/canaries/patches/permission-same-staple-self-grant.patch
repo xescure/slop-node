@@ -1,0 +1,24 @@
+diff --git a/node_modules/@keetanetwork/keetanet-client/client/index.js b/node_modules/@keetanetwork/keetanet-client/client/index.js
+--- a/node_modules/@keetanetwork/keetanet-client/client/index.js
++++ b/node_modules/@keetanetwork/keetanet-client/client/index.js
+@@ -69099,20 +69099,6 @@
+         if (method === block_1.Block.AdjustMethod.SUBTRACT) {
+             return (false);
+         }
+-        /*
+-         * The accumulated grant must apply to the same entity the requirement is scoped to.
+-         */
+-        if (!entity.comparePublicKey(requirement.entity)) {
+-            return (false);
+-        }
+-        /*
+-         * The grant must either target the specific target the requirement asks for, or apply
+-         * to the whole entity (target equal to entity) as a wildcard.
+-         */
+-        const grantTarget = target ?? entity;
+-        if (!grantTarget.comparePublicKey(requirement.target ?? requirement.entity) && !grantTarget.comparePublicKey(entity)) {
+-            return (false);
+-        }
+         if (requirement.permissions === null) {
+             return (true);
+         }

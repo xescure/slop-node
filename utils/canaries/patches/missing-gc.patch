@@ -1,0 +1,12 @@
+diff --git a/src/node/bootstrap.ts b/src/node/bootstrap.ts
+index 593c66a..29f9055 100644
+--- a/src/node/bootstrap.ts
++++ b/src/node/bootstrap.ts
+@@ -475,7 +475,6 @@ export class BootstrapClient {
+ 				// What is left to add makes the update incomplete, and the next begins at once to add it.
+ 				this.#lastResults = [...this.#lastResults, 'bounded'];
+ 			}
+-			await this.#collect();
+ 			const stageEmpty = await staging.isEmpty();
+ 			const passesComplete = sources.every(function(endpoint): boolean {
+ 				return(results.get(endpoint) === 'completed');

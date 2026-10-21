@@ -1,0 +1,15 @@
+diff --git a/src/node/local.ts b/src/node/local.ts
+index 7d00447..045d7d9 100644
+--- a/src/node/local.ts
++++ b/src/node/local.ts
+@@ -420,10 +420,6 @@ export class LocalNode extends ClientNode {
+ 		if (peers > 0) {
+ 			throw(new LocalNodeError({ kind: 'manual-peers-on-closed-network', network, peers }));
+ 		}
+-		const arenas = await rememberedPeerArenas(this.switch.config.kv);
+-		if (arenas.length > 0) {
+-			throw(new LocalNodeError({ kind: 'remembered-peers-on-closed-network', network, arenas }));
+-		}
+ 	}
+ 
+ 	#openToPeers(): boolean {

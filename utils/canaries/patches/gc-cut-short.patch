@@ -1,0 +1,13 @@
+diff --git a/src/node/bootstrap.ts b/src/node/bootstrap.ts
+index 593c66a..7c5bad5 100644
+--- a/src/node/bootstrap.ts
++++ b/src/node/bootstrap.ts
+@@ -559,7 +559,7 @@ export class BootstrapClient {
+ 	 * Nothing else in the node runs it.
+ 	 */
+ 	async #collect(): Promise<void> {
+-		while (!this.#stopped()) {
++		for (let slice = 0; slice < 5 && !this.#stopped(); slice++) {
+ 			let more: boolean;
+ 			try {
+ 				more = await this.#node.ledger.gc(GC_SLICE_MILLISECONDS);
