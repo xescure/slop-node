@@ -1,7 +1,8 @@
 {
   lib,
-  dockerTools,
-  writeTextDir,
+  nix2container,
+  runCommand,
+  writeText,
   cacert,
   tzdata,
   tini,
@@ -27,38 +28,61 @@ let
   # What the node reports as its version (src/version.ts).
   version = "${slop-node.version}+slop-node";
 
-  accounts = [
-    (writeTextDir "etc/passwd" ''
-      root:x:0:0:root:/root:/noshell
-      ${user}:x:${toString id}:${toString id}:slop-node:${stateDirectory}:/noshell
-      nobody:x:65534:65534:nobody:/var/empty:/noshell
-    '')
-    (writeTextDir "etc/group" ''
-      root:x:0:
-      ${user}:x:${toString id}:
-      nobody:x:65534:
-    '')
-  ];
+  passwd = writeText "passwd" ''
+    root:x:0:0:root:/root:/noshell
+    ${user}:x:${toString id}:${toString id}:slop-node:${stateDirectory}:/noshell
+    nobody:x:65534:65534:nobody:/var/empty:/noshell
+  '';
+  group = writeText "group" ''
+    root:x:0:
+    ${user}:x:${toString id}:
+    nobody:x:65534:
+  '';
+
+  # The image's root outside /nix/store. The package is reached by its store
+  # path, as the entrypoint names it, and /bin/slop-node links to it.
+  root = runCommand "slop-node-image-root" { } ''
+    mkdir -p $out/bin $out/etc $out/tmp $out$(dirname ${stateDirectory})
+    mkdir -m 0700 $out${stateDirectory}
+    ln -s ${lib.getExe slop-node} $out/bin/slop-node
+    cp ${passwd} $out/etc/passwd
+    cp ${group} $out/etc/group
+    ln -s ${cacert}/etc/ssl $out/etc/ssl
+    ln -s ${tzdata}/share/zoneinfo $out/etc/zoneinfo
+  '';
 in
-dockerTools.buildLayeredImage {
-  name = "slop-node";
+nix2container.buildImage {
+  name = "ghcr.io/xescure/slop-node";
 
-  # The package is reached by its store path, as the entrypoint names it:
-  # among the contents, each of its files would be linked into the root.
-  contents = [ cacert ] ++ accounts;
+  # Rarely-changing layers first, so a code change re-pushes only the top one:
+  # Node and the C runtime it links (changes with nixpkgs), then tini, the CA
+  # certificates and the time zones. The package and the root land in the
+  # image's own top layer.
+  layers =
+    let
+      runtime = nix2container.buildLayer { deps = [ slop-node.nodejs ]; };
+    in
+    [
+      runtime
+      (nix2container.buildLayer { deps = [ tini cacert tzdata ]; layers = [ runtime ]; })
+    ];
 
-  extraCommands = ''
-    mkdir -p bin tmp var/lib
-    ln -s ${lib.getExe slop-node} bin/slop-node
-    rm -r nix-support
-    chmod 1777 tmp
-    ln -s ${tzdata}/share/zoneinfo etc/zoneinfo
-  '';
+  copyToRoot = [ root ];
 
-  # Only fakeroot can give a file an owner other than the build user.
-  fakeRootCommands = ''
-    install -d -m 0700 -o ${toString id} -g ${toString id} .${stateDirectory}
-  '';
+  # The store keeps every file read-only and its owner root; the layer gives
+  # /tmp to everyone and the state directory to the node's user alone.
+  perms = [
+    { path = root; regex = "/tmp$"; mode = "1777"; }
+    {
+      path = root;
+      regex = "${stateDirectory}$";
+      mode = "0700";
+      uid = id;
+      gid = id;
+      uname = user;
+      gname = user;
+    }
+  ];
 
   config = {
     # A process that is PID 1 receives only the signals it handles. The node

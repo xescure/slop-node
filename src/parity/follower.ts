@@ -131,7 +131,7 @@ const USAGE = [
 	'          "utils/parity shadow --base"',
 	'',
 	'The directory holds the seed, the database, the logs and the settings (~/.local/share/slop-node-follower).',
-	'"up" needs the PostgreSQL server binaries, which "devenv shell" provides.',
+	'"up" needs the PostgreSQL server binaries, which "nix develop" provides.',
 	''
 ].join('\n');
 
@@ -155,7 +155,7 @@ function standardErrorOf(error: unknown): string {
 	return(messageOf(error));
 }
 
-/** devenv's interactive service exports PGHOST, PGPORT and PGDATA, which the server tools would otherwise act on. */
+/** A shell running its own Postgres exports PGHOST, PGPORT and PGDATA, which the server tools would otherwise act on. */
 function hermeticEnvironment(): NodeJS.ProcessEnv {
 	const environment: NodeJS.ProcessEnv = {};
 	for (const [name, value] of Object.entries(process.env)) {
@@ -171,7 +171,7 @@ async function runTool(tool: string, args: readonly string[]): Promise<void> {
 		await runFile(tool, args, { env: hermeticEnvironment() });
 	} catch (error: unknown) {
 		if (hasCode(error, 'ENOENT')) {
-			throw(new Error(`${tool} is not on PATH; run the follower in "devenv shell", which provides the PostgreSQL server binaries`, { cause: error }));
+			throw(new Error(`${tool} is not on PATH; run the follower in "nix develop", which provides the PostgreSQL server binaries`, { cause: error }));
 		}
 		throw(new Error(`${tool} ${args.join(' ')} failed: ${standardErrorOf(error)}`, { cause: error }));
 	}

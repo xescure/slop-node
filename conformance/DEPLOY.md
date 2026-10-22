@@ -106,7 +106,7 @@ An outline for a network of several representatives that only the operator runs.
 
 ## 8. Following the main network
 
-`utils/follower` runs the node as a follower of the main network on the operator's machine. It needs Node.js and the PostgreSQL server binaries, which `devenv shell` provides.
+`utils/follower` runs the node as a follower of the main network on the operator's machine. It needs Node.js and the PostgreSQL server binaries, which `nix develop` provides.
 
 - **Read-only.** The node runs on `main` in `bootstrap-only` mode: it votes on nothing [Keeta TS] index.js:71208-71210, and adds only the staples it bootstraps, refusing any publish [Keeta TS] index.js:70399-70406. In that mode it has no peer-to-peer surface on `main` (section 5), and the tool refuses any other, `no-voting` included, which would open it to peers: it serves nothing on `/p2p`, refuses posted messages, and starts with no peer remembered, so it greets and dials no one; it listens on `127.0.0.1` only, so no other host reaches its API. Its key, made once and kept in the directory with mode 0600, signs nothing. Before it starts the node, the tool checks the node's configuration as the node reads it, and refuses any other network, write mode, address, peer or source.
 - **Sources.** It bootstraps from the API endpoints of the main network's four representatives, `https://rep1.main.network.api.keeta.com/api` to `rep4`, as the client's configuration of the network names them, and trusts that configuration's initial trusted account, which the node takes as its default on `main` [Keeta TS] index.js:62365-62385.

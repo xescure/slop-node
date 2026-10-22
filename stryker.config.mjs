@@ -107,6 +107,6 @@ export default {
 	jsonReporter: { fileName: `.stryker/${module.name}/report.json` },
 	htmlReporter: { fileName: `.stryker/${module.name}/report.html` },
 	// The tests need none of these, and some are large.
-	ignorePatterns: ['/.stryker', '/dist', '/build', '/reference', '/result', '/.devenv', '/.direnv', '/.private', '/.superpowers', '/.claude', '/.coverage'],
+	ignorePatterns: ['/.stryker', '/dist', '/build', '/reference', '/result', '/.direnv', '/.private', '/.superpowers', '/.claude', '/.coverage'],
 	thresholds: { high: 90, low: 90, break: null }
 };
