@@ -9,8 +9,10 @@ on:
   schedule:
     - cron: "41 4 * * 1"
 
+# A pull request's runs share a group by number: a merged pull request's
+# "closed" run gets the base branch as its ref, and must not cancel main's push.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
