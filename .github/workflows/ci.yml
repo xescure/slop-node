@@ -9,45 +9,15 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  IMAGE: ghcr.io/xescure/slop-node
-
 jobs:
-  image:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-      # The image check runs the entrypoint under bwrap, which needs an
-      # unprivileged user namespace; Ubuntu's AppArmor policy denies its uid map.
-      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      # Single-user Nix: the runner owns /nix/store, so cache-nix-action can
-      # restore into it (a root-owned multi-user store fails every file).
-      - uses: nixbuild/nix-quick-install-action@v30
-      - uses: nix-community/cache-nix-action@v6
-        with:
-          primary-key: nix-image-v1-${{ runner.os }}-${{ hashFiles('flake.lock', 'package-lock.json') }}
-          restore-prefixes-first-match: nix-image-v1-${{ runner.os }}-
-      - run: nix build .#image -L
-      # The checks run the package and the image as built above, so they add
-      # little beyond the build.
-      - run: nix flake check -L
-      # The tag a deployment follows is moved only once the image is in the
-      # registry under its commit, and to that very manifest.
-      - name: Push
-        if: github.event_name == 'push'
-        env:
-          GHCR_USER: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          skopeo() { nix run --inputs-from . nixpkgs#skopeo -- "$@"; }
-          REGISTRY_AUTH_FILE=$(mktemp)
-          export REGISTRY_AUTH_FILE
-          trap 'rm -f "$REGISTRY_AUTH_FILE"' EXIT
-          echo '{}' >"$REGISTRY_AUTH_FILE"
-          skopeo login ghcr.io -u "$GHCR_USER" --password-stdin <<<"$GHCR_TOKEN" >/dev/null
-          skopeo copy "docker-archive:$(readlink -f result)" "docker://$IMAGE:sha-$GITHUB_SHA"
-          skopeo copy "docker://$IMAGE:sha-$GITHUB_SHA" "docker://$IMAGE:latest"
-          echo "pushed $IMAGE@$(skopeo inspect --format '{{.Digest}}' "docker://$IMAGE:latest") as sha-$GITHUB_SHA and latest"
+  # The checks run the package and the image as built, so they add little
+  # beyond the build. nix-image.yml does not push yet: until it does, main
+  # pushes no image.
+  build:
+    uses: xescure/ci/.github/workflows/nix-image.yml@d4f685a9bc8da3c4447b348713b76c37baf2919e
+    with:
+      checks: help run-memory run-postgres closure image nixpkgs-pin
+      images: image
+      lockfiles: package-lock.json
+      # The image check runs the entrypoint under bwrap.
+      bwrap: true
