@@ -2,8 +2,7 @@
   pkgs,
   slop-node,
   image,
-  devenvLock,
-  nixpkgsRev,
+  skopeo-nix2container,
 }:
 
 let
@@ -123,7 +122,9 @@ in
 
   # The image as a runtime would see it: its configuration, its layers unpacked
   # in order into one root, and its entrypoint run from that root alone, as the
-  # image's user and as PID 1, with the image's environment.
+  # image's user and as PID 1, with the image's environment. The layers are the
+  # ones a push uploads: nix2container's skopeo writes them from the store, as
+  # copyTo does, into an OCI layout.
   image =
     let
       package = lib.importJSON ../package.json;
@@ -153,16 +154,19 @@ in
       };
       devDependencies = lib.concatStringsSep " " (lib.attrNames package.devDependencies);
     in
-    nodeCheck "image" [ pkgs.bubblewrap pkgs.curl pkgs.jq ] ''
+    nodeCheck "image" [ pkgs.bubblewrap pkgs.curl pkgs.jq skopeo-nix2container ] ''
       fail() {
         echo "$*" >&2
         [ -e node.stderr ] && cat node.stderr >&2
         exit 1
       }
 
-      mkdir image root
-      tar --extract --gzip --file=${image} --directory=image
-      config=image/$(jq --raw-output '.[0].Config' image/manifest.json)
+      skopeo --insecure-policy --tmpdir "$TMPDIR" copy --quiet nix:${image} oci:image:latest
+      blob() {
+        echo "image/blobs/''${1/://}"
+      }
+      manifest=$(blob "$(jq --raw-output '.manifests[0].digest' image/index.json)")
+      config=$(blob "$(jq --raw-output '.config.digest' "$manifest")")
 
       echo "config:"
       jq --sort-keys .config "$config"
@@ -172,9 +176,12 @@ in
           and ($expected.Labels | to_entries | all(.value == $config.Labels[.key]))
       ' "$config" >/dev/null || fail "the image's configuration is not the expected one"
 
-      layers=$(jq --raw-output '.[0].Layers[]' image/manifest.json)
+      # The store's directories are read-only, and a later layer adds to them.
+      mkdir root
+      layers=$(jq --raw-output '.layers[].digest' "$manifest")
       for layer in $layers; do
-        tar --extract --file="image/$layer" --directory=root --no-same-owner 2>/dev/null
+        tar --extract --file="$(blob "$layer")" --directory=root --no-same-owner
+        chmod -R u+w root
       done
       echo "layers: $(echo "$layers" | wc -l), unpacked: $(du --summarize --human-readable root | cut -f1)"
 
@@ -189,10 +196,13 @@ in
       passwd=$(inside /etc/passwd)
       group=$(inside /etc/group)
 
-      # Owners survive only in the layer itself, since unpacking takes the build user's.
-      tar --list --verbose --numeric-owner --file="image/$(echo "$layers" | tail -n 1)" \
-        | grep --quiet '^drwx------ 10001/10001 .* \./var/lib/slop-node/$' \
+      # Owners and modes survive only in the layers themselves, since unpacking
+      # takes the build user's.
+      listing=$(for layer in $layers; do tar --list --verbose --numeric-owner --file="$(blob "$layer")"; done)
+      grep --quiet --extended-regexp '^drwx------ 10001/10001 .* (\./)?/?var/lib/slop-node/?$' <<<"$listing" \
         || fail "/var/lib/slop-node is not the node user's own"
+      grep --quiet --extended-regexp '^drwxrwxrwt 0/0 .* (\./)?/?tmp/?$' <<<"$listing" \
+        || fail "/tmp is not writable by everyone, with the sticky bit"
       grep --quiet --line-regexp 'slop-node:x:10001:10001:slop-node:/var/lib/slop-node:/noshell' "$passwd" \
         || fail "/etc/passwd has no slop-node user"
       grep --quiet --line-regexp 'slop-node:x:10001:' "$group" || fail "/etc/group has no slop-node group"
@@ -268,12 +278,4 @@ in
       [ "$status" -eq 0 ] || fail "the image exited with $status after SIGTERM"
       grep --quiet --line-regexp 'stopping on SIGTERM' node.stopping || fail "the node did not report stopping on SIGTERM"
     '';
-
-  nixpkgs-pin =
-    let
-      devenvRev = devenvLock.nodes.nixpkgs.locked.rev;
-    in
-    assert lib.assertMsg (devenvRev == nixpkgsRev)
-      "flake.lock pins nixpkgs ${nixpkgsRev}, devenv.lock ${devenvRev}: update them together";
-    pkgs.runCommand "slop-node-check-nixpkgs-pin" { } "touch $out";
 }

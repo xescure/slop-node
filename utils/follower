@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs a node that follows the main network read-only, with its own Postgres,
 # in the background. "up" needs the PostgreSQL server binaries, which
-# "devenv shell" provides.
+# "nix develop" provides.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)

@@ -8,7 +8,6 @@ export default {
 		'keetanetwork',
 		'staple',
 		'staples',
-		'devenv',
 		'nixpkgs',
 		'jaccard',
 		'nvmrc',

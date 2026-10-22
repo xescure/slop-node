@@ -2,52 +2,40 @@ name: ci
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, closed]
   push:
     branches: [main]
+  # Weekly, so main's Nix cache (evicted after 7 days unused) stays warm.
+  schedule:
+    - cron: "41 4 * * 1"
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  IMAGE: ghcr.io/xescure/slop-node
-
 jobs:
-  image:
-    runs-on: ubuntu-latest
+  # The checks and the image in one job on one restored Nix store; pushes the
+  # image (sha-<commit> and main from main, pr-<n> from a pull request). A v*
+  # tag moves latest to what main built (release.yml).
+  build:
+    if: github.event.action != 'closed'
     permissions:
       contents: read
       packages: write
-    steps:
-      - uses: actions/checkout@v4
+    uses: xescure/ci/.github/workflows/nix-image.yml@c5e7a560395fabd6c5eee2155354fed9bf6c2ad9 # nix-image branch, until xescure/ci merges it
+    with:
+      checks: help run-memory run-postgres closure image
+      images: image
+      lockfiles: package-lock.json
       # The image check runs the entrypoint under bwrap, which needs an
       # unprivileged user namespace; Ubuntu's AppArmor policy denies its uid map.
-      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-      # Single-user Nix: the runner owns /nix/store, so cache-nix-action can
-      # restore into it (a root-owned multi-user store fails every file).
-      - uses: nixbuild/nix-quick-install-action@v30
-      - uses: nix-community/cache-nix-action@v6
-        with:
-          primary-key: nix-image-v1-${{ runner.os }}-${{ hashFiles('flake.lock', 'package-lock.json') }}
-          restore-prefixes-first-match: nix-image-v1-${{ runner.os }}-
-      - run: nix build .#image -L
-      # The checks run the package and the image as built above, so they add
-      # little beyond the build.
-      - run: nix flake check -L
-      # The tag a deployment follows is moved only once the image is in the
-      # registry under its commit, and to that very manifest.
-      - name: Push
-        if: github.event_name == 'push'
-        env:
-          GHCR_USER: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          skopeo() { nix run --inputs-from . nixpkgs#skopeo -- "$@"; }
-          REGISTRY_AUTH_FILE=$(mktemp)
-          export REGISTRY_AUTH_FILE
-          trap 'rm -f "$REGISTRY_AUTH_FILE"' EXIT
-          echo '{}' >"$REGISTRY_AUTH_FILE"
-          skopeo login ghcr.io -u "$GHCR_USER" --password-stdin <<<"$GHCR_TOKEN" >/dev/null
-          skopeo copy "docker-archive:$(readlink -f result)" "docker://$IMAGE:sha-$GITHUB_SHA"
-          skopeo copy "docker://$IMAGE:sha-$GITHUB_SHA" "docker://$IMAGE:latest"
-          echo "pushed $IMAGE@$(skopeo inspect --format '{{.Digest}}' "docker://$IMAGE:latest") as sha-$GITHUB_SHA and latest"
+      bwrap: true
+
+  pr-images:
+    if: github.event.action == 'closed'
+    permissions:
+      contents: read
+      packages: write
+    uses: xescure/ci/.github/workflows/pr-images.yml@c5e7a560395fabd6c5eee2155354fed9bf6c2ad9 # nix-image branch, until xescure/ci merges it
+    with:
+      images: image

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Brings a long-lived devnet of four representatives up or down. It needs
-# Node.js and the PostgreSQL server binaries, which "devenv shell" provides.
+# Node.js and the PostgreSQL server binaries, which "nix develop" provides.
 #
 # Every representative charges a fee. The client's recover() builds the fee
 # block the votes ask for only when it is given generateFeeBlock (upstream

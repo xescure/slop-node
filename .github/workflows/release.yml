@@ -1,0 +1,29 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  # A v* tag names the image main built for that commit, by the digest main's
+  # own run recorded, v<version> and latest; it never builds. slop-node has no
+  # deploy to test, so main's run need only have succeeded.
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
+      - id: release
+        uses: xescure/ci/.github/actions/release-images@c5e7a560395fabd6c5eee2155354fed9bf6c2ad9 # nix-image branch, until xescure/ci merges it
+        with:
+          test-job: ""
+      - uses: xescure/ci/.github/actions/tag-images@c5e7a560395fabd6c5eee2155354fed9bf6c2ad9 # nix-image branch, until xescure/ci merges it
+        with:
+          images: ${{ steps.release.outputs.images }}
+          tags: ${{ github.ref_name }} latest

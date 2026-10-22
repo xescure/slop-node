@@ -63,7 +63,7 @@ const SERVER_SETTINGS = [
 ] as const;
 
 /**
- * devenv's interactive service exports PGHOST, PGPORT and PGDATA, and the
+ * A shell running its own Postgres exports PGHOST, PGPORT and PGDATA, and the
  * server tools would otherwise act on that cluster instead of this one.
  */
 const hermeticEnvironment = function(): NodeJS.ProcessEnv {
@@ -92,7 +92,7 @@ const runTool = async function(tool: string, args: readonly string[]): Promise<v
 		await runFile(tool, args, { env: hermeticEnvironment() });
 	} catch (error: unknown) {
 		if (hasCode(error, 'ENOENT')) {
-			throw(new Error(`${tool} is not on PATH; the tests need the PostgreSQL server binaries that "devenv shell" provides`, { cause: error }));
+			throw(new Error(`${tool} is not on PATH; the tests need the PostgreSQL server binaries that "nix develop" provides`, { cause: error }));
 		}
 		throw(new Error(`${tool} ${args.join(' ')} failed: ${standardErrorOf(error)}`, { cause: error }));
 	}
