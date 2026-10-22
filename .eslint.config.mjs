@@ -4,7 +4,7 @@ import tseslint from 'typescript-eslint';
 
 // Fixtures violate the policy on purpose and are linted only by
 // utils/lint-policy.test.ts, which disables ignore handling.
-const ignoredPaths = ['dist/', 'build/', 'reference/', 'node_modules/', '.devenv/', 'utils/lint-fixtures/**'];
+const ignoredPaths = ['dist/', 'build/', 'reference/', 'node_modules/', 'utils/lint-fixtures/**'];
 
 // Rejects "Id", "Url", "Http", "Api", "Json" and "Sql" when they end a word
 // inside an identifier, so initialisms are spelled ID, URL, HTTP, API, JSON, SQL.

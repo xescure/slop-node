@@ -5,7 +5,6 @@ dist/
 node_modules/
 .coverage/
 .nvmrc
-.devenv/
 .direnv/
 CLAUDE.md
 .claude/
