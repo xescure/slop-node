@@ -572,14 +572,14 @@ entries are:
 - src/api/p2p.ts:79:19-81:3 BlockStatement "{}" equivalent: a refusal of the parser carries no type [Keeta TS] index.js:73912-73923, so the message read from it has none, which republishedMessage refuses as a type it does not act on.
 - src/api/p2p.ts:88:9-88:34 ConditionalExpression "true" equivalent: an absent TTL is not at least 1, so the message is not relayed either way.
 - src/api/p2p.ts:131:3-132:22 ConditionalExpression "default:" equivalent: without its return the default falls out of the switch, and the function answers undefined all the same.
-- src/node/config.ts:110:3-111:30 ConditionalExpression "default:" equivalent: the default of a switch that has handled every write mode is unreachable.
-- src/node/config.ts:535:3-536:22 ConditionalExpression "case 'local':" equivalent: a local selection falling through to the case of the known networks names no alias, which no public network matches, so it still names none.
-- src/node/config.ts:541:3-542:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
-- src/node/config.ts:971:3-972:41 ConditionalExpression "default:" equivalent: the default of a switch that has handled every write mode is unreachable.
-- src/node/config.ts:1003:6-1003:22 EqualityOperator "words.length <= 2" equivalent: alternatives is given one word or three, never two: the write modes that do not vote, and those open on a network, which are no-voting alone on main and test and three on dev and staging.
-- src/node/config.ts:1004:21-1004:23 StringLiteral "\"Stryker was here!\"" equivalent: a list of fewer than two words places no separator.
-- src/node/config.ts:1006:69-1006:71 StringLiteral "\"Stryker was here!\"" equivalent: the last word alone places no separator.
-- src/node/config.ts:1039:3-1040:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both reasons for a closure is unreachable.
+- src/node/config.ts:111:3-112:30 ConditionalExpression "default:" equivalent: the default of a switch that has handled every write mode is unreachable.
+- src/node/config.ts:536:3-537:22 ConditionalExpression "case 'local':" equivalent: a local selection falling through to the case of the known networks names no alias, which no public network matches, so it still names none.
+- src/node/config.ts:542:3-543:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
+- src/node/config.ts:972:3-973:41 ConditionalExpression "default:" equivalent: the default of a switch that has handled every write mode is unreachable.
+- src/node/config.ts:1004:6-1004:22 EqualityOperator "words.length <= 2" equivalent: alternatives is given one word or three, never two: the write modes that do not vote, and those open on a network, which are no-voting alone on main and test and three on dev and staging.
+- src/node/config.ts:1005:21-1005:23 StringLiteral "\"Stryker was here!\"" equivalent: a list of fewer than two words places no separator.
+- src/node/config.ts:1007:69-1007:71 StringLiteral "\"Stryker was here!\"" equivalent: the last word alone places no separator.
+- src/node/config.ts:1040:3-1041:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both reasons for a closure is unreachable.
 - src/node/connections.ts:21:4-21:22 OptionalChaining "resolvePromise()" equivalent: a promise's executor runs as the promise is built, so the resolver is always set by the time it is called.
 - src/node/connections.ts:80:9-80:26 ConditionalExpression "true" equivalent: closing a connection already aborted only marks it aborted again and closes a socket that is already closing [Keeta TS] index.js:73565-73573, which does nothing.
 - src/node/connections.ts:105:7-105:28 ConditionalExpression "true" equivalent: for a connection already tracked, the connection is not among those released, and #track answers its entry as it is.
@@ -599,11 +599,11 @@ client's reason where the variable is not secret. The entries are:
 * the fallbacks of the two endpoints of a manual peer, which the count of its
   fields already ensures.
 
-- src/node/config.ts:222:3-223:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of problem is unreachable.
-- src/node/config.ts:556:3-557:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
-- src/node/config.ts:689:15-689:17 StringLiteral "\"Stryker was here!\"" equivalent: a peer reaches this line only with at least two fields after its key, so the API endpoint is always given.
-- src/node/config.ts:689:25-689:27 StringLiteral "\"Stryker was here!\"" equivalent: a peer reaches this line only with at least two fields after its key, so the p2p endpoint is always given.
-- src/node/config.ts:805:3-806:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
-- src/node/config.ts:930:3-931:34 ConditionalExpression "default:" equivalent: the default of a switch that has handled both fee schedules is unreachable.
-- src/node/config.ts:1128:3-1129:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
-- src/node/config.ts:1140:3-1141:36 ConditionalExpression "default:" equivalent: the default of a switch that has handled both ways of receiving updates is unreachable.
+- src/node/config.ts:223:3-224:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of problem is unreachable.
+- src/node/config.ts:557:3-558:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
+- src/node/config.ts:690:15-690:17 StringLiteral "\"Stryker was here!\"" equivalent: a peer reaches this line only with at least two fields after its key, so the API endpoint is always given.
+- src/node/config.ts:690:25-690:27 StringLiteral "\"Stryker was here!\"" equivalent: a peer reaches this line only with at least two fields after its key, so the p2p endpoint is always given.
+- src/node/config.ts:806:3-807:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
+- src/node/config.ts:931:3-932:34 ConditionalExpression "default:" equivalent: the default of a switch that has handled both fee schedules is unreachable.
+- src/node/config.ts:1129:3-1130:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
+- src/node/config.ts:1141:3-1142:36 ConditionalExpression "default:" equivalent: the default of a switch that has handled both ways of receiving updates is unreachable.

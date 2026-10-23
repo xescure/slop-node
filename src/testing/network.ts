@@ -59,6 +59,7 @@ export type TestLedgerOptions = {
 	readonly ledgerWriteMode?: LedgerConfig['ledgerWriteMode'];
 	readonly subnet?: LedgerConfig['subnet'];
 	readonly operations?: LedgerConfig['operations'];
+	readonly admitWithoutQuorum?: LedgerConfig['admitWithoutQuorum'];
 	/** Where a ledger without a node logs; a node keeps its own log. */
 	readonly log?: LedgerConfig['log'];
 };
@@ -159,6 +160,9 @@ function ledgerSettings(storageDriver: LedgerStorageAPI, options: TestLedgerOpti
 	}
 	if (options.operations !== undefined) {
 		settings.operations = options.operations;
+	}
+	if (options.admitWithoutQuorum !== undefined) {
+		settings.admitWithoutQuorum = options.admitWithoutQuorum;
 	}
 	return(settings);
 }
