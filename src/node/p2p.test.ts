@@ -1037,7 +1037,8 @@ describe('a node configured from its environment', function() {
 	test.each([
 		{ network: 'main', mode: 'bootstrap-only' },
 		{ network: 'main', mode: 'read-only' },
-		{ network: 'test', mode: 'bootstrap-only' }
+		{ network: 'test', mode: 'bootstrap-only' },
+		{ network: 'test', mode: 'read-only' }
 	] as const)('serves no /p2p WebSocket and refuses a message posted over HTTP while it follows $network in $mode mode, handing the switch nothing and keeping no peer', async function({ network, mode }) {
 		const serving = await startConfigured(network, mode);
 		const greeting = await senderGreeting();
@@ -1054,6 +1055,7 @@ describe('a node configured from its environment', function() {
 
 	test.each([
 		{ network: 'local', mode: 'read-write' },
+		{ network: 'test', mode: 'read-write' },
 		{ network: 'dev', mode: 'read-only' },
 		{ network: 'staging', mode: 'bootstrap-only' },
 		{ network: 'main', mode: 'no-voting' },

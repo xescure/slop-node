@@ -162,6 +162,17 @@ describe('peers configured through the environment', function() {
 		expect(representativeKeys(await first.node.switch.peers({ includeUnverified: true }))).toEqual([keyOf(second.representative)]);
 	});
 
+	test('are dialed by a node voting on the test network, which admits its votes, and greet it back', async function() {
+		const onTest: Environment = { KEETANET_LOCAL_NODE_NETWORK: 'test', KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-write' };
+		const first = await nodes.start(await nodes.environmentFor('memory', onTest));
+		const second = await nodes.start(await nodes.environmentFor('memory', { ...onTest, ...SECOND, KEETANET_LOCAL_NODE_MANUAL_PEERS: await peerSettingOf(first, true) }));
+
+		await second.node.switch.wait();
+
+		expect(representativeKeys(await second.node.switch.peers())).toEqual([keyOf(first.representative)]);
+		expect(representativeKeys(await first.node.switch.peers({ includeUnverified: true }))).toEqual([keyOf(second.representative)]);
+	});
+
 	test('are remembered across a restart when the node keeps its state in Postgres', async function() {
 		const first = await nodes.start(await nodes.environmentFor('memory'));
 		const environment = await nodes.environmentFor('postgres', SECOND);

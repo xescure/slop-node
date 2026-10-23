@@ -9,7 +9,9 @@ const CONFIG = 'src/node/config.ts';
 /** The declarations of config.ts that close a network to peers, each of which a range must hold. */
 const CLOSURE_DECLARATIONS = [
 	'export const PUBLIC_NETWORKS',
+	'export const PEER_VOTING_NETWORKS',
 	'function votesIn(',
+	'function admitsVotes(',
 	'const NON_VOTING_WRITE_MODES',
 	'function networkWithID(',
 	'export function publicNetworkOf(',

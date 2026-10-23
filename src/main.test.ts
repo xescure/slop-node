@@ -64,11 +64,11 @@ describe('slop-node run', function() {
 		expect(cli.stdout()).toContain('storage: memory\n');
 	});
 
-	test.each(['main', 'test'] as const)('refuses to vote on the %s network before it starts', async function(network) {
-		const cli = startCLI(['run'], { ...NODE, KEETANET_LOCAL_NODE_NETWORK: network });
+	test('refuses to vote on the main network before it starts', async function() {
+		const cli = startCLI(['run'], { ...NODE, KEETANET_LOCAL_NODE_NETWORK: 'main' });
 		expect(await cli.exited).toEqual({ code: 1, signal: null });
 		expect(cli.stdout()).toBe('');
-		expect(cli.stderr()).toContain(`the ${network} network is public, so the node may not vote on it`);
+		expect(cli.stderr()).toContain('Keeta\'s main network does not admit this node\'s votes, so the node may not vote on it');
 	});
 
 	test('refuses a configuration it cannot read, naming the variable', async function() {

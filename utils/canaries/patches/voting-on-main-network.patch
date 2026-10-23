@@ -1,0 +1,14 @@
+diff --git a/src/node/config.ts b/src/node/config.ts
+index d785962..9c059fb 100644
+--- a/src/node/config.ts
++++ b/src/node/config.ts
+@@ -1040,9 +1040,6 @@ function refuseWhereClosed(reader: EnvironmentReader, network: NetworkSelection,
+ 	}
+ 	switch (closure.because) {
+ 		case 'it-votes': {
+-			if (closure.network === 'main') {
+-				throw(new ConfigError({ kind: 'voting-on-main-network', ledgerWriteMode: closure.ledgerWriteMode }));
+-			}
+ 			const variable = PEER_VARIABLES.find(function(candidate): boolean {
+ 				return(reader.isSet(candidate));
+ 			});

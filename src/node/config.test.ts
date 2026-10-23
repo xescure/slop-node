@@ -9,7 +9,7 @@ import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { requireAt } from '../ledger/storage/suite/support.js';
 import { deriveTestKeys, TEST_NETWORK_SEEDS } from '../testing/network.js';
 import { bootstrapEndpointsOf, bootstrapPacingOf } from './bootstrap-peers.js';
-import { ConfigError, DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, formatManualPeer, getConfigFromEnv, invalid, LEDGER_WRITE_MODES, localNodeConfig, LOG_FORMATS, MANUAL_PEER_FORM, manualPeerOf, MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, MAX_FEE_SEED_ACCOUNTS, nodeNetworkClosedToP2P, PUBLIC_NETWORKS, publicNetworkOf } from './config.js';
+import { ConfigError, DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, formatManualPeer, getConfigFromEnv, invalid, LEDGER_WRITE_MODES, localNodeConfig, LOG_FORMATS, MANUAL_PEER_FORM, manualPeerOf, MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, MAX_FEE_SEED_ACCOUNTS, nodeNetworkClosedToP2P, PEER_VOTING_NETWORKS, PUBLIC_NETWORKS, publicNetworkOf } from './config.js';
 import type { ConfigProblem, Environment, EnvironmentConfig, LedgerWriteMode } from './config.js';
 import { LocalNode } from './local.js';
 import { MAX_PEER_LIMIT } from './peer-limits.js';
@@ -264,6 +264,7 @@ function peerSetting(peers: boolean): string | undefined {
 
 describe('the safety rule', function() {
 	const PUBLIC: readonly Networks[] = ['main', 'test'];
+	const PEER_VOTING: readonly Networks[] = ['test'];
 	const VOTING: readonly LedgerWriteMode[] = ['read-write'];
 	const FOLLOWING: readonly LedgerWriteMode[] = ['read-only', 'bootstrap-only'];
 
@@ -277,11 +278,11 @@ describe('the safety rule', function() {
 
 	test.each(matrix)('$network in $mode mode, with peers: $peers', function({ network, mode, peers }) {
 		const environment: Environment = { KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: mode, KEETANET_LOCAL_NODE_MANUAL_PEERS: peerSetting(peers) };
-		if (network !== 'local' && PUBLIC.includes(network) && VOTING.includes(mode)) {
-			expect(problemOf(environment)).toEqual({ kind: 'voting-on-public-network', network, ledgerWriteMode: mode });
+		if (network === 'main' && VOTING.includes(mode)) {
+			expect(problemOf(environment)).toEqual({ kind: 'voting-on-main-network', ledgerWriteMode: mode });
 			return;
 		}
-		if (network !== 'local' && peers && VOTING.includes(mode)) {
+		if (network !== 'local' && !PEER_VOTING.includes(network) && peers && VOTING.includes(mode)) {
 			expect(problemOf(environment)).toEqual({ kind: 'peers-on-keeta-network', network, ledgerWriteMode: mode, variable: 'KEETANET_LOCAL_NODE_MANUAL_PEERS' });
 			return;
 		}
@@ -301,15 +302,24 @@ describe('the safety rule', function() {
 			bootstrapPeers = PEER_API;
 		}
 		const environment: Environment = { KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: mode, KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: bootstrapPeers };
-		if (network !== 'local' && PUBLIC.includes(network) && VOTING.includes(mode)) {
-			expect(problemOf(environment)).toEqual({ kind: 'voting-on-public-network', network, ledgerWriteMode: mode });
+		if (network === 'main' && VOTING.includes(mode)) {
+			expect(problemOf(environment)).toEqual({ kind: 'voting-on-main-network', ledgerWriteMode: mode });
 			return;
 		}
-		if (network !== 'local' && peers && VOTING.includes(mode)) {
+		if (network !== 'local' && !PEER_VOTING.includes(network) && peers && VOTING.includes(mode)) {
 			expect(problemOf(environment)).toEqual({ kind: 'peers-on-keeta-network', network, ledgerWriteMode: mode, variable: 'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS' });
 			return;
 		}
 		expect(parse(environment).bootstrapPeers.length > 0).toBe(peers);
+	});
+
+	test('admits a node voting on test, with manual and bootstrap peers both', function() {
+		const config = parse({ KEETANET_LOCAL_NODE_NETWORK: 'test', KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-write', KEETANET_LOCAL_NODE_MANUAL_PEERS: PEER, KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: PEER_API });
+		expect(config.ledgerWriteMode).toBe('read-write');
+		expect(config.manualPeers.map(function(peer) {
+			return(peer.key.publicKeyString.get());
+		})).toEqual([PEER_KEY]);
+		expect(config.bootstrapPeers).toHaveLength(1);
 	});
 
 	test.each(['main', 'test'] as const)('admits a node on %s that does not vote, with manual and bootstrap peers both', function(network) {
@@ -345,7 +355,7 @@ describe('the safety rule', function() {
 	});
 
 	test('applies to the default write mode', function() {
-		expect(problemOf({ KEETANET_LOCAL_NODE_NETWORK: 'main' })).toEqual({ kind: 'voting-on-public-network', network: 'main', ledgerWriteMode: 'read-write' });
+		expect(problemOf({ KEETANET_LOCAL_NODE_NETWORK: 'main' })).toEqual({ kind: 'voting-on-main-network', ledgerWriteMode: 'read-write' });
 	});
 
 	/* Every spelling of the ID that the setting reads as that network. */
@@ -360,31 +370,46 @@ describe('the safety rule', function() {
 	] as const)('applies to the ID of the %s network in every spelling', function(alias, written) {
 		expect(spellingsOf(NetworkConfig.NetworkIDs[alias])).toEqual(expect.arrayContaining([...written]));
 		for (const network of spellingsOf(NetworkConfig.NetworkIDs[alias])) {
-			for (const mode of VOTING) {
-				expect(problemOf({ KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: mode })).toEqual({ kind: 'voting-on-public-network', network: alias, ledgerWriteMode: mode });
-			}
-			expect(problemOf({ KEETANET_LOCAL_NODE_NETWORK: network })).toEqual({ kind: 'voting-on-public-network', network: alias, ledgerWriteMode: 'read-write' });
 			expect(parse({ KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-only' }).network).toEqual({ kind: 'known', alias, network: NetworkConfig.NetworkIDs[alias] });
 			expect(problemOf({ KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-only', KEETANET_LOCAL_NODE_MANUAL_PEERS: PEER })).toEqual({ kind: 'peers-on-public-network', network: alias, ledgerWriteMode: 'read-only' });
 			expect(parse({ KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'no-voting', KEETANET_LOCAL_NODE_MANUAL_PEERS: PEER }).manualPeers).toHaveLength(1);
 		}
 	});
 
+	test('refuses a node voting on the ID of the main network in every spelling', function() {
+		for (const network of spellingsOf(NetworkConfig.NetworkIDs.main)) {
+			for (const mode of VOTING) {
+				expect(problemOf({ KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: mode })).toEqual({ kind: 'voting-on-main-network', ledgerWriteMode: mode });
+			}
+			expect(problemOf({ KEETANET_LOCAL_NODE_NETWORK: network })).toEqual({ kind: 'voting-on-main-network', ledgerWriteMode: 'read-write' });
+		}
+	});
+
+	test('admits a node voting with peers on the ID of the test network in every spelling', function() {
+		for (const network of spellingsOf(NetworkConfig.NetworkIDs.test)) {
+			const config = parse({ KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_MANUAL_PEERS: PEER, KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: PEER_API });
+			expect(config.network).toEqual({ kind: 'known', alias: 'test', network: NetworkConfig.NetworkIDs.test });
+			expect(config.ledgerWriteMode).toBe('read-write');
+			expect(config.manualPeers).toHaveLength(1);
+			expect(config.bootstrapPeers).toHaveLength(1);
+		}
+	});
+
 	test('says why', function() {
-		expect(messageOf({ KEETANET_LOCAL_NODE_NETWORK: 'test' })).toBe('the test network is public, so the node may not vote on it: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to read-only, bootstrap-only or no-voting (it is read-write)');
+		expect(messageOf({ KEETANET_LOCAL_NODE_NETWORK: 'main' })).toBe('Keeta\'s main network does not admit this node\'s votes, so the node may not vote on it: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to read-only, bootstrap-only or no-voting (it is read-write)');
 	});
 });
 
 /*
  * A node built in code is closed by its network ID (src/node/local.ts,
- * src/api/p2p.ts): main and test to every mode but no-voting, dev and staging
- * to the one that votes, and the operator's own network, or one the client
- * does not know, to none.
+ * src/api/p2p.ts): main to every mode but no-voting, test to the modes that
+ * only follow it, dev and staging to the one that votes, and the operator's
+ * own network, or one the client does not know, to none.
  */
 describe('the closure of a node\'s network to its peers', function() {
 	const closures: Record<Networks, readonly LedgerWriteMode[]> = {
 		main: ['read-write', 'read-only', 'bootstrap-only'],
-		test: ['read-write', 'read-only', 'bootstrap-only'],
+		test: ['read-only', 'bootstrap-only'],
 		dev: ['read-write'],
 		staging: ['read-write']
 	};
@@ -416,6 +441,18 @@ describe('the closure of a node\'s network to its peers', function() {
 	test('names each network the client knows public or not, once', function() {
 		const notPublic: readonly Networks[] = ['dev', 'staging'];
 		expect([...PUBLIC_NETWORKS, ...notPublic].sort()).toEqual([...NetworkConfig.networksArray].sort());
+	});
+
+	/*
+	 * A node that votes keeps to itself on a network of Keeta's that does not
+	 * admit its votes, so one the client adds fails here until it is named one
+	 * that does, main, which refuses the node outright, or one it votes on
+	 * alone, rather than stay closed to it unnoticed.
+	 */
+	test('names each network the client knows by whether a node may vote on it with peers, once', function() {
+		const refusing: readonly Networks[] = ['main'];
+		const votingAlone: readonly Networks[] = ['dev', 'staging'];
+		expect([...PEER_VOTING_NETWORKS, ...refusing, ...votingAlone].sort()).toEqual([...NetworkConfig.networksArray].sort());
 	});
 
 	test('names no public network for the local one', function() {
@@ -980,9 +1017,9 @@ const DESCRIBED_PROBLEMS: { readonly [Kind in ConfigProblem['kind']]: { readonly
 		problem: { kind: 'too-many-fee-accounts', count: 1025, maximum: 1024 },
 		message: 'KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX and KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX name 1025 fee accounts, but at most 1024 are derived'
 	},
-	'voting-on-public-network': {
-		problem: { kind: 'voting-on-public-network', network: 'main', ledgerWriteMode: 'read-write' },
-		message: 'the main network is public, so the node may not vote on it: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to read-only, bootstrap-only or no-voting (it is read-write)'
+	'voting-on-main-network': {
+		problem: { kind: 'voting-on-main-network', ledgerWriteMode: 'read-write' },
+		message: 'Keeta\'s main network does not admit this node\'s votes, so the node may not vote on it: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to read-only, bootstrap-only or no-voting (it is read-write)'
 	},
 	'peers-on-keeta-network': {
 		problem: { kind: 'peers-on-keeta-network', network: 'dev', ledgerWriteMode: 'read-write', variable: 'KEETANET_LOCAL_NODE_MANUAL_PEERS' },
@@ -990,7 +1027,7 @@ const DESCRIBED_PROBLEMS: { readonly [Kind in ConfigProblem['kind']]: { readonly
 	},
 	'peers-on-public-network': {
 		problem: { kind: 'peers-on-public-network', network: 'test', ledgerWriteMode: 'read-only' },
-		message: 'the test network is public, so a node only following it keeps its peer-to-peer surface closed there and reads it only by its bootstrap: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to no-voting to peer with it (it is read-only), or leave KEETANET_LOCAL_NODE_MANUAL_PEERS unset'
+		message: 'the test network is public, so a node only following it keeps its peer-to-peer surface closed there and reads it only by its bootstrap: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to read-write or no-voting to peer with it (it is read-only), or leave KEETANET_LOCAL_NODE_MANUAL_PEERS unset'
 	},
 	'remembered-peers': {
 		problem: { kind: 'remembered-peers', network: 'main', ledgerWriteMode: 'bootstrap-only', arenas: ['knownPeers', 'manualPeerCheckIn'] },
