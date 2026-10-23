@@ -559,7 +559,8 @@ connection outlives the connection. The entries are:
 
 * the unreachable defaults of switches, and a local network that falls
   through to the case of the known networks and still names no public one;
-* the separators of a list of alternatives that a word too few leaves out;
+* the separators of a list of alternatives that is never two words long;
+* a local network let through to the test of its rule, which it has none of;
 * checks of a message that a refusal of the switch's parser already decides;
 * a starting count that the loop after it always sets;
 * in the connections a switch holds, steps that the order in which upstream
@@ -575,10 +576,14 @@ connection outlives the connection. The entries are:
 - src/node/config.ts:135:3-136:30 ConditionalExpression "default:" equivalent: the default of a switch that has handled every write mode is unreachable.
 - src/node/config.ts:567:3-568:22 ConditionalExpression "case 'local':" equivalent: a local selection falling through to the case of the known networks names no alias, which no public network matches, so it still names none.
 - src/node/config.ts:573:3-574:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
+- src/node/config.ts:999:4-1000:31 ConditionalExpression "default:" equivalent: the default of a switch that has handled every voting rule is unreachable.
 - src/node/config.ts:1014:3-1015:41 ConditionalExpression "default:" equivalent: the default of a switch that has handled every write mode is unreachable.
+- src/node/config.ts:1050:6-1050:22 EqualityOperator "words.length <= 2" equivalent: alternatives is given one word or three, never two: the write modes that do not vote, and those of them open on a network, which are no-voting alone on main and test and three on dev and staging.
 - src/node/config.ts:1051:21-1051:23 StringLiteral "\"Stryker was here!\"" equivalent: a list of fewer than two words places no separator.
 - src/node/config.ts:1053:69-1053:71 StringLiteral "\"Stryker was here!\"" equivalent: the last word alone places no separator.
 - src/node/config.ts:1085:3-1086:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both reasons for a closure is unreachable.
+- src/node/config.ts:1099:66-1099:90 ConditionalExpression "false" equivalent: a local selection let through has no alias, whose rule is none, so it is not one that votes with peers and is still not refused.
+- src/node/config.ts:1099:83-1099:90 StringLiteral "\"\"" equivalent: no selection is of the kind "", so a local one is let through, and having no alias, whose rule is none, is still not refused.
 - src/node/connections.ts:21:4-21:22 OptionalChaining "resolvePromise()" equivalent: a promise's executor runs as the promise is built, so the resolver is always set by the time it is called.
 - src/node/connections.ts:80:9-80:26 ConditionalExpression "true" equivalent: closing a connection already aborted only marks it aborted again and closes a socket that is already closing [Keeta TS] index.js:73565-73573, which does nothing.
 - src/node/connections.ts:105:7-105:28 ConditionalExpression "true" equivalent: for a connection already tracked, the connection is not among those released, and #track answers its entry as it is.
