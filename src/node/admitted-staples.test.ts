@@ -17,19 +17,28 @@ const SEED = '0000000000000000000000000000000000000000000000000000000000000001';
 
 const TEST_NETWORK = { kind: 'known', alias: 'test', network: 0x54455354n } as const;
 
-type FixtureStaple = { readonly moment: string; readonly staple: string };
-
 /*
- * Keeta's test network from the staple whose single voter held more than two
- * thirds of the delegated weight, through the five carrying only another
- * representative's vote, to the first carrying both representatives' votes
- * again, as GET /node/ledger/history of rep1.test.network.api.keeta.com listed
- * them on 2026-10-23.
+ * Staples of Keeta's test network, as GET /node/ledger/history of
+ * rep1.test.network.api.keeta.com listed them on 2026-10-23, oldest first:
+ * the delegation, voted by keeta_aabf7dz5... alone, that gave
+ * keeta_aabmh4q7... more than two thirds of the weight (2026-10-15 16:07 UTC);
+ * the staple keeta_aabmh4q7... voted alone (16:11); the five keeta_aabf7dz5...
+ * voted alone without a quorum (2026-10-16 18:10 to 18:22); the first voted by
+ * both of Keeta's representatives again (18:30); and one keeta_aabf7dz5...
+ * voted alone once it held a quorum (2026-10-17 19:35).
  */
 async function testNetworkStaples(): Promise<VoteStaple[]> {
-	const parsed = JSON.parse(await readFile(new URL('../testing/fixtures/test-network-weightless-staples.json', import.meta.url), 'utf8')) as readonly FixtureStaple[];
-	return(parsed.map(function({ staple }): VoteStaple {
+	const parsed = JSON.parse(await readFile(new URL('../testing/fixtures/test-network-weightless-staples.json', import.meta.url), 'utf8')) as readonly string[];
+	return(parsed.map(function(staple): VoteStaple {
 		return(new lib.Vote.Staple(Buffer.from(staple, 'base64')));
+	}));
+}
+
+const REP2 = 'keeta_aabf7dz5asq2n2lrldct33x2ww65cophxp7egfiixbb7tbyat5r3kcbcez7ftpi';
+
+function votedByRep2Alone(staple: VoteStaple): boolean {
+	return(staple.votes.every(function(vote): boolean {
+		return(vote.issuer.publicKeyString.get() === REP2);
 	}));
 }
 
@@ -59,12 +68,25 @@ describe('the staples a network admits without a quorum', function() {
 	test('on the test network, are the five Keeta\'s representatives added with less than two thirds of the weight, and not those around them', async function() {
 		const admit = requireAdmit(admittedWithoutQuorum(TEST_NETWORK));
 		const staples = await testNetworkStaples();
-		expect(staples.map(admit)).toEqual([false, true, true, true, true, true, false]);
+		expect(staples.map(admit)).toEqual([false, false, true, true, true, true, true, false, false]);
+		// Rep2's vote alone does not admit a staple: two it voted alone, outside the five, are not admitted.
+		expect(staples.map(votedByRep2Alone)).toEqual([true, false, true, true, true, true, true, false, true]);
+	});
+
+	test('are those of the network the node configures as test, on whose ID their blocks are', async function() {
+		const network = getConfigFromEnv({ KEETANET_LOCAL_NODE_SEED: SEED, KEETANET_LOCAL_NODE_NETWORK: 'test', KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'no-voting' }).network;
+		expect(network).toEqual(TEST_NETWORK);
+		const networks = new Set((await testNetworkStaples()).flatMap(function(staple): bigint[] {
+			return(staple.blocks.map(function(block): bigint {
+				return(block.network);
+			}));
+		}));
+		expect([...networks]).toEqual([TEST_NETWORK.network]);
 	});
 
 	test('are a staple whole: the same votes and blocks encoded again are admitted, and one more vote on the same blocks is not', async function() {
 		const admit = requireAdmit(admittedWithoutQuorum(TEST_NETWORK));
-		const pinned = requireAt(await testNetworkStaples(), 1);
+		const pinned = requireAt(await testNetworkStaples(), 2);
 		const vote = requireAt(pinned.votes, 0);
 		const extra = await new lib.Vote.Builder(lib.Account.fromSeed(SEED, 0), pinned.blocks).seal(1n, vote.validityTo, vote.validityFrom);
 

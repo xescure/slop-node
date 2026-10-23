@@ -2,7 +2,7 @@ Let the node admit named staples without the quorum check
 
 Why: Keeta's test network holds staples its representatives admitted with
 less than the quorum of delegated weight that add() requires
-[Keeta TS] index.js:70455-70458, 70798-70817: after one representative held
+[Keeta TS] index.js:70433-70436, 70776-70795: after one representative held
 more than two thirds of the weight on 2026-10-15, five staples on
 2026-10-16 carry only another's vote. No 0.18.8 ledger replaying the
 network adds them, so the node needs a way to take exactly those.
@@ -13,7 +13,6 @@ ledger past those staples, then delete this patch and the list it serves.
 
 Applies with "patch -p1" from the package root, after 0001, 0002 and 0003.
 
---- a/client/index.js
 --- a/client/index.js
 +++ b/client/index.js
 @@ -70453,7 +70453,8 @@

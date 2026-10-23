@@ -597,8 +597,12 @@ client's reason where the variable is not secret. The entries are:
 
 * the unreachable defaults of switches;
 * the fallbacks of the two endpoints of a manual peer, which the count of its
-  fields already ensures.
+  fields already ensures;
+* the staples a network adds without a quorum, looked up or handed to the
+  ledger where there are none, which leaves the ledger without them all the
+  same.
 
+- src/node/admitted-staples.ts:37:6-37:30 ConditionalExpression "true" equivalent: a local selection has no alias, and the staples of no alias are none, so it still admits none.
 - src/node/config.ts:223:3-224:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of problem is unreachable.
 - src/node/config.ts:557:3-558:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
 - src/node/config.ts:690:15-690:17 StringLiteral "\"Stryker was here!\"" equivalent: a peer reaches this line only with at least two fields after its key, so the API endpoint is always given.
@@ -607,3 +611,4 @@ client's reason where the variable is not secret. The entries are:
 - src/node/config.ts:931:3-932:34 ConditionalExpression "default:" equivalent: the default of a switch that has handled both fee schedules is unreachable.
 - src/node/config.ts:1129:3-1130:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
 - src/node/config.ts:1141:3-1142:36 ConditionalExpression "default:" equivalent: the default of a switch that has handled both ways of receiving updates is unreachable.
+- src/node/config.ts:1188:6-1188:38 ConditionalExpression "true" equivalent: assigning an absent hook leaves admitWithoutQuorum undefined, which add() calls as undefined?.() and so checks the quorum [Keeta TS] index.js:70434.
