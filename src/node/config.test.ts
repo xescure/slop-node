@@ -431,7 +431,7 @@ describe('a node voting in memory', function() {
 		expect(config.storage).toEqual({ kind: 'memory' });
 	});
 
-	test.each(['no-voting', 'read-only', 'bootstrap-only'] as const)('is not one in %s mode, which test admits in memory', function(mode) {
+	test.each(['no-voting', 'read-only', 'bootstrap-only'] as const)('is admitted on test in memory in %s mode, which does not vote', function(mode) {
 		const config = parse({ KEETANET_LOCAL_NODE_NETWORK: 'test', KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: mode });
 		expect(config.ledgerWriteMode).toBe(mode);
 		expect(config.storage).toEqual({ kind: 'memory' });
