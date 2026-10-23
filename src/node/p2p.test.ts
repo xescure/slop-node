@@ -96,9 +96,23 @@ function messageTypeOf(buffer: Buffer | ArrayBuffer): string | undefined {
 	}
 }
 
+type MessageHandling = (from: P2PConnection, buffer: Buffer | ArrayBuffer) => Promise<boolean>;
+
+/**
+ * How the switch handles a message now, for a helper to wrap: its own
+ * handling, or another helper's wrapper of it. vitest 4's spyOn answers the
+ * spy already on a method rather than a new one around it, and the
+ * implementation a helper gives replaces that spy's, so the wrapper must be
+ * read from the spy before then; the spy itself would call the new one.
+ */
+function handlingOf(node: LocalNode): MessageHandling {
+	const current = node.switch.recvMessageFromPeer.bind(node.switch);
+	return(vi.spyOn(node.switch, 'recvMessageFromPeer').getMockImplementation() ?? current);
+}
+
 /** The types of the messages peers deliver to the node from now on, as the switch reads them. */
 function deliveredTypes(node: LocalNode): (string | undefined)[] {
-	const handle = node.switch.recvMessageFromPeer.bind(node.switch);
+	const handle = handlingOf(node);
 	const types: (string | undefined)[] = [];
 	vi.spyOn(node.switch, 'recvMessageFromPeer').mockImplementation(function(from: P2PConnection, buffer: Buffer | ArrayBuffer): Promise<boolean> {
 		types.push(messageTypeOf(buffer));
@@ -118,7 +132,7 @@ function trackedMessages(node: LocalNode): SwitchMessages {
  * have handled them.
  */
 function handledInTurn(node: LocalNode, type: string, count: number): Promise<boolean[]> {
-	const handle = node.switch.recvMessageFromPeer.bind(node.switch);
+	const handle = handlingOf(node);
 	const answers: Promise<boolean>[] = [];
 	return(new Promise<boolean[]>(function(resolve, reject) {
 		vi.spyOn(node.switch, 'recvMessageFromPeer').mockImplementation(function(from: P2PConnection, buffer: Buffer | ArrayBuffer): Promise<boolean> {
@@ -440,7 +454,7 @@ type HeldMessages = {
 
 /** Holds every message peers deliver to the node, before the switch handles it, until released. */
 function holdMessages(node: LocalNode): HeldMessages {
-	const handle = node.switch.recvMessageFromPeer.bind(node.switch);
+	const handle = handlingOf(node);
 	const handling: Promise<boolean>[] = [];
 	let release: () => void = function() {
 		throw(new Error('internal error: released before holding'));
