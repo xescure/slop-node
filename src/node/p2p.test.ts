@@ -19,7 +19,7 @@ import type { RunningLocalNode } from '../testing/local-node.js';
 import type { TestNetwork } from '../testing/network.js';
 import { watchOpenHandles } from '../testing/open-handles.js';
 import { NODE_ENVIRONMENT, RECEIVER, useSDKNodes } from '../testing/sdk.js';
-import type { ServingNode } from '../testing/sdk.js';
+import type { ServingNode, StorageUnderTest } from '../testing/sdk.js';
 import { P2PInternals } from '../upstream/internals.js';
 import type { LedgerWriteMode } from './config.js';
 import type { LocalNode } from './local.js';
@@ -998,8 +998,8 @@ describe('peers over HTTP republish', function() {
 });
 
 /** A representative configured from its environment, as the command builds one, on that network and in that mode. */
-function startConfigured(network: string, mode: LedgerWriteMode): Promise<ServingNode> {
-	return(sdkNodes.start({ ...NODE_ENVIRONMENT, KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: mode }));
+async function startConfigured(network: string, mode: LedgerWriteMode, storage: StorageUnderTest = 'memory'): Promise<ServingNode> {
+	return(await sdkNodes.start(await sdkNodes.environmentFor(storage, { KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: mode })));
 }
 
 /** A representative of the local network, posting over HTTP, whose genuine greeting the node under test is sent. */
@@ -1053,17 +1053,18 @@ describe('a node configured from its environment', function() {
 		expect(await rememberedPeerArenas(serving.node.switch.config.kv)).toEqual([]);
 	});
 
+	/* A node voting on test keeps its ledger in Postgres, as it must. */
 	test.each([
-		{ network: 'local', mode: 'read-write' },
-		{ network: 'test', mode: 'read-write' },
-		{ network: 'dev', mode: 'read-only' },
-		{ network: 'staging', mode: 'bootstrap-only' },
-		{ network: 'main', mode: 'no-voting' },
-		{ network: 'test', mode: 'no-voting' },
-		{ network: 'dev', mode: 'no-voting' },
-		{ network: 'staging', mode: 'no-voting' }
-	] as const)('serves peers over /p2p and HTTP on $network in $mode mode, which the network is open to', async function({ network, mode }) {
-		const serving = await startConfigured(network, mode);
+		{ network: 'local', mode: 'read-write', storage: 'memory' },
+		{ network: 'test', mode: 'read-write', storage: 'postgres' },
+		{ network: 'dev', mode: 'read-only', storage: 'memory' },
+		{ network: 'staging', mode: 'bootstrap-only', storage: 'memory' },
+		{ network: 'main', mode: 'no-voting', storage: 'memory' },
+		{ network: 'test', mode: 'no-voting', storage: 'memory' },
+		{ network: 'dev', mode: 'no-voting', storage: 'memory' },
+		{ network: 'staging', mode: 'no-voting', storage: 'memory' }
+	] as const)('serves peers over /p2p and HTTP on $network in $mode mode, which the network is open to', async function({ network, mode, storage }) {
+		const serving = await startConfigured(network, mode, storage);
 		const greeting = await senderGreeting();
 		const socket = new WebSocket(p2pEndpointOf(serving.node));
 		await opened(socket);
@@ -1076,6 +1077,28 @@ describe('a node configured from its environment', function() {
 		await greeted;
 		expect(await serving.node.switch.peers({ includeUnverified: true })).toHaveLength(1);
 		expect(await rememberedPeerArenas(serving.node.switch.config.kv)).toContain('potentialPeers');
+	});
+});
+
+/*
+ * The environment refuses a node voting on main (src/node/config.ts), so only
+ * one built in code reaches here, and its surface stays closed all the same.
+ */
+describe('a node built in code voting on main', function() {
+	test('serves no /p2p WebSocket and refuses a message posted over HTTP, handing the switch nothing and keeping no peer', async function() {
+		const { node } = await nodes.create({ ledgerWriteMode: 'read-write', genesis: 'absent' });
+		node.config.network = KeetaNet.Client.Config.NetworkIDs.main;
+		await node.run();
+		const greeting = await senderGreeting();
+		const handle = vi.spyOn(node.switch, 'recvMessageFromPeer');
+
+		await expect(opened(new WebSocket(p2pEndpointOf(node)))).rejects.toThrow('did not open');
+		const answer = await postJSON({ apiURL: endpointsOf(node).api.replace(/\/$/, '') }, '/p2p/message', { message: peerMessage('hello', greeting, 0), greeting });
+
+		expect(answer.body).toEqual({ success: false });
+		expect(handle).not.toHaveBeenCalled();
+		expect(await node.switch.peers({ includeUnverified: true, includeStale: true })).toEqual([]);
+		expect(await rememberedPeerArenas(node.switch.config.kv)).toEqual([]);
 	});
 });
 

@@ -164,8 +164,8 @@ describe('peers configured through the environment', function() {
 
 	test('are dialed by a node voting on the test network, which admits its votes, and greet it back', async function() {
 		const onTest: Environment = { KEETANET_LOCAL_NODE_NETWORK: 'test', KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-write' };
-		const first = await nodes.start(await nodes.environmentFor('memory', onTest));
-		const second = await nodes.start(await nodes.environmentFor('memory', { ...onTest, ...SECOND, KEETANET_LOCAL_NODE_MANUAL_PEERS: await peerSettingOf(first, true) }));
+		const first = await nodes.start(await nodes.environmentFor('postgres', onTest));
+		const second = await nodes.start(await nodes.environmentFor('postgres', { ...onTest, ...SECOND, KEETANET_LOCAL_NODE_MANUAL_PEERS: await peerSettingOf(first, true) }));
 
 		await second.node.switch.wait();
 

@@ -144,7 +144,10 @@ export const CANARIES: readonly Canary[] = [
 		name: 'remembered-peers-built-in-code',
 		fix: commit('583e98b'),
 		reverts: 'a node built in code runs on a network closed to its peers with the peers its store remembers',
-		catchers: [caughtBy('src/node/local.test.ts', 'a node built in code on main', 'refuses to run following it with peers its store remembers')]
+		catchers: [
+			caughtBy('src/node/local.test.ts', 'a node built in code on main', 'refuses to run in bootstrap-only mode with peers its store remembers'),
+			caughtBy('src/node/local.test.ts', 'a node built in code on main', 'refuses to run in read-write mode with peers its store remembers')
+		]
 	},
 	{
 		name: 'bootstrap-short-page-drains',

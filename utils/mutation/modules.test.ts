@@ -9,18 +9,19 @@ const CONFIG = 'src/node/config.ts';
 /** The declarations of config.ts that close a network to peers, each of which a range must hold. */
 const CLOSURE_DECLARATIONS = [
 	'export const PUBLIC_NETWORKS',
-	'export const PEER_VOTING_NETWORKS',
+	'const VOTING_RULES',
 	'function votesIn(',
-	'function admitsVotes(',
+	'function mayVoteWithPeersOn(',
 	'const NON_VOTING_WRITE_MODES',
 	'function networkWithID(',
 	'export function publicNetworkOf(',
 	'function closureToP2P(',
 	'export function networkClosedToP2P(',
 	'export function nodeNetworkClosedToP2P(',
-	'function modesOpenOn(',
+	'function nonVotingModesOpenOn(',
 	'function alternatives(',
-	'function refuseWhereClosed('
+	'function refuseWhereClosed(',
+	'function refuseVotesInMemory('
 ] as const;
 
 /* The modules are the mutation runs' own JavaScript, which the suite's TypeScript does not type, so they are read by a path the compiler does not follow. */
