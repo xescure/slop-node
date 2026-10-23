@@ -425,8 +425,8 @@ describe('a node built in code on main', function() {
 		expect(dial).not.toHaveBeenCalled();
 	});
 
-	test('refuses to run following it with peers its store remembers', async function() {
-		const node = await followingMain();
+	test.each(['bootstrap-only', 'read-only', 'read-write'] as const)('refuses to run in %s mode with peers its store remembers', async function(mode) {
+		const node = await onMain(mode);
 		await node.switch.config.kv.set('knownPeers', 'remembered', 'a peer');
 
 		await expect(node.run()).rejects.toThrow('the node keeps its peer-to-peer surface closed on the main network, but its store remembers peers (in knownPeers), which its switch would dial; forget them first ("slop-node clear-peers")');

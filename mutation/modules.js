@@ -25,9 +25,10 @@ const CONFIG = 'src/node/config.ts';
 
 /**
  * The parts of config.ts that close a network to its peer-to-peer surface:
- * the public networks, those a node may vote on with peers and the write
- * mode that votes, the networks a node's ID names, and the closure itself
- * with its refusals. Each runs from the line that is "from" to the first line
+ * the public networks, the rule of where a node may vote on each network
+ * and the write mode that votes, the networks a node's ID names, and the
+ * closure itself with its refusals, that of a node voting in memory among
+ * them. Each runs from the line that is "from" to the first line
  * that is "to" after the line "through", or after "from". They are found by
  * their text, so that an edit of config.ts moves them along, and a part whose
  * lines are not there, the first two once each, stops the run
@@ -44,7 +45,7 @@ const CLOSURE_PARTS = [
 	{ from: 'export function publicNetworkOf(selection: NetworkSelection): PublicNetwork | undefined {', to: '}' },
 	{
 		from: 'type P2PClosure =',
-		through: 'function refuseWhereClosed(reader: EnvironmentReader, network: NetworkSelection, ledgerWriteMode: LedgerWriteMode): void {',
+		through: 'function refuseVotesInMemory(network: NetworkSelection, ledgerWriteMode: LedgerWriteMode, storage: StorageChoice): void {',
 		to: '}'
 	}
 ];

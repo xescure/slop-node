@@ -68,7 +68,14 @@ describe('slop-node run', function() {
 		const cli = startCLI(['run'], { ...NODE, KEETANET_LOCAL_NODE_NETWORK: 'main' });
 		expect(await cli.exited).toEqual({ code: 1, signal: null });
 		expect(cli.stdout()).toBe('');
-		expect(cli.stderr()).toContain('Keeta\'s main network does not admit this node\'s votes, so the node may not vote on it');
+		expect(cli.stderr()).toContain('this node may not vote on Keeta\'s main network');
+	});
+
+	test('refuses to vote on the test network in memory before it starts', async function() {
+		const cli = startCLI(['run'], { ...NODE, KEETANET_LOCAL_NODE_NETWORK: 'test', KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-write' });
+		expect(await cli.exited).toEqual({ code: 1, signal: null });
+		expect(cli.stdout()).toBe('');
+		expect(cli.stderr()).toContain('a node voting on the test network needs KEETANET_LOCAL_NODE_POSTGRES_URL');
 	});
 
 	test('refuses a configuration it cannot read, naming the variable', async function() {
@@ -153,7 +160,7 @@ describe('slop-node run with peers', function() {
 		const voting = startCLI(['run'], dev);
 		expect(await voting.exited).toEqual({ code: 1, signal: null });
 		expect(voting.stdout()).toBe('');
-		expect(voting.stderr()).toBe('slop-node: the dev network is Keeta\'s, and the store of KEETANET_LOCAL_NODE_POSTGRES_URL remembers peers (in lastSeenPeers, manualPeerCheckIn), which the node would reach even without KEETANET_LOCAL_NODE_MANUAL_PEERS: run "slop-node clear-peers" with the same environment to forget them, or set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to read-only, bootstrap-only or no-voting (it is read-write)\n');
+		expect(voting.stderr()).toBe('slop-node: the dev network is closed to the node\'s peers in its write mode, and the store of KEETANET_LOCAL_NODE_POSTGRES_URL remembers peers (in lastSeenPeers, manualPeerCheckIn), which the node would reach even without KEETANET_LOCAL_NODE_MANUAL_PEERS: run "slop-node clear-peers" with the same environment to forget them, or set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to read-only, bootstrap-only or no-voting (it is read-write)\n');
 
 		const clearing = startCLI(['clear-peers'], dev);
 		expect(await clearing.exited).toEqual({ code: 0, signal: null });
