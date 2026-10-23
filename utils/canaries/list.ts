@@ -123,6 +123,15 @@ export const CANARIES: readonly Canary[] = [
 		]
 	},
 	{
+		name: 'votes-in-memory',
+		fix: commit('2899141'),
+		reverts: 'a node votes with peers on test with its ledger in memory, forgetting its votes and their serials each time it stops',
+		catchers: [
+			caughtBy(CONFIG, 'a node voting in memory', 'is refused on test, by every spelling of its ID'),
+			caughtBy(CONFIG, 'a node voting in memory', 'is refused on test in the default write mode, with peers or without')
+		]
+	},
+	{
 		name: 'public-network-open-to-followers',
 		fix: commit('80095a6'),
 		reverts: 'a node only following main or test is open to peers there, as a node that does not vote is',
