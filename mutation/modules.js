@@ -229,18 +229,20 @@ const MODULES = {
 	 * How the node reads its environment, and the node upstream is given from
 	 * it: the rest of config.ts, measured by its own tests, by the genesis
 	 * command's, which reads the node's variables through it, and by the
-	 * follower's, which is a node configured through it.
+	 * follower's, which is a node configured through it; and the staples the
+	 * network it selects adds without a quorum, measured by their own tests.
 	 */
 	config: {
 		/* Read only when asked, as the peer-to-peer module's is. */
 		get mutate() {
-			return(restOfConfigRanges(readFileSync(CONFIG, 'utf8')));
+			return([...restOfConfigRanges(readFileSync(CONFIG, 'utf8')), 'src/node/admitted-staples.ts']);
 		},
 		tests: [
 			'src/node/config.test.ts',
 			'src/node/configured-peers.test.ts',
 			'src/node/genesis.test.ts',
-			'src/parity/follower-config.test.ts'
+			'src/parity/follower-config.test.ts',
+			'src/node/admitted-staples.test.ts'
 		],
 		ignorers: [],
 		selectedCases: {}
