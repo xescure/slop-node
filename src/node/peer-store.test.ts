@@ -76,6 +76,7 @@ describe('a node that may not have peers on its network', function() {
 describe('a node that may have peers', function() {
 	test.each([
 		{ network: 'local', mode: 'read-write' },
+		{ network: 'test', mode: 'read-write' },
 		{ network: 'dev', mode: 'read-only' },
 		{ network: 'staging', mode: 'bootstrap-only' },
 		{ network: 'main', mode: 'no-voting' },

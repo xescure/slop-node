@@ -395,15 +395,16 @@ function unusedPort(): Promise<number> {
 	return(listenAndClose(0));
 }
 
-describe('a node built in code on main', function() {
-	const PEER: P2PPeer = {
-		kind: lib.Node.Kind.REPRESENTATIVE,
-		key: lib.Account.fromSeed('d4f6a8c1e3b5d7f9a0c2e4b6d8f1a3c5e7092b4d6f8a0c2e4b6d8f1a3c5e7b93', 0),
-		endpoints: { api: 'http://127.0.0.1:9/api', p2p: 'ws://127.0.0.1:9/p2p' },
-		preferUpdates: 'websocket',
-		certificate: null
-	};
+/** A representative a node built in code is given to dial. */
+const PEER: P2PPeer = {
+	kind: lib.Node.Kind.REPRESENTATIVE,
+	key: lib.Account.fromSeed('d4f6a8c1e3b5d7f9a0c2e4b6d8f1a3c5e7092b4d6f8a0c2e4b6d8f1a3c5e7b93', 0),
+	endpoints: { api: 'http://127.0.0.1:9/api', p2p: 'ws://127.0.0.1:9/p2p' },
+	preferUpdates: 'websocket',
+	certificate: null
+};
 
+describe('a node built in code on main', function() {
 	/** A node on main in the mode given, as one a caller builds without the environment would. */
 	async function onMain(ledgerWriteMode: LedgerWriteMode): Promise<LocalNode> {
 		const { node } = await nodes.create({ ledgerWriteMode, genesis: 'absent' });
@@ -453,5 +454,29 @@ describe('a node built in code on main', function() {
 
 			await expect(node.run()).resolves.toBeUndefined();
 		});
+	});
+});
+
+describe('a node built in code voting on test, open to its peer-to-peer surface', function() {
+	async function votingOnTest(): Promise<LocalNode> {
+		const { node } = await nodes.create({ ledgerWriteMode: 'read-write', genesis: 'absent' });
+		node.config.network = KeetaNet.Client.Config.NetworkIDs.test;
+		return(node);
+	}
+
+	test('runs with manual peers, dialing them', async function() {
+		const node = await votingOnTest();
+		node.config.manualPeers = [PEER];
+		const dial = vi.spyOn(node.switch, 'addManualPeer');
+
+		await expect(node.run()).resolves.toBeUndefined();
+		expect(dial).toHaveBeenCalledWith(PEER);
+	});
+
+	test('runs with peers its store remembers', async function() {
+		const node = await votingOnTest();
+		await node.switch.config.kv.set('knownPeers', 'remembered', 'a peer');
+
+		await expect(node.run()).resolves.toBeUndefined();
 	});
 });

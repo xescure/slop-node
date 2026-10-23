@@ -92,9 +92,19 @@ type _EveryWriteModeListed = AssertNever<Exclude<LedgerWriteMode, typeof WRITE_M
 
 export const LEDGER_WRITE_MODES: readonly LedgerWriteMode[] = WRITE_MODES;
 
-/** The public networks, which a node may not vote on (closureToP2P). */
+/** The public networks, which a node only following reads by its bootstrap alone (closureToP2P), and which have their genesis. */
 export type PublicNetwork = Extract<Networks, 'main' | 'test'>;
 export const PUBLIC_NETWORKS: readonly PublicNetwork[] = ['main', 'test'];
+
+/**
+ * The networks of Keeta's a node may vote on with peers, as it does on its
+ * own. Upstream says of no network whether it admits a representative's
+ * votes, so they are named here. Keeta's main network does not admit this
+ * node's votes, so a node that votes is refused there; on dev and staging it
+ * votes only without peers (closureToP2P).
+ */
+export type PeerVotingNetwork = Extract<PublicNetwork, 'test'>;
+export const PEER_VOTING_NETWORKS: readonly PeerVotingNetwork[] = ['test'];
 
 /** The write mode a node votes and quotes in; in any other it does neither [Keeta TS] index.js:70058-70060, 71208-71210. */
 type VotingWriteMode = Extract<LedgerWriteMode, 'read-write'>;
@@ -112,13 +122,19 @@ function votesIn(mode: LedgerWriteMode): mode is VotingWriteMode {
 	}
 }
 
+function admitsVotes(network: Networks): network is PeerVotingNetwork {
+	return(PEER_VOTING_NETWORKS.some(function(candidate): boolean {
+		return(candidate === network);
+	}));
+}
+
 const NON_VOTING_WRITE_MODES: readonly LedgerWriteMode[] = WRITE_MODES.filter(function(mode): boolean {
 	return(!votesIn(mode));
 });
 
 /**
- * The variables that name peers. A node with peers on one of Keeta's
- * networks takes part in it, so there it may not vote.
+ * The variables that name peers. A node with peers on one of Keeta's networks
+ * takes part in it, so it votes there only where admitted (PEER_VOTING_NETWORKS).
  */
 export type PeerVariable = Extract<ConfigVariable, 'KEETANET_LOCAL_NODE_MANUAL_PEERS' | 'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS'>;
 export const PEER_VARIABLES: readonly PeerVariable[] = ['KEETANET_LOCAL_NODE_MANUAL_PEERS', 'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS'];
@@ -155,7 +171,7 @@ export type ConfigProblem =
 	| { readonly kind: 'conflicting'; readonly variables: readonly [ConfigVariable, ConfigVariable] }
 	| { readonly kind: 'fee-recipient-without-fee'; readonly variable: ConfigVariable }
 	| { readonly kind: 'too-many-fee-accounts'; readonly count: number; readonly maximum: number }
-	| { readonly kind: 'voting-on-public-network'; readonly network: PublicNetwork; readonly ledgerWriteMode: VotingWriteMode }
+	| { readonly kind: 'voting-on-main-network'; readonly ledgerWriteMode: VotingWriteMode }
 	| { readonly kind: 'peers-on-keeta-network'; readonly network: Networks; readonly ledgerWriteMode: VotingWriteMode; readonly variable: PeerVariable }
 	| { readonly kind: 'peers-on-public-network'; readonly network: PublicNetwork; readonly ledgerWriteMode: LedgerWriteMode }
 	| { readonly kind: 'remembered-peers'; readonly network: Networks; readonly ledgerWriteMode: LedgerWriteMode; readonly arenas: readonly PeerArena[] }
@@ -191,8 +207,8 @@ function describeProblem(problem: ConfigProblem): string {
 			return(`${problem.variable} says where fees go, but KEETANET_LOCAL_NODE_FEE_SCHEDULE charges nothing`);
 		case 'too-many-fee-accounts':
 			return(`KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX and KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX name ${String(problem.count)} fee accounts, but at most ${String(problem.maximum)} are derived`);
-		case 'voting-on-public-network':
-			return(`the ${problem.network} network is public, so the node may not vote on it: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to ${alternatives(NON_VOTING_WRITE_MODES)} (it is ${problem.ledgerWriteMode})`);
+		case 'voting-on-main-network':
+			return(`Keeta's main network does not admit this node's votes, so the node may not vote on it: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to ${alternatives(NON_VOTING_WRITE_MODES)} (it is ${problem.ledgerWriteMode})`);
 		case 'peers-on-keeta-network':
 			return(`the ${problem.network} network is Keeta's, so a node with peers on it may not vote: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to ${alternatives(NON_VOTING_WRITE_MODES)} (it is ${problem.ledgerWriteMode}), or leave ${problem.variable} unset`);
 		case 'peers-on-public-network':
@@ -937,8 +953,10 @@ function readFeePolicy(reader: EnvironmentReader): FeePolicy {
  * no /p2p WebSocket, refuses every message posted over HTTP, dials no peer
  * and starts with none remembered.
  *
- * A node that votes would carry its votes to its peers, so on Keeta's
- * networks it takes no peers at all, neither to dial nor to bootstrap from.
+ * A node that votes would carry its votes to its peers, so on a network of
+ * Keeta's that does not admit them it takes no peers at all, neither to dial
+ * nor to bootstrap from; on one that does (PEER_VOTING_NETWORKS) it peers as
+ * any representative does.
  * A node only following a public network reads it by its bootstrap over
  * HTTP alone, so that the follower beside the parity tools greets no one.
  * A node in no-voting mode is open on every network: it neither votes nor
@@ -955,6 +973,9 @@ function closureToP2P(network: NetworkSelection, ledgerWriteMode: LedgerWriteMod
 		return(undefined);
 	}
 	if (votesIn(ledgerWriteMode)) {
+		if (admitsVotes(network.alias)) {
+			return(undefined);
+		}
 		return({ because: 'it-votes', network: network.alias, ledgerWriteMode });
 	}
 	switch (ledgerWriteMode) {
@@ -1007,10 +1028,10 @@ function alternatives(words: readonly string[]): string {
 }
 
 /**
- * Where the network is closed to the node: one that votes is refused on a
- * public network, and on any other of Keeta's with peers; one that only
- * follows a public network may still bootstrap from peers, over HTTP, but
- * names none to dial.
+ * Where the network is closed to the node: one that votes is refused on
+ * Keeta's main network, and with peers on any other closed to it; one that
+ * only follows a public network may still bootstrap from peers, over HTTP,
+ * but names none to dial.
  */
 function refuseWhereClosed(reader: EnvironmentReader, network: NetworkSelection, ledgerWriteMode: LedgerWriteMode): void {
 	const closure = closureToP2P(network, ledgerWriteMode);
@@ -1019,9 +1040,8 @@ function refuseWhereClosed(reader: EnvironmentReader, network: NetworkSelection,
 	}
 	switch (closure.because) {
 		case 'it-votes': {
-			const publicNetwork = publicNetworkOf(network);
-			if (publicNetwork !== undefined) {
-				throw(new ConfigError({ kind: 'voting-on-public-network', network: publicNetwork, ledgerWriteMode: closure.ledgerWriteMode }));
+			if (closure.network === 'main') {
+				throw(new ConfigError({ kind: 'voting-on-main-network', ledgerWriteMode: closure.ledgerWriteMode }));
 			}
 			const variable = PEER_VARIABLES.find(function(candidate): boolean {
 				return(reader.isSet(candidate));
@@ -1065,8 +1085,8 @@ function readEndpoints(reader: EnvironmentReader, listen: ListenAddress): Advert
 
 /**
  * The node the environment describes, refused where its network is closed
- * to it (closureToP2P), so that it never votes on a public network nor
- * carries its votes to peers on any of Keeta's.
+ * to it (closureToP2P), so that it never votes on Keeta's main network nor
+ * carries its votes to peers on any of Keeta's that does not admit them.
  */
 export function getConfigFromEnv(environment: Environment): EnvironmentConfig {
 	const reader = new EnvironmentReader(environment);

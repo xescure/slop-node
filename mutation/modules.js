@@ -25,12 +25,13 @@ const CONFIG = 'src/node/config.ts';
 
 /**
  * The parts of config.ts that close a network to its peer-to-peer surface:
- * the public networks and the write mode that votes, the networks a node's
- * ID names, and the closure itself with its refusals. Each runs from the line
- * that is "from" to the first line that is "to" after the line "through", or
- * after "from". They are found by their text, so that an edit of config.ts
- * moves them along, and a part whose lines are not there, the first two once
- * each, stops the run (utils/mutation/modules.test.ts runs this in the suite).
+ * the public networks, those a node may vote on with peers and the write
+ * mode that votes, the networks a node's ID names, and the closure itself
+ * with its refusals. Each runs from the line that is "from" to the first line
+ * that is "to" after the line "through", or after "from". They are found by
+ * their text, so that an edit of config.ts moves them along, and a part whose
+ * lines are not there, the first two once each, stops the run
+ * (utils/mutation/modules.test.ts runs this in the suite).
  * @type {readonly { readonly from: string; readonly through?: string; readonly to: string }[]}
  */
 const CLOSURE_PARTS = [

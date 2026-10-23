@@ -113,13 +113,13 @@ export const CANARIES: readonly Canary[] = [
 		catchers: [caughtBy(P2P, 'peers over HTTP republish', 'refuses a greeting as the message from a sender greeting with \'its own key\', so a filter in it does not keep staples from that representative')]
 	},
 	{
-		name: 'voting-on-public-network',
+		name: 'voting-on-main-network',
 		fix: commit('2baa96f'),
-		reverts: 'a node that votes is accepted on main and test',
+		reverts: 'a node that votes is accepted on main, keeping to itself there as on dev and staging',
 		catchers: [
 			caughtBy(CONFIG, 'the safety rule', 'applies to the default write mode'),
 			caughtBy(CONFIG, 'the safety rule', '\'main\' in \'read-write\' mode, with peers: false'),
-			caughtBy(CONFIG, 'the safety rule', '\'test\' in \'read-write\' mode, with peers: false')
+			caughtBy(CONFIG, 'the safety rule', 'refuses a node voting on the ID of the main network in every spelling')
 		]
 	},
 	{

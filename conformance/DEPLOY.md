@@ -73,12 +73,19 @@ The values of `KEETANET_LOCAL_NODE_SEED`, `KEETANET_LOCAL_NODE_FEE_SEED`, `KEETA
 
 The node enforces these at start, before it serves anything. A node in `no-voting` mode neither votes nor quotes: the ledger refuses both in any mode but `read-write` [Keeta TS] index.js:70058-70060, 71208-71210.
 
-- On `main` and `test`, the public networks, the node may not vote: `KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE` must be `read-only`, `bootstrap-only` or `no-voting`.
+- On `main` the node may not vote: Keeta's main network does not admit this node's votes. `KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE` must be `read-only`, `bootstrap-only` or `no-voting`.
+- On `test` a node in `read-write` mode votes as a representative of its own: it takes manual, bootstrap and remembered peers, serves `/p2p` and handles posted messages, as a node in `no-voting` mode does.
 - On any other network of Keeta's (`dev` and `staging`), a node in `read-write` mode may have no peers: it refuses `KEETANET_LOCAL_NODE_MANUAL_PEERS`, `KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS`, and peers its database remembers. It then serves nothing on `/p2p` and refuses every posted message.
 - On `main` and `test` a node in `read-only` or `bootstrap-only` mode keeps its peer-to-peer surface closed: it refuses `KEETANET_LOCAL_NODE_MANUAL_PEERS` and peers its database remembers, serves nothing on `/p2p`, and refuses every posted message unread, so it never greets a peer back nor dials one. It reads those networks only by its bootstrap, over HTTP, from `KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS`.
 - A node in `no-voting` mode is open to peers on every network, `main` and `test` included: it takes manual, bootstrap and remembered peers, serves `/p2p` and handles posted messages. It adds the staples its peers and clients send it, and passes on only those it adds [Keeta TS] index.js:70399-70409, 72512-72536, 72543-72598.
-- Voting with peers is therefore possible on network 0 only, the operator's own network.
+- Voting with peers is therefore possible on `test` and on network 0, the operator's own network, only.
 - `genesis` is refused on `main` and `test`, and in memory.
+
+A representative's key is safe only with the one database it votes from, which the node cannot check, so the operator must keep to these:
+
+- **One database per key.** Before it votes, the node looks in its database for a vote of its own on another block with the same predecessor, and refuses if it finds one; it numbers its votes from a sequence in the same database [Keeta TS] index.js:70317-70340, 70377, 70388. A database wiped or restored from a backup while the key lives, or a second database with the same key, forgets those votes: the node can then vote for two competing blocks, or sign two votes with the same serial, which proves to anyone holding both that the representative misbehaved. A node in memory forgets them each time it stops, so a representative on `test` keeps its ledger in Postgres. After losing a representative's database, give the node a new key.
+- **The seed goes nowhere else.** Never give a representative's seed to an environment that runs a database of its own: no preview or pull-request environments of the hosting platform, no local run with the production seed. Use a seed made for that representative alone.
+- **Several processes on one database are safe**, as during a deploy that starts the new node before the old one stops: their transactions are serializable, and they take serials from the same sequence.
 
 ## 6. Running
 
