@@ -43,7 +43,7 @@ export default defineConfig({
 					name: 'devnet',
 					include: [DEVNET_TESTS],
 					exclude: [DEVNET_FAULT_TESTS],
-					poolOptions: { forks: { singleFork: true } },
+					maxWorkers: 1,
 					sequence: { groupOrder: 1 }
 				}
 			},
@@ -58,7 +58,7 @@ export default defineConfig({
 				test: {
 					name: 'devnet-faults',
 					include: [DEVNET_FAULT_TESTS],
-					poolOptions: { forks: { singleFork: true } },
+					maxWorkers: 1,
 					sequence: { groupOrder: 2 }
 				}
 			}
