@@ -124,8 +124,9 @@ function problemsOf(tests: readonly NamedTest[], problemOf: (test: NamedTest) =>
 
 /**
  * Clones HEAD, checks the canary still fits it, runs its named tests, which
- * must pass, then applies its patch, from the clone, and runs their files,
- * whose named tests must each fail by assertion.
+ * must pass, then applies its patch, from the clone, and runs them again,
+ * alone as before, so that each must fail by assertion of its own rather
+ * than by what another test of its file left behind.
  */
 async function runCanary(canary: Canary, scratch: string, root: string, commit: string): Promise<Verdict> {
 	await cloneAt(root, commit, scratch);
@@ -142,7 +143,7 @@ async function runCanary(canary: Canary, scratch: string, root: string, commit: 
 		return({ escapes: red, failed: [] });
 	}
 	await run('git', ['apply', patchOf(canary)], { cwd: scratch });
-	const report = await runTests(scratch, files, 'reverted');
+	const report = await runTests(scratch, files, 'reverted', namePatternOf(canary.catchers));
 	return({
 		escapes: problemsOf(canary.catchers, function(test): string | undefined {
 			return(escapeOf(report, test));
