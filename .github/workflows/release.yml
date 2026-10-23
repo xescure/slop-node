@@ -20,10 +20,10 @@ jobs:
           persist-credentials: false
       - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
       - id: release
-        uses: xescure/ci/.github/actions/release-images@d47d9d523d8c6eb7a8da2bec626ac0db30f58bae # main
+        uses: xescure/ci/.github/actions/release-images@24e1cd8300d1388705f3a5dcef0172f9d8c938a3 # main
         with:
           test-job: ""
-      - uses: xescure/ci/.github/actions/tag-images@d47d9d523d8c6eb7a8da2bec626ac0db30f58bae # main
+      - uses: xescure/ci/.github/actions/tag-images@24e1cd8300d1388705f3a5dcef0172f9d8c938a3 # main
         with:
           images: ${{ steps.release.outputs.images }}
           tags: ${{ github.ref_name }} latest
