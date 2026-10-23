@@ -10,6 +10,7 @@ import type { JSONSerializableObject } from '@keetanetwork/keetanet-client/lib/u
 import { P2PInternals } from '../upstream/internals.js';
 import { assertNever } from '../util/assert-never.js';
 import type { AssertNever } from '../util/assert-never.js';
+import { admittedWithoutQuorum } from './admitted-staples.js';
 import { bootstrapFrom, paceBootstrap } from './bootstrap-peers.js';
 import { computeFeeFromBlocksFor, parseFeeSchedule } from './fees.js';
 import type { FeeAccount, FeePolicy } from './fees.js';
@@ -1247,6 +1248,10 @@ export function localNodeConfig(config: EnvironmentConfig, resources: NodeResour
 	if (kv !== null) {
 		retval.p2p = { ...retval.p2p, kv };
 		retval.bootstrap = { kv };
+	}
+	const admitWithoutQuorum = admittedWithoutQuorum(config.network);
+	if (admitWithoutQuorum !== undefined) {
+		retval.ledger = { ...retval.ledger, admitWithoutQuorum };
 	}
 	bootstrapFrom(retval, config.bootstrapPeers);
 	paceBootstrap(retval, config.bootstrapMinIntervalMilliseconds);
