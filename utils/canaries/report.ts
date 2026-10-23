@@ -84,7 +84,8 @@ function errorsAt(object: JSONObject, name: string, where: string): ReportedErro
 	}));
 }
 
-const TIMEOUT = /^(Test|Hook) timed out in \d+ms/u;
+/** A test's or hook's own timeout, or vi.waitFor's and vi.waitUntil's when the code they wait on never answers [vitest 4.1.11] dist/chunks/test.DNmyFkvJ.js:3376, 3417. */
+const TIMEOUT = /^(?:(?:Test|Hook) timed out in \d+ms|Timed out in wait(?:For|Until)!)/u;
 
 const BROKEN = new Set(['SyntaxError', 'ReferenceError', 'TypeError']);
 
@@ -121,16 +122,11 @@ function describeError(error: ReportedError | undefined): string {
 
 function statusOf(state: string, where: string): TestResult['status'] {
 	switch (state) {
-		case 'pass':
-			return('passed');
-		case 'fail':
-			return('failed');
-		case 'skip':
-		case 'todo':
-			return('skipped');
-		case 'run':
-		case 'queued':
-		case 'only':
+		case 'passed':
+		case 'failed':
+		case 'skipped':
+			return(state);
+		case 'pending':
 			return('unfinished');
 		default:
 			throw(new Error(`${where}.state is not a test state: ${state}`));

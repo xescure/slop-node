@@ -160,11 +160,17 @@ afterAll(async function() {
 describe('the canary reporter', function() {
 	test('tells a timeout, a failed hook, an expectation and an error apart, as vitest runs them', { timeout: RUN_TIMEOUT }, async function() {
 		await write('src/kinds.test.ts', `
-			import { beforeEach, describe, expect, test } from 'vitest';
+			import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 			describe('kinds', function() {
 				test('hangs', async function() {
 					await new Promise(function() {});
+				});
+
+				test('waits', async function() {
+					await vi.waitFor(function() {
+						return(new Promise(function() {}));
+					}, { timeout: 100 });
 				});
 
 				test('expects', function() {
@@ -207,6 +213,7 @@ describe('the canary reporter', function() {
 				return([result.name.join(' > '), result.status, result.failure?.kind]);
 			})).toEqual([
 				['kinds > hangs', 'failed', 'timeout'],
+				['kinds > waits', 'failed', 'timeout'],
 				['kinds > expects', 'failed', 'assertion'],
 				['kinds > checks', 'failed', 'assertion'],
 				['kinds > ranges', 'failed', 'unknown'],

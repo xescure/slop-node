@@ -16,7 +16,7 @@ function canaryReport(files: Readonly<Record<string, readonly ReportedTest[]>>, 
 }
 
 function failed(name: readonly string[], errors: readonly ReportedError[], failedHooks: readonly string[] = []): ReportedTest {
-	return({ name, state: 'fail', errors, failedHooks });
+	return({ name, state: 'failed', errors, failedHooks });
 }
 
 function ran(name: readonly string[], state: string): ReportedTest {
@@ -36,9 +36,9 @@ describe('a canary\'s run', function() {
 	});
 
 	test('does not catch it when the named test passes, is skipped, never ended, or ran in another file or under another name', function() {
-		expect(escapeIn({ 'src/a.test.ts': [ran(NAMED.name, 'pass')] })).toBe('a block > a test passed');
-		expect(escapeIn({ 'src/a.test.ts': [ran(NAMED.name, 'skip')] })).toBe('a block > a test skipped');
-		expect(escapeIn({ 'src/a.test.ts': [ran(NAMED.name, 'run')] })).toBe('a block > a test unfinished');
+		expect(escapeIn({ 'src/a.test.ts': [ran(NAMED.name, 'passed')] })).toBe('a block > a test passed');
+		expect(escapeIn({ 'src/a.test.ts': [ran(NAMED.name, 'skipped')] })).toBe('a block > a test skipped');
+		expect(escapeIn({ 'src/a.test.ts': [ran(NAMED.name, 'pending')] })).toBe('a block > a test unfinished');
 		expect(escapeIn({ 'src/b.test.ts': [failed(NAMED.name, [{ name: 'AssertionError', message: 'no' }])] })).toBe('no test a block > a test ran in src/a.test.ts');
 		expect(escapeIn({ 'src/a.test.ts': [failed(['a block', 'another test'], [{ name: 'AssertionError', message: 'no' }])] })).toBe('no test a block > a test ran in src/a.test.ts');
 	});
@@ -60,9 +60,9 @@ describe('a canary\'s run', function() {
 			return(baselineProblemOf(parseRunReport(canaryReport(files), ROOT), NAMED));
 		}
 
-		expect(baselineOf({ 'src/a.test.ts': [ran(NAMED.name, 'pass')] })).toBeUndefined();
+		expect(baselineOf({ 'src/a.test.ts': [ran(NAMED.name, 'passed')] })).toBeUndefined();
 		expect(baselineOf({ 'src/a.test.ts': [failed(NAMED.name, [{ name: 'Error', message: 'connect ENOENT /tmp/postgres/socket' }], ['beforeEach'])] })).toBe('before the patch, a block > a test failed: Error: connect ENOENT /tmp/postgres/socket (in beforeEach)');
-		expect(baselineOf({ 'src/a.test.ts': [ran(NAMED.name, 'skip')] })).toBe('before the patch, a block > a test skipped');
+		expect(baselineOf({ 'src/a.test.ts': [ran(NAMED.name, 'skipped')] })).toBe('before the patch, a block > a test skipped');
 		expect(baselineOf({})).toBe('before the patch, no test a block > a test ran in src/a.test.ts');
 	});
 });
@@ -71,6 +71,8 @@ describe('a test\'s failure', function() {
 	test.each<[string, ReportedError | undefined, readonly string[], string]>([
 		['a test timeout', { name: 'Error', message: 'Test timed out in 5000ms.' }, [], 'timeout'],
 		['a hook timeout', { name: 'Error', message: 'Hook timed out in 10000ms.' }, ['beforeEach'], 'timeout'],
+		['vi.waitFor running out of time', { name: 'Error', message: 'Timed out in waitFor!' }, [], 'timeout'],
+		['vi.waitUntil running out of time', { name: 'Error', message: 'Timed out in waitUntil!' }, [], 'timeout'],
 		['an error in a hook', { name: 'AssertionError', message: 'expected 1 to be 2' }, ['afterEach'], 'hook'],
 		['a syntax error', { name: 'SyntaxError', message: 'Unexpected token' }, [], 'broken'],
 		['a reference error', { name: 'ReferenceError', message: 'x is not defined' }, [], 'broken'],
@@ -90,7 +92,7 @@ describe('a test\'s failure', function() {
 
 describe('the canary reporter\'s report', function() {
 	test('names each test by the file it ran in, relative to the tree, and the titles of its blocks and its own', function() {
-		const report = parseRunReport(canaryReport({ 'src/a.test.ts': [ran(['a block', 'an inner block', 'a test'], 'pass'), failed(['a lone test'], [{ name: 'AssertionError', message: 'no' }])] }), ROOT);
+		const report = parseRunReport(canaryReport({ 'src/a.test.ts': [ran(['a block', 'an inner block', 'a test'], 'passed'), failed(['a lone test'], [{ name: 'AssertionError', message: 'no' }])] }), ROOT);
 
 		expect(report.tests).toEqual([
 			{ file: 'src/a.test.ts', name: ['a block', 'an inner block', 'a test'], status: 'passed', failure: undefined },
