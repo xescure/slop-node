@@ -1,0 +1,41 @@
+Let the node admit named staples without the quorum check
+
+Why: Keeta's test network holds staples its representatives admitted with
+less than the quorum of delegated weight that add() requires
+[Keeta TS] index.js:70433-70436, 70776-70795: after one representative held
+more than two thirds of the weight on 2026-10-15, five staples on
+2026-10-16 carry only another's vote. No 0.18.8 ledger replaying the
+network adds them, so the node needs a way to take exactly those.
+Upstream status: the ledger configuration has no such option; votes are
+checked whatever the ledger write mode or the caller.
+Removal condition: upstream offers checkpoints, or another way to start a
+ledger past those staples, then delete this patch and the list it serves.
+
+Applies with "patch -p1" from the package root, after 0001, 0002 and 0003.
+
+--- a/client/index.js
++++ b/client/index.js
+@@ -70453,7 +70453,8 @@
+             }
+         }
+         const weightTiming = __classPrivateFieldGet(this, _LedgerAtomicInterface_ledger, "f").node?.timing.startTime('db-add.getWeight');
+-        const votesSufficient = await __classPrivateFieldGet(this, _LedgerAtomicInterface_instances, "m", _LedgerAtomicInterface_validateVotingWeight).call(this, votesAndBlocks.votes);
++        const admitWithoutQuorum = __classPrivateFieldGet(__classPrivateFieldGet(this, _LedgerAtomicInterface_ledger, "f"), _Ledger_config, "f").admitWithoutQuorum;
++        const votesSufficient = admitWithoutQuorum?.(votesAndBlocks) === true || await __classPrivateFieldGet(this, _LedgerAtomicInterface_instances, "m", _LedgerAtomicInterface_validateVotingWeight).call(this, votesAndBlocks.votes);
+         if (votesSufficient !== true) {
+             throw (new ledger_1.KeetaNetLedgerError('LEDGER_INSUFFICIENT_VOTING_WEIGHT', 'Votes attached do not represent enough voting power'));
+         }
+--- a/lib/ledger/index.d.ts
++++ b/lib/ledger/index.d.ts
+@@ -56,6 +56,11 @@
+      */
+     ledgerWriteMode?: 'bootstrap-only' | 'read-only' | 'read-write' | 'no-voting';
+     /**
++     * Whether add() takes a staple without checking that its votes carry
++     * a quorum of the delegated weight
++     */
++    admitWithoutQuorum?: (staple: VoteStaple) => boolean;
++    /**
+      * Timeout for storage operations
+      */
+     transactionRetries?: ({
