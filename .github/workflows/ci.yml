@@ -24,7 +24,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: xescure/ci/.github/workflows/nix-image.yml@3def945490e9e1743a59e0ad5e76ef991b9b43b8 # main
+    uses: xescure/ci/.github/workflows/nix-image.yml@24e1cd8300d1388705f3a5dcef0172f9d8c938a3 # main
     with:
       checks: help run-memory run-postgres closure image
       images: image
@@ -38,6 +38,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: xescure/ci/.github/workflows/pr-images.yml@3def945490e9e1743a59e0ad5e76ef991b9b43b8 # main
+    uses: xescure/ci/.github/workflows/pr-images.yml@24e1cd8300d1388705f3a5dcef0172f9d8c938a3 # main
     with:
       images: image
