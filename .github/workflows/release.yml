@@ -17,13 +17,13 @@ jobs:
           persist-credentials: false
       - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # 31.11.3
       - id: release
-        uses: xescure/ci/.github/actions/release-images@3def945490e9e1743a59e0ad5e76ef991b9b43b8 # main
+        uses: xescure/ci/.github/actions/release-images@13428d3b0c261dd457057dbf927b5f0983bb963f # main
         with:
           test-job: ""
-      - uses: xescure/ci/.github/actions/tag-images@3def945490e9e1743a59e0ad5e76ef991b9b43b8 # main
+      - uses: xescure/ci/.github/actions/tag-images@13428d3b0c261dd457057dbf927b5f0983bb963f # main
         with:
           images: ${{ steps.release.outputs.images }}
           tags: ${{ github.ref_name }} latest
-      - uses: xescure/ci/.github/actions/prod-branch@3def945490e9e1743a59e0ad5e76ef991b9b43b8 # main
+      - uses: xescure/ci/.github/actions/prod-branch@13428d3b0c261dd457057dbf927b5f0983bb963f # main
         with:
           commit: ${{ steps.release.outputs.commit }}
