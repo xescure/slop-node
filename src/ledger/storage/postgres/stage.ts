@@ -43,7 +43,7 @@ const countStaged: Statement<[], CountColumns> = statement('count_staged', `
 	SELECT count(*) AS staples, COALESCE(sum(octet_length(bytes)), 0) AS bytes FROM bootstrap_stage`);
 
 function stagedOf(row: StagedColumns): StagedStaple {
-	const bytes = row.bytes.buffer.slice(row.bytes.byteOffset, row.bytes.byteOffset + row.bytes.byteLength);
+	const bytes = new Uint8Array(row.bytes).buffer;
 	return({ key: row.blocks_hash.toString('hex').toUpperCase(), bytes, firstVote: row.first_vote_from, lastVote: row.last_vote_from });
 }
 
