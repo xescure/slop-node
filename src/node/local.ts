@@ -24,6 +24,7 @@ import { close, listen } from './server.js';
 import type { Listening, ListenTarget } from './server.js';
 import { NodeStats } from './stats.js';
 import { SwitchStore } from './switch-store.js';
+import { VerifiedPeerStore } from './verified-peers.js';
 import { recordNoTiming } from './timing.js';
 
 export type { ApiErrorResponse, LocalNodeConfig } from '@keetanetwork/keetanet-client/lib/node/local.js';
@@ -244,7 +245,7 @@ export class LocalNode extends ClientNode {
 		this.#connections = new SwitchConnections(this.switch, this.log);
 		this.#messages = new SwitchMessages(this.switch, this.log);
 		this.#switchStore = new SwitchStore(this.switch.config.kv);
-		this.switch.config.kv = this.#switchStore;
+		this.switch.config.kv = new VerifiedPeerStore(this.#switchStore);
 		// Outside production Express answers a failure that escapes every handler with its stack.
 		this.#app.set('env', 'production');
 	}
