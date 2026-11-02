@@ -121,6 +121,45 @@ describe('KEETANET_LOCAL_NODE_SEED', function() {
 		expect(problemOf({ KEETANET_LOCAL_NODE_SEED: '' })).toEqual({ kind: 'empty', variable: 'KEETANET_LOCAL_NODE_SEED' });
 	});
 
+	describe.each([
+		['main', 'bootstrap-only'],
+		['main', 'read-only'],
+		['test', 'bootstrap-only'],
+		['test', 'read-only']
+	])('on %s in %s mode, which greets no one and signs nothing', function(network, mode) {
+		const FOLLOWER: Environment = { KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: mode };
+
+		test('may be left out, for a key made at random each time the node starts', function() {
+			const first = parse({}, FOLLOWER).representative;
+			const second = parse({}, FOLLOWER).representative;
+			expect(first.hasPrivateKey).toBe(true);
+			expect(keyOf(first)).not.toBe(keyOf(second));
+		});
+
+		test('is used when given', function() {
+			expect(keyOf(parse({ KEETANET_LOCAL_NODE_SEED: SEED }, FOLLOWER).representative)).toBe(keyOf(lib.Account.fromSeed(SEED, 0)));
+		});
+
+		test('is required with KEETANET_LOCAL_NODE_SEED_INDEX, which names a key of the seed', function() {
+			expect(problemOf({ KEETANET_LOCAL_NODE_SEED_INDEX: '1' }, FOLLOWER)).toEqual({ kind: 'missing', variable: 'KEETANET_LOCAL_NODE_SEED' });
+		});
+	});
+
+	test.each([
+		['main', 'no-voting'],
+		['test', 'no-voting'],
+		['test', 'read-write'],
+		['dev', 'read-write'],
+		['dev', 'bootstrap-only']
+	])('is required on %s in %s mode, where peers or votes carry the key', function(network, mode) {
+		const environment: Environment = {
+			KEETANET_LOCAL_NODE_NETWORK: network,
+			KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: mode,
+			KEETANET_LOCAL_NODE_POSTGRES_URL: 'postgres://localhost/ledger'
+		};
+		expect(problemOf(environment, {})).toEqual({ kind: 'missing', variable: 'KEETANET_LOCAL_NODE_SEED' });
+	});
+
 	test('accepts upper-case hexadecimal', function() {
 		expect(keyOf(parse({ KEETANET_LOCAL_NODE_SEED: SEED.toUpperCase() }).representative)).toBe(keyOf(lib.Account.fromSeed(SEED, 0)));
 	});
