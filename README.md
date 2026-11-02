@@ -34,8 +34,6 @@ You also have the option to listen to incoming blocks without replicating the lo
 **A peering node is for actually participating in the Keeta network.** Your node will actively receive updates from the network, and it will forward these blocks to other nodes. This process creates more and more active copies of the ledger on independent servers. This is a crucial step towards building a robust and decentralized network.
 
 ```bash
-docker compose down
-
 # You can save it down, but for a peering node it's not essential
 echo "KEETANET_LOCAL_NODE_SEED=$(openssl rand -hex 32)" >> .env
 
@@ -56,8 +54,6 @@ docker compose up -d
 We're in the big leagues now. **Representatives are exclusively responsible for the network level security of Keeta.** They verify each block, signature, and operation that goes into the ledger. If you send a simple transfer of `1 $KTA`, underneath potentially dozens of reps will have verified that you had proper permissions, enough funds, and so on. Reps may earn (and redistribute) transaction fees on blocks they validate. However, this is **not enabled** on Keeta mainnet yet.
 
 ```bash
-docker compose down
-
 # Save this one down and also keep it secure!
 echo "KEETANET_LOCAL_NODE_SEED=$(openssl rand -hex 32)" >> .env
 
