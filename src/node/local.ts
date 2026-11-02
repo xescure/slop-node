@@ -232,6 +232,7 @@ export class LocalNode extends ClientNode {
 	readonly #connections: SwitchConnections;
 	readonly #messages: SwitchMessages;
 	readonly #switchStore: SwitchStore;
+	readonly #verifiedPeers: VerifiedPeerStore;
 	#bootstrap: BootstrapClient | undefined;
 	#running = false;
 	readonly #peerLimits: PeerLimits;
@@ -245,7 +246,8 @@ export class LocalNode extends ClientNode {
 		this.#connections = new SwitchConnections(this.switch, this.log);
 		this.#messages = new SwitchMessages(this.switch, this.log);
 		this.#switchStore = new SwitchStore(this.switch.config.kv);
-		this.switch.config.kv = new VerifiedPeerStore(this.#switchStore);
+		this.#verifiedPeers = new VerifiedPeerStore(this.#switchStore);
+		this.switch.config.kv = this.#verifiedPeers;
 		// Outside production Express answers a failure that escapes every handler with its stack.
 		this.#app.set('env', 'production');
 	}
@@ -379,6 +381,7 @@ export class LocalNode extends ClientNode {
 		this.#messages.open();
 		try {
 			await this.#refusePeersWhereClosed();
+			await this.#verifiedPeers.repair();
 			await super.run();
 			const target = listenTarget(this.config);
 			if (target !== undefined && needsAdvertising(this.config) && isUnspecifiedAddress(target.host)) {

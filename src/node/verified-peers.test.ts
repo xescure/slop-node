@@ -99,3 +99,33 @@ describe('every other write', function() {
 		expect(await underlying.get('potentialPeers', REP4.key)).toEqual(unsignedRecordOf(REP4));
 	});
 });
+
+describe('repairing the known peers', function() {
+	test('replaces a record without a signature by the greeting signed by its key', async function() {
+		const { underlying, store, ready } = storeWith([['knownPeers', REP4.key, unsignedRecordOf(REP4)], ['potentialPeers', REP4.key, REP4]]);
+		await ready;
+
+		await store.repair();
+
+		expect(await underlying.get('knownPeers', REP4.key)).toEqual(REP4);
+	});
+
+	test('leaves a record without a signature whose peer has not greeted, or greeted signed by another key', async function() {
+		const { underlying, store, ready } = storeWith([['knownPeers', REP4.key, unsignedRecordOf(REP4)], ['knownPeers', REP2.key, unsignedRecordOf(REP2)], ['potentialPeers', REP2.key, REP4]]);
+		await ready;
+
+		await store.repair();
+
+		expect(await underlying.get('knownPeers', REP4.key)).toEqual(unsignedRecordOf(REP4));
+		expect(await underlying.get('knownPeers', REP2.key)).toEqual(unsignedRecordOf(REP2));
+	});
+
+	test('leaves a signed record', async function() {
+		const { underlying, store, ready } = storeWith([['knownPeers', REP4.key, REP4], ['potentialPeers', REP4.key, REP2]]);
+		await ready;
+
+		await store.repair();
+
+		expect(await underlying.get('knownPeers', REP4.key)).toEqual(REP4);
+	});
+});

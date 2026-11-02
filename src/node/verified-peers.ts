@@ -40,6 +40,21 @@ export class VerifiedPeerStore implements KVStorageProviderAPI {
 		this.#store = store;
 	}
 
+	/**
+	 * Records anew each known peer without a signature, for a store whose
+	 * records were written before this one kept greetings: the switch dials
+	 * no manual peer it is still connected to [Keeta TS] index.js:73813-73821,
+	 * so such a record would otherwise be kept as it is.
+	 */
+	async repair(): Promise<void> {
+		const known = await this.#store.getAll('knownPeers');
+		for (const [key, value] of Object.entries(known)) {
+			if (signedBy(key, value) === undefined) {
+				await this.set('knownPeers', key, value);
+			}
+		}
+	}
+
 	async set(arena: string, key: string, value: JSONSerializable | undefined, options?: KVSetOptionsType): Promise<void> {
 		await this.#store.set(arena, key, await this.#recorded(arena, key, value), options);
 	}

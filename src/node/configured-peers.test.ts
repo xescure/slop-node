@@ -186,6 +186,35 @@ describe('peers configured through the environment', function() {
 		expect(representativeKeys(await restarted.node.switch.peers())).toEqual([keyOf(first.representative)]);
 	});
 
+	test('are listed after a restart that finds a record without a signature beside the greeting signed by the peer', async function() {
+		const first = await nodes.start(await nodes.environmentFor('memory'));
+		const environment = await nodes.environmentFor('postgres', SECOND);
+		const second = await nodes.start({ ...environment, KEETANET_LOCAL_NODE_MANUAL_PEERS: await peerSettingOf(first, true) });
+		await second.node.switch.wait();
+		await second.stop();
+
+		// As a node that recorded the peer before it kept greetings left its store.
+		const advertisement = await first.node.switch.getOutgoingGreetingInfo();
+		const peer = manualPeerOf(advertisement);
+		if (peer === undefined) {
+			throw(new Error('the node advertises no valid peer record'));
+		}
+		const key = keyOf(peer.key);
+		const storage = openStorage(getConfigFromEnv(environment, NO_REPRESENTATIVES).storage);
+		if (storage.kind !== 'postgres') {
+			throw(new Error('the node keeps no store of its own'));
+		}
+		await storage.kv.set('knownPeers', key, P2PInternals.P2PPeerToJSO({ kind: peer.kind, key: peer.key, endpoints: peer.endpoints, preferUpdates: peer.preferUpdates, certificate: null }));
+		await storage.kv.set('potentialPeers', key, advertisement);
+		await closeStorage(storage);
+		// Gone, so that no new greeting records it again.
+		await first.stop();
+
+		const restarted = await nodes.start(environment);
+
+		expect(representativeKeys(await restarted.node.switch.peers())).toEqual([keyOf(first.representative)]);
+	});
+
 	/*
 	 * The switch closes its connections as it stops [Keeta TS] index.js:73811-73821,
 	 * but unregisters each, writing to its store, only once the socket has
