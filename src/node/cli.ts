@@ -43,7 +43,7 @@ const COMMAND_HELP: Readonly<Record<Command, string>> = {
 };
 
 const VARIABLE_HELP: Readonly<Record<ConfigVariable, string>> = {
-	KEETANET_LOCAL_NODE_SEED: 'the representative\'s seed, 64 hexadecimal digits (required)',
+	KEETANET_LOCAL_NODE_SEED: 'the representative\'s seed, 64 hexadecimal digits (required, except in read-only or bootstrap-only mode on main or test: a random key)',
 	KEETANET_LOCAL_NODE_SEED_INDEX: 'the index of its key under the seed (0)',
 	KEETANET_LOCAL_NODE_LOG_LEVEL: 'ALL, DEBUG, INFO, WARN, ERROR or NONE (INFO)',
 	KEETANET_LOCAL_NODE_LOG_FILTER: 'log only entries matching this regular expression',

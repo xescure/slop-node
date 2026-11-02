@@ -62,6 +62,7 @@
               pkgs.jq
               pkgs.git
               pkgs.gnupatch
+              pkgs.openssl
               (pkgs.lib.getBin pkgs.postgresql_18)
             ];
           };

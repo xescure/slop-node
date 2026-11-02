@@ -24,6 +24,17 @@ jobs:
         with:
           images: ${{ steps.release.outputs.images }}
           tags: ${{ github.ref_name }} latest
+      # The release's compose.yaml names its own version, so that a node runs
+      # the release its file came from until a newer file is downloaded,
+      # however often it pulls.
+      - name: Publish compose.yaml
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          sed -i "s|ghcr.io/xescure/slop-node:latest|ghcr.io/xescure/slop-node:${TAG}|" compose.yaml
+          grep -q "ghcr.io/xescure/slop-node:${TAG}" compose.yaml
+          gh release create "$TAG" compose.yaml --verify-tag --generate-notes
       - uses: xescure/ci/.github/actions/prod-branch@33f7e0ee3bc0326c13d103b4b0aaaa43b38a93ec # main
         with:
           commit: ${{ steps.release.outputs.commit }}
