@@ -5,6 +5,7 @@ import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { getConfigFromEnv, localNodeConfig, publicOnly } from '../node/config.js';
 import type { Environment, EnvironmentConfig } from '../node/config.js';
 import { LocalNode } from '../node/local.js';
+import type { LimitedLocalNodeConfig } from '../node/local.js';
 import { closeStorage, nodeResourcesOf, openStorage } from '../node/storage.js';
 import { assertNever } from '../util/assert-never.js';
 import { deriveTestKeys, NO_REPRESENTATIVES, TEST_NETWORK_SEEDS } from './network.js';
@@ -78,12 +79,16 @@ export function endpointOf(apiURL: string, representative: Account): Representat
 	return({ host: new URL(apiURL).host, representative: publicOnly(representative) });
 }
 
+/** What a node is configured with beside its environment. */
+export type NodeSettings = Pick<LimitedLocalNodeConfig, 'discoveryPeriodMilliseconds'>;
+
 export type SDKNodes = {
 	/** A fresh database of the migrated template, dropped after the test. */
 	readonly database: () => Promise<TestDatabase>;
 	/** The environment of a node keeping its ledger in a fresh store of that kind. */
 	readonly environmentFor: (storage: StorageUnderTest, extra?: Environment) => Promise<Environment>;
-	readonly start: (environment: Environment) => Promise<ServingNode>;
+	/** Starts a node of the environment, with the configuration's own settings given beside it. */
+	readonly start: (environment: Environment, settings?: NodeSettings) => Promise<ServingNode>;
 	/** A client of the official SDK that knows only that representative. */
 	readonly userClient: (endpoint: RepresentativeEndpoint, signer: Account | null) => UserClient;
 };
@@ -126,10 +131,11 @@ export function useSDKNodes(): SDKNodes {
 		}
 	}
 
-	async function start(environment: Environment): Promise<ServingNode> {
+	async function start(environment: Environment, settings: NodeSettings = {}): Promise<ServingNode> {
 		const config = getConfigFromEnv(environment, NO_REPRESENTATIVES);
 		const storage = openStorage(config.storage);
-		const node = new LocalNode(localNodeConfig(config, nodeResourcesOf(storage, new lib.Log())));
+		// Onto the configuration itself: bootstrapFrom and paceBootstrap keep their settings by that object.
+		const node = new LocalNode(Object.assign(localNodeConfig(config, nodeResourcesOf(storage, new lib.Log())), settings));
 		let stopping: Promise<void> | undefined;
 		const stop = function(): Promise<void> {
 			stopping ??= node.stop().finally(function() {

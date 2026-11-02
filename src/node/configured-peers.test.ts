@@ -215,6 +215,18 @@ describe('peers configured through the environment', function() {
 		expect(representativeKeys(await restarted.node.switch.peers())).toEqual([keyOf(first.representative)]);
 	});
 
+	test('learned of are dialed, and known once the node connects to them', async function() {
+		const first = await nodes.start(await nodes.environmentFor('memory'));
+		const second = await nodes.start(await nodes.environmentFor('memory', SECOND), { discoveryPeriodMilliseconds: 50 });
+
+		// As the peers' exchange of advertisements leaves one.
+		await second.node.switch.config.kv.set('potentialPeers', keyOf(first.representative), await first.node.switch.getOutgoingGreetingInfo());
+
+		await vi.waitFor(async function() {
+			expect(representativeKeys(await second.node.switch.peers())).toEqual([keyOf(first.representative)]);
+		}, { timeout: 5000, interval: 50 });
+	});
+
 	/*
 	 * The switch closes its connections as it stops [Keeta TS] index.js:73811-73821,
 	 * but unregisters each, writing to its store, only once the socket has

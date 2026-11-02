@@ -1,12 +1,11 @@
 diff --git a/src/node/local.ts b/src/node/local.ts
-index 7d00447..012b188 100644
 --- a/src/node/local.ts
 +++ b/src/node/local.ts
-@@ -238,7 +238,6 @@ export class LocalNode extends ClientNode {
+@@ -247,7 +247,6 @@
  	constructor(config: LimitedLocalNodeConfig) {
  		super(withoutManualPeers(config));
  		this.config = config;
 -		recordNoTiming(this.timing);
  		this.stats = new NodeStats(config.stats);
  		this.#peerLimits = config.peerLimits ?? DEFAULT_PEER_LIMITS;
- 		this.#connections = new SwitchConnections(this.switch, this.log);
+ 		this.#discoveryPeriodMilliseconds = config.discoveryPeriodMilliseconds ?? DISCOVERY_PERIOD_MILLISECONDS;

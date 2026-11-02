@@ -11,7 +11,7 @@ function isObject(value: JSONSerializable | undefined): value is JSONSerializabl
 }
 
 /** The record, if it is a representative's advertisement signed by the key it is filed under. */
-function signedBy(key: string, value: JSONSerializable | undefined): JSONSerializableObject | undefined {
+export function signedBy(key: string, value: JSONSerializable | undefined): JSONSerializableObject | undefined {
 	if (!isObject(value)) {
 		return(undefined);
 	}

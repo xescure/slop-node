@@ -25,12 +25,17 @@ import type { Listening, ListenTarget } from './server.js';
 import { NodeStats } from './stats.js';
 import { SwitchStore } from './switch-store.js';
 import { VerifiedPeerStore } from './verified-peers.js';
+import { DISCOVERY_PERIOD_MILLISECONDS, DiscoveredPeerDialer } from './discovered-peers.js';
 import { recordNoTiming } from './timing.js';
 
 export type { ApiErrorResponse, LocalNodeConfig } from '@keetanetwork/keetanet-client/lib/node/local.js';
 
-/** Upstream's configuration of the node, and how much it takes from peers at once, DEFAULT_PEER_LIMITS unless given. */
-export type LimitedLocalNodeConfig = LocalNodeConfig & { peerLimits?: PeerLimits };
+/**
+ * Upstream's configuration of the node, how much it takes from peers at
+ * once, DEFAULT_PEER_LIMITS unless given, and how often it dials the peers it
+ * discovered, DISCOVERY_PERIOD_MILLISECONDS unless given.
+ */
+export type LimitedLocalNodeConfig = LocalNodeConfig & { peerLimits?: PeerLimits; discoveryPeriodMilliseconds?: number };
 
 const lib = KeetaNet.lib;
 
@@ -234,8 +239,10 @@ export class LocalNode extends ClientNode {
 	readonly #switchStore: SwitchStore;
 	readonly #verifiedPeers: VerifiedPeerStore;
 	#bootstrap: BootstrapClient | undefined;
+	#discovery: DiscoveredPeerDialer | undefined;
 	#running = false;
 	readonly #peerLimits: PeerLimits;
+	readonly #discoveryPeriodMilliseconds: number;
 
 	constructor(config: LimitedLocalNodeConfig) {
 		super(withoutManualPeers(config));
@@ -243,6 +250,7 @@ export class LocalNode extends ClientNode {
 		recordNoTiming(this.timing);
 		this.stats = new NodeStats(config.stats);
 		this.#peerLimits = config.peerLimits ?? DEFAULT_PEER_LIMITS;
+		this.#discoveryPeriodMilliseconds = config.discoveryPeriodMilliseconds ?? DISCOVERY_PERIOD_MILLISECONDS;
 		this.#connections = new SwitchConnections(this.switch, this.log);
 		this.#messages = new SwitchMessages(this.switch, this.log);
 		this.#switchStore = new SwitchStore(this.switch.config.kv);
@@ -400,6 +408,7 @@ export class LocalNode extends ClientNode {
 			for (const peer of this.config.manualPeers ?? []) {
 				this.switch.addManualPeer(peer);
 			}
+			this.#discovery = this.#startDiscovery();
 			this.#bootstrap = this.#startBootstrap();
 		} catch (error) {
 			this.#running = false;
@@ -428,6 +437,25 @@ export class LocalNode extends ClientNode {
 		if (arenas.length > 0) {
 			throw(new LocalNodeError({ kind: 'remembered-peers-on-closed-network', network, arenas }));
 		}
+	}
+
+	/** A node open to peers also dials those it learns of, but none it is configured with, nor itself. */
+	#startDiscovery(): DiscoveredPeerDialer | undefined {
+		if (!this.#openToPeers()) {
+			return(undefined);
+		}
+		const excluded = new Set((this.config.manualPeers ?? []).flatMap(function(peer): string[] {
+			if (!('key' in peer)) {
+				return([]);
+			}
+			return([peer.key.publicKeyString.get()]);
+		}));
+		if (this.config.ledgerPrivateKey !== undefined) {
+			excluded.add(this.config.ledgerPrivateKey.publicKeyString.get());
+		}
+		const discovery = new DiscoveredPeerDialer(this.switch, excluded, this.log);
+		discovery.start(this.#discoveryPeriodMilliseconds);
+		return(discovery);
 	}
 
 	#openToPeers(): boolean {
@@ -485,6 +513,7 @@ export class LocalNode extends ClientNode {
 	 * connections refuse its dial, and the detached store takes its writes.
 	 */
 	override async stop(): Promise<void> {
+		this.#discovery?.stop();
 		await this.#bootstrap?.stop();
 		const peers = this.#peers;
 		this.#peers = undefined;

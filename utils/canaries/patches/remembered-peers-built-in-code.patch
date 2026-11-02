@@ -1,8 +1,7 @@
 diff --git a/src/node/local.ts b/src/node/local.ts
-index 7d00447..045d7d9 100644
 --- a/src/node/local.ts
 +++ b/src/node/local.ts
-@@ -420,10 +420,6 @@ export class LocalNode extends ClientNode {
+@@ -433,10 +433,6 @@
  		if (peers > 0) {
  			throw(new LocalNodeError({ kind: 'manual-peers-on-closed-network', network, peers }));
  		}
@@ -12,4 +11,4 @@ index 7d00447..045d7d9 100644
 -		}
  	}
  
- 	#openToPeers(): boolean {
+ 	/** A node open to peers also dials those it learns of, but none it is configured with, nor itself. */
