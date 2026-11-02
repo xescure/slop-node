@@ -9,6 +9,7 @@
 #                             A replica greets no one and signs nothing, so it needs none.
 #   SLOP_NODE_DOMAIN          peer, rep: the DNS name other nodes reach this one at.
 #   CLOUDFLARE_TUNNEL_TOKEN   cloudflare: the tunnel's token; route the tunnel's hostname to http://node:8080.
+#   KEETANET_LOCAL_NODE_LOG_LEVEL  ALL, DEBUG, INFO, WARN, ERROR or NONE (INFO).
 #
 # Each node finds Keeta's representatives for its network by itself. Run one
 # at a time. A replica refuses to start on a database that a peer has
@@ -53,6 +54,7 @@ x-postgres: &postgres
 
 x-main-network: &main-network
   KEETANET_LOCAL_NODE_NETWORK: main
+  KEETANET_LOCAL_NODE_LOG_LEVEL: ${KEETANET_LOCAL_NODE_LOG_LEVEL:-INFO}
   KEETANET_LOCAL_NODE_POSTGRES_URL: postgres://slop-node:${SLOP_NODE_POSTGRES_PASSWORD:-slop-node}@postgres/ledger
 
 services:
@@ -115,6 +117,7 @@ services:
         condition: service_healthy
     environment:
       KEETANET_LOCAL_NODE_NETWORK: test
+      KEETANET_LOCAL_NODE_LOG_LEVEL: ${KEETANET_LOCAL_NODE_LOG_LEVEL:-INFO}
       KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: read-write
       KEETANET_LOCAL_NODE_SEED: ${KEETANET_LOCAL_NODE_SEED:-}
       KEETANET_LOCAL_NODE_POSTGRES_URL: postgres://slop-node:${SLOP_NODE_POSTGRES_PASSWORD:-slop-node}@postgres-test/ledger
