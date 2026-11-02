@@ -1104,6 +1104,19 @@ function refuseVotesInMemory(network: NetworkSelection, ledgerWriteMode: LedgerW
 	}
 }
 
+/**
+ * The node's key. A node that only follows a public network greets no one
+ * and signs nothing (closureToP2P), so a key made at random each time it
+ * starts serves it as well as one of a seed.
+ */
+function readRepresentative(reader: EnvironmentReader, network: NetworkSelection, ledgerWriteMode: LedgerWriteMode): Account {
+	const seedGiven = reader.isSet('KEETANET_LOCAL_NODE_SEED') || reader.isSet('KEETANET_LOCAL_NODE_SEED_INDEX');
+	if (!seedGiven && closureToP2P(network, ledgerWriteMode)?.because === 'it-follows') {
+		return(lib.Account.fromSeed(lib.Account.generateRandomSeed(), 0));
+	}
+	return(readSeedAccount(reader, 'KEETANET_LOCAL_NODE_SEED', 'KEETANET_LOCAL_NODE_SEED_INDEX'));
+}
+
 /** A node on every interface cannot derive an address peers can reach, so both endpoints must be given. */
 function readEndpoints(reader: EnvironmentReader, listen: ListenAddress): AdvertisedEndpoints {
 	const endpoints: AdvertisedEndpoints = {
@@ -1145,7 +1158,7 @@ export function getConfigFromEnv(environment: Environment): EnvironmentConfig {
 	const storage = reader.read<StorageChoice>('KEETANET_LOCAL_NODE_POSTGRES_URL', parsePostgresURL, { kind: 'memory' });
 	refuseVotesInMemory(network, ledgerWriteMode, storage);
 
-	const representative = readSeedAccount(reader, 'KEETANET_LOCAL_NODE_SEED', 'KEETANET_LOCAL_NODE_SEED_INDEX');
+	const representative = readRepresentative(reader, network, ledgerWriteMode);
 	const listen: ListenAddress = {
 		ip: reader.read('KEETANET_LOCAL_NODE_LISTEN_IP', parseListenIP, DEFAULT_LISTEN.ip),
 		port: reader.read('KEETANET_LOCAL_NODE_LISTEN_PORT', parseListenPort, DEFAULT_LISTEN.port)

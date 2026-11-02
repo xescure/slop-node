@@ -1,12 +1,11 @@
 diff --git a/src/node/config.ts b/src/node/config.ts
-index 88f566a..8bdc761 100644
 --- a/src/node/config.ts
 +++ b/src/node/config.ts
-@@ -1141,7 +1141,6 @@ export function getConfigFromEnv(environment: Environment): EnvironmentConfig {
+@@ -1156,7 +1156,6 @@
  	const ledgerWriteMode = reader.read('KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE', parseLedgerWriteMode, DEFAULT_LEDGER_WRITE_MODE);
  	refuseWhereClosed(reader, network, ledgerWriteMode);
  	const storage = reader.read<StorageChoice>('KEETANET_LOCAL_NODE_POSTGRES_URL', parsePostgresURL, { kind: 'memory' });
 -	refuseVotesInMemory(network, ledgerWriteMode, storage);
  
- 	const representative = readSeedAccount(reader, 'KEETANET_LOCAL_NODE_SEED', 'KEETANET_LOCAL_NODE_SEED_INDEX');
+ 	const representative = readRepresentative(reader, network, ledgerWriteMode);
  	const listen: ListenAddress = {

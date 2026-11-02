@@ -30,7 +30,7 @@ What a deployment usually sets:
 
 | Variable | |
 |---|---|
-| `KEETANET_LOCAL_NODE_SEED` | The representative's seed. Secret. |
+| `KEETANET_LOCAL_NODE_SEED` | The representative's seed. Secret. A node in `read-only` or `bootstrap-only` mode on `main` or `test` greets no one and signs nothing, so without a seed it makes a key at random each time it starts. |
 | `KEETANET_INITIAL_TRUSTED_ACCOUNT` | The network's trusted account, a public key. Required on `local`. |
 | `KEETANET_LOCAL_NODE_NETWORK` | `local` (network 0, the default), `dev`, `staging`, `test`, `main`, or the numeric ID of one of them. |
 | `KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE` | `read-write` (default), `no-voting`, `bootstrap-only` or `read-only`. |
