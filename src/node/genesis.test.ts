@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { requireAt } from '../ledger/storage/suite/support.js';
-import { deriveTestKeys, TEST_NETWORK_SEEDS } from '../testing/network.js';
+import { deriveTestKeys, NO_REPRESENTATIVES, TEST_NETWORK_SEEDS } from '../testing/network.js';
 import { ConfigError, getConfigFromEnv, localNodeConfig } from './config.js';
 import type { ConfigProblem, Environment, EnvironmentConfig } from './config.js';
 import { addGenesis, GenesisError, getGenesisConfigFromEnv } from './genesis.js';
@@ -29,7 +29,7 @@ const GENESIS: Environment = {
 
 function settingsFor(extra: Environment, node: Environment = NODE): GenesisSettings {
 	const environment = { ...node, ...GENESIS, ...extra };
-	return(getGenesisConfigFromEnv(environment, getConfigFromEnv(environment)));
+	return(getGenesisConfigFromEnv(environment, getConfigFromEnv(environment, NO_REPRESENTATIVES)));
 }
 
 function problemOf(extra: Environment, node: Environment = NODE): ConfigProblem {
@@ -139,11 +139,11 @@ function nodeOf(config: EnvironmentConfig): LocalNode {
 
 describe('adding genesis', function() {
 	const environment: Environment = { ...NODE, ...GENESIS };
-	const config: EnvironmentConfig = { ...getConfigFromEnv(environment), storage: { kind: 'memory' } };
+	const config: EnvironmentConfig = { ...getConfigFromEnv(environment, NO_REPRESENTATIVES), storage: { kind: 'memory' } };
 
 	test('funds the trusted account, delegated to the representative', async function() {
 		const node = nodeOf(config);
-		const settings = getGenesisConfigFromEnv(environment, getConfigFromEnv(environment));
+		const settings = getGenesisConfigFromEnv(environment, getConfigFromEnv(environment, NO_REPRESENTATIVES));
 		const staple = await addGenesis(node, settings);
 		const blocks = staple.blocks.map(function(block): string {
 			return(block.account.publicKeyString.get());
@@ -190,7 +190,7 @@ describe('adding genesis', function() {
 
 	test('is refused once the network has it', async function() {
 		const node = nodeOf(config);
-		const settings = getGenesisConfigFromEnv(environment, getConfigFromEnv(environment));
+		const settings = getGenesisConfigFromEnv(environment, getConfigFromEnv(environment, NO_REPRESENTATIVES));
 		await addGenesis(node, settings);
 		await expect(addGenesis(node, settings)).rejects.toThrow(GenesisError);
 		await node.stop();

@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import { getConfigFromEnv } from '../node/config.js';
+import { CLIENT_REPRESENTATIVES, getConfigFromEnv } from '../node/config.js';
 import type { Environment, EnvironmentConfig } from '../node/config.js';
 import { assertNever } from '../util/assert-never.js';
 
@@ -215,7 +215,7 @@ export class FollowerSafetyError extends Error {
  * pace, it dials no one, and no one else can reach it.
  */
 export function checkFollowerEnvironment(environment: Environment): EnvironmentConfig {
-	const config = getConfigFromEnv(environment);
+	const config = getConfigFromEnv(environment, CLIENT_REPRESENTATIVES);
 	const problems: string[] = [];
 	if (config.network.kind !== 'known' || config.network.alias !== 'main') {
 		problems.push('it must follow the main network');

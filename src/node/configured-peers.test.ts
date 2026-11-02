@@ -2,7 +2,7 @@ import { describe, expect, onTestFinished, test, vi } from 'vitest';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { P2PConnection, P2PPeer, P2PSwitch } from '@keetanetwork/keetanet-client/lib/p2p.js';
-import { TEST_NETWORK_SEEDS } from '../testing/network.js';
+import { NO_REPRESENTATIVES, TEST_NETWORK_SEEDS } from '../testing/network.js';
 import { useSDKNodes } from '../testing/sdk.js';
 import type { ServingNode } from '../testing/sdk.js';
 import { startSilentPeer } from '../testing/silent-peer.js';
@@ -125,7 +125,7 @@ function logConnections(): ConnectionLog {
 describe('peers configured through the environment', function() {
 	test('are dialed only once the node runs, so that it greets them with where it listens', async function() {
 		const first = await nodes.start(await nodes.environmentFor('memory'));
-		const config = getConfigFromEnv(await nodes.environmentFor('memory', { ...SECOND, KEETANET_LOCAL_NODE_MANUAL_PEERS: await peerSettingOf(first, true) }));
+		const config = getConfigFromEnv(await nodes.environmentFor('memory', { ...SECOND, KEETANET_LOCAL_NODE_MANUAL_PEERS: await peerSettingOf(first, true) }), NO_REPRESENTATIVES);
 		const second = new LocalNode(localNodeConfig(config, { storageDriver: new MemoryLedgerStorage(), kv: null, log: new lib.Log() }));
 		onTestFinished(function() {
 			return(second.stop());
@@ -147,18 +147,18 @@ describe('peers configured through the environment', function() {
 	/*
 	 * After dialing, the switch records a manual peer as given
 	 * [Keeta TS] index.js:74790-74793, and reads back as known only a record
-	 * that carries a valid signature [Keeta TS] index.js:73680-73684, 72976-73015;
-	 * the peer's own greeting leaves it among the unverified ones
-	 * [Keeta TS] index.js:74711-74715.
+	 * that carries a valid signature [Keeta TS] index.js:73680-73684, 72976-73015.
+	 * The peer's greeting is signed by its own key, which proves the record.
 	 */
-	test('without a signature are reached, but stay unverified', async function() {
+	test('without a signature are reached, and verified by the advertisement they greet with', async function() {
 		const first = await nodes.start(await nodes.environmentFor('memory'));
 		const second = await nodes.start(await nodes.environmentFor('memory', { ...SECOND, KEETANET_LOCAL_NODE_MANUAL_PEERS: await peerSettingOf(first, false) }));
 
 		await second.node.switch.wait();
 
-		expect(await second.node.switch.peers()).toEqual([]);
-		expect(representativeKeys(await second.node.switch.peers({ includeUnverified: true }))).toEqual([keyOf(first.representative)]);
+		const [verified, ...others] = await second.node.switch.peers();
+		expect(others).toEqual([]);
+		expect(verified).toEqual(manualPeerOf(await first.node.switch.getOutgoingGreetingInfo()));
 		expect(representativeKeys(await first.node.switch.peers({ includeUnverified: true }))).toEqual([keyOf(second.representative)]);
 	});
 
@@ -215,7 +215,7 @@ describe('peers configured through the environment', function() {
 	test('still waiting for a greeting are closed as the node stops, so that nothing is written to a closed store', async function() {
 		const connections = logConnections();
 		const peer = await startSilentPeer(lib.Account.fromSeed(TEST_NETWORK_SEEDS.representative, 1));
-		const config = getConfigFromEnv(await nodes.environmentFor('postgres', { KEETANET_LOCAL_NODE_MANUAL_PEERS: peer.setting }));
+		const config = getConfigFromEnv(await nodes.environmentFor('postgres', { KEETANET_LOCAL_NODE_MANUAL_PEERS: peer.setting }), NO_REPRESENTATIVES);
 		const storage = openStorage(config.storage);
 		if (storage.kind !== 'postgres') {
 			throw(new Error('the node keeps no store in Postgres'));

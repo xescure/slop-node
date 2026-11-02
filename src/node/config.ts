@@ -1,6 +1,6 @@
 import { isIP } from 'node:net';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import type { Networks } from '@keetanetwork/keetanet-client/config/index.js';
+import type { Networks, Representative } from '@keetanetwork/keetanet-client/config/index.js';
 import type { Account, GenericAccount, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { LedgerConfig } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { LogTargetLevel } from '@keetanetwork/keetanet-client/lib/log/index.js';
@@ -191,7 +191,7 @@ export type ConfigProblem =
 	| { readonly kind: 'remembered-peers'; readonly network: Networks; readonly ledgerWriteMode: LedgerWriteMode; readonly arenas: readonly PeerArena[] }
 	| { readonly kind: 'peers-in-memory' }
 	| { readonly kind: 'history-in-memory' }
-	| { readonly kind: 'automatic-peers' }
+	| { readonly kind: 'automatic-peers'; readonly variable: PeerVariable; readonly because: 'local-network' | 'listed-with-others' }
 	| { readonly kind: 'peer-signature-invalid'; readonly key: string }
 	| { readonly kind: 'duplicate-peer'; readonly key: string }
 	| { readonly kind: 'peer-is-self'; readonly key: string }
@@ -236,7 +236,14 @@ function describeProblem(problem: ConfigProblem): string {
 		case 'history-in-memory':
 			return('reindex-history needs KEETANET_LOCAL_NODE_POSTGRES_URL: a node in memory writes its history anew each time it starts');
 		case 'automatic-peers':
-			return(`KEETANET_LOCAL_NODE_MANUAL_PEERS=auto is not supported: this node finds no peers by itself, so list each as ${MANUAL_PEER_FORM}`);
+			switch (problem.because) {
+				case 'local-network':
+					return(`${problem.variable}=auto names the representatives the client knows for the network, and it knows none for the local network: list each peer instead`);
+				case 'listed-with-others':
+					return(`${problem.variable}=auto stands alone: give auto, or list each peer`);
+				default:
+					return(assertNever(problem.because));
+			}
 		case 'peer-signature-invalid':
 			return(`KEETANET_LOCAL_NODE_MANUAL_PEERS gives ${problem.key} a signature that does not cover the key, endpoints and preference written with it`);
 		case 'duplicate-peer':
@@ -700,6 +707,70 @@ function parsePreferUpdates(text: string): P2PUpdateOptions {
 
 const AUTOMATIC_PEERS = 'auto';
 
+/**
+ * Whether a list of peers is "auto", which names the representatives the
+ * client knows for the network (knownRepresentatives) and stands alone.
+ */
+function isAutomatic(variable: PeerVariable, entries: readonly string[]): boolean {
+	const automatic = entries.some(function(entry): boolean {
+		return(entry.toLowerCase() === AUTOMATIC_PEERS);
+	});
+	if (automatic && entries.length > 1) {
+		throw(new ConfigError({ kind: 'automatic-peers', variable, because: 'listed-with-others' }));
+	}
+	return(automatic);
+}
+
+/** Keeta's representatives on each of its networks, which "auto" names, and which a node names when it is given no peers. */
+export type KnownRepresentatives = (network: Networks) => readonly Representative[];
+
+/** The representatives the client knows for each of Keeta's networks [Keeta TS] index.js:62358-62400. */
+export const CLIENT_REPRESENTATIVES: KnownRepresentatives = function(network: Networks): readonly Representative[] {
+	return(NetworkConfig.getDefaultConfig(network).representatives);
+};
+
+/** The representatives known for the network; none are known for the local one. */
+function knownRepresentatives(variable: PeerVariable, network: NetworkSelection, representatives: KnownRepresentatives): readonly Representative[] {
+	switch (network.kind) {
+		case 'local':
+			throw(new ConfigError({ kind: 'automatic-peers', variable, because: 'local-network' }));
+		case 'known':
+			return(representatives(network.alias));
+		default:
+			return(assertNever(network));
+	}
+}
+
+function apiOf(known: Representative): string {
+	return(known.endpoints.api);
+}
+
+/**
+ * The peers of a node that names none: on one of Keeta's networks, the
+ * representatives known for it, as "auto" names them. The node dials them
+ * where the network is open to its peer-to-peer surface, and catches up from
+ * them there and where it only follows the network (closureToP2P); where it
+ * votes alone it has no peers.
+ */
+function peersByDefault(network: NetworkSelection, ledgerWriteMode: LedgerWriteMode, representatives: KnownRepresentatives): { readonly manual: ManualPeer[]; readonly bootstrap: string[] } {
+	if (network.kind === 'local') {
+		return({ manual: [], bootstrap: [] });
+	}
+	const known = representatives(network.alias);
+	const closure = closureToP2P(network, ledgerWriteMode);
+	if (closure === undefined) {
+		return({ manual: known.map(unsignedPeerOf), bootstrap: known.map(apiOf) });
+	}
+	switch (closure.because) {
+		case 'it-follows':
+			return({ manual: [], bootstrap: known.map(apiOf) });
+		case 'it-votes':
+			return({ manual: [], bootstrap: [] });
+		default:
+			return(assertNever(closure));
+	}
+}
+
 /** The fields after the key, which are the endpoints, then optionally the preference and the signature. */
 const MIN_PEER_FIELDS = 2;
 const MAX_PEER_FIELDS = 4;
@@ -745,22 +816,33 @@ function parseManualPeer(entry: string): ManualPeer {
 }
 
 /** Entries are separated by commas; space around them and empty ones are ignored, as in the list of fee accounts. */
-function parseManualPeers(text: string, representative: Account): ManualPeer[] {
+/**
+ * A representative the client knows, as a peer without a signature: its
+ * greeting, signed by its own key, proves it (VerifiedPeerStore).
+ */
+function unsignedPeerOf(known: Representative): ManualPeer {
+	return({ kind: lib.Node.Kind.REPRESENTATIVE, key: known.key, endpoints: { api: known.endpoints.api, p2p: known.endpoints.p2p }, preferUpdates: DEFAULT_PREFER_UPDATES, certificate: null });
+}
+
+/** The peers a list names: those it writes out, or "auto"'s. */
+function namedPeers(variable: PeerVariable, entries: readonly string[], network: NetworkSelection, representatives: KnownRepresentatives): ManualPeer[] {
+	if (isAutomatic(variable, entries)) {
+		return(knownRepresentatives(variable, network, representatives).map(unsignedPeerOf));
+	}
+	return(entries.map(parseManualPeer));
+}
+
+function parseManualPeers(text: string, representative: Account, network: NetworkSelection, representatives: KnownRepresentatives): ManualPeer[] {
 	const variable = 'KEETANET_LOCAL_NODE_MANUAL_PEERS';
 	const entries = text.split(',').map(function(entry): string {
 		return(entry.trim());
 	}).filter(function(entry): boolean {
 		return(entry !== '');
 	});
-	if (entries.some(function(entry): boolean {
-		return(entry.toLowerCase() === AUTOMATIC_PEERS);
-	})) {
-		throw(new ConfigError({ kind: 'automatic-peers' }));
-	}
 	if (entries.length === 0) {
 		throw(invalid(variable, `a comma-separated list of ${MANUAL_PEER_FORM}`, text));
 	}
-	const peers = entries.map(parseManualPeer);
+	const peers = namedPeers(variable, entries, network, representatives);
 	const seen = new Set<string>();
 	for (const peer of peers) {
 		const key = peer.key.publicKeyString.get();
@@ -791,14 +873,18 @@ function parseBootstrapPeer(entry: string): string {
 }
 
 /** Entries are separated by commas; space around them and empty ones are ignored, and so is an endpoint given twice. */
-function parseBootstrapPeers(text: string): string[] {
+function parseBootstrapPeers(text: string, network: NetworkSelection, representatives: KnownRepresentatives): string[] {
+	const variable = 'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS';
 	const entries = text.split(',').map(function(entry): string {
 		return(entry.trim());
 	}).filter(function(entry): boolean {
 		return(entry !== '');
 	});
 	if (entries.length === 0) {
-		throw(invalid('KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS', `a comma-separated list, each ${BOOTSTRAP_PEER_FORM}`, text));
+		throw(invalid(variable, `a comma-separated list, each ${BOOTSTRAP_PEER_FORM}`, text));
+	}
+	if (isAutomatic(variable, entries)) {
+		return(knownRepresentatives(variable, network, representatives).map(apiOf));
 	}
 	return([...new Set(entries.map(parseBootstrapPeer))]);
 }
@@ -1145,7 +1231,7 @@ function readEndpoints(reader: EnvironmentReader, listen: ListenAddress): Advert
  * carries its votes to peers where its rule (VOTING_RULES) is to vote alone,
  * and refused voting with peers in memory.
  */
-export function getConfigFromEnv(environment: Environment): EnvironmentConfig {
+export function getConfigFromEnv(environment: Environment, representatives: KnownRepresentatives): EnvironmentConfig {
 	const reader = new EnvironmentReader(environment);
 	const unknown = reader.unknownNodeVariable();
 	if (unknown !== undefined) {
@@ -1159,6 +1245,7 @@ export function getConfigFromEnv(environment: Environment): EnvironmentConfig {
 	refuseVotesInMemory(network, ledgerWriteMode, storage);
 
 	const representative = readRepresentative(reader, network, ledgerWriteMode);
+	const byDefault = peersByDefault(network, ledgerWriteMode, representatives);
 	const listen: ListenAddress = {
 		ip: reader.read('KEETANET_LOCAL_NODE_LISTEN_IP', parseListenIP, DEFAULT_LISTEN.ip),
 		port: reader.read('KEETANET_LOCAL_NODE_LISTEN_PORT', parseListenPort, DEFAULT_LISTEN.port)
@@ -1178,9 +1265,11 @@ export function getConfigFromEnv(environment: Environment): EnvironmentConfig {
 		endpoints: readEndpoints(reader, listen),
 		preferUpdates: reader.read('KEETANET_LOCAL_NODE_PREFER_UPDATES', parsePreferUpdates, DEFAULT_PREFER_UPDATES),
 		manualPeers: reader.read('KEETANET_LOCAL_NODE_MANUAL_PEERS', function(text: string): ManualPeer[] {
-			return(parseManualPeers(text, representative));
-		}, []),
-		bootstrapPeers: reader.read('KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS', parseBootstrapPeers, []),
+			return(parseManualPeers(text, representative, network, representatives));
+		}, byDefault.manual),
+		bootstrapPeers: reader.read('KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS', function(text: string): string[] {
+			return(parseBootstrapPeers(text, network, representatives));
+		}, byDefault.bootstrap),
 		bootstrapMinIntervalMilliseconds: reader.read('KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS', parseBootstrapMinInterval, defaultBootstrapMinInterval(network)),
 		peerLimits: readPeerLimits(reader),
 		fee: readFeePolicy(reader),

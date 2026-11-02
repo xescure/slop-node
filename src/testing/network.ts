@@ -5,6 +5,8 @@ import type { Block } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { Ledger, LedgerConfig, LedgerStorageAPI } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { Node, NodeConfig } from '@keetanetwork/keetanet-client/lib/node/index.js';
 import type { FeeAmountAndToken, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
+import type { Representative } from '@keetanetwork/keetanet-client/config/index.js';
+import type { KnownRepresentatives } from '../node/config.js';
 import { assertNever } from '../util/assert-never.js';
 
 const lib = KeetaNet.lib;
@@ -19,6 +21,11 @@ export type TestNetworkSeeds = {
 	readonly trustedRoot: string;
 	readonly representative: string;
 	readonly user: string;
+};
+
+/** Keeta's representatives for no network, so that a node under test reaches none of them. */
+export const NO_REPRESENTATIVES: KnownRepresentatives = function(): readonly Representative[] {
+	return([]);
 };
 
 export const TEST_NETWORK_SEEDS: TestNetworkSeeds = {

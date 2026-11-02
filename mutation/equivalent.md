@@ -574,16 +574,16 @@ connection outlives the connection. The entries are:
 - src/api/p2p.ts:88:9-88:34 ConditionalExpression "true" equivalent: an absent TTL is not at least 1, so the message is not relayed either way.
 - src/api/p2p.ts:131:3-132:22 ConditionalExpression "default:" equivalent: without its return the default falls out of the switch, and the function answers undefined all the same.
 - src/node/config.ts:135:3-136:30 ConditionalExpression "default:" equivalent: the default of a switch that has handled every write mode is unreachable.
-- src/node/config.ts:567:3-568:22 ConditionalExpression "case 'local':" equivalent: a local selection falling through to the case of the known networks names no alias, which no public network matches, so it still names none.
-- src/node/config.ts:573:3-574:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
-- src/node/config.ts:999:4-1000:31 ConditionalExpression "default:" equivalent: the default of a switch that has handled every voting rule is unreachable.
-- src/node/config.ts:1014:3-1015:41 ConditionalExpression "default:" equivalent: the default of a switch that has handled every write mode is unreachable.
-- src/node/config.ts:1050:6-1050:22 EqualityOperator "words.length <= 2" equivalent: alternatives is given one word or three, never two: the write modes that do not vote, and those of them open on a network, which are no-voting alone on main and test and three on dev and staging.
-- src/node/config.ts:1051:21-1051:23 StringLiteral "\"Stryker was here!\"" equivalent: a list of fewer than two words places no separator.
-- src/node/config.ts:1053:69-1053:71 StringLiteral "\"Stryker was here!\"" equivalent: the last word alone places no separator.
-- src/node/config.ts:1085:3-1086:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both reasons for a closure is unreachable.
-- src/node/config.ts:1099:66-1099:90 ConditionalExpression "false" equivalent: a local selection let through has no alias, whose rule is none, so it is not one that votes with peers and is still not refused.
-- src/node/config.ts:1099:83-1099:90 StringLiteral "\"\"" equivalent: no selection is of the kind "", so a local one is let through, and having no alias, whose rule is none, is still not refused.
+- src/node/config.ts:574:3-575:22 ConditionalExpression "case 'local':" equivalent: a local selection falling through to the case of the known networks names no alias, which no public network matches, so it still names none.
+- src/node/config.ts:580:3-581:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
+- src/node/config.ts:1085:4-1086:31 ConditionalExpression "default:" equivalent: the default of a switch that has handled every voting rule is unreachable.
+- src/node/config.ts:1100:3-1101:41 ConditionalExpression "default:" equivalent: the default of a switch that has handled every write mode is unreachable.
+- src/node/config.ts:1136:6-1136:22 EqualityOperator "words.length <= 2" equivalent: alternatives is given one word or three, never two: the write modes that do not vote, and those of them open on a network, which are no-voting alone on main and test and three on dev and staging.
+- src/node/config.ts:1137:21-1137:23 StringLiteral "\"Stryker was here!\"" equivalent: a list of fewer than two words places no separator.
+- src/node/config.ts:1139:69-1139:71 StringLiteral "\"Stryker was here!\"" equivalent: the last word alone places no separator.
+- src/node/config.ts:1171:3-1172:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both reasons for a closure is unreachable.
+- src/node/config.ts:1185:66-1185:90 ConditionalExpression "false" equivalent: a local selection let through has no alias, whose rule is none, so it is not one that votes with peers and is still not refused.
+- src/node/config.ts:1185:83-1185:90 StringLiteral "\"\"" equivalent: no selection is of the kind "", so a local one is let through, and having no alias, whose rule is none, is still not refused.
 - src/node/connections.ts:21:4-21:22 OptionalChaining "resolvePromise()" equivalent: a promise's executor runs as the promise is built, so the resolver is always set by the time it is called.
 - src/node/connections.ts:80:9-80:26 ConditionalExpression "true" equivalent: closing a connection already aborted only marks it aborted again and closes a socket that is already closing [Keeta TS] index.js:73565-73573, which does nothing.
 - src/node/connections.ts:105:7-105:28 ConditionalExpression "true" equivalent: for a connection already tracked, the connection is not among those released, and #track answers its entry as it is.
@@ -607,12 +607,12 @@ client's reason where the variable is not secret. The entries are:
   same.
 
 - src/node/admitted-staples.ts:37:6-37:30 ConditionalExpression "true" equivalent: a local selection has no alias, and the staples of no alias are none, so it still admits none.
-- src/node/config.ts:254:3-255:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of problem is unreachable.
-- src/node/config.ts:588:3-589:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
-- src/node/config.ts:721:15-721:17 StringLiteral "\"Stryker was here!\"" equivalent: a peer reaches this line only with at least two fields after its key, so the API endpoint is always given.
-- src/node/config.ts:721:25-721:27 StringLiteral "\"Stryker was here!\"" equivalent: a peer reaches this line only with at least two fields after its key, so the p2p endpoint is always given.
-- src/node/config.ts:837:3-838:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
-- src/node/config.ts:962:3-963:34 ConditionalExpression "default:" equivalent: the default of a switch that has handled both fee schedules is unreachable.
-- src/node/config.ts:1194:3-1195:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
-- src/node/config.ts:1206:3-1207:36 ConditionalExpression "default:" equivalent: the default of a switch that has handled both ways of receiving updates is unreachable.
-- src/node/config.ts:1253:6-1253:38 ConditionalExpression "true" equivalent: assigning an absent hook leaves admitWithoutQuorum undefined, which add() calls as undefined?.() and so checks the quorum [Keeta TS] index.js:70434.
+- src/node/config.ts:261:3-262:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of problem is unreachable.
+- src/node/config.ts:595:3-596:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
+- src/node/config.ts:792:15-792:17 StringLiteral "\"Stryker was here!\"" equivalent: a peer reaches this line only with at least two fields after its key, so the API endpoint is always given.
+- src/node/config.ts:792:25-792:27 StringLiteral "\"Stryker was here!\"" equivalent: a peer reaches this line only with at least two fields after its key, so the p2p endpoint is always given.
+- src/node/config.ts:923:3-924:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
+- src/node/config.ts:1048:3-1049:34 ConditionalExpression "default:" equivalent: the default of a switch that has handled both fee schedules is unreachable.
+- src/node/config.ts:1283:3-1284:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
+- src/node/config.ts:1295:3-1296:36 ConditionalExpression "default:" equivalent: the default of a switch that has handled both ways of receiving updates is unreachable.
+- src/node/config.ts:1342:6-1342:38 ConditionalExpression "true" equivalent: assigning an absent hook leaves admitWithoutQuorum undefined, which add() calls as undefined?.() and so checks the quorum [Keeta TS] index.js:70434.

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { deriveTestKeys, TEST_NETWORK_SEEDS } from '../testing/network.js';
+import { deriveTestKeys, NO_REPRESENTATIVES, TEST_NETWORK_SEEDS } from '../testing/network.js';
 import { KVInternals } from '../upstream/internals.js';
 import { ConfigError, getConfigFromEnv } from './config.js';
 import type { ConfigProblem, Environment } from './config.js';
@@ -23,7 +23,7 @@ async function storeWith(arenas: readonly PeerArena[]): Promise<Store> {
 
 async function problemOf(environment: Environment, kv: Store): Promise<ConfigProblem | undefined> {
 	try {
-		await refuseRememberedPeers(getConfigFromEnv({ ...NODE, ...environment }), kv);
+		await refuseRememberedPeers(getConfigFromEnv({ ...NODE, ...environment }, NO_REPRESENTATIVES), kv);
 	} catch (error: unknown) {
 		if (error instanceof ConfigError) {
 			return(error.problem);
@@ -57,13 +57,13 @@ describe('a node that may not have peers on its network', function() {
 	test('tells a node following main to forget the peers it remembers, or to peer in the one mode open there', async function() {
 		const kv = await storeWith(['knownPeers']);
 		const environment = { KEETANET_LOCAL_NODE_NETWORK: 'main', KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'bootstrap-only' };
-		await expect(refuseRememberedPeers(getConfigFromEnv({ ...NODE, ...environment }), kv)).rejects.toThrow('the main network is closed to the node\'s peers in its write mode, and the store of KEETANET_LOCAL_NODE_POSTGRES_URL remembers peers (in knownPeers), which the node would reach even without KEETANET_LOCAL_NODE_MANUAL_PEERS: run "slop-node clear-peers" with the same environment to forget them, or set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to no-voting (it is bootstrap-only)');
+		await expect(refuseRememberedPeers(getConfigFromEnv({ ...NODE, ...environment }, NO_REPRESENTATIVES), kv)).rejects.toThrow('the main network is closed to the node\'s peers in its write mode, and the store of KEETANET_LOCAL_NODE_POSTGRES_URL remembers peers (in knownPeers), which the node would reach even without KEETANET_LOCAL_NODE_MANUAL_PEERS: run "slop-node clear-peers" with the same environment to forget them, or set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to no-voting (it is bootstrap-only)');
 	});
 
 	test('names every arena that remembers a peer, and how to forget them', async function() {
 		const kv = await storeWith(['knownPeers', 'lastSeenPeers']);
 		const environment = { KEETANET_LOCAL_NODE_NETWORK: 'dev' };
-		await expect(refuseRememberedPeers(getConfigFromEnv({ ...NODE, ...environment }), kv)).rejects.toThrow('the dev network is closed to the node\'s peers in its write mode, and the store of KEETANET_LOCAL_NODE_POSTGRES_URL remembers peers (in knownPeers, lastSeenPeers), which the node would reach even without KEETANET_LOCAL_NODE_MANUAL_PEERS: run "slop-node clear-peers" with the same environment to forget them, or set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to read-only, bootstrap-only or no-voting (it is read-write)');
+		await expect(refuseRememberedPeers(getConfigFromEnv({ ...NODE, ...environment }, NO_REPRESENTATIVES), kv)).rejects.toThrow('the dev network is closed to the node\'s peers in its write mode, and the store of KEETANET_LOCAL_NODE_POSTGRES_URL remembers peers (in knownPeers, lastSeenPeers), which the node would reach even without KEETANET_LOCAL_NODE_MANUAL_PEERS: run "slop-node clear-peers" with the same environment to forget them, or set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to read-only, bootstrap-only or no-voting (it is read-write)');
 	});
 
 	test('starts when no arena remembers a peer', async function() {

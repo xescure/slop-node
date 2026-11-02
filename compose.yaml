@@ -10,11 +10,10 @@
 #   SLOP_NODE_DOMAIN          peer, rep: the DNS name other nodes reach this one at.
 #   CLOUDFLARE_TUNNEL_TOKEN   cloudflare: the tunnel's token; route the tunnel's hostname to http://node:8080.
 #
-# The nodes are services of their own rather than one with a switch, because
-# a replica on main refuses KEETANET_LOCAL_NODE_MANUAL_PEERS even when it is
-# empty. Run one at a time. A replica refuses to start on a database that a
-# peer has remembered peers in: run `docker compose run --rm peer clear-peers`
-# once before going back.
+# Each node finds Keeta's representatives for its network by itself. Run one
+# at a time. A replica refuses to start on a database that a peer has
+# remembered peers in: run `docker compose run --rm peer clear-peers` once
+# before going back.
 
 name: slop-node
 
@@ -52,15 +51,9 @@ x-postgres: &postgres
     timeout: 5s
     retries: 10
 
-# The representatives Keeta's client library names for the main network.
 x-main-network: &main-network
   KEETANET_LOCAL_NODE_NETWORK: main
   KEETANET_LOCAL_NODE_POSTGRES_URL: postgres://slop-node:${SLOP_NODE_POSTGRES_PASSWORD:-slop-node}@postgres/ledger
-  KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: >-
-    https://rep1.main.network.api.keeta.com/api,
-    https://rep2.main.network.api.keeta.com/api,
-    https://rep3.main.network.api.keeta.com/api,
-    https://rep4.main.network.api.keeta.com/api
 
 services:
   postgres:
@@ -108,17 +101,12 @@ services:
       # Compose would demand ${...:?} of a replica too, which has no seed; the
       # node refuses the empty value itself, naming the variable.
       KEETANET_LOCAL_NODE_SEED: ${KEETANET_LOCAL_NODE_SEED:-}
-      KEETANET_LOCAL_NODE_MANUAL_PEERS: >-
-        keeta_aabwip6zeo2fnzfxp5hssrrqtascs2277w2zk7vqd6d3k3m4dkt2flcbca2mqki@https://rep1.main.network.api.keeta.com/api|wss://rep1.main.network.api.keeta.com/p2p,
-        keeta_aabvmwxttv4q56gbfveighwfwp3yvitlrdfsacic3ckqc7lqelsspvmhc7oldmq@https://rep2.main.network.api.keeta.com/api|wss://rep2.main.network.api.keeta.com/p2p,
-        keeta_aabwqf5fnta4t2v2atieis545b3rqoq6z7x5w3geugiilqlz5jdsb5og2rmxvdq@https://rep3.main.network.api.keeta.com/api|wss://rep3.main.network.api.keeta.com/p2p,
-        keeta_aablpogflko72eusdhuuqgsto2rwcvy2m5mo5snmvrmbacz3qczwjtwpmzf5ufq@https://rep4.main.network.api.keeta.com/api|wss://rep4.main.network.api.keeta.com/p2p
       # Peers keep the endpoints this node signs: give it a name that stays.
       KEETANET_LOCAL_NODE_ENDPOINT_API: https://${SLOP_NODE_DOMAIN:-SLOP_NODE_DOMAIN is unset}/api
       KEETANET_LOCAL_NODE_ENDPOINT_P2P: wss://${SLOP_NODE_DOMAIN:-SLOP_NODE_DOMAIN is unset}/p2p
 
   # Votes on the test network, the only one of Keeta's where this node votes
-  # with peers, with the representatives the client library names for it.
+  # with peers.
   rep:
     <<: [*node, *public]
     profiles: [rep]
@@ -130,12 +118,6 @@ services:
       KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: read-write
       KEETANET_LOCAL_NODE_SEED: ${KEETANET_LOCAL_NODE_SEED:-}
       KEETANET_LOCAL_NODE_POSTGRES_URL: postgres://slop-node:${SLOP_NODE_POSTGRES_PASSWORD:-slop-node}@postgres-test/ledger
-      KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: >-
-        https://rep1.test.network.api.keeta.com/api,
-        https://rep2.test.network.api.keeta.com/api
-      KEETANET_LOCAL_NODE_MANUAL_PEERS: >-
-        keeta_aabi4bd3f7jrt67mxcq44ozj65bh4bp2mygmrkedxggu2rxwn2ztuw3b6exivbq@https://rep1.test.network.api.keeta.com/api|wss://rep1.test.network.api.keeta.com/p2p,
-        keeta_aabf7dz5asq2n2lrldct33x2ww65cophxp7egfiixbb7tbyat5r3kcbcez7ftpi@https://rep2.test.network.api.keeta.com/api|wss://rep2.test.network.api.keeta.com/p2p
       KEETANET_LOCAL_NODE_ENDPOINT_API: https://${SLOP_NODE_DOMAIN:-SLOP_NODE_DOMAIN is unset}/api
       KEETANET_LOCAL_NODE_ENDPOINT_P2P: wss://${SLOP_NODE_DOMAIN:-SLOP_NODE_DOMAIN is unset}/p2p
 

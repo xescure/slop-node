@@ -7,6 +7,7 @@ import { getConfigFromEnv } from '../node/config.js';
 import type { Environment } from '../node/config.js';
 import { checkFollowerEnvironment, DEFAULT_FOLLOWER_SETTINGS, defaultFollowerDirectory, followerDirectory, followerEnvironment, MAINNET_REPRESENTATIVE_APIS, parseFollowerCommand, readOrCreateSeed } from './follower-config.js';
 import type { FollowerSettings } from './follower-config.js';
+import { NO_REPRESENTATIVES } from '../testing/network.js';
 
 const SEED = '6a1fc1bb5c0b0e2d4f6b8d0a2c4e6f8a0b2d4f6a8c0e2a4c6e8a0c2e4a6c8e0a';
 const DATABASE_URL = 'postgresql://slop@%2Fhome%2Fslop%2F.local%2Fshare%2Fslop-node-follower%2Frun:5432/follower';
@@ -81,7 +82,7 @@ describe('the follower\'s node', function() {
 		expect(config.bootstrapMinIntervalMilliseconds).toBe(1000);
 		expect(config.listen).toEqual({ ip: '127.0.0.1', port: SETTINGS.port });
 		expect(config.initialTrustedAccount.publicKeyString.get()).toBe('keeta_aabk62tezl4whordlviamlx3zrdgux6lk63cghay45vkzdatyemzvqqjuj5resa');
-		expect(getConfigFromEnv(environment())).toEqual(config);
+		expect(getConfigFromEnv(environment(), NO_REPRESENTATIVES)).toEqual(config);
 	});
 
 	test.each<[string, Environment, RegExp]>([
@@ -91,12 +92,15 @@ describe('the follower\'s node', function() {
 		['no-voting, which the node would open to peers', { KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'no-voting' }, /must be bootstrap-only \(it is no-voting\)/],
 		['manual peers', { KEETANET_LOCAL_NODE_MANUAL_PEERS: `keeta_aabwip6zeo2fnzfxp5hssrrqtascs2277w2zk7vqd6d3k3m4dkt2flcbca2mqki@https://rep1.main.network.api.keeta.com/api|wss://rep1.main.network.api.keeta.com/p2p` }, /manual peers|MANUAL_PEERS/],
 		['a source that is no mainnet representative', { KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: 'https://rep.example/api' }, /https:\/\/rep\.example\/api/],
-		['no sources', { KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: undefined }, /bootstraps from no representative/],
 		['every interface', { KEETANET_LOCAL_NODE_LISTEN_IP: '0.0.0.0', KEETANET_LOCAL_NODE_ENDPOINT_API: 'http://follower.example/api', KEETANET_LOCAL_NODE_ENDPOINT_P2P: 'ws://follower.example/p2p' }, /127\.0\.0\.1/],
 		['requests that are not paced', { KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS: '0' }, /pac/],
 		['a ledger in memory', { KEETANET_LOCAL_NODE_POSTGRES_URL: undefined }, /Postgres/]
 	])('refuses %s', function(_ignoredName, change, message) {
 		expect(refusal({ ...environment(), ...change })).toMatch(message);
+	});
+
+	test('catches up from the main network\'s representatives the client knows when given no sources', function() {
+		expect(checkFollowerEnvironment({ ...environment(), KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: undefined }).bootstrapPeers).toEqual(MAINNET_APIS);
 	});
 
 	test('never sets a variable that would make it vote, publish, dial or advertise', function() {

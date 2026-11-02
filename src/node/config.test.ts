@@ -7,10 +7,10 @@ import type { JSONSerializableObject } from '@keetanetwork/keetanet-client/lib/u
 import { PostgresKVStorage } from '../kv/postgres.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { requireAt } from '../ledger/storage/suite/support.js';
-import { deriveTestKeys, TEST_NETWORK_SEEDS } from '../testing/network.js';
+import { deriveTestKeys, NO_REPRESENTATIVES, TEST_NETWORK_SEEDS } from '../testing/network.js';
 import { bootstrapEndpointsOf, bootstrapPacingOf } from './bootstrap-peers.js';
-import { ConfigError, DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, formatManualPeer, getConfigFromEnv, invalid, LEDGER_WRITE_MODES, localNodeConfig, LOG_FORMATS, MANUAL_PEER_FORM, manualPeerOf, MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, MAX_FEE_SEED_ACCOUNTS, nodeNetworkClosedToP2P, PUBLIC_NETWORKS, publicNetworkOf } from './config.js';
-import type { ConfigProblem, Environment, EnvironmentConfig, LedgerWriteMode } from './config.js';
+import { CLIENT_REPRESENTATIVES, ConfigError, DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, formatManualPeer, getConfigFromEnv, invalid, LEDGER_WRITE_MODES, localNodeConfig, LOG_FORMATS, MANUAL_PEER_FORM, manualPeerOf, MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS, MAX_FEE_SEED_ACCOUNTS, nodeNetworkClosedToP2P, PUBLIC_NETWORKS, publicNetworkOf } from './config.js';
+import type { ConfigProblem, Environment, EnvironmentConfig, KnownRepresentatives, LedgerWriteMode } from './config.js';
 import { LocalNode } from './local.js';
 import { MAX_PEER_LIMIT } from './peer-limits.js';
 
@@ -43,8 +43,8 @@ const BASE: Environment = {
 	KEETANET_INITIAL_TRUSTED_ACCOUNT: TRUSTED
 };
 
-function parse(extra: Environment, base: Environment = BASE): EnvironmentConfig {
-	return(getConfigFromEnv({ ...base, ...extra }));
+function parse(extra: Environment, base: Environment = BASE, representatives: KnownRepresentatives = NO_REPRESENTATIVES): EnvironmentConfig {
+	return(getConfigFromEnv({ ...base, ...extra }, representatives));
 }
 
 function problemOf(extra: Environment, base: Environment = BASE): ConfigProblem {
@@ -786,9 +786,23 @@ describe('KEETANET_LOCAL_NODE_MANUAL_PEERS', function() {
 		expect(error.cause).toBeUndefined();
 	});
 
-	test.each(['auto', 'AUTO', ` auto `, `${PEER},auto`])('refuses %j: this node finds no peers by itself', function(value) {
-		expect(problemOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: value })).toEqual({ kind: 'automatic-peers' });
-		expect(messageOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: value })).toBe('KEETANET_LOCAL_NODE_MANUAL_PEERS=auto is not supported: this node finds no peers by itself, so list each as <keeta_ account>@<api URL>|<p2p URL>[|http or websocket[|signature]]');
+	describe.each(['auto', 'AUTO', ' auto '])('%j', function(value) {
+		test.each(['main', 'test'] as const)('names the representatives the client knows for %s, unsigned, over WebSockets', function(network) {
+			const config = parse({ KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'no-voting', KEETANET_LOCAL_NODE_MANUAL_PEERS: value }, { KEETANET_LOCAL_NODE_SEED: SEED }, CLIENT_REPRESENTATIVES);
+			const known = NetworkConfig.getDefaultConfig(network).representatives;
+			expect(known.length).toBeGreaterThan(0);
+			expect(config.manualPeers).toEqual(known.map(function(rep) {
+				return({ kind: lib.Node.Kind.REPRESENTATIVE, key: rep.key, endpoints: rep.endpoints, preferUpdates: 'websocket', certificate: null });
+			}));
+		});
+
+		test('is refused on the local network, which the client knows no representatives of', function() {
+			expect(problemOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: value })).toEqual({ kind: 'automatic-peers', variable: 'KEETANET_LOCAL_NODE_MANUAL_PEERS', because: 'local-network' });
+		});
+	});
+
+	test('refuses auto beside a listed peer', function() {
+		expect(problemOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: `${PEER},auto` })).toEqual({ kind: 'automatic-peers', variable: 'KEETANET_LOCAL_NODE_MANUAL_PEERS', because: 'listed-with-others' });
 	});
 
 	const SIGNATURE_IN_BASE64 = `${MANUAL_PEER_FORM}, the signature in base64`;
@@ -846,6 +860,49 @@ describe('KEETANET_LOCAL_NODE_MANUAL_PEERS', function() {
 	});
 });
 
+describe('the peers of a node that sets none', function() {
+	function unset(network: Networks, mode: LedgerWriteMode, representatives: KnownRepresentatives = CLIENT_REPRESENTATIVES): EnvironmentConfig {
+		return(parse({ KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: mode, KEETANET_LOCAL_NODE_POSTGRES_URL: 'postgres://localhost/ledger' }, { KEETANET_LOCAL_NODE_SEED: SEED }, representatives));
+	}
+
+	function apis(network: Networks): string[] {
+		return(NetworkConfig.getDefaultConfig(network).representatives.map(function(rep): string {
+			return(rep.endpoints.api);
+		}));
+	}
+
+	test.each([['main', 'no-voting'], ['test', 'no-voting'], ['test', 'read-write']] as const)('are the representatives the client knows on %s in %s mode, which peers', function(network, mode) {
+		const config = unset(network, mode);
+		expect(config.manualPeers).toEqual(parse({ KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: mode, KEETANET_LOCAL_NODE_POSTGRES_URL: 'postgres://localhost/ledger', KEETANET_LOCAL_NODE_MANUAL_PEERS: 'auto' }, { KEETANET_LOCAL_NODE_SEED: SEED }, CLIENT_REPRESENTATIVES).manualPeers);
+		expect(config.manualPeers.length).toBeGreaterThan(0);
+		expect(config.bootstrapPeers).toEqual(apis(network));
+	});
+
+	test.each([['main', 'bootstrap-only'], ['test', 'read-only']] as const)('are none to dial on %s in %s mode, which only follows, but its catch-up is from the representatives the client knows', function(network, mode) {
+		const config = unset(network, mode);
+		expect(config.manualPeers).toEqual([]);
+		expect(config.bootstrapPeers).toEqual(apis(network));
+	});
+
+	test.each(['dev', 'staging'] as const)('are none on %s in read-write mode, which votes alone', function(network) {
+		const config = unset(network, 'read-write');
+		expect(config.manualPeers).toEqual([]);
+		expect(config.bootstrapPeers).toEqual([]);
+	});
+
+	test('are none on the local network, which the client knows no representatives of', function() {
+		const config = parse({});
+		expect(config.manualPeers).toEqual([]);
+		expect(config.bootstrapPeers).toEqual([]);
+	});
+
+	test('are none where the node is given no representatives, as in tests', function() {
+		const config = unset('test', 'no-voting', NO_REPRESENTATIVES);
+		expect(config.manualPeers).toEqual([]);
+		expect(config.bootstrapPeers).toEqual([]);
+	});
+});
+
 describe('KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS', function() {
 	test('lists API endpoints separated by commas, each once and as written', function() {
 		expect(parse({ KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: ` ${PEER_API} ,, https://rep.example:8443/keeta/api,${PEER_API}, ` }).bootstrapPeers).toEqual([PEER_API, 'https://rep.example:8443/keeta/api']);
@@ -853,6 +910,18 @@ describe('KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS', function() {
 
 	test.each(['127.0.0.1:7001/api', 'ws://127.0.0.1:7001/p2p', 'http://127.0.0.1:7001/api?x=1', 'http://127.0.0.1:7001/api#top', 'http://127.0.0.1:7001/a|b', PEER])('refuses the endpoint %j', function(value) {
 		expect(problemOf({ KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: value })).toMatchObject({ kind: 'invalid', variable: 'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS' });
+	});
+
+	test.each(['main', 'test'] as const)('is the API endpoint of each representative the client knows for %s with auto', function(network) {
+		const config = parse({ KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'bootstrap-only', KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: 'auto' }, {}, CLIENT_REPRESENTATIVES);
+		expect(config.bootstrapPeers).toEqual(NetworkConfig.getDefaultConfig(network).representatives.map(function(rep) {
+			return(rep.endpoints.api);
+		}));
+	});
+
+	test('refuses auto on the local network, and beside a listed endpoint', function() {
+		expect(problemOf({ KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: 'auto' })).toEqual({ kind: 'automatic-peers', variable: 'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS', because: 'local-network' });
+		expect(problemOf({ KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: `${PEER_API},auto` })).toEqual({ kind: 'automatic-peers', variable: 'KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS', because: 'listed-with-others' });
 	});
 
 	test('says what an endpoint is written as', function() {
@@ -1115,8 +1184,8 @@ const DESCRIBED_PROBLEMS: { readonly [Kind in ConfigProblem['kind']]: { readonly
 		message: 'reindex-history needs KEETANET_LOCAL_NODE_POSTGRES_URL: a node in memory writes its history anew each time it starts'
 	},
 	'automatic-peers': {
-		problem: { kind: 'automatic-peers' },
-		message: 'KEETANET_LOCAL_NODE_MANUAL_PEERS=auto is not supported: this node finds no peers by itself, so list each as <keeta_ account>@<api URL>|<p2p URL>[|http or websocket[|signature]]'
+		problem: { kind: 'automatic-peers', variable: 'KEETANET_LOCAL_NODE_MANUAL_PEERS', because: 'local-network' },
+		message: 'KEETANET_LOCAL_NODE_MANUAL_PEERS=auto names the representatives the client knows for the network, and it knows none for the local network: list each peer instead'
 	},
 	'peer-signature-invalid': {
 		problem: { kind: 'peer-signature-invalid', key: PEER_KEY },

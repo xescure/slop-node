@@ -152,7 +152,13 @@ describe('slop-node run with peers', function() {
 		const peerKey = lib.Account.fromSeed(TEST_NETWORK_SEEDS.representative, 1).publicKeyString.get();
 		const dev: Environment = { ...NODE, KEETANET_LOCAL_NODE_NETWORK: 'dev', KEETANET_LOCAL_NODE_POSTGRES_URL: (await nodes.database()).connectionString };
 
-		const following = startCLI(['run'], { ...dev, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-only', KEETANET_LOCAL_NODE_MANUAL_PEERS: `${peerKey}@http://127.0.0.1:${String(port)}/api|ws://127.0.0.1:${String(port)}/p2p` });
+		const following = startCLI(['run'], {
+			...dev,
+			KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-only',
+			KEETANET_LOCAL_NODE_MANUAL_PEERS: `${peerKey}@http://127.0.0.1:${String(port)}/api|ws://127.0.0.1:${String(port)}/p2p`,
+			// Its own, so that it catches up from none of the dev network's representatives.
+			KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: `http://127.0.0.1:${String(port)}/api`
+		});
 		await following.printed(PEER_LINE);
 		following.signal('SIGTERM');
 		expect(await following.exited).toEqual({ code: 0, signal: null });
@@ -190,10 +196,10 @@ describe('slop-node run with peers', function() {
 		expect(cli.stderr()).toBe('');
 	});
 
-	test('refuses peers named automatically', async function() {
+	test('refuses peers named automatically on the local network, which the client knows no representatives of', async function() {
 		const cli = startCLI(['run'], { ...NODE, KEETANET_LOCAL_NODE_MANUAL_PEERS: 'auto' });
 		expect(await cli.exited).toEqual({ code: 1, signal: null });
-		expect(cli.stderr()).toBe('slop-node: KEETANET_LOCAL_NODE_MANUAL_PEERS=auto is not supported: this node finds no peers by itself, so list each as <keeta_ account>@<api URL>|<p2p URL>[|http or websocket[|signature]]\n');
+		expect(cli.stderr()).toBe('slop-node: KEETANET_LOCAL_NODE_MANUAL_PEERS=auto names the representatives the client knows for the network, and it knows none for the local network: list each peer instead\n');
 	});
 });
 

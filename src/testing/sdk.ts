@@ -7,7 +7,7 @@ import type { Environment, EnvironmentConfig } from '../node/config.js';
 import { LocalNode } from '../node/local.js';
 import { closeStorage, nodeResourcesOf, openStorage } from '../node/storage.js';
 import { assertNever } from '../util/assert-never.js';
-import { deriveTestKeys, TEST_NETWORK_SEEDS } from './network.js';
+import { deriveTestKeys, NO_REPRESENTATIVES, TEST_NETWORK_SEEDS } from './network.js';
 import { createDatabase } from './postgres.js';
 import type { TestDatabase } from './postgres.js';
 
@@ -127,7 +127,7 @@ export function useSDKNodes(): SDKNodes {
 	}
 
 	async function start(environment: Environment): Promise<ServingNode> {
-		const config = getConfigFromEnv(environment);
+		const config = getConfigFromEnv(environment, NO_REPRESENTATIVES);
 		const storage = openStorage(config.storage);
 		const node = new LocalNode(localNodeConfig(config, nodeResourcesOf(storage, new lib.Log())));
 		let stopping: Promise<void> | undefined;

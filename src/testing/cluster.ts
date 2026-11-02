@@ -15,7 +15,7 @@ import { LocalNode } from '../node/local.js';
 import { closeStorage, nodeResourcesOf, openStorage } from '../node/storage.js';
 import type { OpenedStorage } from '../node/storage.js';
 import { assertNever } from '../util/assert-never.js';
-import { deriveTestKeys, TEST_NETWORK_SEEDS } from './network.js';
+import { deriveTestKeys, NO_REPRESENTATIVES, TEST_NETWORK_SEEDS } from './network.js';
 import { createDatabase } from './postgres.js';
 import type { TestDatabase } from './postgres.js';
 import { eachStapleOnce } from '../util/each-staple-once.js';
@@ -311,7 +311,7 @@ export class ClusterMember {
 	 * the network was when it was made, unless the member is to fetch it.
 	 */
 	async #startOnPort(): Promise<void> {
-		const config = getConfigFromEnv(this.environment());
+		const config = getConfigFromEnv(this.environment(), NO_REPRESENTATIVES);
 		const storage = openStorage(config.storage);
 		const nodeConfig = localNodeConfig(config, nodeResourcesOf(storage, new lib.Log()));
 		nodeConfig.bootstrap = { ...nodeConfig.bootstrap, period: BOOTSTRAP_PERIOD_MILLISECONDS };
@@ -543,7 +543,7 @@ export class Cluster {
 		const config = getConfigFromEnv({
 			KEETANET_LOCAL_NODE_SEED: TEST_NETWORK_SEEDS.representative,
 			KEETANET_INITIAL_TRUSTED_ACCOUNT: trustedRoot.publicKeyString.get()
-		});
+		}, NO_REPRESENTATIVES);
 		const node = new LocalNode(localNodeConfig(config, nodeResourcesOf(storage, new lib.Log())));
 		try {
 			return(await addGenesis(node, {
@@ -610,7 +610,7 @@ export class Cluster {
 			const others = peers.filter(function(_peer, index): boolean {
 				return(index !== member.index);
 			});
-			const { manualPeers } = getConfigFromEnv(member.environment({ KEETANET_LOCAL_NODE_MANUAL_PEERS: others.join(',') }));
+			const { manualPeers } = getConfigFromEnv(member.environment({ KEETANET_LOCAL_NODE_MANUAL_PEERS: others.join(',') }), NO_REPRESENTATIVES);
 			const configured = member.node.config.manualPeers ?? [];
 			for (const peer of manualPeers) {
 				const known = configured.some(function(existing): boolean {

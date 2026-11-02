@@ -5,7 +5,7 @@ import type { VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { MemoryLedgerStorage } from '../ledger/storage/memory/driver.js';
 import { DEFAULT_WEIGHTS, GENESIS_MOMENT, headOf, requireAt } from '../ledger/storage/suite/support.js';
 import { confirmedStaple, sendBlock } from '../testing/blocks.js';
-import { createTestNetwork, freezeClock } from '../testing/network.js';
+import { createTestNetwork, freezeClock, NO_REPRESENTATIVES } from '../testing/network.js';
 import type { TestNetwork } from '../testing/network.js';
 import { admittedWithoutQuorum } from './admitted-staples.js';
 import type { AdmitWithoutQuorum } from './admitted-staples.js';
@@ -50,7 +50,7 @@ function requireAdmit(admit: AdmitWithoutQuorum | undefined): AdmitWithoutQuorum
 }
 
 function admitOn(variables: Record<string, string>): AdmitWithoutQuorum | undefined {
-	const config = getConfigFromEnv({ KEETANET_LOCAL_NODE_SEED: SEED, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'no-voting', ...variables });
+	const config = getConfigFromEnv({ KEETANET_LOCAL_NODE_SEED: SEED, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'no-voting', ...variables }, NO_REPRESENTATIVES);
 	return(localNodeConfig(config, { storageDriver: new MemoryLedgerStorage(), kv: null, log: new lib.Log() }).ledger.admitWithoutQuorum);
 }
 
@@ -74,7 +74,7 @@ describe('the staples a network admits without a quorum', function() {
 	});
 
 	test('are those of the network the node configures as test, on whose ID their blocks are', async function() {
-		const network = getConfigFromEnv({ KEETANET_LOCAL_NODE_SEED: SEED, KEETANET_LOCAL_NODE_NETWORK: 'test', KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'no-voting' }).network;
+		const network = getConfigFromEnv({ KEETANET_LOCAL_NODE_SEED: SEED, KEETANET_LOCAL_NODE_NETWORK: 'test', KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'no-voting' }, NO_REPRESENTATIVES).network;
 		expect(network).toEqual(TEST_NETWORK);
 		const networks = new Set((await testNetworkStaples()).flatMap(function(staple): bigint[] {
 			return(staple.blocks.map(function(block): bigint {
