@@ -1,0 +1,169 @@
+# A slop-node on one of Keeta's networks, with its own Postgres.
+#
+# Settings go in a .env file beside this one, which Compose reads by itself:
+#
+#   COMPOSE_PROFILES          one node: replica or peer on main, rep on test;
+#                             a peer or a rep also takes caddy or cloudflare.
+#   KEETANET_LOCAL_NODE_SEED  peer, rep: the node's key, 64 hex digits (openssl rand -hex 32).
+#                             Keep it with the database: the node is one key on one database.
+#                             A replica greets no one and signs nothing, so it needs none.
+#   SLOP_NODE_DOMAIN          peer, rep: the DNS name other nodes reach this one at.
+#   CLOUDFLARE_TUNNEL_TOKEN   cloudflare: the tunnel's token; route the tunnel's hostname to http://node:8080.
+#
+# The nodes are services of their own rather than one with a switch, because
+# a replica on main refuses KEETANET_LOCAL_NODE_MANUAL_PEERS even when it is
+# empty. Run one at a time. A replica refuses to start on a database that a
+# peer has remembered peers in: run `docker compose run --rm peer clear-peers`
+# once before going back.
+
+name: slop-node
+
+x-node: &node
+  image: ${SLOP_NODE_IMAGE:-ghcr.io/xescure/slop-node:latest}
+  restart: unless-stopped
+  # The node finishes the requests in flight and closes its database
+  # connections after SIGTERM; Compose's default 10 s can cut that short.
+  stop_grace_period: 20s
+  # The API on the host only: a wallet, an indexer or an anchor next to the
+  # node reaches all of it, and nothing else does.
+  ports:
+    - 127.0.0.1:${SLOP_NODE_PORT:-8080}:8080
+
+# The name caddy and cloudflare reach whichever node faces the internet by.
+x-public: &public
+  networks:
+    default:
+      aliases: [node]
+
+x-postgres: &postgres
+  image: postgres:18
+  restart: unless-stopped
+  environment:
+    POSTGRES_USER: slop-node
+    POSTGRES_PASSWORD: ${SLOP_NODE_POSTGRES_PASSWORD:-slop-node}
+    POSTGRES_DB: ledger
+  # Docker's 64 MiB of shared memory is too little for parallel queries over
+  # a ledger of tens of gigabytes.
+  shm_size: 1g
+  stop_grace_period: 1m
+  healthcheck:
+    test: ["CMD", "pg_isready", "-U", "slop-node", "-d", "ledger"]
+    interval: 5s
+    timeout: 5s
+    retries: 10
+
+# The representatives Keeta's client library names for the main network.
+x-main-network: &main-network
+  KEETANET_LOCAL_NODE_NETWORK: main
+  KEETANET_LOCAL_NODE_POSTGRES_URL: postgres://slop-node:${SLOP_NODE_POSTGRES_PASSWORD:-slop-node}@postgres/ledger
+  KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: >-
+    https://rep1.main.network.api.keeta.com/api,
+    https://rep2.main.network.api.keeta.com/api,
+    https://rep3.main.network.api.keeta.com/api,
+    https://rep4.main.network.api.keeta.com/api
+
+services:
+  postgres:
+    <<: *postgres
+    profiles: [replica, peer]
+    volumes:
+      # From 18 the image keeps its data in a versioned directory below this one.
+      - postgres:/var/lib/postgresql
+
+  # The ledger records no network, so a rep on a database of main would vote
+  # from main's state; the test network keeps a database of its own.
+  postgres-test:
+    <<: *postgres
+    profiles: [rep]
+    volumes:
+      - postgres-test:/var/lib/postgresql
+
+  # Catches up from the representatives over HTTP, and is closed to peers.
+  replica:
+    <<: *node
+    profiles: [replica]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *main-network
+      KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: bootstrap-only
+      # A node on every interface must name its endpoints. A replica greets no
+      # one, so they are only where the host reaches it.
+      KEETANET_LOCAL_NODE_ENDPOINT_API: http://localhost:${SLOP_NODE_PORT:-8080}/api
+      KEETANET_LOCAL_NODE_ENDPOINT_P2P: ws://localhost:${SLOP_NODE_PORT:-8080}/p2p
+
+  # Dials the representatives, takes the staples they push and passes them on
+  # to the nodes that dial it at SLOP_NODE_DOMAIN. It never votes: main allows
+  # this node no other mode that peers.
+  peer:
+    <<: [*node, *public]
+    profiles: [peer]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *main-network
+      KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: no-voting
+      # Compose would demand ${...:?} of a replica too, which has no seed; the
+      # node refuses the empty value itself, naming the variable.
+      KEETANET_LOCAL_NODE_SEED: ${KEETANET_LOCAL_NODE_SEED:-}
+      KEETANET_LOCAL_NODE_MANUAL_PEERS: >-
+        keeta_aabwip6zeo2fnzfxp5hssrrqtascs2277w2zk7vqd6d3k3m4dkt2flcbca2mqki@https://rep1.main.network.api.keeta.com/api|wss://rep1.main.network.api.keeta.com/p2p,
+        keeta_aabvmwxttv4q56gbfveighwfwp3yvitlrdfsacic3ckqc7lqelsspvmhc7oldmq@https://rep2.main.network.api.keeta.com/api|wss://rep2.main.network.api.keeta.com/p2p,
+        keeta_aabwqf5fnta4t2v2atieis545b3rqoq6z7x5w3geugiilqlz5jdsb5og2rmxvdq@https://rep3.main.network.api.keeta.com/api|wss://rep3.main.network.api.keeta.com/p2p,
+        keeta_aablpogflko72eusdhuuqgsto2rwcvy2m5mo5snmvrmbacz3qczwjtwpmzf5ufq@https://rep4.main.network.api.keeta.com/api|wss://rep4.main.network.api.keeta.com/p2p
+      # Peers keep the endpoints this node signs: give it a name that stays.
+      KEETANET_LOCAL_NODE_ENDPOINT_API: https://${SLOP_NODE_DOMAIN:-SLOP_NODE_DOMAIN is unset}/api
+      KEETANET_LOCAL_NODE_ENDPOINT_P2P: wss://${SLOP_NODE_DOMAIN:-SLOP_NODE_DOMAIN is unset}/p2p
+
+  # Votes on the test network, the only one of Keeta's where this node votes
+  # with peers, with the representatives the client library names for it.
+  rep:
+    <<: [*node, *public]
+    profiles: [rep]
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    environment:
+      KEETANET_LOCAL_NODE_NETWORK: test
+      KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: read-write
+      KEETANET_LOCAL_NODE_SEED: ${KEETANET_LOCAL_NODE_SEED:-}
+      KEETANET_LOCAL_NODE_POSTGRES_URL: postgres://slop-node:${SLOP_NODE_POSTGRES_PASSWORD:-slop-node}@postgres-test/ledger
+      KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: >-
+        https://rep1.test.network.api.keeta.com/api,
+        https://rep2.test.network.api.keeta.com/api
+      KEETANET_LOCAL_NODE_MANUAL_PEERS: >-
+        keeta_aabi4bd3f7jrt67mxcq44ozj65bh4bp2mygmrkedxggu2rxwn2ztuw3b6exivbq@https://rep1.test.network.api.keeta.com/api|wss://rep1.test.network.api.keeta.com/p2p,
+        keeta_aabf7dz5asq2n2lrldct33x2ww65cophxp7egfiixbb7tbyat5r3kcbcez7ftpi@https://rep2.test.network.api.keeta.com/api|wss://rep2.test.network.api.keeta.com/p2p
+      KEETANET_LOCAL_NODE_ENDPOINT_API: https://${SLOP_NODE_DOMAIN:-SLOP_NODE_DOMAIN is unset}/api
+      KEETANET_LOCAL_NODE_ENDPOINT_P2P: wss://${SLOP_NODE_DOMAIN:-SLOP_NODE_DOMAIN is unset}/p2p
+
+  # TLS for the node from Let's Encrypt; needs ports 80 and 443 reachable from
+  # the internet. Caddy passes WebSocket upgrades on and sets no body limit.
+  caddy:
+    image: caddy:2
+    profiles: [caddy]
+    restart: unless-stopped
+    command: caddy reverse-proxy --from ${SLOP_NODE_DOMAIN:-SLOP_NODE_DOMAIN is unset} --to node:8080
+    ports:
+      - 80:80
+      - 443:443
+      - 443:443/udp
+    volumes:
+      - caddy:/data
+
+  # TLS for the node through a Cloudflare tunnel, for a host that the internet
+  # cannot reach, as behind most home routers.
+  cloudflare:
+    image: cloudflare/cloudflared:latest
+    profiles: [cloudflare]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+
+volumes:
+  postgres:
+  postgres-test:
+  caddy:
