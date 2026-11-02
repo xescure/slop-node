@@ -1,8 +1,12 @@
 # Slop Node
 
-...the first publicly available node software for Keeta. Created with heavy use of AI agents.
+...the first publicly available node software for Keeta. Created with heavy use of AI agents. Not affiliated with Keeta.
 
 [Keeta][keeta-home] is a Delegated Proof of Stake (DPoS) Layer-1 designed for high-throughput asset transfers. Its ledger is a [Directed Acyclic Graph (DAG)][whitepaper] of per-account block chains rather than a single linearly-ordered chain like you'd find with typical networks. Each account publishes blocks to its own chain, and operations in those blocks reference other accounts' chains, which lets independent accounts publish concurrently.
+
+- [How blockchain network Keeta processes 11 million transactions per second with Spanner][google-spanner]
+- [Keeta and ASK Group Launch Joint Venture to Tokenize Billions in Real-World Assets][ask-group]
+- [Keeta: Payments Fintech Startup Raises $17 Million in Seed Funding][business-insider]
 
 ## Get started
 
@@ -83,6 +87,16 @@ docker compose logs -f
 docker compose logs | grep "the peers are read from there on"
 ```
 
+### 4. Use it
+
+Your node speaks the same API as Keeta's own reps, **so anything that talks to Keeta can talk to your node instead.** Point the Keeta SDK at `http://localhost:8080/api`, or just query it directly:
+
+```bash
+curl http://localhost:8080/api/node/ledger/account/keeta_.../balance
+curl http://localhost:8080/api/node/ledger/account/keeta_.../history
+curl http://localhost:8080/api/node/ledger/history
+```
+
 ## Motivation
 
 The true digitalization of finance, especially in cross-border contexts, has stalled. Blockchain technology may bring about a new chapter where money is as fast as the internet is. However, current blockchains are unscalable and clunky and I don't see them being the next financial backbone at all.
@@ -92,6 +106,13 @@ Keeta is insanely fast. It can facilitate tens or even hundreds of millions of t
 I can't wait to see how Keeta develops, but right now its source code isn't fully public and third parties are not able to run their own nodes. I fed Claude Opus 5.5 the public parts of the code, my understanding of Keeta, its docs, forum discussions, and a few *ehm* proprietary sources. Then came about 6 hours of refinement and setting up an environment where the agent could evaluate itself.
 
 **The end result is a fully functional Keeta node.** It's primarily for experimentation, please don't rely on it for high value applications yet.
+
+## Status
+
+- Built against `@keetanetwork/keetanet-client` 0.18.8, the same version Keeta's reps run.
+- Replicas and peering nodes run on mainnet, reps on testnet only.
+- Tested against the upstream code, and checked against the mainnet reps' own answers.
+- A peering node runs live at [node.xescu.re][live-node].
 
 ## Architecture
 
@@ -296,3 +317,7 @@ erDiagram
 [keeta-home]: https://keeta.com/
 [whitepaper]: https://keeta.com/whitepaper.pdf
 [block-listener]: https://github.com/KeetaNetwork/anchor/blob/main/src/lib/block-listener.ts
+[google-spanner]: https://cloud.google.com/blog/topics/financial-services/how-blockchain-network-keeta-processes-11-million-transactions-per-second-with-spanner
+[ask-group]: https://keeta.com/blog/keeta-and-ask-group-launch-joint-venture-to-tokenize-billions-in-real-world-assets
+[business-insider]: https://www.businessinsider.com/keeta-payments-fintech-startup-raises-17-million-in-seed-funding-2023-6
+[live-node]: https://node.xescu.re/api/node/version
