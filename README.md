@@ -10,7 +10,7 @@
 
 This assumes you have Docker/Podman set up already and that you can run Linux containers. You'll need **40 GB of free disk space, 4 GB of RAM (8 GB is comfortable), and 2 CPU cores.** The Keeta ledger takes about 23 GB right now, the rest is headroom for the database. The first sync takes a day or two, after that the node barely uses anything.
 
-For a peering node you'll also need a domain that you plan to keep, since other nodes remember it. Either ports 80 and 443 have to be reachable from the internet, or you need a free Cloudflare account to set up a tunnel.
+For a peering node or a rep you'll also need a domain that you plan to keep, since other nodes remember it. Either ports 80 and 443 have to be reachable from the internet, or you need a free Cloudflare account to set up a tunnel.
 
 ### 1. Quickly download the `compose.yaml` file
 
@@ -34,6 +34,8 @@ You also have the option to listen to incoming blocks without replicating the lo
 **A peering node is for actually participating in the Keeta network.** Your node will actively receive updates from the network, and it will forward these blocks to other nodes. This process creates more and more active copies of the ledger on independent servers. This is a crucial step towards building a robust and decentralized network.
 
 ```bash
+docker compose down
+
 # You can save it down, but for a peering node it's not essential
 echo "KEETANET_LOCAL_NODE_SEED=$(openssl rand -hex 32)" >> .env
 
@@ -97,11 +99,202 @@ I can't wait to see how Keeta develops, but right now its source code isn't full
 
 ## Architecture
 
-<ascii or figma class diagram>
+```mermaid
+flowchart LR
+    reps["Keeta reps"]
+    clients["Wallets, apps, anchors"]
+
+    subgraph node["slop-node"]
+        cli["CLI<br/>src/main.ts, src/node/cli.ts"]
+        config["Config and safety rules<br/>src/node/config.ts"]
+        local["LocalNode<br/>src/node/local.ts"]
+        api["HTTP API<br/>src/api/"]
+        bootstrap["Bootstrap<br/>src/node/bootstrap*.ts"]
+
+        subgraph upstream["@keetanetwork/keetanet-client"]
+            ledger["Ledger<br/>validates, votes"]
+            switch["P2P switch"]
+        end
+
+        subgraph storage["Storage"]
+            driver["Ledger storage driver<br/>src/ledger/storage/postgres/<br/>src/ledger/storage/memory/"]
+            kv["KV store<br/>src/kv/postgres.ts<br/>stats, peers, cursors"]
+        end
+    end
+
+    pg[("Postgres")]
+
+    cli --> config --> local
+    local --> api
+    local --> bootstrap
+    local --> ledger
+    local --> switch
+    api --> ledger
+    bootstrap --> ledger
+    ledger --> driver
+    switch --> kv
+    bootstrap --> kv
+    driver --> pg
+    kv --> pg
+
+    clients -- "HTTP /api" --> api
+    clients -- "WebSocket /p2p" --> switch
+    bootstrap -- "HTTP catch-up" --> reps
+    switch <-- "WebSocket /p2p" --> reps
+```
 
 ## Ledger schema
 
-<ascii or figma class diagram>
+```mermaid
+erDiagram
+    accounts ||--o{ blocks : publishes
+    accounts ||--o{ chain : "has, by height"
+    accounts ||--o| heads : "has latest"
+    accounts ||--o{ votes : issues
+    accounts ||--o{ balances : holds
+    accounts ||--o| supplies : "token supply"
+    accounts ||--o| weights : "rep weight"
+    accounts ||--o| delegations : "delegates to"
+    accounts ||--o| account_info : describes
+    accounts ||--o{ acls : "principal, entity, target"
+    accounts ||--o{ certificates : holds
+    accounts ||--o{ history : "takes part in"
+
+    staples ||--|{ blocks : contains
+    staples ||--o{ history : "listed in"
+    votes ||--|{ vote_blocks : covers
+    blocks ||--o{ vote_blocks : "voted in"
+    blocks ||--o| chain : "placed at"
+    blocks ||--o{ idempotent_keys : "keyed by"
+
+    deferred_staples ||--o{ deferred_waits : "waits for block"
+    deferred_staples ||--o{ deferred_blocks : "builds on previous"
+    deferred_staples ||--o| deferred_checks : "due for a check"
+
+    accounts {
+        bigint id PK
+        text public_key UK
+        smallint key_type
+        hash32 first_staple
+    }
+    staples {
+        hash32 blocks_hash PK
+        timestamptz staple_time
+        timestamptz moment
+        bigint sequence UK
+        bit256 checksum
+        bytea bytes
+    }
+    blocks {
+        hash32 hash PK
+        ledger_name ledger "main or side"
+        bigint account_id FK
+        hash32 previous
+        hash32 staple FK
+        bytea bytes
+    }
+    votes {
+        bigint id PK
+        ledger_name ledger "main or side"
+        bigint issuer_id FK
+        hash32 blocks_hash
+        boolean permanent
+        bytea bytes
+    }
+    vote_blocks {
+        bigint vote_id PK, FK
+        int position PK
+        hash32 block_hash FK
+    }
+    chain {
+        bigint account_id PK, FK
+        bigint height PK
+        hash32 block_hash FK
+    }
+    heads {
+        bigint account_id PK, FK
+        hash32 block_hash FK
+        bigint height
+    }
+    history {
+        bigint account_id PK, FK
+        timestamptz staple_time PK
+        hash32 blocks_hash PK, FK
+    }
+    balances {
+        bigint account_id PK, FK
+        bigint token_id PK, FK
+        numeric balance
+    }
+    supplies {
+        bigint token_id PK, FK
+        numeric supply
+    }
+    weights {
+        bigint representative_id PK, FK
+        numeric weight
+    }
+    delegations {
+        bigint account_id PK, FK
+        bigint representative_id FK
+    }
+    account_info {
+        bigint account_id PK, FK
+        text name
+        text description
+        text metadata
+    }
+    acls {
+        bigint principal_id FK
+        hash32 certificate
+        bigint entity_id FK
+        bigint target_id FK
+        numeric base_permissions
+        numeric external_permissions
+    }
+    certificates {
+        bigint account_id PK, FK
+        hash32 hash PK
+        bytea certificate
+    }
+    idempotent_keys {
+        hash32 key PK
+        ledger_name ledger PK
+        hash32 block_hash PK, FK
+    }
+    deferred_staples {
+        hash32 blocks_hash PK
+        bytea bytes
+        timestamptz latest_vote_from
+    }
+    deferred_waits {
+        hash32 block_hash PK
+        hash32 blocks_hash PK, FK
+    }
+    deferred_blocks {
+        hash32 blocks_hash PK, FK
+        hash32 previous PK
+    }
+    deferred_checks {
+        hash32 blocks_hash PK, FK
+    }
+    bootstrap_stage {
+        hash32 blocks_hash PK
+        timestamptz first_vote_from
+        timestamptz last_vote_from
+        bytea bytes
+    }
+    ledger_checksum {
+        smallint shard PK
+        bit256 checksum
+    }
+    kv_entries {
+        text arena PK
+        text key PK
+        json value
+        timestamptz expires_at
+    }
+```
 
 
 [keeta-home]: https://keeta.com/
