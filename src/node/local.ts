@@ -439,7 +439,7 @@ export class LocalNode extends ClientNode {
 		}
 	}
 
-	/** A node open to peers also dials those it learns of, but none it is configured with, nor itself. */
+	/** A node open to peers also dials those it learns of, but none it is configured with, nor itself under any key it had. */
 	#startDiscovery(): DiscoveredPeerDialer | undefined {
 		if (!this.#openToPeers()) {
 			return(undefined);
@@ -453,7 +453,7 @@ export class LocalNode extends ClientNode {
 		if (this.config.ledgerPrivateKey !== undefined) {
 			excluded.add(this.config.ledgerPrivateKey.publicKeyString.get());
 		}
-		const discovery = new DiscoveredPeerDialer(this.switch, excluded, this.log);
+		const discovery = new DiscoveredPeerDialer(this.switch, { keys: excluded, address: this.config.endpoints?.p2p }, this.log);
 		discovery.start(this.#discoveryPeriodMilliseconds);
 		return(discovery);
 	}

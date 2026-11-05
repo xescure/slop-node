@@ -13,6 +13,36 @@ export const MAX_DISCOVERED_PEERS: number = 8;
 
 const LOG_SOURCE = 'discovered-peers';
 
+/**
+ * What a node leaves out of the peers it discovered: the keys given, such as
+ * its own and its configured peers', and every advertisement of its own
+ * address, which only a key it had before signs. A peer that prefers updates
+ * over HTTP is dialed without a greeting and taken as known and seen at once
+ * [Keeta TS] index.js:74781-74815, so the switch would never learn that it
+ * answers at the node's own address, and would keep it among its peers.
+ */
+export type DiscoveryExclusions = {
+	readonly keys: ReadonlySet<string>;
+	readonly address: string | undefined;
+};
+
+/** The address as a URL writes it, so that two spellings of one compare equal. */
+function canonicalAddress(address: string): string {
+	try {
+		return(new URL(address).href);
+	} catch {
+		return(address);
+	}
+}
+
+/** Whether the peer is advertised at the address, however each is spelled. */
+function advertisedAt(peer: ManualPeer, address: string | undefined): boolean {
+	if (address === undefined) {
+		return(false);
+	}
+	return(canonicalAddress(peer.endpoints.p2p) === canonicalAddress(address));
+}
+
 /** The peer a record is the advertisement of, if it is signed by the key it is filed under. */
 function advertisedPeer(key: string, record: Parameters<typeof signedBy>[1]): ManualPeer | undefined {
 	const advertisement = signedBy(key, record);
@@ -26,11 +56,11 @@ function advertisedPeer(key: string, record: Parameters<typeof signedBy>[1]): Ma
  * Peers the node learned of from its peers' exchange of advertisements
  * [Keeta TS] index.js:74638-74649, 74051-74064, each signed by the key it
  * is filed under, those it already connected to first, so that it keeps
- * the same ones, leaving out the keys excluded.
+ * the same ones, leaving out those excluded.
  */
-export async function chooseDiscoveredPeers(store: KVStorageProviderAPI, excluded: ReadonlySet<string>, limit: number): Promise<ManualPeer[]> {
+export async function chooseDiscoveredPeers(store: KVStorageProviderAPI, excluded: DiscoveryExclusions, limit: number): Promise<ManualPeer[]> {
 	const [known, potential] = await Promise.all([store.getAll('knownPeers'), store.getAll('potentialPeers')]);
-	const named = new Set(excluded);
+	const named = new Set(excluded.keys);
 	const chosen: ManualPeer[] = [];
 	for (const records of [known, potential]) {
 		for (const key of Object.keys(records).sort()) {
@@ -41,7 +71,7 @@ export async function chooseDiscoveredPeers(store: KVStorageProviderAPI, exclude
 				continue;
 			}
 			const peer = advertisedPeer(key, records[key]);
-			if (peer !== undefined) {
+			if (peer !== undefined && !advertisedAt(peer, excluded.address)) {
 				named.add(key);
 				chosen.push(peer);
 			}
@@ -62,11 +92,11 @@ export async function chooseDiscoveredPeers(store: KVStorageProviderAPI, exclude
  */
 export class DiscoveredPeerDialer {
 	readonly #switch: P2PSwitch;
-	readonly #excluded: ReadonlySet<string>;
+	readonly #excluded: DiscoveryExclusions;
 	readonly #log: Logger;
 	#timer: ReturnType<typeof setInterval> | undefined;
 
-	constructor(peerSwitch: P2PSwitch, excluded: ReadonlySet<string>, log: Logger) {
+	constructor(peerSwitch: P2PSwitch, excluded: DiscoveryExclusions, log: Logger) {
 		this.#switch = peerSwitch;
 		this.#excluded = excluded;
 		this.#log = log;
