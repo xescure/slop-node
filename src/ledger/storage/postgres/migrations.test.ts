@@ -248,6 +248,74 @@ describe('applyMigrations', function() {
 		expect(options.rows).toEqual([{ reloptions: ['fillfactor=10'] }]);
 	});
 
+	test('version 12 adds the projection tables and the holders index, and sets the backfill to start below the newest staple', async function() {
+		const database = await freshDatabase();
+		const pool = database.pool();
+		const shipped = (await readdir(SCHEMA_MIGRATIONS)).sort();
+		const beforeProjection: Record<string, Buffer> = {};
+		for (const file of shipped.filter(function(name) {
+			return(name < '0012');
+		})) {
+			beforeProjection[file] = await readFile(new URL(file, SCHEMA_MIGRATIONS));
+		}
+		const older = await migrationDirectory(beforeProjection);
+		const emptyDatabase = await freshDatabase();
+		const emptyPool = emptyDatabase.pool();
+		expect(await applyMigrations(emptyPool, older, clockAt(FIRST_START))).toBe(11);
+		expect(await applyMigrations(emptyPool, SCHEMA_MIGRATIONS, clockAt(SECOND_START))).toBe(shipped.length);
+		expect((await emptyPool.query('SELECT complete_from::text FROM projection_backfill')).rows).toEqual([{ complete_from: '1' }]);
+
+		expect(await applyMigrations(pool, older, clockAt(FIRST_START))).toBe(11);
+		for (const label of ['first', 'second']) {
+			await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, bytes, checksum) VALUES (sha256(convert_to($1, \'UTF8\')), $2, $2, \'\\x00\', repeat(\'0\', 256)::bit(256))', [label, FIRST_START]);
+		}
+		const second = await pool.query<{ sequence: string }>('SELECT sequence::text FROM staples WHERE blocks_hash = sha256(convert_to(\'second\', \'UTF8\'))');
+
+		expect(await applyMigrations(pool, SCHEMA_MIGRATIONS, clockAt(SECOND_START))).toBe(shipped.length);
+
+		const columns = await pool.query<{ table_name: string; column_name: string; type: string; nullable: string }>(`SELECT table_name, column_name, COALESCE(domain_name, data_type) AS type, is_nullable AS nullable
+			FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name IN ('block_details', 'operations', 'projection_backfill')
+			ORDER BY table_name, ordinal_position`);
+		expect(columns.rows.map(function(row) {
+			return([row.table_name, row.column_name, row.type, row.nullable]);
+		})).toEqual([
+			['block_details', 'hash', 'hash32', 'NO'],
+			['block_details', 'date', 'timestamptz_ms', 'NO'],
+			['block_details', 'version', 'smallint', 'NO'],
+			['block_details', 'purpose', 'smallint', 'NO'],
+			['block_details', 'signer_id', 'bigint', 'NO'],
+			['operations', 'block_hash', 'hash32', 'NO'],
+			['operations', 'idx', 'integer', 'NO'],
+			['operations', 'type', 'smallint', 'NO'],
+			['operations', 'account_id', 'bigint', 'NO'],
+			['operations', 'counterparty_id', 'bigint', 'YES'],
+			['operations', 'token_id', 'bigint', 'YES'],
+			['operations', 'amount', 'amount', 'YES'],
+			['operations', 'staple_time', 'timestamptz_ms', 'NO'],
+			['operations', 'details', 'jsonb', 'NO'],
+			['projection_backfill', 'singleton', 'boolean', 'NO'],
+			['projection_backfill', 'complete_from', 'bigint', 'NO']
+		]);
+		const foreignKeys = await pool.query(`SELECT table_name FROM information_schema.table_constraints
+			WHERE table_schema = current_schema() AND constraint_type = 'FOREIGN KEY' AND table_name IN ('block_details', 'operations', 'projection_backfill')`);
+		expect(foreignKeys.rows).toEqual([]);
+		const indexes = await pool.query<{ relname: string; definition: string }>(`SELECT relname, regexp_replace(pg_get_indexdef(oid), '^.* USING ', '') AS definition FROM pg_class
+			WHERE relname IN ('operations_pkey', 'operations_account_time', 'operations_counterparty_time', 'operations_token_time', 'balances_token_holders')
+			ORDER BY relname`);
+		expect(indexes.rows).toEqual([
+			{ relname: 'balances_token_holders', definition: 'btree (token_id, balance DESC) WHERE ((balance)::numeric <> (0)::numeric)' },
+			{ relname: 'operations_account_time', definition: 'btree (account_id, staple_time DESC)' },
+			{ relname: 'operations_counterparty_time', definition: 'btree (counterparty_id, staple_time DESC) WHERE (counterparty_id IS NOT NULL)' },
+			{ relname: 'operations_pkey', definition: 'btree (block_hash, idx)' },
+			{ relname: 'operations_token_time', definition: 'btree (token_id, staple_time DESC) WHERE (token_id IS NOT NULL)' }
+		]);
+		const backfill = await pool.query<{ complete_from: string }>('SELECT complete_from::text FROM projection_backfill');
+		expect(backfill.rows).toEqual([{ complete_from: String(BigInt(second.rows[0]?.sequence ?? '0') + 1n) }]);
+		await expect(pool.query('INSERT INTO projection_backfill (singleton, complete_from) VALUES (false, 1)')).rejects.toThrow(/check/);
+		await expect(pool.query('INSERT INTO projection_backfill (complete_from) VALUES (1)')).rejects.toThrow(/duplicate key/);
+	});
+
 	test('a migration runs without the session\'s statement timeout, which the session gets back afterwards', async function() {
 		const database = await freshDatabase();
 		// One connection, so the setting read afterwards is the migrating session's.

@@ -407,7 +407,7 @@ describe('the Postgres driver', function() {
 		await storage.abortTransaction(transaction);
 
 		const versions = await database.pool().query<{ version: number }>('SELECT version FROM schema_version ORDER BY version');
-		expect(versions.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }]);
+		expect(versions.rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }]);
 	});
 
 	test('destroy ends a pool the driver opened and leaves an injected pool to its owner', async function() {

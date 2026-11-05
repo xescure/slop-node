@@ -928,6 +928,8 @@ Writes everything that one confirmed staple changes, all of it or none of it (se
 
 The unique indexes back the checks of steps 1 and 2 against another process: `blocks_main_successor` admits one confirmed successor per previous, and `idempotent_keys_main` one main block per key.
 
+The driver also writes, in the savepoint of the staple, a `block_details` row for each of its blocks and an `operations` row for each of their operations, with the accounts, token and amount each names. The memory driver writes none.
+
 #### `runIsolated`
 
 ```ts

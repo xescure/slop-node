@@ -32,6 +32,7 @@ export default {
 		'hardlinks',
 		'reloptions',
 		'relname',
+		'indexdef',
 		'pghost',
 		'pgport',
 		'nextval',
