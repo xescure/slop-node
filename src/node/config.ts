@@ -60,7 +60,8 @@ export const NODE_VARIABLES = [
 	'KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS',
 	'KEETANET_LOCAL_NODE_MAX_PEER_SOCKETS',
 	'KEETANET_LOCAL_NODE_MAX_POSTED_MESSAGES',
-	'KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE'
+	'KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE',
+	'KEETANET_LOCAL_NODE_BACKFILL_PROJECTION'
 ] as const;
 
 export const TRUSTED_ACCOUNT_VARIABLE = 'KEETANET_INITIAL_TRUSTED_ACCOUNT';
@@ -191,6 +192,9 @@ export type ConfigProblem =
 	| { readonly kind: 'remembered-peers'; readonly network: Networks; readonly ledgerWriteMode: LedgerWriteMode; readonly arenas: readonly PeerArena[] }
 	| { readonly kind: 'peers-in-memory' }
 	| { readonly kind: 'history-in-memory' }
+	| { readonly kind: 'projection-in-memory' }
+	| { readonly kind: 'backfill-in-memory' }
+	| { readonly kind: 'backfill-read-only' }
 	| { readonly kind: 'automatic-peers'; readonly variable: PeerVariable; readonly because: 'local-network' | 'listed-with-others' }
 	| { readonly kind: 'peer-signature-invalid'; readonly key: string }
 	| { readonly kind: 'duplicate-peer'; readonly key: string }
@@ -235,6 +239,12 @@ function describeProblem(problem: ConfigProblem): string {
 			return('clear-peers needs KEETANET_LOCAL_NODE_POSTGRES_URL: a node in memory forgets its peers when it stops');
 		case 'history-in-memory':
 			return('reindex-history needs KEETANET_LOCAL_NODE_POSTGRES_URL: a node in memory writes its history anew each time it starts');
+		case 'projection-in-memory':
+			return('backfill-projection needs KEETANET_LOCAL_NODE_POSTGRES_URL: a ledger in memory keeps no decoded rows to fill in');
+		case 'backfill-in-memory':
+			return('KEETANET_LOCAL_NODE_BACKFILL_PROJECTION=on needs KEETANET_LOCAL_NODE_POSTGRES_URL: a ledger in memory keeps no decoded rows to fill in');
+		case 'backfill-read-only':
+			return('KEETANET_LOCAL_NODE_BACKFILL_PROJECTION=on fills in the rows once the node has caught up with its peers, which a node in read-only mode never does: leave it off and run "slop-node backfill-projection", or set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to another mode');
 		case 'automatic-peers':
 			switch (problem.because) {
 				case 'local-network':
@@ -327,6 +337,8 @@ export type EnvironmentConfig = {
 	readonly fee: FeePolicy;
 	/** Off by default, as upstream has it [Keeta TS] index.js:70019. */
 	readonly enableTokenAdminModifyBalance: boolean;
+	/** Whether the node, once caught up with its peers, fills in the decoded rows of the staples stored before it kept them. */
+	readonly backfillProjection: boolean;
 };
 
 const DEFAULT_LOG_LEVEL: LogTargetLevel = 'INFO';
@@ -954,6 +966,17 @@ function parseBoolean(variable: ConfigVariable, text: string): boolean {
 	}
 }
 
+function parseOnOff(variable: ConfigVariable, text: string): boolean {
+	switch (text) {
+		case 'on':
+			return(true);
+		case 'off':
+			return(false);
+		default:
+			throw(invalid(variable, 'on or off', text));
+	}
+}
+
 const FEE_SEED_VARIABLES = ['KEETANET_LOCAL_NODE_FEE_SEED', 'KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX', 'KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX'] as const satisfies readonly ConfigVariable[];
 const FEE_RECIPIENT_VARIABLES = [...FEE_SEED_VARIABLES, 'KEETANET_LOCAL_NODE_FEE_ACCOUNTS', 'KEETANET_LOCAL_NODE_FEE_TOKEN'] as const satisfies readonly ConfigVariable[];
 
@@ -1190,6 +1213,20 @@ function refuseVotesInMemory(network: NetworkSelection, ledgerWriteMode: LedgerW
 	}
 }
 
+/* The backfill waits for the node to catch up with its peers, which a read-only node never tries (LocalNode's bootstrap). */
+function readBackfillProjection(reader: EnvironmentReader, ledgerWriteMode: LedgerWriteMode, storage: StorageChoice): boolean {
+	const backfill = reader.read('KEETANET_LOCAL_NODE_BACKFILL_PROJECTION', function(text: string): boolean {
+		return(parseOnOff('KEETANET_LOCAL_NODE_BACKFILL_PROJECTION', text));
+	}, false);
+	if (backfill && storage.kind === 'memory') {
+		throw(new ConfigError({ kind: 'backfill-in-memory' }));
+	}
+	if (backfill && ledgerWriteMode === 'read-only') {
+		throw(new ConfigError({ kind: 'backfill-read-only' }));
+	}
+	return(backfill);
+}
+
 /**
  * The node's key. A node that only follows a public network greets no one
  * and signs nothing (closureToP2P), so a key made at random each time it
@@ -1275,7 +1312,8 @@ export function getConfigFromEnv(environment: Environment, representatives: Know
 		fee: readFeePolicy(reader),
 		enableTokenAdminModifyBalance: reader.read('KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE', function(text: string): boolean {
 			return(parseBoolean('KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE', text));
-		}, false)
+		}, false),
+		backfillProjection: readBackfillProjection(reader, ledgerWriteMode, storage)
 	});
 }
 

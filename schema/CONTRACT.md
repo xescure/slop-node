@@ -930,6 +930,8 @@ The unique indexes back the checks of steps 1 and 2 against another process: `bl
 
 The driver also writes, in the savepoint of the staple, a `block_details` row for each of its blocks and an `operations` row for each of their operations, with the accounts, token and amount each names. The memory driver writes none.
 
+The staples stored before migration 0012 have no rows. `PostgresLedgerStorage.backfillProjection` writes them, newest first, in batches of their own transactions, each lowering `projection_backfill.complete_from` to its oldest staple; then it fills in, once, the staples from where it began on that hold a main block without its `block_details` row. Its inserts skip rows already written, so it runs beside a node and beside another backfill. Tested by `src/ledger/storage/postgres/driver.test.ts: "two backfills at once write each row once"` and `"a backfill beside staples being confirmed writes each row once, and leaves the live staples' rows as they were"`.
+
 #### `runIsolated`
 
 ```ts

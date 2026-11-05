@@ -100,6 +100,7 @@ describe('the defaults', function() {
 		expect(config.listen).toEqual({ ip: '127.0.0.1', port: 0 });
 		expect(config.fee).toEqual({ kind: 'free' });
 		expect(config.enableTokenAdminModifyBalance).toBe(false);
+		expect(config.backfillProjection).toBe(false);
 		expect(config.endpoints).toEqual({ api: undefined, p2p: undefined });
 		expect(config.preferUpdates).toBe('websocket');
 		expect(config.manualPeers).toEqual([]);
@@ -1063,6 +1064,31 @@ describe('KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE', function() {
 	});
 });
 
+describe('KEETANET_LOCAL_NODE_BACKFILL_PROJECTION', function() {
+	test.each([['on', true], ['off', false]] as const)('reads %j', function(value, expected) {
+		expect(parse({ KEETANET_LOCAL_NODE_POSTGRES_URL: POSTGRES_URL, KEETANET_LOCAL_NODE_BACKFILL_PROJECTION: value }).backfillProjection).toBe(expected);
+	});
+
+	test.each(['true', 'ON', 'yes', '1'])('the setting refuses anything but on and off, naming it: %j', function(value) {
+		expect(problemOf({ KEETANET_LOCAL_NODE_POSTGRES_URL: POSTGRES_URL, KEETANET_LOCAL_NODE_BACKFILL_PROJECTION: value })).toEqual({ kind: 'invalid', variable: 'KEETANET_LOCAL_NODE_BACKFILL_PROJECTION', expected: 'on or off', value });
+	});
+
+	test('is refused on in memory, which keeps no decoded rows, and left off there', function() {
+		expect(problemOf({ KEETANET_LOCAL_NODE_BACKFILL_PROJECTION: 'on' })).toEqual({ kind: 'backfill-in-memory' });
+		expect(parse({ KEETANET_LOCAL_NODE_BACKFILL_PROJECTION: 'off' }).backfillProjection).toBe(false);
+	});
+
+	test.each(LEDGER_WRITE_MODES.filter(function(mode): boolean {
+		return(mode !== 'read-only');
+	}))('is read on in %s mode, where the node catches up with its peers', function(mode) {
+		expect(parse({ KEETANET_LOCAL_NODE_POSTGRES_URL: POSTGRES_URL, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: mode, KEETANET_LOCAL_NODE_BACKFILL_PROJECTION: 'on' }).backfillProjection).toBe(true);
+	});
+
+	test('is refused on in read-only mode, where the node never catches up with its peers', function() {
+		expect(problemOf({ KEETANET_LOCAL_NODE_POSTGRES_URL: POSTGRES_URL, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-only', KEETANET_LOCAL_NODE_BACKFILL_PROJECTION: 'on' })).toEqual({ kind: 'backfill-read-only' });
+	});
+});
+
 describe('a value the node cannot read', function() {
 	const flat: Environment = { KEETANET_LOCAL_NODE_FEE_SCHEDULE: 'flat:10' };
 	const fullRange: Environment = { ...flat, KEETANET_LOCAL_NODE_FEE_SEED: FEE_SEED, KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX: '2', KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX: '4' };
@@ -1085,6 +1111,7 @@ describe('a value the node cannot read', function() {
 		['a pacing of the bootstrap', { KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS: 'second' }, 'KEETANET_LOCAL_NODE_BOOTSTRAP_MIN_INTERVAL_MS must be a whole number of milliseconds from 0 to 60000 (it is "second")'],
 		['a peer limit', { KEETANET_LOCAL_NODE_MAX_PEER_SOCKETS: '0' }, `KEETANET_LOCAL_NODE_MAX_PEER_SOCKETS must be a whole number from 1 to ${String(MAX_PEER_LIMIT)} (it is "0")`],
 		['a switch', { KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE: 'yes' }, 'KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE must be true or false (it is "yes")'],
+		['a setting that is on or off', { KEETANET_LOCAL_NODE_POSTGRES_URL: POSTGRES_URL, KEETANET_LOCAL_NODE_BACKFILL_PROJECTION: 'true' }, 'KEETANET_LOCAL_NODE_BACKFILL_PROJECTION must be on or off (it is "true")'],
 		['a fee schedule', { KEETANET_LOCAL_NODE_FEE_SCHEDULE: 'daily' }, 'KEETANET_LOCAL_NODE_FEE_SCHEDULE must be free, or flat:<base units per block> (it is "daily")'],
 		['a list of fee accounts', { ...flat, KEETANET_LOCAL_NODE_FEE_ACCOUNTS: ' , ' }, 'KEETANET_LOCAL_NODE_FEE_ACCOUNTS must be a comma-separated list of public keys (it is " , ")'],
 		['a fee account', { ...flat, KEETANET_LOCAL_NODE_FEE_ACCOUNTS: keyOf(TOKEN) }, `KEETANET_LOCAL_NODE_FEE_ACCOUNTS must be public keys of accounts or storage accounts (it is "${keyOf(TOKEN) ?? ''}")`],
@@ -1182,6 +1209,18 @@ const DESCRIBED_PROBLEMS: { readonly [Kind in ConfigProblem['kind']]: { readonly
 	'history-in-memory': {
 		problem: { kind: 'history-in-memory' },
 		message: 'reindex-history needs KEETANET_LOCAL_NODE_POSTGRES_URL: a node in memory writes its history anew each time it starts'
+	},
+	'projection-in-memory': {
+		problem: { kind: 'projection-in-memory' },
+		message: 'backfill-projection needs KEETANET_LOCAL_NODE_POSTGRES_URL: a ledger in memory keeps no decoded rows to fill in'
+	},
+	'backfill-in-memory': {
+		problem: { kind: 'backfill-in-memory' },
+		message: 'KEETANET_LOCAL_NODE_BACKFILL_PROJECTION=on needs KEETANET_LOCAL_NODE_POSTGRES_URL: a ledger in memory keeps no decoded rows to fill in'
+	},
+	'backfill-read-only': {
+		problem: { kind: 'backfill-read-only' },
+		message: 'KEETANET_LOCAL_NODE_BACKFILL_PROJECTION=on fills in the rows once the node has caught up with its peers, which a node in read-only mode never does: leave it off and run "slop-node backfill-projection", or set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to another mode'
 	},
 	'automatic-peers': {
 		problem: { kind: 'automatic-peers', variable: 'KEETANET_LOCAL_NODE_MANUAL_PEERS', because: 'local-network' },

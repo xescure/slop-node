@@ -11,6 +11,7 @@ import {
 	createTokenBlock,
 	manageCertificateBlock,
 	modifyPermissionsBlock,
+	multisigSendBlock,
 	operationsBlock,
 	receiveBlock,
 	sendBlock,
@@ -25,13 +26,17 @@ import { interceptQueries, serverError } from '../../../testing/query-faults.js'
 import { MemoryLedgerStorage } from '../memory/driver.js';
 import { blocksHashesOf, certificateFor, certificateIssuedBy, ChainCursor, checksumOf, DEFAULT_WEIGHTS, GENESIS_MOMENT, headOf, requireAt } from '../suite/support.js';
 import type { TransactionOptions } from '../base.js';
-import { catchUpVotes, catchUpVotesAfter, foldLedgerChecksum, insertBlockDetails, insertMainVotes, insertOperations, mainLedgerCounts, readLedgerChecksum } from './confirmed-statements.js';
+import { backfillOperations, catchUpVotes, catchUpVotesAfter, foldLedgerChecksum, insertBlockDetails, insertMainVotes, insertOperations, mainLedgerCounts, readLedgerChecksum } from './confirmed-statements.js';
 import { addressesOf, decodeBlock } from './decode.js';
-import { PostgresLedgerStorage } from './driver.js';
-import type { HistoryReindex, PostgresTransaction } from './driver.js';
+import type { Address, DecodedBlock } from './decode.js';
+import { BACKFILL_BATCH_STAPLES, PostgresLedgerStorage, projectionRowsOf } from './driver.js';
+import type { HistoryReindex, PostgresTransaction, ProjectionBackfill } from './driver.js';
 import type { PostgresPoolSource } from './pool.js';
+import type { AccountID } from './sql.js';
 
 const lib = KeetaNet.lib;
+
+const NEWCOMER_SEED = '5e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b5e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b';
 
 // A vote on a test database takes tens of milliseconds.
 const ONE_CONNECTION_TIMEOUT_MILLISECONDS = 10000;
@@ -1286,6 +1291,50 @@ describe('the projection', function() {
 		expect(projection).toEqual(await decodedLedgerOf(pool));
 	});
 
+	test('a block a multisig signs has the multisig as its signer', async function() {
+		const context = await projectionFixture();
+		const { network, cursor, pool } = context;
+		const owner = requireAt(network.users, 0);
+		const signers = [lib.Account.fromSeed(NEWCOMER_SEED, 1), lib.Account.fromSeed(NEWCOMER_SEED, 2)];
+		const { block: creation, multisig } = await createMultisigBlock({ owner, signers, quorum: 2n, previous: cursor.previous(owner), network: network.network });
+		cursor.append(creation);
+		const delegated = cursor.append(await modifyPermissionsBlock({ account: owner, previous: cursor.previous(owner), network: network.network, principal: multisig, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['SEND_ON_BEHALF']), target: network.baseToken }));
+		await context.apply([creation, delegated]);
+		advanceClock(1000);
+		const signed = cursor.append(await multisigSendBlock({ from: owner, signer: [multisig, signers], to: requireAt(network.users, 1), amount: 1n, token: network.baseToken, previous: cursor.previous(owner), network: network.network }));
+
+		await context.apply([signed]);
+
+		const projection = await projectionOf(pool);
+		expect(projection[blockHashOf(signed)]?.signer).toBe(multisig.publicKeyString.get());
+		expect(projection).toEqual(await decodedLedgerOf(pool));
+	});
+
+	// No block upstream validates carries a NUL in its details, so the rows are built from a decoded block that does.
+	test('a NUL in the details of an operation is written as U+FFFD, which jsonb accepts', async function() {
+		const { network, pool } = await projectionFixture();
+		const account = requireAt(network.users, 0).publicKeyString.get() as Address;
+		const interned = await pool.query<{ id: AccountID; public_key: string }>('SELECT id, public_key FROM accounts WHERE public_key = $1', [account]);
+		const ids = new Map(interned.rows.map(function(row): [string, AccountID] {
+			return([row.public_key, row.id]);
+		}));
+		const block: DecodedBlock = {
+			account,
+			signer: account,
+			date: GENESIS_MOMENT,
+			version: 1,
+			purpose: 0,
+			operations: [{ index: 0, type: 'SET_INFO', account, counterparty: null, token: null, amount: null, details: { name: 'A\u0000B', 'note\u0000': ['C\u0000D', 'plain'], exact: true, quorum: null } }]
+		};
+		const hash = Buffer.alloc(32, 1);
+		const { operations } = projectionRowsOf([{ blocksHash: 'FF'.repeat(32), stapleTime: GENESIS_MOMENT, blocks: [{ hash, decoded: block }] }], ids);
+
+		await pool.query({ text: insertOperations.text, values: operations });
+
+		const stored = await pool.query<{ details: unknown }>('SELECT details FROM operations WHERE block_hash = $1', [hash]);
+		expect(stored.rows).toEqual([{ details: { name: 'A\uFFFDB', 'note\uFFFD': ['C\uFFFDD', 'plain'], exact: true, quorum: null } }]);
+	});
+
 	test('a ledger built from genesis has rows for every staple, and complete_from at its first', async function() {
 		const context = await projectionFixture();
 		const { network, cursor, pool } = context;
@@ -1313,3 +1362,240 @@ describe('the projection', function() {
 		expect(backfill.rows).toEqual([{ complete_from: requireAt(staples.rows, 0).sequence }]);
 	});
 });
+
+describe('the projection backfill', function() {
+	afterEach(function() {
+		vi.useRealTimers();
+	});
+
+	test('a backfill writes the rows of every staple below complete_from, newest first, and lowers it to the oldest', async function() {
+		const context = await projectionFixture();
+		const { pool, storage } = context;
+		await applyEveryOperation(context);
+		await applySends(context, BACKFILL_BATCH_STAPLES);
+		const sequences = await sequencesOf(pool);
+		const operations = await operationCountOf(pool);
+		await asMigrated(pool);
+		const newest = sequences.slice(-BACKFILL_BATCH_STAPLES);
+		const progress: { readonly done: ProjectionBackfill; readonly filled: readonly bigint[] }[] = [];
+
+		const done = await storage.backfillProjection(async function(reached) {
+			progress.push({ done: reached, filled: await filledOf(pool) });
+		});
+
+		const oldest = requireAt(sequences, 0);
+		expect(progress.map(function({ done: reached }) {
+			return([reached.completeFrom, reached.staples]);
+		})).toEqual([[requireAt(newest, 0), BACKFILL_BATCH_STAPLES], [oldest, sequences.length]]);
+		expect(requireAt(progress, 0).filled).toEqual(newest);
+		expect(done).toEqual({ completeFrom: oldest, staples: sequences.length, operations });
+		expect(await completeFromOf(pool)).toBe(oldest);
+		expect(await projectionOf(pool)).toEqual(await decodedLedgerOf(pool));
+	});
+
+	test('a backfill stopped after a batch resumes below the staple it reached', async function() {
+		const context = await projectionFixture();
+		const { pool, storage } = context;
+		await applyEveryOperation(context);
+		await applySends(context, BACKFILL_BATCH_STAPLES);
+		const sequences = await sequencesOf(pool);
+		await asMigrated(pool);
+		const newest = sequences.slice(-BACKFILL_BATCH_STAPLES);
+
+		await expect(storage.backfillProjection(function() {
+			return(Promise.reject(new Error('stopped')));
+		})).rejects.toThrow('stopped');
+		expect(await completeFromOf(pool)).toBe(requireAt(newest, 0));
+		expect(await filledOf(pool)).toEqual(newest);
+
+		const resumed = await storage.backfillProjection();
+
+		expect(resumed).toMatchObject({ completeFrom: requireAt(sequences, 0), staples: sequences.length - BACKFILL_BATCH_STAPLES });
+		expect(await projectionOf(pool)).toEqual(await decodedLedgerOf(pool));
+	});
+
+	test('two backfills at once write each row once', async function() {
+		const context = await projectionFixture();
+		const { pool, storage } = context;
+		await applyEveryOperation(context);
+		await applySends(context, BACKFILL_BATCH_STAPLES);
+		const sequences = await sequencesOf(pool);
+		const operations = await operationCountOf(pool);
+		await asMigrated(pool);
+		const rival = injectedStorageOn(pool);
+
+		const both = await Promise.all([storage.backfillProjection(), rival.backfillProjection()]);
+
+		const oldest = requireAt(sequences, 0);
+		expect(both.map(function(done) {
+			return(done.completeFrom);
+		})).toEqual([oldest, oldest]);
+		expect(await completeFromOf(pool)).toBe(oldest);
+		expect(await rowCountsOf(pool)).toEqual({ blocks: await mainBlockCountOf(pool), operations });
+		expect(await projectionOf(pool)).toEqual(await decodedLedgerOf(pool));
+	});
+
+	test('a backfill beside staples being confirmed writes each row once, and leaves the live staples\' rows as they were', async function() {
+		const context = await projectionFixture();
+		const { pool, storage, network, cursor } = context;
+		await applyEveryOperation(context);
+		await applySends(context, BACKFILL_BATCH_STAPLES);
+		const sequences = await sequencesOf(pool);
+		await asMigrated(pool);
+		const live: { readonly hash: string; readonly rows: unknown }[] = [];
+
+		const done = await storage.backfillProjection(async function() {
+			const from = requireAt(network.users, live.length);
+			const block = cursor.append(await sendBlock({ from, to: requireAt(network.users, live.length + 1), amount: 1n, token: network.baseToken, previous: cursor.previous(from), network: network.network }));
+			await context.apply([block]);
+			live.push({ hash: blockHashOf(block), rows: (await projectionOf(pool))[blockHashOf(block)] });
+		});
+
+		expect(live).toHaveLength(2);
+		const projection = await projectionOf(pool);
+		for (const { hash, rows } of live) {
+			expect(projection[hash]).toEqual(rows);
+		}
+		expect(done).toMatchObject({ completeFrom: requireAt(sequences, 0), staples: sequences.length });
+		expect(await rowCountsOf(pool)).toEqual({ blocks: await mainBlockCountOf(pool), operations: await operationCountOf(pool) });
+		expect(projection).toEqual(await decodedLedgerOf(pool));
+	});
+
+	test('a backfill fills a staple above complete_from whose rows are missing, as one an older build stored after the migration would be', async function() {
+		const context = await projectionFixture();
+		const { pool, storage, network, cursor } = context;
+		await applyEveryOperation(context);
+		const migrated = (await sequencesOf(pool)).length;
+		const migratedOperations = await operationCountOf(pool);
+		const migratedFrom = await asMigrated(pool);
+		const from = requireAt(network.users, 0);
+		// The first staple stored after the migration, by a build that writes no rows.
+		const old = cursor.append(await sendBlock({ from, to: requireAt(network.users, 1), amount: 1n, token: network.baseToken, previous: cursor.previous(from), network: network.network }));
+		await context.apply([old]);
+		await pool.query('DELETE FROM operations WHERE block_hash = $1', [old.hash.getBuffer()]);
+		await pool.query('DELETE FROM block_details WHERE hash = $1', [old.hash.getBuffer()]);
+		await applySends(context, 2);
+		expect(requireAt(await sequencesOf(pool), migrated)).toBe(migratedFrom);
+
+		const done = await storage.backfillProjection();
+
+		expect(done).toEqual({ completeFrom: requireAt(await sequencesOf(pool), 0), staples: migrated + 1, operations: migratedOperations + old.operations.length });
+		expect(await projectionOf(pool)).toEqual(await decodedLedgerOf(pool));
+		expect(await storage.backfillProjection()).toEqual({ completeFrom: done.completeFrom, staples: 0, operations: 0 });
+	});
+
+	test('a backfill whose batch fails writes none of it, and leaves complete_from where it was', async function() {
+		const context = await projectionFixture();
+		const { pool, storage } = context;
+		await applyEveryOperation(context);
+		const migratedFrom = await asMigrated(pool);
+		failing(pool, function(text) {
+			return(text === backfillOperations.text);
+		}, function() {
+			return(serverError('XX000', 'the server failed'));
+		});
+
+		await expect(storage.backfillProjection()).rejects.toThrow('the server failed');
+
+		expect(await projectionOf(pool)).toEqual({});
+		expect(await completeFromOf(pool)).toBe(migratedFrom);
+	});
+
+	test('backfilled rows equal the rows the live path wrote for the same staples', async function() {
+		const context = await projectionFixture();
+		const { pool, storage } = context;
+		await applyEveryOperation(context);
+		await applySends(context, 2);
+		const live = await projectionOf(pool);
+		await asMigrated(pool);
+		expect(await projectionOf(pool)).toEqual({});
+
+		await storage.backfillProjection();
+
+		expect(await projectionOf(pool)).toEqual(live);
+	});
+
+	test('a backfill that meets an address with no id stops, names the staple and the address, and writes nothing for that batch', async function() {
+		const context = await projectionFixture();
+		const { pool, storage } = context;
+		await applyEveryOperation(context);
+		const migratedFrom = await asMigrated(pool);
+		// The last staple creates a multisig whose first signer only its details name.
+		const newcomer = lib.Account.fromSeed('6b5a4c3d2e1f0a9b8c7d6e5f4a3b2c1d6b5a4c3d2e1f0a9b8c7d6e5f4a3b2c1d', 0).publicKeyString.get();
+		const naming = await pool.query<{ blocks_hash: Buffer }>('SELECT blocks_hash FROM staples ORDER BY sequence DESC LIMIT 1');
+		interceptQueries(pool, async function(issued, run) {
+			const result = await run();
+			if (issued.name === 'ledger_account_ids_of') {
+				const rows: unknown = Reflect.get(Object(result), 'rows');
+				if (Array.isArray(rows)) {
+					Reflect.set(Object(result), 'rows', rows.filter(function(row: { public_key?: unknown }) {
+						return(row.public_key !== newcomer);
+					}));
+				}
+			}
+			return(result);
+		});
+
+		await expect(storage.backfillProjection()).rejects.toThrow(`internal error: staple ${requireAt(naming.rows, 0).blocks_hash.toString('hex').toUpperCase()} names account ${newcomer}, which was not interned`);
+
+		expect(await projectionOf(pool)).toEqual({});
+		expect(await completeFromOf(pool)).toBe(migratedFrom);
+	});
+});
+
+/** A staple of one send for each, among the users in turn. */
+const applySends = async function(context: ProjectionFixture, count: number): Promise<void> {
+	const { network, cursor } = context;
+	for (let index = 0; index < count; index++) {
+		const from = requireAt(network.users, index % network.users.length);
+		const to = requireAt(network.users, (index + 1) % network.users.length);
+		await context.apply([cursor.append(await sendBlock({ from, to, amount: 1n, token: network.baseToken, previous: cursor.previous(from), network: network.network }))]);
+	}
+};
+
+/** The ledger as the projection's migration leaves one that held these staples: no rows, and complete from after the newest. */
+const asMigrated = async function(pool: pg.Pool): Promise<bigint> {
+	await pool.query('DELETE FROM operations');
+	await pool.query('DELETE FROM block_details');
+	await pool.query('UPDATE projection_backfill SET complete_from = (SELECT max(sequence) + 1 FROM staples)');
+	return(await completeFromOf(pool));
+};
+
+const completeFromOf = async function(pool: pg.Pool): Promise<bigint> {
+	const rows = await pool.query<{ complete_from: string }>('SELECT complete_from::text AS complete_from FROM projection_backfill');
+	return(BigInt(requireAt(rows.rows, 0).complete_from));
+};
+
+const sequencesOf = async function(pool: pg.Pool): Promise<bigint[]> {
+	const rows = await pool.query<{ sequence: string }>('SELECT sequence::text AS sequence FROM staples ORDER BY staples.sequence');
+	return(rows.rows.map(function(row) {
+		return(BigInt(row.sequence));
+	}));
+};
+
+/** The staples that have rows of their blocks, oldest first. */
+const filledOf = async function(pool: pg.Pool): Promise<bigint[]> {
+	const rows = await pool.query<{ sequence: string }>(`
+		SELECT DISTINCT staples.sequence::text AS sequence, staples.sequence AS position
+		FROM block_details JOIN blocks ON blocks.hash = block_details.hash JOIN staples ON staples.blocks_hash = blocks.staple
+		ORDER BY position`);
+	return(rows.rows.map(function(row) {
+		return(BigInt(row.sequence));
+	}));
+};
+
+const operationCountOf = async function(pool: pg.Pool): Promise<number> {
+	const rows = await pool.query<{ count: string }>('SELECT coalesce(sum(operation_count), 0)::text AS count FROM blocks WHERE ledger = \'main\'');
+	return(Number(requireAt(rows.rows, 0).count));
+};
+
+const mainBlockCountOf = async function(pool: pg.Pool): Promise<number> {
+	const rows = await pool.query<{ count: string }>('SELECT count(*)::text AS count FROM blocks WHERE ledger = \'main\'');
+	return(Number(requireAt(rows.rows, 0).count));
+};
+
+const rowCountsOf = async function(pool: pg.Pool): Promise<{ readonly blocks: number; readonly operations: number }> {
+	const rows = await pool.query<{ blocks: string; operations: string }>('SELECT (SELECT count(*) FROM block_details)::text AS blocks, (SELECT count(*) FROM operations)::text AS operations');
+	const row = requireAt(rows.rows, 0);
+	return({ blocks: Number(row.blocks), operations: Number(row.operations) });
+};

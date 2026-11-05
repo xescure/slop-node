@@ -14,6 +14,7 @@ import type { JSONLogAttributes, JSONLogLevel } from './log-format.js';
 import { DEFAULT_PEER_LIMITS, MAX_PEER_LIMIT } from './peer-limits.js';
 import { forgetPeers, PEER_ARENAS, refuseRememberedPeers } from './peer-store.js';
 import { P2P_PATH } from './peers.js';
+import { pause, ProjectionBackfillRunner } from './projection-backfill.js';
 import { closeStorage, nodeResourcesOf, openStorage } from './storage.js';
 import type { OpenedStorage } from './storage.js';
 
@@ -30,7 +31,7 @@ export type Output = {
 	readonly error: (text: string) => void;
 };
 
-const COMMANDS = ['run', 'genesis', 'clear-peers', 'reindex-history', 'help'] as const;
+const COMMANDS = ['run', 'genesis', 'clear-peers', 'reindex-history', 'backfill-projection', 'help'] as const;
 
 type Command = typeof COMMANDS[number];
 
@@ -39,6 +40,7 @@ const COMMAND_HELP: Readonly<Record<Command, string>> = {
 	genesis: 'add the first staple of a new network to the ledger in Postgres',
 	'clear-peers': 'make the node in Postgres forget every peer it remembers; run it while the node is stopped',
 	'reindex-history': 'list each staple of the ledger in Postgres in the history of the accounts it involves, as this build does; run it while the node is stopped',
+	'backfill-projection': 'fill in the decoded blocks and operations of the staples the ledger in Postgres stored before it kept them; it may run beside the node',
 	help: 'print this text'
 };
 
@@ -69,6 +71,7 @@ const VARIABLE_HELP: Readonly<Record<ConfigVariable, string>> = {
 	KEETANET_LOCAL_NODE_MAX_PEER_SOCKETS: `the most sockets peers and listeners hold open on ${P2P_PATH} at once, from 1 to ${String(MAX_PEER_LIMIT)} (${String(DEFAULT_PEER_LIMITS.sockets)})`,
 	KEETANET_LOCAL_NODE_MAX_POSTED_MESSAGES: `the most messages peers post over HTTP that it handles at once, from 1 to ${String(MAX_PEER_LIMIT)} (${String(DEFAULT_PEER_LIMITS.postedMessages)})`,
 	KEETANET_LOCAL_NODE_ENABLE_TOKEN_ADMIN_MODIFY_BALANCE: 'true lets the node vote for TOKEN_ADMIN_MODIFY_BALANCE (false)',
+	KEETANET_LOCAL_NODE_BACKFILL_PROJECTION: 'on lets the node do what backfill-projection does, once, after it has caught up with its peers; it needs KEETANET_LOCAL_NODE_POSTGRES_URL and a write mode other than read-only (off)',
 	KEETANET_GENESIS_TRUSTED_SEED: 'the seed of the trusted account (required)',
 	KEETANET_GENESIS_TRUSTED_SEED_INDEX: 'the index of its key under the seed (0)',
 	KEETANET_GENESIS_SUPPLY: 'the base token supply, in base units, held by the trusted account (required)',
@@ -244,8 +247,35 @@ async function refuseRememberedPeersIn(config: EnvironmentConfig, storage: Opene
 	}
 }
 
+/** The backfill the configuration asks for, which counts the node caught up once an update of its bootstrap has been complete. */
+function projectionBackfillRunnerOf(config: EnvironmentConfig, storage: OpenedStorage, node: LocalNode): ProjectionBackfillRunner | undefined {
+	if (!config.backfillProjection) {
+		return(undefined);
+	}
+	switch (storage.kind) {
+		case 'memory':
+			throw(new ConfigError({ kind: 'backfill-in-memory' }));
+		case 'postgres': {
+			const { ledger } = storage;
+			return(new ProjectionBackfillRunner({
+				caughtUp: async function(): Promise<boolean> {
+					return(((await node.bootstrap?.stats())?.completeCount ?? 0) > 0);
+				},
+				backfill: function(progress) {
+					return(ledger.backfillProjection(progress));
+				},
+				log: node.log,
+				pause
+			}));
+		}
+		default:
+			return(assertNever(storage));
+	}
+}
+
 /**
- * Serves until a signal, then stops serving, waiting for the requests in
+ * Serves until a signal, beside the projection backfill if the configuration
+ * asks for it, then stops it and serving, waiting for the requests in
  * flight, and closes the storage. While it serves, a rejection nothing
  * handles is logged and the node carries on; while it starts or stops, one
  * still ends the process with a failure, since the node is then not known to
@@ -268,13 +298,18 @@ async function run(config: EnvironmentConfig, output: Output): Promise<void> {
 			await node.ledger.getHeadBlock(node.networkAddress, 'main');
 			log.startAutoSync();
 			await node.run();
-			const uninstall = logUnhandledRejections(log);
+			const backfill = projectionBackfillRunnerOf(config, storage, node);
 			try {
-				output.out(startupSummaryLines(config.log.format, await startupSummary(config, storage, node)));
-				const signal = await stopping.received;
-				output.out(ownLine(config.log.format, `stopping on ${signal}\n`, 'info', `stopping on ${signal}`));
+				const uninstall = logUnhandledRejections(log);
+				try {
+					output.out(startupSummaryLines(config.log.format, await startupSummary(config, storage, node)));
+					const signal = await stopping.received;
+					output.out(ownLine(config.log.format, `stopping on ${signal}\n`, 'info', `stopping on ${signal}`));
+				} finally {
+					uninstall();
+				}
 			} finally {
-				uninstall();
+				await backfill?.stop();
 			}
 		} finally {
 			await node.stop();
@@ -365,6 +400,29 @@ async function reindexHistory(config: EnvironmentConfig, output: Output): Promis
 	}
 }
 
+/** Fills in the rows of the ledger's staples stored before it kept them, beside a node or without one. */
+async function backfillProjection(config: EnvironmentConfig, output: Output): Promise<void> {
+	const storage = openStorage(config.storage);
+	try {
+		switch (storage.kind) {
+			case 'memory':
+				throw(new ConfigError({ kind: 'projection-in-memory' }));
+			case 'postgres': {
+				const done = await storage.ledger.backfillProjection(function(progress) {
+					output.out(`backfilled ${String(progress.staples)} staples, ${String(progress.operations)} operations\n`);
+					return(Promise.resolve());
+				});
+				output.out(`done: ${String(done.staples)} staples, ${String(done.operations)} operations backfilled; every staple from the one stored as ${done.completeFrom.toString()} has its rows\n`);
+				return;
+			}
+			default:
+				assertNever(storage);
+		}
+	} finally {
+		await closeStorage(storage);
+	}
+}
+
 /** The log levels that ask for the details of a failure. */
 const DETAILED_LOG_LEVELS: ReadonlySet<string> = new Set(['DEBUG', 'ALL']);
 
@@ -424,6 +482,9 @@ async function runCommand(command: Command, environment: Environment, output: Ou
 			return;
 		case 'reindex-history':
 			await reindexHistory(getConfigFromEnv(environment, CLIENT_REPRESENTATIVES), output);
+			return;
+		case 'backfill-projection':
+			await backfillProjection(getConfigFromEnv(environment, CLIENT_REPRESENTATIVES), output);
 			return;
 		default:
 			assertNever(command);
