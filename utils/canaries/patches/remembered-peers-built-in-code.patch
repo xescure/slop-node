@@ -11,4 +11,4 @@ diff --git a/src/node/local.ts b/src/node/local.ts
 -		}
  	}
  
- 	/** A node open to peers also dials those it learns of, but none it is configured with, nor itself. */
+ 	/** A node open to peers also dials those it learns of, but none it is configured with, nor itself under any key it had. */

@@ -228,6 +228,36 @@ describe('peers configured through the environment', function() {
 	});
 
 	/*
+	 * A peer that prefers updates over HTTP is dialed without a greeting, and
+	 * taken as known and seen at once [Keeta TS] index.js:74781-74815, so that
+	 * the switch never learns that it answers at the node's own address.
+	 */
+	test('learned of at the node\'s own address are not dialed, as only a key it had before advertises one there', async function() {
+		const first = await nodes.start(await nodes.environmentFor('memory'));
+		const before = await nodes.start(await nodes.environmentFor('memory', { KEETANET_LOCAL_NODE_SEED_INDEX: '2', KEETANET_LOCAL_NODE_PREFER_UPDATES: 'http' }));
+		const pastSelf = await before.node.switch.getOutgoingGreetingInfo();
+		const port = new URL(before.node.config.endpoints?.p2p ?? '').port;
+		await before.stop();
+		const second = await nodes.start(await nodes.environmentFor('memory', { ...SECOND, KEETANET_LOCAL_NODE_LISTEN_PORT: port }), { discoveryPeriodMilliseconds: 50 });
+		const dialed = vi.spyOn(second.node.switch, 'addManualPeer');
+		function dialedKeys(): string[] {
+			return(representativeKeys(dialed.mock.calls.map(function([peer]): P2PPeer {
+				return(peer);
+			})));
+		}
+
+		// As the peers' exchange of advertisements leaves them, the node's own before it changed keys among them.
+		await second.node.switch.config.kv.set('potentialPeers', keyOf(before.representative), pastSelf);
+		await second.node.switch.config.kv.set('potentialPeers', keyOf(first.representative), await first.node.switch.getOutgoingGreetingInfo());
+
+		// A round of dialing adds each peer it chose at once, so the round that dialed the first has dialed every peer it chose.
+		await vi.waitFor(function() {
+			expect(dialedKeys()).toContain(keyOf(first.representative));
+		}, { timeout: 5000, interval: 50 });
+		expect(dialedKeys()).not.toContain(keyOf(before.representative));
+	});
+
+	/*
 	 * The switch closes its connections as it stops [Keeta TS] index.js:73811-73821,
 	 * but unregisters each, writing to its store, only once the socket has
 	 * closed [Keeta TS] index.js:73472-73477, 73881-73898.

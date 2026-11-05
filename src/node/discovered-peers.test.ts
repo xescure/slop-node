@@ -7,12 +7,12 @@ import { chooseDiscoveredPeers } from './discovered-peers.js';
 
 type Entry = readonly ['knownPeers' | 'potentialPeers', string, JSONSerializableObject];
 
-async function choose(entries: readonly Entry[], excluded: readonly string[], limit: number): Promise<string[]> {
+async function choose(entries: readonly Entry[], excluded: readonly string[], limit: number, address?: string): Promise<string[]> {
 	const store = new KVInternals.KVStorageProviderMemory();
 	for (const [arena, key, value] of entries) {
 		await store.set(arena, key, value);
 	}
-	const peers = await chooseDiscoveredPeers(store, new Set(excluded), limit);
+	const peers = await chooseDiscoveredPeers(store, { keys: new Set(excluded), address }, limit);
 	return(peers.map(function(peer): string {
 		return(peer.key.publicKeyString.get());
 	}));
@@ -41,6 +41,22 @@ describe('the discovered peers a node dials', function() {
 			['potentialPeers', MAIN_REP1.key, MAIN_REP1],
 			['potentialPeers', MAIN_REP2.key, MAIN_REP2]
 		], [MAIN_REP1.key], 8);
+		expect(chosen).toEqual([MAIN_REP2.key]);
+	});
+
+	test('leave out every advertisement of the node\'s own address, which only a key it had before signs', async function() {
+		const chosen = await choose([
+			['knownPeers', MAIN_REP1.key, MAIN_REP1],
+			['potentialPeers', MAIN_REP2.key, MAIN_REP2]
+		], [], 8, MAIN_REP1.endpoints.p2p);
+		expect(chosen).toEqual([MAIN_REP2.key]);
+	});
+
+	test('take the node\'s address as the same however its host is cased', async function() {
+		const chosen = await choose([
+			['potentialPeers', MAIN_REP1.key, MAIN_REP1],
+			['potentialPeers', MAIN_REP2.key, MAIN_REP2]
+		], [], 8, MAIN_REP1.endpoints.p2p.replace('rep1.main', 'REP1.Main'));
 		expect(chosen).toEqual([MAIN_REP2.key]);
 	});
 
