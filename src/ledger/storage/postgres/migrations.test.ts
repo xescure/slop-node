@@ -266,10 +266,11 @@ describe('applyMigrations', function() {
 		expect((await emptyPool.query('SELECT complete_from::text FROM projection_backfill')).rows).toEqual([{ complete_from: '1' }]);
 
 		expect(await applyMigrations(pool, older, clockAt(FIRST_START))).toBe(11);
-		for (const label of ['first', 'second']) {
+		// The first is deleted, so the sequences are 2 and 3 and the count is no guide to the highest.
+		for (const label of ['first', 'second', 'third']) {
 			await pool.query('INSERT INTO staples (blocks_hash, staple_time, moment, bytes, checksum) VALUES (sha256(convert_to($1, \'UTF8\')), $2, $2, \'\\x00\', repeat(\'0\', 256)::bit(256))', [label, FIRST_START]);
 		}
-		const second = await pool.query<{ sequence: string }>('SELECT sequence::text FROM staples WHERE blocks_hash = sha256(convert_to(\'second\', \'UTF8\'))');
+		await pool.query('DELETE FROM staples WHERE blocks_hash = sha256(convert_to(\'first\', \'UTF8\'))');
 
 		expect(await applyMigrations(pool, SCHEMA_MIGRATIONS, clockAt(SECOND_START))).toBe(shipped.length);
 
@@ -301,17 +302,18 @@ describe('applyMigrations', function() {
 			WHERE table_schema = current_schema() AND constraint_type = 'FOREIGN KEY' AND table_name IN ('block_details', 'operations', 'projection_backfill')`);
 		expect(foreignKeys.rows).toEqual([]);
 		const indexes = await pool.query<{ relname: string; definition: string }>(`SELECT relname, regexp_replace(pg_get_indexdef(oid), '^.* USING ', '') AS definition FROM pg_class
-			WHERE relname IN ('operations_pkey', 'operations_account_time', 'operations_counterparty_time', 'operations_token_time', 'balances_token_holders')
+			WHERE relnamespace = current_schema()::regnamespace AND relname IN ('block_details_pkey', 'operations_pkey', 'operations_account_time', 'operations_counterparty_time', 'operations_token_time', 'balances_token_holders')
 			ORDER BY relname`);
 		expect(indexes.rows).toEqual([
 			{ relname: 'balances_token_holders', definition: 'btree (token_id, balance DESC) WHERE ((balance)::numeric <> (0)::numeric)' },
+			{ relname: 'block_details_pkey', definition: 'btree (hash)' },
 			{ relname: 'operations_account_time', definition: 'btree (account_id, staple_time DESC)' },
 			{ relname: 'operations_counterparty_time', definition: 'btree (counterparty_id, staple_time DESC) WHERE (counterparty_id IS NOT NULL)' },
 			{ relname: 'operations_pkey', definition: 'btree (block_hash, idx)' },
 			{ relname: 'operations_token_time', definition: 'btree (token_id, staple_time DESC) WHERE (token_id IS NOT NULL)' }
 		]);
 		const backfill = await pool.query<{ complete_from: string }>('SELECT complete_from::text FROM projection_backfill');
-		expect(backfill.rows).toEqual([{ complete_from: String(BigInt(second.rows[0]?.sequence ?? '0') + 1n) }]);
+		expect(backfill.rows).toEqual([{ complete_from: '4' }]);
 		await expect(pool.query('INSERT INTO projection_backfill (singleton, complete_from) VALUES (false, 1)')).rejects.toThrow(/check/);
 		await expect(pool.query('INSERT INTO projection_backfill (complete_from) VALUES (1)')).rejects.toThrow(/duplicate key/);
 	});

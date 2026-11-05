@@ -33,6 +33,8 @@ export default {
 		'reloptions',
 		'relname',
 		'indexdef',
+		'relnamespace',
+		'regnamespace',
 		'pghost',
 		'pgport',
 		'nextval',
