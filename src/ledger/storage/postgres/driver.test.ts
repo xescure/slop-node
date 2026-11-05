@@ -29,7 +29,7 @@ import type { TransactionOptions } from '../base.js';
 import { backfillOperations, catchUpVotes, catchUpVotesAfter, foldLedgerChecksum, insertBlockDetails, insertMainVotes, insertOperations, mainLedgerCounts, readLedgerChecksum } from './confirmed-statements.js';
 import { addressesOf, decodeBlock } from './decode.js';
 import type { Address, DecodedBlock } from './decode.js';
-import { BACKFILL_BATCH_STAPLES, PostgresLedgerStorage, projectionRowsOf } from './driver.js';
+import { BACKFILL_BATCH_STAPLES, PostgresLedgerStorage, projectionRowsOf, SWEEP_WINDOW_STAPLES } from './driver.js';
 import type { HistoryReindex, PostgresTransaction, ProjectionBackfill } from './driver.js';
 import type { PostgresPoolSource } from './pool.js';
 import type { AccountID } from './sql.js';
@@ -1476,12 +1476,91 @@ describe('the projection backfill', function() {
 		await pool.query('DELETE FROM block_details WHERE hash = $1', [old.hash.getBuffer()]);
 		await applySends(context, 2);
 		expect(requireAt(await sequencesOf(pool), migrated)).toBe(migratedFrom);
+		const newest = await newestOf(pool);
+		const swept = sweepReadsOf(pool);
 
 		const done = await storage.backfillProjection();
 
+		expect(swept).toEqual([[String(migratedFrom - 1n), String(newest), BACKFILL_BATCH_STAPLES]]);
+		expect(await sweptThroughOf(pool)).toBe(newest);
 		expect(done).toEqual({ completeFrom: requireAt(await sequencesOf(pool), 0), staples: migrated + 1, operations: migratedOperations + old.operations.length });
 		expect(await projectionOf(pool)).toEqual(await decodedLedgerOf(pool));
 		expect(await storage.backfillProjection()).toEqual({ completeFrom: done.completeFrom, staples: 0, operations: 0 });
+	});
+
+	test('a second run after a complete backfill reads only the staples stored since the last sweep', async function() {
+		const context = await projectionFixture();
+		const { pool, storage } = context;
+		await applyEveryOperation(context);
+		await asMigrated(pool);
+		await storage.backfillProjection();
+		const sweptBefore = await newestOf(pool);
+		expect(await sweptThroughOf(pool)).toBe(sweptBefore);
+		await applySends(context, 2);
+		const newest = await newestOf(pool);
+		const swept = sweepReadsOf(pool);
+
+		expect(await storage.backfillProjection()).toMatchObject({ staples: 0, operations: 0 });
+
+		expect(swept).toEqual([[String(sweptBefore), String(newest), BACKFILL_BATCH_STAPLES]]);
+		expect(await sweptThroughOf(pool)).toBe(newest);
+		swept.length = 0;
+		await storage.backfillProjection();
+		expect(swept).toEqual([]);
+	});
+
+	test('the sweep reads at most a window of staples at a time', async function() {
+		const context = await projectionFixture();
+		const { pool, storage } = context;
+		await applyEveryOperation(context);
+		await asMigrated(pool);
+		await storage.backfillProjection();
+		const sweptBefore = await newestOf(pool);
+		// Staple rows without blocks, which only stretch the range the sweep reads.
+		await pool.query(`INSERT INTO staples (blocks_hash, staple_time, moment, bytes, checksum)
+			SELECT sha256(convert_to('bare ' || n, 'UTF8')), $1, $1, '\\x00', repeat('0', 256)::bit(256) FROM generate_series(1, $2::integer) AS n`, [GENESIS_MOMENT, Number(SWEEP_WINDOW_STAPLES) + 5]);
+		const newest = await newestOf(pool);
+		const swept = sweepReadsOf(pool);
+
+		await storage.backfillProjection();
+
+		const windowEnd = sweptBefore + SWEEP_WINDOW_STAPLES;
+		expect(swept).toEqual([[String(sweptBefore), String(windowEnd), BACKFILL_BATCH_STAPLES], [String(windowEnd), String(newest), BACKFILL_BATCH_STAPLES]]);
+		expect(await sweptThroughOf(pool)).toBe(newest);
+	});
+
+	test('a stop asked for during the sweep ends it between windows, and the next sweep begins where it reached', async function() {
+		const context = await projectionFixture();
+		const { pool, storage } = context;
+		await applyEveryOperation(context);
+		await asMigrated(pool);
+		// Staples an older build stores after the migration, more than one batch of them.
+		await applySends(context, BACKFILL_BATCH_STAPLES + 2);
+		await pool.query('DELETE FROM operations USING blocks, staples WHERE operations.block_hash = blocks.hash AND blocks.staple = staples.blocks_hash AND staples.sequence >= (SELECT complete_from FROM projection_backfill)');
+		await pool.query('DELETE FROM block_details USING blocks, staples WHERE block_details.hash = blocks.hash AND blocks.staple = staples.blocks_hash AND staples.sequence >= (SELECT complete_from FROM projection_backfill)');
+		const stale = (await sequencesOf(pool)).slice(-(BACKFILL_BATCH_STAPLES + 2));
+		const stopping = new AbortController();
+		let batches = 0;
+
+		await expect(storage.backfillProjection(function() {
+			batches++;
+			if (batches === 2) {
+				stopping.abort();
+			}
+			return(Promise.resolve());
+		}, stopping.signal)).rejects.toMatchObject({ name: 'AbortError' });
+
+		const reached = requireAt(stale, BACKFILL_BATCH_STAPLES - 1);
+		expect(await sweptThroughOf(pool)).toBe(reached);
+		expect((await filledOf(pool)).filter(function(sequence) {
+			return(sequence >= requireAt(stale, 0));
+		})).toEqual(stale.slice(0, BACKFILL_BATCH_STAPLES));
+		const swept = sweepReadsOf(pool);
+
+		expect(await storage.backfillProjection()).toMatchObject({ staples: 2 });
+
+		expect(requireAt(swept, 0)[0]).toBe(String(reached));
+		expect(await projectionOf(pool)).toEqual(await decodedLedgerOf(pool));
 	});
 
 	test('a backfill whose batch fails writes none of it, and leaves complete_from where it was', async function() {
@@ -1598,4 +1677,30 @@ const rowCountsOf = async function(pool: pg.Pool): Promise<{ readonly blocks: nu
 	const rows = await pool.query<{ blocks: string; operations: string }>('SELECT (SELECT count(*) FROM block_details)::text AS blocks, (SELECT count(*) FROM operations)::text AS operations');
 	const row = requireAt(rows.rows, 0);
 	return({ blocks: Number(row.blocks), operations: Number(row.operations) });
+};
+
+const newestOf = async function(pool: pg.Pool): Promise<bigint> {
+	const sequences = await sequencesOf(pool);
+	return(requireAt(sequences, sequences.length - 1));
+};
+
+const sweptThroughOf = async function(pool: pg.Pool): Promise<bigint | null> {
+	const rows = await pool.query<{ swept_through: string | null }>('SELECT swept_through::text AS swept_through FROM projection_backfill');
+	const swept = requireAt(rows.rows, 0).swept_through;
+	if (swept === null) {
+		return(null);
+	}
+	return(BigInt(swept));
+};
+
+/** The parameters of every read of the sweep from now on: after, through and the batch's limit. */
+const sweepReadsOf = function(pool: pg.Pool): unknown[][] {
+	const reads: unknown[][] = [];
+	interceptQueries(pool, function(issued, run) {
+		if (issued.name === 'ledger_staples_missing_rows') {
+			reads.push([...issued.values]);
+		}
+		return(run());
+	});
+	return(reads);
 };

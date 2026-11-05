@@ -248,6 +248,18 @@ const MODULES = {
 		],
 		ignorers: [],
 		selectedCases: {}
+	},
+	/*
+	 * When the node runs the projection backfill beside itself: once it has
+	 * caught up, between batches only while it stays so, again after a
+	 * failure, and no further once stopped; measured by its own tests, with
+	 * the backfill and the node's state stood in for.
+	 */
+	'projection-backfill': {
+		mutate: ['src/node/projection-backfill.ts'],
+		tests: ['src/node/projection-backfill.test.ts'],
+		ignorers: [],
+		selectedCases: {}
 	}
 };
 

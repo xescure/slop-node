@@ -452,22 +452,28 @@ export const staplesToBackfill: Statement<[string, number], BackfilledStaple> = 
 		SELECT sequence, blocks_hash, staple_time FROM staples WHERE sequence < $1 ORDER BY sequence DESC LIMIT $2
 	`, 'DESC'));
 
-/** The main staples after a sequence number that hold a main block without its block_details row, oldest first. */
-export const staplesMissingRows: Statement<[string, number], BackfilledStaple> = statement('staples_missing_rows', withBlocks(`
+/** The main staples after a sequence number and up to another that hold a main block without its block_details row, oldest first. */
+export const staplesMissingRows: Statement<[string, string, number], BackfilledStaple> = statement('staples_missing_rows', withBlocks(`
 		SELECT sequence, blocks_hash, staple_time FROM staples
-		WHERE sequence > $1 AND EXISTS (
+		WHERE sequence > $1 AND sequence <= $2 AND EXISTS (
 			SELECT 1 FROM blocks
 			WHERE blocks.staple = staples.blocks_hash AND blocks.ledger = 'main'
 				AND NOT EXISTS (SELECT 1 FROM block_details WHERE block_details.hash = blocks.hash)
 		)
-		ORDER BY sequence LIMIT $2
+		ORDER BY sequence LIMIT $3
 	`, 'ASC'));
+
+export const newestStapleSequence: Statement<[], { sequence: IntegerText }> = statement('newest_staple_sequence', 'SELECT coalesce(max(sequence), 0) AS sequence FROM staples');
 
 export const accountIDsOf: Statement<[string[]], { id: AccountID; public_key: string }> = statement('account_ids_of', `
 	SELECT id, public_key FROM accounts WHERE public_key = ANY($1::text[])`);
 
-export const projectionCompleteFrom: Statement<[], { complete_from: IntegerText }> = statement('projection_complete_from', 'SELECT complete_from FROM projection_backfill');
+export const projectionBackfillState: Statement<[], { complete_from: IntegerText; swept_through: IntegerText | null }> = statement('projection_backfill_state', 'SELECT complete_from, swept_through FROM projection_backfill');
 
 // complete_from only moves down, whichever of two backfills commits first.
 export const lowerBackfill: Statement<[string]> = statement('lower_backfill', `
 	UPDATE projection_backfill SET complete_from = $1 WHERE complete_from > $1`);
+
+// swept_through only moves up, as complete_from only moves down.
+export const raiseSwept: Statement<[string]> = statement('raise_swept', `
+	UPDATE projection_backfill SET swept_through = $1 WHERE swept_through IS NULL OR swept_through < $1`);

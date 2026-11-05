@@ -37,10 +37,13 @@ CREATE INDEX operations_token_time ON operations (token_id, staple_time DESC) WH
 -- complete_from is the lowest staple sequence from which every main staple has
 -- its rows. The migration records the cutover, as the staples written before
 -- it have none; only a backfill of them lowers it, so applying a staple never
--- touches this row.
+-- touches this row. A staple an older build stores beside this one, after the
+-- cutover, has no rows either; swept_through is the highest sequence up to
+-- which a backfill has looked for such staples, or null before one has.
 CREATE TABLE projection_backfill (
 	singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
-	complete_from bigint NOT NULL
+	complete_from bigint NOT NULL,
+	swept_through bigint
 );
 
 INSERT INTO projection_backfill (complete_from)

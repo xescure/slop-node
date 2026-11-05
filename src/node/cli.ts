@@ -261,8 +261,8 @@ function projectionBackfillRunnerOf(config: EnvironmentConfig, storage: OpenedSt
 				caughtUp: async function(): Promise<boolean> {
 					return(((await node.bootstrap?.stats())?.completeCount ?? 0) > 0);
 				},
-				backfill: function(progress) {
-					return(ledger.backfillProjection(progress));
+				backfill: function(progress, signal) {
+					return(ledger.backfillProjection(progress, signal));
 				},
 				log: node.log,
 				pause

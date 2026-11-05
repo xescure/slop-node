@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import type { Logger } from '@keetanetwork/keetanet-client/lib/log/index.js';
 import type { ProjectionBackfill } from '../ledger/storage/postgres/driver.js';
-import { BACKFILL_RETRY_MILLISECONDS, CAUGHT_UP_POLL_MILLISECONDS, ProjectionBackfillRunner } from './projection-backfill.js';
+import { BACKFILL_RETRY_MILLISECONDS, CAUGHT_UP_POLL_MILLISECONDS, pause, ProjectionBackfillRunner } from './projection-backfill.js';
 import type { ProjectionBackfillIO } from './projection-backfill.js';
 
 class RecordingLog implements Logger {
@@ -166,6 +166,32 @@ describe('the projection backfill beside a node', function() {
 		await runner.stop();
 	});
 
+	test('hands the backfill a signal that aborts once it is stopped, and not before', async function() {
+		const surroundings = new Surroundings(1);
+		surroundings.caughtUp = true;
+		let handed: AbortSignal | undefined;
+		let release: (() => void) | undefined;
+		const runner = new ProjectionBackfillRunner({
+			...surroundings.io,
+			backfill: async function(_progress, signal) {
+				handed = signal;
+				await new Promise<void>(function(resolve) {
+					release = resolve;
+				});
+				return(doneAfter(1));
+			}
+		});
+		await vi.waitFor(function() {
+			expect(handed?.aborted).toBe(false);
+		});
+
+		const stopped = runner.stop();
+
+		expect(handed?.aborted).toBe(true);
+		release?.();
+		await stopped;
+	});
+
 	test('stopped while it waits for the node, never backfills, and logs no failure', async function() {
 		const surroundings = new Surroundings(1);
 		const runner = new ProjectionBackfillRunner(surroundings.io);
@@ -216,5 +242,24 @@ describe('the projection backfill beside a node', function() {
 		await stopped;
 
 		expect(surroundings.log.lines).toEqual(['info PROJECTION Projection backfill: 1 staples, 2 operations filled in; every staple from the one stored as 99 has its rows']);
+	});
+});
+
+describe('a pause of the projection backfill', function() {
+	test('ends after its time', async function() {
+		const began = Date.now();
+
+		await pause(20, new AbortController().signal);
+
+		expect(Date.now() - began).toBeGreaterThanOrEqual(19);
+	});
+
+	test('fails once its signal aborts', async function() {
+		const stopping = new AbortController();
+		const paused = pause(60_000, stopping.signal);
+
+		stopping.abort();
+
+		await expect(paused).rejects.toMatchObject({ name: 'AbortError' });
 	});
 });

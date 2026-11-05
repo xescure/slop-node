@@ -73,9 +73,11 @@ import {
 	markInvolved,
 	mergeAccountInfo,
 	nonZeroBalances,
+	newestStapleSequence,
 	ownersOf,
-	projectionCompleteFrom,
+	projectionBackfillState,
 	raiseHeads,
+	raiseSwept,
 	readLedgerChecksum,
 	removeCertificate,
 	removeHistoryRows,
@@ -388,6 +390,9 @@ export type ProjectionBackfill = {
 
 /** The staples a backfill decodes and writes in one transaction; a heavy staple of the main network holds about a thousand operations. */
 export const BACKFILL_BATCH_STAPLES = 20;
+
+/** The staples one read of the sweep looks through at most, so that each read is short whatever the ledger holds, and a stop waits for one only. */
+export const SWEEP_WINDOW_STAPLES = 10_000n;
 
 function resolved(): Promise<void> {
 	return(Promise.resolve());
@@ -928,59 +933,100 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * are complete from, in batches, and decodes each batch outside any
 	 * transaction, then writes it in a transaction of its own, which also
 	 * lowers where they are complete from to the batch's oldest staple; so a
-	 * backfill that was stopped resumes below it. Then it fills in, once, the
-	 * staples above where it began that hold a main block without its rows,
-	 * as an older build beside this one stores them. It runs beside a live
-	 * node, and beside another backfill: neither writes a row another wrote.
-	 * Once every staple has its rows, it writes nothing. The next batch waits
-	 * for the progress, which hears the totals after each.
+	 * backfill that was stopped resumes below it. Then it sweeps the staples
+	 * above where it began, or above where the last sweep reached, up to the
+	 * newest, for those that hold a main block without its rows, as an older
+	 * build beside this one stores them, in windows that each record where
+	 * the sweep reached. It runs beside a live node, and beside another
+	 * backfill: neither writes a row another wrote. Once every staple has its
+	 * rows, it writes nothing, and reads only the staples stored since. The
+	 * next batch waits for the progress, which hears the totals after each,
+	 * and none begins once the signal aborts.
 	 */
-	async backfillProjection(progress: (done: ProjectionBackfill) => Promise<void> = resolved): Promise<ProjectionBackfill> {
+	async backfillProjection(progress: (done: ProjectionBackfill) => Promise<void> = resolved, signal?: AbortSignal): Promise<ProjectionBackfill> {
 		const { pool } = await this.#pool.connection();
-		const stored = onlyRow((await pool.query<{ complete_from: IntegerText }>({ name: projectionCompleteFrom.name, text: projectionCompleteFrom.text })).rows);
+		const stored = onlyRow((await pool.query<{ complete_from: IntegerText; swept_through: IntegerText | null }>({ name: projectionBackfillState.name, text: projectionBackfillState.text })).rows);
 		if (stored === undefined) {
 			throw(new Error('internal error: the projection backfill has no row'));
 		}
 		const began = fromInteger(stored.complete_from);
 		let done: ProjectionBackfill = { completeFrom: began, staples: 0, operations: 0 };
 		for (;;) {
-			const rows = await this.#staplesToBackfill(staplesToBackfill, done.completeFrom);
+			signal?.throwIfAborted();
+			const rows = await this.#staplesToBackfill(done.completeFrom);
 			const oldest = rows.at(-1);
 			if (oldest === undefined) {
 				break;
 			}
 			const reached = fromInteger(oldest.sequence);
-			const operations = await this.#backfill(rows, reached);
+			const operations = await this.#backfill(rows, lowerBackfill, reached);
 			done = { completeFrom: reached, staples: done.staples + rows.length, operations: done.operations + operations };
 			await progress(done);
 		}
+		/*
+		 * Every staple below where the walk began has its rows now, so the sweep
+		 * looks only above. An earlier sweep looked above where its own walk
+		 * began, which is no lower, as complete_from only falls.
+		 */
 		let after = began - 1n;
-		for (;;) {
-			const rows = await this.#staplesToBackfill(staplesMissingRows, after);
+		if (stored.swept_through === null) {
+			await this.#raiseSwept(after);
+		} else {
+			after = fromInteger(stored.swept_through);
+		}
+		const newest = await this.#newestSequence();
+		while (after < newest) {
+			signal?.throwIfAborted();
+			let through = after + SWEEP_WINDOW_STAPLES;
+			if (through > newest) {
+				through = newest;
+			}
+			const rows = (await pool.query<BackfilledStaple>({ name: staplesMissingRows.name, text: staplesMissingRows.text, values: [toNumeric(after), toNumeric(through), BACKFILL_BATCH_STAPLES] })).rows;
 			const last = rows.at(-1);
 			if (last === undefined) {
-				return(done);
+				await this.#raiseSwept(through);
+			} else {
+				// A full batch may leave staples of the window unread, which the next read begins after.
+				if (rows.length === BACKFILL_BATCH_STAPLES) {
+					through = fromInteger(last.sequence);
+				}
+				const operations = await this.#backfill(rows, raiseSwept, through);
+				done = { ...done, staples: done.staples + rows.length, operations: done.operations + operations };
+				await progress(done);
 			}
-			after = fromInteger(last.sequence);
-			const operations = await this.#backfill(rows, undefined);
-			done = { ...done, staples: done.staples + rows.length, operations: done.operations + operations };
-			await progress(done);
+			after = through;
 		}
+		return(done);
 	}
 
-	async #staplesToBackfill(query: Statement<[string, number], BackfilledStaple>, from: bigint): Promise<BackfilledStaple[]> {
+	async #staplesToBackfill(below: bigint): Promise<BackfilledStaple[]> {
 		const { pool } = await this.#pool.connection();
-		return((await pool.query<BackfilledStaple>({ name: query.name, text: query.text, values: [toNumeric(from), BACKFILL_BATCH_STAPLES] })).rows);
+		return((await pool.query<BackfilledStaple>({ name: staplesToBackfill.name, text: staplesToBackfill.text, values: [toNumeric(below), BACKFILL_BATCH_STAPLES] })).rows);
+	}
+
+	async #raiseSwept(through: bigint): Promise<void> {
+		const { pool } = await this.#pool.connection();
+		await pool.query({ name: raiseSwept.name, text: raiseSwept.text, values: [toNumeric(through)] });
+	}
+
+	async #newestSequence(): Promise<bigint> {
+		const { pool } = await this.#pool.connection();
+		const row = onlyRow((await pool.query<{ sequence: IntegerText }>({ name: newestStapleSequence.name, text: newestStapleSequence.text })).rows);
+		if (row === undefined) {
+			throw(new Error('internal error: the newest staple sequence returned no row'));
+		}
+		return(fromInteger(row.sequence));
 	}
 
 	/*
 	 * A heavy staple takes tens of milliseconds to decode, so the batch yields
 	 * after each to the work of a live node beside it. The transaction is READ
 	 * COMMITTED: a row another backfill or staple wrote meanwhile is then
-	 * skipped, and complete_from compared with what the other committed, where
-	 * SERIALIZABLE would fail the batch instead.
+	 * skipped, and complete_from or swept_through compared with what the
+	 * other committed, where SERIALIZABLE would fail the batch instead. It
+	 * records where the batch reached with the rows.
 	 */
-	async #backfill(rows: readonly BackfilledStaple[], lowerTo: bigint | undefined): Promise<number> {
+	async #backfill(rows: readonly BackfilledStaple[], reaching: Statement<[string]>, reached: bigint): Promise<number> {
 		const staples: ProjectedStaple[] = [];
 		for (const row of rows) {
 			staples.push({
@@ -998,9 +1044,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 		try {
 			await transaction.run(backfillBlockDetails, blocks);
 			await transaction.run(backfillOperations, operations);
-			if (lowerTo !== undefined) {
-				await transaction.run(lowerBackfill, [toNumeric(lowerTo)]);
-			}
+			await transaction.run(reaching, [toNumeric(reached)]);
 		} catch (error: unknown) {
 			await transaction.abort();
 			throw(error);

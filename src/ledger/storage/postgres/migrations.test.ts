@@ -296,7 +296,8 @@ describe('applyMigrations', function() {
 			['operations', 'staple_time', 'timestamptz_ms', 'NO'],
 			['operations', 'details', 'jsonb', 'NO'],
 			['projection_backfill', 'singleton', 'boolean', 'NO'],
-			['projection_backfill', 'complete_from', 'bigint', 'NO']
+			['projection_backfill', 'complete_from', 'bigint', 'NO'],
+			['projection_backfill', 'swept_through', 'bigint', 'YES']
 		]);
 		const foreignKeys = await pool.query(`SELECT table_name FROM information_schema.table_constraints
 			WHERE table_schema = current_schema() AND constraint_type = 'FOREIGN KEY' AND table_name IN ('block_details', 'operations', 'projection_backfill')`);
@@ -312,8 +313,8 @@ describe('applyMigrations', function() {
 			{ relname: 'operations_pkey', definition: 'btree (block_hash, idx)' },
 			{ relname: 'operations_token_time', definition: 'btree (token_id, staple_time DESC) WHERE (token_id IS NOT NULL)' }
 		]);
-		const backfill = await pool.query<{ complete_from: string }>('SELECT complete_from::text FROM projection_backfill');
-		expect(backfill.rows).toEqual([{ complete_from: '4' }]);
+		const backfill = await pool.query<{ complete_from: string; swept_through: string | null }>('SELECT complete_from::text, swept_through::text FROM projection_backfill');
+		expect(backfill.rows).toEqual([{ complete_from: '4', swept_through: null }]);
 		await expect(pool.query('INSERT INTO projection_backfill (singleton, complete_from) VALUES (false, 1)')).rejects.toThrow(/check/);
 		await expect(pool.query('INSERT INTO projection_backfill (complete_from) VALUES (1)')).rejects.toThrow(/duplicate key/);
 	});

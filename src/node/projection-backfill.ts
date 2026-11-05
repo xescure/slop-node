@@ -13,7 +13,8 @@ export const BACKFILL_RETRY_MILLISECONDS = 60_000;
 export type ProjectionBackfillIO = {
 	/** Whether the node has caught up with its peers, so that applying their staples is not behind. */
 	readonly caughtUp: () => Promise<boolean>;
-	readonly backfill: (progress: (done: ProjectionBackfill) => Promise<void>) => Promise<ProjectionBackfill>;
+	/** Begins no batch once the signal aborts. */
+	readonly backfill: (progress: (done: ProjectionBackfill) => Promise<void>, signal: AbortSignal) => Promise<ProjectionBackfill>;
 	readonly log: Logger;
 	/** Resolves after that long, or rejects once the signal aborts. */
 	readonly pause: (milliseconds: number, signal: AbortSignal) => Promise<void>;
@@ -57,7 +58,7 @@ export class ProjectionBackfillRunner {
 				const done = await this.#io.backfill(async (progress) => {
 					this.#io.log.info(LOG_SOURCE, `Projection backfill: ${describeBackfill(progress)}`);
 					await this.#whenCaughtUp();
-				});
+				}, signal);
 				this.#io.log.info(LOG_SOURCE, `Projection backfill done: ${describeBackfill(done)}`);
 				return;
 			} catch (error: unknown) {
