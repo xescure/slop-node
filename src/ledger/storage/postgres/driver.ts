@@ -44,10 +44,12 @@ import {
 	foldLedgerChecksum,
 	headsOf,
 	historyReindexCursor,
+	insertBlockDetails,
 	insertChain,
 	insertMainBlocks,
 	insertMainIdempotentKeys,
 	insertMainVotes,
+	insertOperations,
 	insertStaple,
 	keepHistoryReindexCursor,
 	mainBlock,
@@ -78,8 +80,10 @@ import {
 	totalWeight,
 	weightOf
 } from './confirmed-statements.js';
-import type { ACLColumns, AccountInfoColumns, CatchUpVoteColumns, CertificateColumns, LedgerCountsColumns, ReindexedStaple } from './confirmed-statements.js';
+import type { ACLColumns, AccountInfoColumns, BlockDetailsParameters, CatchUpVoteColumns, CertificateColumns, LedgerCountsColumns, OperationParameters, ReindexedStaple } from './confirmed-statements.js';
 import { checkIn, checkOut } from './connection.js';
+import { addressesOf, decodeBlock as decodedBlockOf } from './decode.js';
+import type { Address } from './decode.js';
 import { mapDatabaseError } from './errors.js';
 import { MigratedPostgresPool } from './pool.js';
 import type { PostgresPoolSource } from './pool.js';
@@ -544,6 +548,68 @@ function principalCertificateOf(update: ACLUpdate): Buffer | null {
 		default:
 			return(assertNever(update));
 	}
+}
+
+function numericOrNull(value: bigint | null): string | null {
+	if (value === null) {
+		return(null);
+	}
+	return(toNumeric(value));
+}
+
+type ProjectionRows = { readonly blocks: BlockDetailsParameters; readonly operations: OperationParameters };
+
+/*
+ * A decoded address is the public key string the ids are keyed by. The change
+ * interns every account a block names, those only in an operation's details
+ * included: upstream counts each among the accounts the staple touches or may
+ * create [Keeta TS] index.js:69348-69411, 69763-69766, 69838, and the sender
+ * a receive names sent in the same staple. One without an id is a bug, and
+ * the staple fails rather than store a row that names nobody.
+ */
+function projectionRowsOf(staple: VoteStaple, ids: AccountIDs): ProjectionRows {
+	const idOfAddress = function(address: Address): AccountID {
+		const id = ids.get(address);
+		if (id === undefined) {
+			throw(new Error(`internal error: staple ${staple.blocksHash.toString()} names account ${address}, which was not interned`));
+		}
+		return(id);
+	};
+	const optionalIDOf = function(address: Address | null): AccountID | null {
+		if (address === null) {
+			return(null);
+		}
+		return(idOfAddress(address));
+	};
+	const stapleTime = staple.timestamp();
+	const blocks: BlockDetailsParameters = [[], [], [], [], []];
+	const operations: OperationParameters = [[], [], [], [], [], [], [], [], []];
+	const [hashes, dates, versions, purposes, signers] = blocks;
+	const [blockHashes, indexes, types, accounts, counterparties, tokens, amounts, stapleTimes, details] = operations;
+	for (const block of staple.blocks) {
+		const decoded = decodedBlockOf(block);
+		for (const address of addressesOf(decoded)) {
+			idOfAddress(address);
+		}
+		const hash = hashBytes(block.hash);
+		hashes.push(hash);
+		dates.push(decoded.date);
+		versions.push(decoded.version);
+		purposes.push(decoded.purpose);
+		signers.push(idOfAddress(decoded.signer));
+		for (const operation of decoded.operations) {
+			blockHashes.push(hash);
+			indexes.push(operation.index);
+			types.push(lib.Block.OperationType[operation.type]);
+			accounts.push(idOfAddress(operation.account));
+			counterparties.push(optionalIDOf(operation.counterparty));
+			tokens.push(optionalIDOf(operation.token));
+			amounts.push(numericOrNull(operation.amount));
+			stapleTimes.push(stapleTime);
+			details.push(JSON.stringify(operation.details));
+		}
+	}
+	return({ blocks, operations });
 }
 
 function idOf(ids: AccountIDs, account: GenericAccount | string): AccountID {
@@ -1328,6 +1394,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 			await transaction.run(insertStaple, [blocksHash, change.staple.timestamp(), change.moment, Buffer.from(change.staple.toBytes()), checksum]);
 			await transaction.run(foldLedgerChecksum, [checksumShardOf(blocksHash), checksum]);
 			await this.#writeBlocks(transaction, change, ids, blocksHash);
+			await this.#writeProjection(transaction, change, ids);
 			await this.#writeVotes(transaction, change, ids, blocksHash);
 			await this.#writeAmounts(transaction, change, ids);
 			await this.#writeDelegations(transaction, change, ids);
@@ -1555,6 +1622,12 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 				return(toNumeric(height));
 			})
 		]);
+	}
+
+	async #writeProjection(transaction: PostgresTransaction, change: ConfirmedStapleChange, ids: AccountIDs): Promise<void> {
+		const { blocks, operations } = projectionRowsOf(change.staple, ids);
+		await transaction.run(insertBlockDetails, blocks);
+		await transaction.run(insertOperations, operations);
 	}
 
 	/*

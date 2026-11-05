@@ -285,6 +285,25 @@ export const insertMainBlocks: Statement<[Buffer[], AccountID[], Buffer[], numbe
 	WHERE blocks.ledger = 'side'
 	RETURNING hash`);
 
+/** Each block's hash, date, version, purpose and signer, a row per block. */
+export type BlockDetailsParameters = [Buffer[], Date[], number[], number[], AccountID[]];
+
+/** Each operation's block, index, Block.OperationType, accounts, amount, staple time and details as json text, a row per operation. */
+export type OperationParameters = [Buffer[], number[], number[], AccountID[], (AccountID | null)[], (AccountID | null)[], (string | null)[], Date[], string[]];
+
+const BLOCK_DETAILS_ROWS = `
+	INSERT INTO block_details (hash, date, version, purpose, signer_id)
+	SELECT * FROM unnest($1::bytea[], $2::timestamptz[], $3::smallint[], $4::smallint[], $5::bigint[])`;
+
+const OPERATION_ROWS = `
+	INSERT INTO operations (block_hash, idx, type, account_id, counterparty_id, token_id, amount, staple_time, details)
+	SELECT * FROM unnest($1::bytea[], $2::integer[], $3::smallint[], $4::bigint[], $5::bigint[], $6::bigint[], $7::numeric[], $8::timestamptz[], $9::jsonb[])`;
+
+// A block gets its rows once, with the staple that confirms it: a second write is a bug, which the primary key refuses.
+export const insertBlockDetails: Statement<BlockDetailsParameters> = statement('insert_block_details', BLOCK_DETAILS_ROWS);
+
+export const insertOperations: Statement<OperationParameters> = statement('insert_operations', OPERATION_ROWS);
+
 export const insertChain: Statement<[AccountID[], string[], Buffer[]]> = statement('insert_chain', `
 	INSERT INTO chain (account_id, height, block_hash)
 	SELECT * FROM unnest($1::bigint[], $2::bigint[], $3::bytea[])`);
