@@ -1032,9 +1032,13 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 			staples.push({
 				blocksHash: row.blocks_hash.toString('hex').toUpperCase(),
 				stapleTime: row.staple_time,
-				blocks: row.blocks.map(function(bytes) {
-					const block = decodeBlock(bytes);
-					return({ hash: hashBytes(block.hash), decoded: decodedBlockOf(block) });
+				blocks: row.blocks.map(function(bytes, index) {
+					try {
+						const block = decodeBlock(bytes);
+						return({ hash: hashBytes(block.hash), decoded: decodedBlockOf(block) });
+					} catch (cause: unknown) {
+						throw(new Error(`the projection backfill could not decode block ${String(row.hashes[index]?.toString('hex'))} of staple ${hexOf(row.blocks_hash)}`, { cause }));
+					}
 				})
 			});
 			await nextTurn();

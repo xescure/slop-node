@@ -1580,6 +1580,25 @@ describe('the projection backfill', function() {
 		expect(await completeFromOf(pool)).toBe(migratedFrom);
 	});
 
+	test('a backfill that cannot decode a stored block names the staple and the block, with the decoding error as the cause', async function() {
+		const context = await projectionFixture();
+		const { pool, storage } = context;
+		await applyEveryOperation(context);
+		const migratedFrom = await asMigrated(pool);
+		const stored = await pool.query<{ staple: Buffer; hash: Buffer }>('SELECT staple, hash FROM blocks WHERE staple IS NOT NULL ORDER BY staple_position DESC LIMIT 1');
+		const { staple, hash } = requireAt(stored.rows, 0);
+		await pool.query('UPDATE blocks SET bytes = $1 WHERE hash = $2', [Buffer.from('not a block'), hash]);
+
+		const failure: unknown = await storage.backfillProjection().catch(function(error: unknown) {
+			return(error);
+		});
+
+		expect(failure).toBeInstanceOf(Error);
+		expect(failure).toHaveProperty('message', `the projection backfill could not decode block ${hash.toString('hex')} of staple ${staple.toString('hex')}`);
+		expect(failure).toHaveProperty('cause');
+		expect(await completeFromOf(pool)).toBe(migratedFrom);
+	});
+
 	test('backfilled rows equal the rows the live path wrote for the same staples', async function() {
 		const context = await projectionFixture();
 		const { pool, storage } = context;

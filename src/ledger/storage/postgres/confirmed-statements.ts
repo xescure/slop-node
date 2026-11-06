@@ -435,13 +435,13 @@ export const addHistoryRows: Statement<[Buffer[], string[]], { added: IntegerTex
 	)
 	SELECT count(*) AS added FROM added`);
 
-/** A main staple whose rows a backfill writes, with its blocks in staple order. */
-export type BackfilledStaple = { readonly sequence: IntegerText; readonly blocks_hash: Buffer; readonly staple_time: Date; readonly blocks: Buffer[] };
+/** A main staple whose rows a backfill writes, with its blocks and their hashes in staple order. */
+export type BackfilledStaple = { readonly sequence: IntegerText; readonly blocks_hash: Buffer; readonly staple_time: Date; readonly blocks: Buffer[]; readonly hashes: Buffer[] };
 
 function withBlocks(batch: string, order: 'ASC' | 'DESC'): string {
 	return(`
 	WITH batch AS (${batch})
-	SELECT batch.sequence, batch.blocks_hash, batch.staple_time, array_agg(blocks.bytes ORDER BY blocks.staple_position) AS blocks
+	SELECT batch.sequence, batch.blocks_hash, batch.staple_time, array_agg(blocks.bytes ORDER BY blocks.staple_position) AS blocks, array_agg(blocks.hash::bytea ORDER BY blocks.staple_position) AS hashes
 	FROM batch JOIN blocks ON blocks.staple = batch.blocks_hash
 	GROUP BY batch.sequence, batch.blocks_hash, batch.staple_time
 	ORDER BY batch.sequence ${order}`);
