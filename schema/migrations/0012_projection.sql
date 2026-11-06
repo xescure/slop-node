@@ -49,5 +49,6 @@ CREATE TABLE projection_backfill (
 INSERT INTO projection_backfill (complete_from)
 SELECT coalesce((SELECT max(sequence) FROM staples), 0) + 1;
 
--- The holders of a token, largest first.
-CREATE INDEX balances_token_holders ON balances (token_id, balance DESC) WHERE balance <> 0;
+-- The holders of a token, largest first; the account id breaks ties, so that a
+-- page of holders resumes exactly where the last one stopped.
+CREATE INDEX balances_token_holders ON balances (token_id, balance DESC, account_id DESC) WHERE balance <> 0;

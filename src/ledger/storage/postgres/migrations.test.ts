@@ -306,7 +306,7 @@ describe('applyMigrations', function() {
 			WHERE relnamespace = current_schema()::regnamespace AND relname IN ('block_details_pkey', 'operations_pkey', 'operations_account_time', 'operations_counterparty_time', 'operations_token_time', 'balances_token_holders')
 			ORDER BY relname`);
 		expect(indexes.rows).toEqual([
-			{ relname: 'balances_token_holders', definition: 'btree (token_id, balance DESC) WHERE ((balance)::numeric <> (0)::numeric)' },
+			{ relname: 'balances_token_holders', definition: 'btree (token_id, balance DESC, account_id DESC) WHERE ((balance)::numeric <> (0)::numeric)' },
 			{ relname: 'block_details_pkey', definition: 'btree (hash)' },
 			{ relname: 'operations_account_time', definition: 'btree (account_id, staple_time DESC)' },
 			{ relname: 'operations_counterparty_time', definition: 'btree (counterparty_id, staple_time DESC) WHERE (counterparty_id IS NOT NULL)' },
