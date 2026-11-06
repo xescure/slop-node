@@ -26,7 +26,7 @@ import { interceptQueries, serverError } from '../../../testing/query-faults.js'
 import { MemoryLedgerStorage } from '../memory/driver.js';
 import { blocksHashesOf, certificateFor, certificateIssuedBy, ChainCursor, checksumOf, DEFAULT_WEIGHTS, GENESIS_MOMENT, headOf, requireAt } from '../suite/support.js';
 import type { TransactionOptions } from '../base.js';
-import { backfillOperations, catchUpVotes, catchUpVotesAfter, foldLedgerChecksum, insertBlockDetails, insertMainVotes, insertOperations, mainLedgerCounts, readLedgerChecksum } from './confirmed-statements.js';
+import { backfillOperations, catchUpVotes, catchUpVotesAfter, foldLedgerChecksum, insertBlockDetails, insertMainVotes, insertOperations, lowerBackfill, mainLedgerCounts, raiseSwept, readLedgerChecksum } from './confirmed-statements.js';
 import { addressesOf, decodeBlock } from './decode.js';
 import type { Address, DecodedBlock } from './decode.js';
 import { BACKFILL_BATCH_STAPLES, PostgresLedgerStorage, projectionRowsOf, SWEEP_WINDOW_STAPLES } from './driver.js';
@@ -1393,6 +1393,19 @@ describe('the projection backfill', function() {
 		expect(await projectionOf(pool)).toEqual(await decodedLedgerOf(pool));
 	});
 
+	test('the progress of a backfill only ever moves towards the oldest staples and the newest', async function() {
+		const { pool } = await projectionFixture();
+		await pool.query('UPDATE projection_backfill SET complete_from = 5, swept_through = 50');
+
+		await pool.query({ text: lowerBackfill.text, values: ['9'] });
+		await pool.query({ text: raiseSwept.text, values: ['40'] });
+
+		expect([await completeFromOf(pool), await sweptThroughOf(pool)]).toEqual([5n, 50n]);
+		await pool.query({ text: lowerBackfill.text, values: ['3'] });
+		await pool.query({ text: raiseSwept.text, values: ['60'] });
+		expect([await completeFromOf(pool), await sweptThroughOf(pool)]).toEqual([3n, 60n]);
+	});
+
 	test('a backfill stopped after a batch resumes below the staple it reached', async function() {
 		const context = await projectionFixture();
 		const { pool, storage } = context;
@@ -1527,6 +1540,30 @@ describe('the projection backfill', function() {
 		const windowEnd = sweptBefore + SWEEP_WINDOW_STAPLES;
 		expect(swept).toEqual([[String(sweptBefore), String(windowEnd), BACKFILL_BATCH_STAPLES], [String(windowEnd), String(newest), BACKFILL_BATCH_STAPLES]]);
 		expect(await sweptThroughOf(pool)).toBe(newest);
+	});
+
+	test('the sweep reports a window\'s staples before it reads those of the next', async function() {
+		const context = await projectionFixture();
+		const { pool, storage } = context;
+		await applyEveryOperation(context);
+		await asMigrated(pool);
+		await storage.backfillProjection();
+		const sweptBefore = await newestOf(pool);
+		// An older build stores one staple in the first window and one in the second, with a stretch of staples without blocks between them.
+		await applySends(context, 1);
+		await pool.query(`INSERT INTO staples (blocks_hash, staple_time, moment, bytes, checksum)
+			SELECT sha256(convert_to('bare ' || n, 'UTF8')), $1, $1, '\\x00', repeat('0', 256)::bit(256) FROM generate_series(1, $2::integer) AS n`, [GENESIS_MOMENT, Number(SWEEP_WINDOW_STAPLES)]);
+		await applySends(context, 1);
+		await pool.query('DELETE FROM operations USING blocks, staples WHERE operations.block_hash = blocks.hash AND blocks.staple = staples.blocks_hash AND staples.sequence > $1', [sweptBefore.toString()]);
+		await pool.query('DELETE FROM block_details USING blocks, staples WHERE block_details.hash = blocks.hash AND blocks.staple = staples.blocks_hash AND staples.sequence > $1', [sweptBefore.toString()]);
+		const reported: { readonly staples: number; readonly swept: bigint | null }[] = [];
+
+		await storage.backfillProjection(async function(reached) {
+			reported.push({ staples: reached.staples, swept: await sweptThroughOf(pool) });
+		});
+
+		expect(reported).toEqual([{ staples: 1, swept: sweptBefore + SWEEP_WINDOW_STAPLES }, { staples: 2, swept: await newestOf(pool) }]);
+		expect(await projectionOf(pool)).toEqual(await decodedLedgerOf(pool));
 	});
 
 	test('a stop asked for during the sweep ends it between windows, and the next sweep begins where it reached', async function() {
