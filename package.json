@@ -16,29 +16,29 @@
 	},
 	"dependencies": {
 		"@keetanetwork/keetanet-client": "0.18.8",
-		"express": "5.2.1",
+		"express": "5.3.0",
 		"pg": "8.23.1"
 	},
 	"devDependencies": {
 		"@eslint/js": "9.39.5",
-		"@stryker-mutator/core": "10.0.0",
-		"@stryker-mutator/vitest-runner": "10.0.0",
+		"@stryker-mutator/core": "10.1.1",
+		"@stryker-mutator/vitest-runner": "10.1.1",
 		"@types/asn1js": "2.0.2",
 		"@types/express": "5.0.6",
-		"@types/node": "24.19.1",
+		"@types/node": "24.19.2",
 		"@types/pg": "8.23.1",
 		"ajv": "8.20.0",
 		"asn1js": "2.4.0",
-		"bloom-filters": "3.0.2",
-		"cspell": "10.3.6",
+		"bloom-filters": "3.0.4",
+		"cspell": "10.4.0",
 		"eslint": "9.39.5",
-		"tslib": "2.8.1",
-		"typescript": "5.6.3",
-		"typescript-eslint": "8.71.1",
-		"vitest": "4.1.11",
-		"ws": "8.21.3"
+		"tslib": "2.9.1",
+		"typescript": "5.9.3",
+		"typescript-eslint": "8.72.1",
+		"vitest": "4.1.12",
+		"ws": "8.22.1"
 	},
 	"engines": {
-		"node": "24.21.0"
+		"node": "24.22.2"
 	}
 }
