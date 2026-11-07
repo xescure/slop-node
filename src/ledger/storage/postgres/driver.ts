@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, AccountKeyAlgorithm, GenericAccount, IdentifierAddress, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
@@ -23,6 +24,7 @@ import {
 	accountHistory,
 	accountHistoryAfter,
 	accountHistoryLists,
+	accountIDsOf,
 	accountInfoOf,
 	aclsOfEntity,
 	aclsOfPrincipal,
@@ -34,6 +36,8 @@ import {
 	allHistory,
 	allHistoryAfter,
 	appendHistory,
+	backfillBlockDetails,
+	backfillOperations,
 	balanceOf,
 	catchUpVotes,
 	catchUpVotesAfter,
@@ -44,12 +48,15 @@ import {
 	foldLedgerChecksum,
 	headsOf,
 	historyReindexCursor,
+	insertBlockDetails,
 	insertChain,
 	insertMainBlocks,
 	insertMainIdempotentKeys,
 	insertMainVotes,
+	insertOperations,
 	insertStaple,
 	keepHistoryReindexCursor,
+	lowerBackfill,
 	mainBlock,
 	mainBlockHeight,
 	mainBlocksOrSuccessors,
@@ -66,20 +73,27 @@ import {
 	markInvolved,
 	mergeAccountInfo,
 	nonZeroBalances,
+	newestStapleSequence,
 	ownersOf,
+	projectionBackfillState,
 	raiseHeads,
+	raiseSwept,
 	readLedgerChecksum,
 	removeCertificate,
 	removeHistoryRows,
 	representativeOf,
 	setACL,
 	setDelegations,
+	staplesMissingRows,
+	staplesToBackfill,
 	staplesToReindex,
 	totalWeight,
 	weightOf
 } from './confirmed-statements.js';
-import type { ACLColumns, AccountInfoColumns, CatchUpVoteColumns, CertificateColumns, LedgerCountsColumns, ReindexedStaple } from './confirmed-statements.js';
+import type { ACLColumns, AccountInfoColumns, BackfilledStaple, BlockDetailsParameters, CatchUpVoteColumns, CertificateColumns, LedgerCountsColumns, OperationParameters, ReindexedStaple } from './confirmed-statements.js';
 import { checkIn, checkOut } from './connection.js';
+import { addressesOf, decodeBlock as decodedBlockOf } from './decode.js';
+import type { Address, DecodedBlock, DecodedOperation } from './decode.js';
 import { mapDatabaseError } from './errors.js';
 import { MigratedPostgresPool } from './pool.js';
 import type { PostgresPoolSource } from './pool.js';
@@ -367,6 +381,23 @@ function checksumShardOf(blocksHash: Buffer): number {
 /** The staples a reindex reads and rewrites in one transaction; one of the main network's largest touches about a thousand accounts. */
 const REINDEX_BATCH_STAPLES = 200;
 
+/** What a projection backfill filled in, and from which staple sequence on every main staple has its rows as it ended. */
+export type ProjectionBackfill = {
+	readonly completeFrom: bigint;
+	readonly staples: number;
+	readonly operations: number;
+};
+
+/** The staples a backfill decodes and writes in one transaction; a heavy staple of the main network holds about a thousand operations. */
+export const BACKFILL_BATCH_STAPLES = 20;
+
+/** The staples one read of the sweep looks through at most, so that each read is short whatever the ledger holds, and a stop waits for one only. */
+export const SWEEP_WINDOW_STAPLES = 10_000n;
+
+function resolved(): Promise<void> {
+	return(Promise.resolve());
+}
+
 /** The history rows a batch of staples should have, and those of accounts the staples touch but do not list. */
 function historyChangesOf(rows: readonly ReindexedStaple[], context: EffectContext): { listed: Map<Buffer, string[]>; unlisted: Map<Buffer, string[]> } {
 	const listed = new Map<Buffer, string[]>();
@@ -544,6 +575,103 @@ function principalCertificateOf(update: ACLUpdate): Buffer | null {
 		default:
 			return(assertNever(update));
 	}
+}
+
+function numericOrNull(value: bigint | null): string | null {
+	if (value === null) {
+		return(null);
+	}
+	return(toNumeric(value));
+}
+
+type ProjectionRows = { readonly blocks: BlockDetailsParameters; readonly operations: OperationParameters };
+
+/** A staple's blocks as the projection decodes them, under the blocks hash that names the staple, at its time. */
+export type ProjectedStaple = {
+	readonly blocksHash: string;
+	readonly stapleTime: Date;
+	readonly blocks: readonly { readonly hash: Buffer; readonly decoded: DecodedBlock }[];
+};
+
+function projectedStapleOf(staple: VoteStaple): ProjectedStaple {
+	return({
+		blocksHash: staple.blocksHash.toString(),
+		stapleTime: staple.timestamp(),
+		blocks: staple.blocks.map(function(block) {
+			return({ hash: hashBytes(block.hash), decoded: decodedBlockOf(block) });
+		})
+	});
+}
+
+/** jsonb refuses U+0000 in any string, which would fail the staple or the backfill that writes it. */
+function withoutNUL(text: string): string {
+	return(text.replaceAll('\u0000', '\uFFFD'));
+}
+
+function detailsText(details: DecodedOperation['details']): string {
+	return(JSON.stringify(Object.fromEntries(Object.entries(details).map(function([key, value]) {
+		if (typeof value === 'string') {
+			return([withoutNUL(key), withoutNUL(value)]);
+		}
+		if (Array.isArray(value)) {
+			return([withoutNUL(key), value.map(withoutNUL)]);
+		}
+		return([withoutNUL(key), value]);
+	}))));
+}
+
+function idOfAddress(ids: AccountIDs, staple: ProjectedStaple, address: Address): AccountID {
+	const id = ids.get(address);
+	if (id === undefined) {
+		throw(new Error(`internal error: staple ${staple.blocksHash} names account ${address}, which was not interned`));
+	}
+	return(id);
+}
+
+function optionalIDOfAddress(ids: AccountIDs, staple: ProjectedStaple, address: Address | null): AccountID | null {
+	if (address === null) {
+		return(null);
+	}
+	return(idOfAddress(ids, staple, address));
+}
+
+/*
+ * A decoded address is the public key string the ids are keyed by. A change
+ * interns every account a block names, those only in an operation's details
+ * included: upstream counts each among the accounts the staple touches or may
+ * create [Keeta TS] index.js:69348-69411, 69763-69766, 69838, and the sender
+ * a receive names sent in the same staple. One without an id is a bug, and
+ * the staples fail rather than store a row that names nobody.
+ */
+export function projectionRowsOf(staples: readonly ProjectedStaple[], ids: AccountIDs): ProjectionRows {
+	const blocks: BlockDetailsParameters = [[], [], [], [], []];
+	const operations: OperationParameters = [[], [], [], [], [], [], [], [], []];
+	const [hashes, dates, versions, purposes, signers] = blocks;
+	const [blockHashes, indexes, types, accounts, counterparties, tokens, amounts, stapleTimes, details] = operations;
+	for (const staple of staples) {
+		for (const { hash, decoded } of staple.blocks) {
+			for (const address of addressesOf(decoded)) {
+				idOfAddress(ids, staple, address);
+			}
+			hashes.push(hash);
+			dates.push(decoded.date);
+			versions.push(decoded.version);
+			purposes.push(decoded.purpose);
+			signers.push(idOfAddress(ids, staple, decoded.signer));
+			for (const operation of decoded.operations) {
+				blockHashes.push(hash);
+				indexes.push(operation.index);
+				types.push(lib.Block.OperationType[operation.type]);
+				accounts.push(idOfAddress(ids, staple, operation.account));
+				counterparties.push(optionalIDOfAddress(ids, staple, operation.counterparty));
+				tokens.push(optionalIDOfAddress(ids, staple, operation.token));
+				amounts.push(numericOrNull(operation.amount));
+				stapleTimes.push(staple.stapleTime);
+				details.push(detailsText(operation.details));
+			}
+		}
+	}
+	return({ blocks, operations });
 }
 
 function idOf(ids: AccountIDs, account: GenericAccount | string): AccountID {
@@ -799,6 +927,153 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 		}
 	}
 
+	/**
+	 * Writes the rows of the main staples stored before the node wrote any
+	 * (schema/migrations/0012_projection.sql). It walks down from where they
+	 * are complete from, in batches, and decodes each batch outside any
+	 * transaction, then writes it in a transaction of its own, which also
+	 * lowers where they are complete from to the batch's oldest staple; so a
+	 * backfill that was stopped resumes below it. Then it sweeps the staples
+	 * above where it began, or above where the last sweep reached, up to the
+	 * newest, for those that hold a main block without its rows, as an older
+	 * build beside this one stores them, in windows that each record where
+	 * the sweep reached. It runs beside a live node, and beside another
+	 * backfill: neither writes a row another wrote. Once every staple has its
+	 * rows, it writes nothing, and reads only the staples stored since. The
+	 * next batch waits for the progress, which hears the totals after each,
+	 * and none begins once the signal aborts.
+	 */
+	async backfillProjection(progress: (done: ProjectionBackfill) => Promise<void> = resolved, signal?: AbortSignal): Promise<ProjectionBackfill> {
+		const { pool } = await this.#pool.connection();
+		const stored = onlyRow((await pool.query<{ complete_from: IntegerText; swept_through: IntegerText | null }>({ name: projectionBackfillState.name, text: projectionBackfillState.text })).rows);
+		if (stored === undefined) {
+			throw(new Error('internal error: the projection backfill has no row'));
+		}
+		const began = fromInteger(stored.complete_from);
+		let done: ProjectionBackfill = { completeFrom: began, staples: 0, operations: 0 };
+		for (;;) {
+			signal?.throwIfAborted();
+			const rows = await this.#staplesToBackfill(done.completeFrom);
+			const oldest = rows.at(-1);
+			if (oldest === undefined) {
+				break;
+			}
+			const reached = fromInteger(oldest.sequence);
+			const operations = await this.#backfill(rows, lowerBackfill, reached);
+			done = { completeFrom: reached, staples: done.staples + rows.length, operations: done.operations + operations };
+			await progress(done);
+		}
+		/*
+		 * Every staple below where the walk began has its rows now, so the sweep
+		 * looks only above. An earlier sweep looked above where its own walk
+		 * began, which is no lower, as complete_from only falls.
+		 */
+		let after = began - 1n;
+		if (stored.swept_through === null) {
+			await this.#raiseSwept(after);
+		} else {
+			after = fromInteger(stored.swept_through);
+		}
+		const newest = await this.#newestSequence();
+		while (after < newest) {
+			signal?.throwIfAborted();
+			let through = after + SWEEP_WINDOW_STAPLES;
+			if (through > newest) {
+				through = newest;
+			}
+			const rows = (await pool.query<BackfilledStaple>({ name: staplesMissingRows.name, text: staplesMissingRows.text, values: [toNumeric(after), toNumeric(through), BACKFILL_BATCH_STAPLES] })).rows;
+			const last = rows.at(-1);
+			if (last === undefined) {
+				await this.#raiseSwept(through);
+			} else {
+				// A full batch may leave staples of the window unread, which the next read begins after.
+				if (rows.length === BACKFILL_BATCH_STAPLES) {
+					through = fromInteger(last.sequence);
+				}
+				const operations = await this.#backfill(rows, raiseSwept, through);
+				done = { ...done, staples: done.staples + rows.length, operations: done.operations + operations };
+				await progress(done);
+			}
+			after = through;
+		}
+		return(done);
+	}
+
+	async #staplesToBackfill(below: bigint): Promise<BackfilledStaple[]> {
+		const { pool } = await this.#pool.connection();
+		return((await pool.query<BackfilledStaple>({ name: staplesToBackfill.name, text: staplesToBackfill.text, values: [toNumeric(below), BACKFILL_BATCH_STAPLES] })).rows);
+	}
+
+	async #raiseSwept(through: bigint): Promise<void> {
+		const { pool } = await this.#pool.connection();
+		await pool.query({ name: raiseSwept.name, text: raiseSwept.text, values: [toNumeric(through)] });
+	}
+
+	async #newestSequence(): Promise<bigint> {
+		const { pool } = await this.#pool.connection();
+		const row = onlyRow((await pool.query<{ sequence: IntegerText }>({ name: newestStapleSequence.name, text: newestStapleSequence.text })).rows);
+		if (row === undefined) {
+			throw(new Error('internal error: the newest staple sequence returned no row'));
+		}
+		return(fromInteger(row.sequence));
+	}
+
+	/*
+	 * A heavy staple takes tens of milliseconds to decode, so the batch yields
+	 * after each to the work of a live node beside it. The transaction is READ
+	 * COMMITTED: a row another backfill or staple wrote meanwhile is then
+	 * skipped, and complete_from or swept_through compared with what the
+	 * other committed, where SERIALIZABLE would fail the batch instead. It
+	 * records where the batch reached with the rows.
+	 */
+	async #backfill(rows: readonly BackfilledStaple[], reaching: Statement<[string]>, reached: bigint): Promise<number> {
+		const staples: ProjectedStaple[] = [];
+		for (const row of rows) {
+			staples.push({
+				blocksHash: row.blocks_hash.toString('hex').toUpperCase(),
+				stapleTime: row.staple_time,
+				blocks: row.blocks.map(function(bytes, index) {
+					try {
+						const block = decodeBlock(bytes);
+						return({ hash: hashBytes(block.hash), decoded: decodedBlockOf(block) });
+					} catch (cause: unknown) {
+						throw(new Error(`the projection backfill could not decode block ${String(row.hashes[index]?.toString('hex'))} of staple ${hexOf(row.blocks_hash)}`, { cause }));
+					}
+				})
+			});
+			await nextTurn();
+		}
+		const { blocks, operations } = projectionRowsOf(staples, await this.#idsOf(staples));
+		const transaction = await this.#begin({ identifier: 'backfill-projection', readOnly: false }, 'READ COMMITTED');
+		try {
+			await transaction.run(backfillBlockDetails, blocks);
+			await transaction.run(backfillOperations, operations);
+			await transaction.run(reaching, [toNumeric(reached)]);
+		} catch (error: unknown) {
+			await transaction.abort();
+			throw(error);
+		}
+		await transaction.commit();
+		return(operations[0].length);
+	}
+
+	/* A backfill never interns: the staples interned every account they name as they were stored. */
+	async #idsOf(staples: readonly ProjectedStaple[]): Promise<AccountIDs> {
+		const named = new Set<Address>();
+		for (const staple of staples) {
+			for (const { decoded } of staple.blocks) {
+				for (const address of addressesOf(decoded)) {
+					named.add(address);
+				}
+			}
+		}
+		const { pool } = await this.#pool.connection();
+		const rows = (await pool.query<{ id: AccountID; public_key: string }>({ name: accountIDsOf.name, text: accountIDsOf.text, values: [Array.from(named)] })).rows;
+		return(new Map(rows.map(function(row): [string, AccountID] {
+			return([row.public_key, row.id]);
+		})));
+	}
+
 	async #rewriteHistory(transaction: PostgresTransaction, listed: ReadonlyMap<Buffer, readonly string[]>, unlisted: ReadonlyMap<Buffer, readonly string[]>): Promise<{ readonly removed: number; readonly added: number }> {
 		const removed = onlyRow(await transaction.run(removeHistoryRows, pairsOf(unlisted)));
 		const added = onlyRow(await transaction.run(addHistoryRows, pairsOf(listed)));
@@ -808,10 +1083,14 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 		return({ removed: Number(fromInteger(removed.removed)), added: Number(fromInteger(added.added)) });
 	}
 
-	async beginTransaction(options: TransactionOptions): Promise<PostgresTransaction> {
+	beginTransaction(options: TransactionOptions): Promise<PostgresTransaction> {
+		return(this.#begin(options, 'SERIALIZABLE'));
+	}
+
+	async #begin(options: TransactionOptions, isolation: 'SERIALIZABLE' | 'READ COMMITTED'): Promise<PostgresTransaction> {
 		const { pool } = await this.#pool.connection();
 		const client = await checkOut(pool);
-		let begin = 'BEGIN ISOLATION LEVEL SERIALIZABLE';
+		let begin = `BEGIN ISOLATION LEVEL ${isolation}`;
 		// Upstream opens read-only transactions only for reads (CONTRACT 3.2), which lets Postgres track fewer conflicts.
 		if (options.readOnly ?? true) {
 			begin = `${begin} READ ONLY`;
@@ -1328,6 +1607,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 			await transaction.run(insertStaple, [blocksHash, change.staple.timestamp(), change.moment, Buffer.from(change.staple.toBytes()), checksum]);
 			await transaction.run(foldLedgerChecksum, [checksumShardOf(blocksHash), checksum]);
 			await this.#writeBlocks(transaction, change, ids, blocksHash);
+			await this.#writeProjection(transaction, change, ids);
 			await this.#writeVotes(transaction, change, ids, blocksHash);
 			await this.#writeAmounts(transaction, change, ids);
 			await this.#writeDelegations(transaction, change, ids);
@@ -1555,6 +1835,12 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 				return(toNumeric(height));
 			})
 		]);
+	}
+
+	async #writeProjection(transaction: PostgresTransaction, change: ConfirmedStapleChange, ids: AccountIDs): Promise<void> {
+		const { blocks, operations } = projectionRowsOf([projectedStapleOf(change.staple)], ids);
+		await transaction.run(insertBlockDetails, blocks);
+		await transaction.run(insertOperations, operations);
 	}
 
 	/*

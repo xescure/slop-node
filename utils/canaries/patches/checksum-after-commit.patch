@@ -11,7 +11,7 @@ index e2a7270..c123f5f 100644
  
  	constructor(source: PostgresPoolSource) {
  		super();
-@@ -1326,7 +1328,10 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
+@@ -1601,7 +1603,10 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
  			const blocksHash = hashBytes(change.staple.blocksHash);
  			const checksum = change.checksum.toString(16).padStart(CHECKSUM_HEX_DIGITS, '0');
  			await transaction.run(insertStaple, [blocksHash, change.staple.timestamp(), change.moment, Buffer.from(change.staple.toBytes()), checksum]);
@@ -21,5 +21,5 @@ index e2a7270..c123f5f 100644
 +			}
 +			this.#unfolded.push([checksumShardOf(blocksHash), checksum]);
  			await this.#writeBlocks(transaction, change, ids, blocksHash);
+ 			await this.#writeProjection(transaction, change, ids);
  			await this.#writeVotes(transaction, change, ids, blocksHash);
- 			await this.#writeAmounts(transaction, change, ids);

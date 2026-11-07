@@ -450,6 +450,118 @@ describe('slop-node reindex-history', function() {
 	});
 });
 
+/** A ledger in Postgres of a genesis, as the projection's migration leaves one that held it: without rows, and complete from after its newest staple. */
+async function migratedLedger(): Promise<{ readonly environment: Environment; readonly pool: pg.Pool }> {
+	const environment: Environment = { ...NODE, KEETANET_LOCAL_NODE_POSTGRES_URL: await createTestDatabaseURL() };
+	const genesis = startCLI(['genesis'], { ...environment, ...GENESIS });
+	expect(await genesis.exited).toEqual({ code: 0, signal: null });
+	const pool = new pg.Pool({ connectionString: environment['KEETANET_LOCAL_NODE_POSTGRES_URL'] });
+	onTestFinished(function() {
+		return(pool.end());
+	});
+	await pool.query('DELETE FROM operations');
+	await pool.query('DELETE FROM block_details');
+	await pool.query('UPDATE projection_backfill SET complete_from = (SELECT max(sequence) + 1 FROM staples)');
+	return({ environment, pool });
+}
+
+type ProjectionState = { readonly completeFrom: string; readonly blocks: string; readonly operations: string };
+
+async function projectionStateOf(pool: pg.Pool): Promise<ProjectionState> {
+	const rows = await pool.query<ProjectionState>('SELECT complete_from::text AS "completeFrom", (SELECT count(*) FROM block_details)::text AS blocks, (SELECT count(*) FROM operations)::text AS operations FROM projection_backfill');
+	const [state] = rows.rows;
+	if (state === undefined) {
+		throw(new Error('the projection backfill has no row'));
+	}
+	return(state);
+}
+
+/** What the projection holds once every staple has its rows. */
+async function filledStateOf(pool: pg.Pool): Promise<ProjectionState> {
+	const rows = await pool.query<ProjectionState>('SELECT min(staples.sequence)::text AS "completeFrom", count(*)::text AS blocks, sum(blocks.operation_count)::text AS operations FROM blocks JOIN staples ON staples.blocks_hash = blocks.staple');
+	const [state] = rows.rows;
+	if (state === undefined) {
+		throw(new Error('the ledger has no blocks'));
+	}
+	return(state);
+}
+
+describe('slop-node backfill-projection', function() {
+	test('the subcommand fills the rows and a second run does nothing', async function() {
+		const { environment, pool } = await migratedLedger();
+		const filled = await filledStateOf(pool);
+
+		const cli = startCLI(['backfill-projection'], environment);
+		expect(await cli.exited).toEqual({ code: 0, signal: null });
+		expect(cli.stdout()).toBe(`backfilled 1 staples, ${filled.operations} operations\ndone: 1 staples, ${filled.operations} operations backfilled; every staple from the one stored as ${filled.completeFrom} has its rows\n`);
+		expect(await projectionStateOf(pool)).toEqual(filled);
+
+		const again = startCLI(['backfill-projection'], environment);
+		expect(await again.exited).toEqual({ code: 0, signal: null });
+		expect(again.stdout()).toBe(`done: 0 staples, 0 operations backfilled; every staple from the one stored as ${filled.completeFrom} has its rows\n`);
+		expect(await projectionStateOf(pool)).toEqual(filled);
+	});
+
+	test('is refused in memory', async function() {
+		const cli = startCLI(['backfill-projection'], NODE);
+		expect(await cli.exited).toEqual({ code: 1, signal: null });
+		expect(cli.stderr()).toBe('slop-node: backfill-projection needs KEETANET_LOCAL_NODE_POSTGRES_URL: a ledger in memory keeps no decoded rows to fill in\n');
+	});
+});
+
+describe('slop-node run with KEETANET_LOCAL_NODE_BACKFILL_PROJECTION', function() {
+	test('with the backfill setting on, a node that has caught up fills the rows of the staples stored before, and stops once complete_from reaches the oldest', async function() {
+		const { environment, pool } = await migratedLedger();
+		const filled = await filledStateOf(pool);
+
+		const cli = startCLI(['run'], { ...environment, KEETANET_LOCAL_NODE_BACKFILL_PROJECTION: 'on' });
+		await cli.printed(new RegExp(`Projection backfill done: 1 staples, ${filled.operations} operations filled in; every staple from the one stored as ${filled.completeFrom} has its rows$`, 'm'));
+
+		expect(await projectionStateOf(pool)).toEqual(filled);
+		cli.signal('SIGTERM');
+		expect(await cli.exited).toEqual({ code: 0, signal: null });
+		expect(cli.stdout().match(/Projection backfill done/g)).toHaveLength(1);
+	});
+
+	test('with the backfill setting on, a node that is behind its peers waits before backfilling', async function() {
+		const { environment, pool } = await migratedLedger();
+		const before = await projectionStateOf(pool);
+		const port = await closedPort();
+		const peer = `http://127.0.0.1:${String(port)}/api`;
+
+		const cli = startCLI(['run'], { ...environment, KEETANET_LOCAL_NODE_BACKFILL_PROJECTION: 'on', KEETANET_LOCAL_NODE_BOOTSTRAP_PEERS: peer });
+		await cli.printed(/Projection backfill waits until the node has caught up with its peers$/m);
+		await cli.printed(new RegExp(`Bootstrapping from ${peer} failed`), 'stderr');
+		await cli.printed(API_LINE);
+
+		expect(await projectionStateOf(pool)).toEqual(before);
+		cli.signal('SIGTERM');
+		expect(await cli.exited).toEqual({ code: 0, signal: null });
+		expect(await projectionStateOf(pool)).toEqual(before);
+		expect(cli.stdout()).not.toMatch(/Projection backfill(?: done)?: /);
+	});
+
+	test('with the setting off, the node never backfills', async function() {
+		const { environment, pool } = await migratedLedger();
+		const before = await projectionStateOf(pool);
+
+		const cli = startCLI(['run'], environment);
+		await cli.printed(API_LINE);
+		cli.signal('SIGTERM');
+		expect(await cli.exited).toEqual({ code: 0, signal: null });
+
+		expect(await projectionStateOf(pool)).toEqual(before);
+		expect(`${cli.stdout()}${cli.stderr()}`).not.toContain('Projection backfill');
+	});
+
+	test('refuses the setting on in memory before it starts', async function() {
+		const cli = startCLI(['run'], { ...NODE, KEETANET_LOCAL_NODE_BACKFILL_PROJECTION: 'on' });
+		expect(await cli.exited).toEqual({ code: 1, signal: null });
+		expect(cli.stdout()).toBe('');
+		expect(cli.stderr()).toBe('slop-node: KEETANET_LOCAL_NODE_BACKFILL_PROJECTION=on needs KEETANET_LOCAL_NODE_POSTGRES_URL: a ledger in memory keeps no decoded rows to fill in\n');
+	});
+});
+
 describe('slop-node genesis', function() {
 	test('creates the network in Postgres, where the node then serves it', async function() {
 		const environment: Environment = { ...NODE, KEETANET_LOCAL_NODE_POSTGRES_URL: await createTestDatabaseURL() };

@@ -174,106 +174,118 @@ Two kinds of mutant need no entry:
 
 ## postgres
 
-- src/ledger/storage/postgres/driver.ts:242:34-242:52 ObjectLiteral "{}" equivalent: mapDatabaseError treats every failed statement not marked before-commit as the COMMIT, so a COMMIT marked with no kind is mapped the same.
-- src/ledger/storage/postgres/driver.ts:242:42-242:50 StringLiteral "\"\"" equivalent: mapDatabaseError treats every failed statement not marked before-commit as the COMMIT, so a COMMIT marked with no kind is mapped the same.
-- src/ledger/storage/postgres/driver.ts:294:4-295:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
-- src/ledger/storage/postgres/driver.ts:361:6-361:25 ConditionalExpression "false" equivalent: a blocks hash is always 32 bytes, so its first byte is never undefined.
-- src/ledger/storage/postgres/driver.ts:361:27-363:3 BlockStatement "{}" equivalent: a blocks hash is always 32 bytes, so its first byte is never undefined.
-- src/ledger/storage/postgres/driver.ts:362:19-362:69 StringLiteral "\"\"" equivalent: the message of the unreachable error for an empty blocks hash.
-- src/ledger/storage/postgres/driver.ts:378:36-378:38 ArrayDeclaration "[\"Stryker was here\"]" equivalent: the history statements find an account by its public key, and no account has that one, so the extra pair adds no row.
-- src/ledger/storage/postgres/driver.ts:379:34-379:36 ArrayDeclaration "[\"Stryker was here\"]" equivalent: the history statements find an account by its public key, and no account has that one, so the extra pair removes no row.
-- src/ledger/storage/postgres/driver.ts:435:6-435:21 ConditionalExpression "false" equivalent: every statement onlyRow reads is keyed by a primary or unique key, limited to one row, or an aggregate, so it never answers two rows.
-- src/ledger/storage/postgres/driver.ts:435:23-437:3 BlockStatement "{}" equivalent: every statement onlyRow reads is keyed by a primary or unique key, limited to one row, or an aggregate, so it never answers two rows.
-- src/ledger/storage/postgres/driver.ts:436:19-436:89 StringLiteral "``" equivalent: the message of the unreachable error for two rows where one was expected.
-- src/ledger/storage/postgres/driver.ts:462:6-462:23 ConditionalExpression "true" equivalent: upstream reads a null name as the empty string, as it reads an absent one [Keeta TS] index.js:68769-68775.
-- src/ledger/storage/postgres/driver.ts:465:6-465:30 ConditionalExpression "true" equivalent: upstream reads a null description as the empty string, as it reads an absent one [Keeta TS] index.js:68769-68775.
-- src/ledger/storage/postgres/driver.ts:468:6-468:27 ConditionalExpression "true" equivalent: upstream reads null metadata as the empty string, as it reads absent metadata [Keeta TS] index.js:68769-68775.
-- src/ledger/storage/postgres/driver.ts:477:6-477:42 ConditionalExpression "true" equivalent: infoParameters writes the default permission's two sets together or neither, and the merge keeps or replaces each column alike, so one is null exactly when the other is.
-- src/ledger/storage/postgres/driver.ts:477:6-477:86 LogicalOperator "row.default_base_permission !== null || row.default_external_permission !== null" equivalent: infoParameters writes the default permission's two sets together or neither, and the merge keeps or replaces each column alike, so one is null exactly when the other is.
-- src/ledger/storage/postgres/driver.ts:477:46-477:86 ConditionalExpression "true" equivalent: infoParameters writes the default permission's two sets together or neither, and the merge keeps or replaces each column alike, so one is null exactly when the other is.
-- src/ledger/storage/postgres/driver.ts:533:3-534:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
-- src/ledger/storage/postgres/driver.ts:544:3-545:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
-- src/ledger/storage/postgres/driver.ts:551:6-551:22 ConditionalExpression "false" equivalent: every account a write names is interned first (accountsNamedBy), and interning answers an ID for every account it is given, so none is missing.
-- src/ledger/storage/postgres/driver.ts:551:24-553:3 BlockStatement "{}" equivalent: every account a write names is interned first (accountsNamedBy), and interning answers an ID for every account it is given, so none is missing.
-- src/ledger/storage/postgres/driver.ts:552:19-552:85 StringLiteral "``" equivalent: the message of the unreachable error for an account that was not interned.
-- src/ledger/storage/postgres/driver.ts:570:45-570:75 ConditionalExpression "true" equivalent: upstream sets a quorum only to the quorum a multisig is created with, a bigint [Keeta TS] index.js:69345, never to null.
-- src/ledger/storage/postgres/driver.ts:573:120-573:155 ConditionalExpression "false" equivalent: only a multisig has a quorum, which the insert that creates its info row writes whatever the flag says, and no block of a multisig can change its info later [Keeta TS] index.js:64809-64811; every other account's quorum is null either way.
-- src/ledger/storage/postgres/driver.ts:573:120-573:155 ConditionalExpression "true" equivalent: only a multisig has a quorum, which the insert that creates its info row writes whatever the flag says, and no block of a multisig can change its info later [Keeta TS] index.js:64809-64811; every other account's quorum is null either way.
-- src/ledger/storage/postgres/driver.ts:573:120-573:155 EqualityOperator "update.multisigQuorum === undefined" equivalent: only a multisig has a quorum, which the insert that creates its info row writes whatever the flag says, and no block of a multisig can change its info later [Keeta TS] index.js:64809-64811; every other account's quorum is null either way.
-- src/ledger/storage/postgres/driver.ts:620:28-620:30 ArrayDeclaration "[\"Stryker was here\"]" equivalent: no staple is keyed by those bytes, so rebuilding reads nothing more.
-- src/ledger/storage/postgres/driver.ts:628:6-628:26 ConditionalExpression "false" equivalent: without the early return the rebuild runs its two statements over no staples, which read nothing.
-- src/ledger/storage/postgres/driver.ts:628:28-630:3 BlockStatement "{}" equivalent: without the early return the rebuild runs its two statements over no staples, which read nothing.
-- src/ledger/storage/postgres/driver.ts:668:7-668:26 ConditionalExpression "false" equivalent: groupBy never makes an empty group, so a group always has a first vote.
-- src/ledger/storage/postgres/driver.ts:668:28-670:4 BlockStatement "{}" equivalent: groupBy never makes an empty group, so a group always has a first vote.
-- src/ledger/storage/postgres/driver.ts:669:20-669:63 StringLiteral "\"\"" equivalent: the message of the unreachable error for an empty group of votes.
-- src/ledger/storage/postgres/driver.ts:805:7-805:28 ConditionalExpression "false" equivalent: both history counts are aggregates, which always answer one row, so the guard for no row is unreachable.
-- src/ledger/storage/postgres/driver.ts:805:7-805:51 ConditionalExpression "false" equivalent: both history counts are aggregates, which always answer one row, so the guard for no row is unreachable.
-- src/ledger/storage/postgres/driver.ts:805:7-805:51 LogicalOperator "removed === undefined && added === undefined" equivalent: both history counts are aggregates, which always answer one row, so the guard for no row is unreachable.
-- src/ledger/storage/postgres/driver.ts:805:32-805:51 ConditionalExpression "false" equivalent: both history counts are aggregates, which always answer one row, so the guard for no row is unreachable.
-- src/ledger/storage/postgres/driver.ts:805:53-807:4 BlockStatement "{}" equivalent: both history counts are aggregates, which always answer one row, so the guard for no row is unreachable.
-- src/ledger/storage/postgres/driver.ts:806:20-806:69 StringLiteral "\"\"" equivalent: the message of the unreachable error for a history count with no row.
-- src/ledger/storage/postgres/driver.ts:857:7-857:24 ConditionalExpression "false" equivalent: nextval always answers one row, so the guard for no row is unreachable.
-- src/ledger/storage/postgres/driver.ts:857:26-859:4 BlockStatement "{}" equivalent: nextval always answers one row, so the guard for no row is unreachable.
-- src/ledger/storage/postgres/driver.ts:858:20-858:61 StringLiteral "\"\"" equivalent: the message of the unreachable error for nextval with no row.
-- src/ledger/storage/postgres/driver.ts:874:7-874:24 ConditionalExpression "false" equivalent: the statement is an aggregate, which always answers one row, so the guard for no row is unreachable.
-- src/ledger/storage/postgres/driver.ts:874:26-876:4 BlockStatement "{}" equivalent: the statement is an aggregate, which always answers one row, so the guard for no row is unreachable.
-- src/ledger/storage/postgres/driver.ts:875:20-875:59 StringLiteral "\"\"" equivalent: the message of the unreachable error for a sum with no row.
-- src/ledger/storage/postgres/driver.ts:917:8-917:31 ConditionalExpression "false" equivalent: without the early return the statement runs with an empty entity list, which matches no row (D10), the answer the early return gives; the transaction is checked open either way.
-- src/ledger/storage/postgres/driver.ts:917:33-920:5 BlockStatement "{}" equivalent: without the early return the statement runs with an empty entity list, which matches no row (D10), the answer the early return gives; the transaction is checked open either way.
-- src/ledger/storage/postgres/driver.ts:969:4-970:31 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
-- src/ledger/storage/postgres/driver.ts:1014:7-1014:27 ConditionalExpression "true" equivalent: the public key of an absent account is undefined [Keeta TS] index.js:63699-63701, which pg sends as the null the original passes.
-- src/ledger/storage/postgres/driver.ts:1085:8-1085:25 ConditionalExpression "true" equivalent: the page after a start has rows only when the start is in the account's history, as the statement reads the start's time from the account's own row, so the check that the start is listed then passes.
-- src/ledger/storage/postgres/driver.ts:1085:30-1085:127 OptionalChaining "(await transaction.run(accountHistoryLists, [publicKeyOf(account), hashBytes(start)]))[0].listed" equivalent: an EXISTS query always answers one row.
-- src/ledger/storage/postgres/driver.ts:1115:7-1115:25 ConditionalExpression "true" equivalent: a page holds at least one vote, so the page is empty only when no row was read, and then no next key is made either way.
-- src/ledger/storage/postgres/driver.ts:1150:7-1150:27 ConditionalExpression "true" equivalent: the public key of an absent account is undefined [Keeta TS] index.js:63699-63701, which pg sends as the null the original passes.
-- src/ledger/storage/postgres/driver.ts:1176:4-1177:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
-- src/ledger/storage/postgres/driver.ts:1177:5-1177:32 CallExpression ";" equivalent: the default of a switch that has handled every case of its union is unreachable.
-- src/ledger/storage/postgres/driver.ts:1232:53-1232:55 ArrayDeclaration "[\"Stryker was here\"]" equivalent: the string makes a claim with no key and no block, and the insert keeps only a claim whose block is a side copy, so it inserts nothing.
-- src/ledger/storage/postgres/driver.ts:1246:9-1246:31 ConditionalExpression "false" equivalent: an insert without a conflict clause answers its one row or fails, so the guard for no row is unreachable.
-- src/ledger/storage/postgres/driver.ts:1246:33-1248:6 BlockStatement "{}" equivalent: an insert without a conflict clause answers its one row or fails, so the guard for no row is unreachable.
-- src/ledger/storage/postgres/driver.ts:1247:22-1247:77 StringLiteral "``" equivalent: the message of the unreachable error for a side vote insert with no row.
-- src/ledger/storage/postgres/driver.ts:1265:7-1265:24 ConditionalExpression "false" equivalent: the statement is an aggregate, which always answers one row, so the guard for no row is unreachable.
-- src/ledger/storage/postgres/driver.ts:1265:26-1267:4 BlockStatement "{}" equivalent: the statement is an aggregate, which always answers one row, so the guard for no row is unreachable.
-- src/ledger/storage/postgres/driver.ts:1266:20-1266:71 StringLiteral "\"\"" equivalent: the message of the unreachable error for the counts with no row.
-- src/ledger/storage/postgres/driver.ts:1309:7-1309:24 ConditionalExpression "false" equivalent: the statement is an aggregate, which always answers one row, so the guard for no row is unreachable.
-- src/ledger/storage/postgres/driver.ts:1309:26-1311:4 BlockStatement "{}" equivalent: the statement is an aggregate, which always answers one row, so the guard for no row is unreachable.
-- src/ledger/storage/postgres/driver.ts:1310:20-1310:73 StringLiteral "\"\"" equivalent: the message of the unreachable error for the checksum with no row.
-- src/ledger/storage/postgres/driver.ts:1383:7-1383:24 ConditionalExpression "false" equivalent: the statement is an aggregate, which always answers one row, so the guard for no row is unreachable.
-- src/ledger/storage/postgres/driver.ts:1383:26-1385:4 BlockStatement "{}" equivalent: the statement is an aggregate, which always answers one row, so the guard for no row is unreachable.
-- src/ledger/storage/postgres/driver.ts:1384:20-1384:81 StringLiteral "\"\"" equivalent: the message of the unreachable error for the orphaned row count with no row.
-- src/ledger/storage/postgres/driver.ts:1399:7-1399:27 ConditionalExpression "true" equivalent: with no vote to collect, the three statements delete nothing.
-- src/ledger/storage/postgres/driver.ts:1399:7-1399:27 EqualityOperator "collected.length >= 0" equivalent: with no vote to collect, the three statements delete nothing.
-- src/ledger/storage/postgres/driver.ts:1435:7-1435:41 ConditionalExpression "false" equivalent: with no idempotent key, the statement finds no holder.
-- src/ledger/storage/postgres/driver.ts:1435:43-1437:4 BlockStatement "{}" equivalent: with no idempotent key, the statement finds no holder.
-- src/ledger/storage/postgres/driver.ts:1461:90-1463:4 BlockStatement "{}" equivalent: a block on main is the main successor of its own previous, which the same statement finds through the list of previous blocks, so it is still found on main.
-- src/ledger/storage/postgres/driver.ts:1516:7-1516:40 ConditionalExpression "false" equivalent: the check before it refuses any block already on main in the same snapshot, and the insert turns a side copy into the main row, so it answers a row for every block.
-- src/ledger/storage/postgres/driver.ts:1516:42-1518:4 BlockStatement "{}" equivalent: the check before it refuses any block already on main in the same snapshot, and the insert turns a side copy into the main row, so it answers a row for every block.
-- src/ledger/storage/postgres/driver.ts:1517:28-1517:57 StringLiteral "\"\"" equivalent: the message of the unreachable error for a block the insert found already on main.
-- src/ledger/storage/postgres/driver.ts:1517:59-1517:130 StringLiteral "``" equivalent: the message of the unreachable error for a block the insert found already on main.
-- src/ledger/storage/postgres/driver.ts:1526:8-1526:28 ConditionalExpression "false" equivalent: the change holds a height for every block of its staple, as blockHeightsOf refuses a staple without one.
-- src/ledger/storage/postgres/driver.ts:1526:30-1528:5 BlockStatement "{}" equivalent: the change holds a height for every block of its staple, as blockHeightsOf refuses a staple without one.
-- src/ledger/storage/postgres/driver.ts:1527:21-1527:83 StringLiteral "``" equivalent: the message of the unreachable error for a block with no height.
-- src/ledger/storage/postgres/driver.ts:1538:8-1538:28 ConditionalExpression "false" equivalent: the heights and the hashes are mapped from the same blocks, so the lists are equally long.
-- src/ledger/storage/postgres/driver.ts:1538:8-1538:50 ConditionalExpression "false" equivalent: the heights and the hashes are mapped from the same blocks, so the lists are equally long.
-- src/ledger/storage/postgres/driver.ts:1538:8-1538:50 LogicalOperator "height === undefined && hash === undefined" equivalent: the heights and the hashes are mapped from the same blocks, so the lists are equally long.
-- src/ledger/storage/postgres/driver.ts:1538:32-1538:50 ConditionalExpression "false" equivalent: the heights and the hashes are mapped from the same blocks, so the lists are equally long.
-- src/ledger/storage/postgres/driver.ts:1538:52-1540:5 BlockStatement "{}" equivalent: the heights and the hashes are mapped from the same blocks, so the lists are equally long.
-- src/ledger/storage/postgres/driver.ts:1539:21-1539:68 StringLiteral "\"\"" equivalent: the message of the unreachable error for lists of unequal length.
-- src/ledger/storage/postgres/driver.ts:1542:8-1542:56 ConditionalExpression "true" equivalent: a staple lists an account's blocks in chain order, as the base refuses any other, so each later block of an account is higher and keeping the last keeps the highest.
-- src/ledger/storage/postgres/driver.ts:1542:33-1542:56 EqualityOperator "current.height <= height" equivalent: a staple lists an account's blocks in chain order, as the base refuses any other, so each later block of an account is higher and keeping the last keeps the highest.
-- src/ledger/storage/postgres/driver.ts:1631:7-1631:31 ConditionalExpression "false" equivalent: with no delegation, the statement sets nothing.
-- src/ledger/storage/postgres/driver.ts:1631:33-1633:4 BlockStatement "{}" equivalent: with no delegation, the statement sets nothing.
-- src/ledger/storage/postgres/driver.ts:1657:8-1657:52 ConditionalExpression "false" equivalent: computeLedgerEffect resolves every permission update but a deletion into a SET [Keeta TS] index.js:68502-68522, so the guard is unreachable.
-- src/ledger/storage/postgres/driver.ts:1657:54-1659:5 BlockStatement "{}" equivalent: computeLedgerEffect resolves every permission update but a deletion into a SET [Keeta TS] index.js:68502-68522, so the guard is unreachable.
-- src/ledger/storage/postgres/driver.ts:1658:21-1658:104 StringLiteral "``" equivalent: the message of the unreachable error for an unresolved permission update.
-- src/ledger/storage/postgres/driver.ts:1681:5-1682:26 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
-- src/ledger/storage/postgres/driver.ts:1682:6-1682:26 CallExpression ";" equivalent: the default of a switch that has handled every case of its union is unreachable.
-- src/ledger/storage/postgres/driver.ts:1688:7-1688:41 ConditionalExpression "false" equivalent: with no idempotent key, the statement inserts nothing.
-- src/ledger/storage/postgres/driver.ts:1688:43-1690:4 BlockStatement "{}" equivalent: with no idempotent key, the statement inserts nothing.
-- src/ledger/storage/postgres/driver.ts:1726:3-1727:30 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
-- src/ledger/storage/postgres/driver.ts:1746:8-1746:29 ConditionalExpression "true" equivalent: reading the side ledger for no keys answers nothing.
-- src/ledger/storage/postgres/driver.ts:1746:8-1746:29 EqualityOperator "unanswered.length >= 0" equivalent: reading the side ledger for no keys answers nothing.
-- src/ledger/storage/postgres/driver.ts:1753:3-1754:30 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
+- src/ledger/storage/postgres/decode.ts:67:3-68:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
+- src/ledger/storage/postgres/decode.ts:177:3-178:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
+- src/ledger/storage/postgres/driver.ts:256:34-256:52 ObjectLiteral "{}" equivalent: mapDatabaseError treats every failed statement not marked before-commit as the COMMIT, so a COMMIT marked with no kind is mapped the same.
+- src/ledger/storage/postgres/driver.ts:256:42-256:50 StringLiteral "\"\"" equivalent: mapDatabaseError treats every failed statement not marked before-commit as the COMMIT, so a COMMIT marked with no kind is mapped the same.
+- src/ledger/storage/postgres/driver.ts:308:4-309:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
+- src/ledger/storage/postgres/driver.ts:375:6-375:25 ConditionalExpression "false" equivalent: a blocks hash is always 32 bytes, so its first byte is never undefined.
+- src/ledger/storage/postgres/driver.ts:375:27-377:3 BlockStatement "{}" equivalent: a blocks hash is always 32 bytes, so its first byte is never undefined.
+- src/ledger/storage/postgres/driver.ts:376:19-376:69 StringLiteral "\"\"" equivalent: the message of the unreachable error for an empty blocks hash.
+- src/ledger/storage/postgres/driver.ts:397:36-399:2 BlockStatement "{}" equivalent: the backfill awaits what its progress answers, and awaiting undefined goes on as awaiting a resolved promise does.
+- src/ledger/storage/postgres/driver.ts:409:36-409:38 ArrayDeclaration "[\"Stryker was here\"]" equivalent: the history statements find an account by its public key, and no account has that one, so the extra pair adds no row.
+- src/ledger/storage/postgres/driver.ts:410:34-410:36 ArrayDeclaration "[\"Stryker was here\"]" equivalent: the history statements find an account by its public key, and no account has that one, so the extra pair removes no row.
+- src/ledger/storage/postgres/driver.ts:466:6-466:21 ConditionalExpression "false" equivalent: every statement onlyRow reads is keyed by a primary or unique key, limited to one row, or an aggregate, so it never answers two rows.
+- src/ledger/storage/postgres/driver.ts:466:23-468:3 BlockStatement "{}" equivalent: every statement onlyRow reads is keyed by a primary or unique key, limited to one row, or an aggregate, so it never answers two rows.
+- src/ledger/storage/postgres/driver.ts:467:19-467:89 StringLiteral "``" equivalent: the message of the unreachable error for two rows where one was expected.
+- src/ledger/storage/postgres/driver.ts:493:6-493:23 ConditionalExpression "true" equivalent: upstream reads a null name as the empty string, as it reads an absent one [Keeta TS] index.js:68769-68775.
+- src/ledger/storage/postgres/driver.ts:496:6-496:30 ConditionalExpression "true" equivalent: upstream reads a null description as the empty string, as it reads an absent one [Keeta TS] index.js:68769-68775.
+- src/ledger/storage/postgres/driver.ts:499:6-499:27 ConditionalExpression "true" equivalent: upstream reads null metadata as the empty string, as it reads absent metadata [Keeta TS] index.js:68769-68775.
+- src/ledger/storage/postgres/driver.ts:508:6-508:42 ConditionalExpression "true" equivalent: infoParameters writes the default permission's two sets together or neither, and the merge keeps or replaces each column alike, so one is null exactly when the other is.
+- src/ledger/storage/postgres/driver.ts:508:6-508:86 LogicalOperator "row.default_base_permission !== null || row.default_external_permission !== null" equivalent: infoParameters writes the default permission's two sets together or neither, and the merge keeps or replaces each column alike, so one is null exactly when the other is.
+- src/ledger/storage/postgres/driver.ts:508:46-508:86 ConditionalExpression "true" equivalent: infoParameters writes the default permission's two sets together or neither, and the merge keeps or replaces each column alike, so one is null exactly when the other is.
+- src/ledger/storage/postgres/driver.ts:564:3-565:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
+- src/ledger/storage/postgres/driver.ts:575:3-576:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
+- src/ledger/storage/postgres/driver.ts:679:6-679:22 ConditionalExpression "false" equivalent: every account a write names is interned first (accountsNamedBy), and interning answers an ID for every account it is given, so none is missing.
+- src/ledger/storage/postgres/driver.ts:679:24-681:3 BlockStatement "{}" equivalent: every account a write names is interned first (accountsNamedBy), and interning answers an ID for every account it is given, so none is missing.
+- src/ledger/storage/postgres/driver.ts:680:19-680:85 StringLiteral "``" equivalent: the message of the unreachable error for an account that was not interned.
+- src/ledger/storage/postgres/driver.ts:698:45-698:75 ConditionalExpression "true" equivalent: upstream sets a quorum only to the quorum a multisig is created with, a bigint [Keeta TS] index.js:69345, never to null.
+- src/ledger/storage/postgres/driver.ts:701:120-701:155 ConditionalExpression "false" equivalent: only a multisig has a quorum, which the insert that creates its info row writes whatever the flag says, and no block of a multisig can change its info later [Keeta TS] index.js:64809-64811; every other account's quorum is null either way.
+- src/ledger/storage/postgres/driver.ts:701:120-701:155 ConditionalExpression "true" equivalent: only a multisig has a quorum, which the insert that creates its info row writes whatever the flag says, and no block of a multisig can change its info later [Keeta TS] index.js:64809-64811; every other account's quorum is null either way.
+- src/ledger/storage/postgres/driver.ts:701:120-701:155 EqualityOperator "update.multisigQuorum === undefined" equivalent: only a multisig has a quorum, which the insert that creates its info row writes whatever the flag says, and no block of a multisig can change its info later [Keeta TS] index.js:64809-64811; every other account's quorum is null either way.
+- src/ledger/storage/postgres/driver.ts:748:28-748:30 ArrayDeclaration "[\"Stryker was here\"]" equivalent: no staple is keyed by those bytes, so rebuilding reads nothing more.
+- src/ledger/storage/postgres/driver.ts:756:6-756:26 ConditionalExpression "false" equivalent: without the early return the rebuild runs its two statements over no staples, which read nothing.
+- src/ledger/storage/postgres/driver.ts:756:28-758:3 BlockStatement "{}" equivalent: without the early return the rebuild runs its two statements over no staples, which read nothing.
+- src/ledger/storage/postgres/driver.ts:796:7-796:26 ConditionalExpression "false" equivalent: groupBy never makes an empty group, so a group always has a first vote.
+- src/ledger/storage/postgres/driver.ts:796:28-798:4 BlockStatement "{}" equivalent: groupBy never makes an empty group, so a group always has a first vote.
+- src/ledger/storage/postgres/driver.ts:797:20-797:63 StringLiteral "\"\"" equivalent: the message of the unreachable error for an empty group of votes.
+- src/ledger/storage/postgres/driver.ts:949:7-949:27 ConditionalExpression "false" equivalent: the migration inserts the one row of projection_backfill and nothing deletes it, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:949:29-951:4 BlockStatement "{}" equivalent: the migration inserts the one row of projection_backfill and nothing deletes it, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:950:20-950:72 StringLiteral "\"\"" equivalent: the message of the unreachable error for a projection backfill with no row.
+- src/ledger/storage/postgres/driver.ts:981:8-981:24 EqualityOperator "through >= newest" equivalent: where the window ends at the newest staple, setting it to the newest leaves it as it was.
+- src/ledger/storage/postgres/driver.ts:1015:7-1015:24 ConditionalExpression "false" equivalent: max over the staples is an aggregate, which always answers one row, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1015:26-1017:4 BlockStatement "{}" equivalent: max over the staples is an aggregate, which always answers one row, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1016:20-1016:80 StringLiteral "\"\"" equivalent: the message of the unreachable error for the newest staple sequence with no row.
+- src/ledger/storage/postgres/driver.ts:1040:80-1040:107 OptionalChaining "row.hashes[index].toString" equivalent: the query aggregates a hash for each block it aggregates, so the hash at an index of the blocks is always there.
+- src/ledger/storage/postgres/driver.ts:1047:55-1047:76 StringLiteral "\"\"" equivalent: a transaction's identifier is named only by the errors of a statement run after it ends, which the backfill never runs.
+- src/ledger/storage/postgres/driver.ts:1080:7-1080:28 ConditionalExpression "false" equivalent: both history counts are aggregates, which always answer one row, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1080:7-1080:51 ConditionalExpression "false" equivalent: both history counts are aggregates, which always answer one row, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1080:7-1080:51 LogicalOperator "removed === undefined && added === undefined" equivalent: both history counts are aggregates, which always answer one row, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1080:32-1080:51 ConditionalExpression "false" equivalent: both history counts are aggregates, which always answer one row, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1080:53-1082:4 BlockStatement "{}" equivalent: both history counts are aggregates, which always answer one row, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1081:20-1081:69 StringLiteral "\"\"" equivalent: the message of the unreachable error for a history count with no row.
+- src/ledger/storage/postgres/driver.ts:1136:7-1136:24 ConditionalExpression "false" equivalent: nextval always answers one row, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1136:26-1138:4 BlockStatement "{}" equivalent: nextval always answers one row, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1137:20-1137:61 StringLiteral "\"\"" equivalent: the message of the unreachable error for nextval with no row.
+- src/ledger/storage/postgres/driver.ts:1153:7-1153:24 ConditionalExpression "false" equivalent: the statement is an aggregate, which always answers one row, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1153:26-1155:4 BlockStatement "{}" equivalent: the statement is an aggregate, which always answers one row, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1154:20-1154:59 StringLiteral "\"\"" equivalent: the message of the unreachable error for a sum with no row.
+- src/ledger/storage/postgres/driver.ts:1196:8-1196:31 ConditionalExpression "false" equivalent: without the early return the statement runs with an empty entity list, which matches no row (D10), the answer the early return gives; the transaction is checked open either way.
+- src/ledger/storage/postgres/driver.ts:1196:33-1199:5 BlockStatement "{}" equivalent: without the early return the statement runs with an empty entity list, which matches no row (D10), the answer the early return gives; the transaction is checked open either way.
+- src/ledger/storage/postgres/driver.ts:1248:4-1249:31 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
+- src/ledger/storage/postgres/driver.ts:1293:7-1293:27 ConditionalExpression "true" equivalent: the public key of an absent account is undefined [Keeta TS] index.js:63699-63701, which pg sends as the null the original passes.
+- src/ledger/storage/postgres/driver.ts:1364:8-1364:25 ConditionalExpression "true" equivalent: the page after a start has rows only when the start is in the account's history, as the statement reads the start's time from the account's own row, so the check that the start is listed then passes.
+- src/ledger/storage/postgres/driver.ts:1364:30-1364:127 OptionalChaining "(await transaction.run(accountHistoryLists, [publicKeyOf(account), hashBytes(start)]))[0].listed" equivalent: an EXISTS query always answers one row.
+- src/ledger/storage/postgres/driver.ts:1394:7-1394:25 ConditionalExpression "true" equivalent: a page holds at least one vote, so the page is empty only when no row was read, and then no next key is made either way.
+- src/ledger/storage/postgres/driver.ts:1429:7-1429:27 ConditionalExpression "true" equivalent: the public key of an absent account is undefined [Keeta TS] index.js:63699-63701, which pg sends as the null the original passes.
+- src/ledger/storage/postgres/driver.ts:1455:4-1456:32 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
+- src/ledger/storage/postgres/driver.ts:1456:5-1456:32 CallExpression ";" equivalent: the default of a switch that has handled every case of its union is unreachable.
+- src/ledger/storage/postgres/driver.ts:1511:53-1511:55 ArrayDeclaration "[\"Stryker was here\"]" equivalent: the string makes a claim with no key and no block, and the insert keeps only a claim whose block is a side copy, so it inserts nothing.
+- src/ledger/storage/postgres/driver.ts:1525:9-1525:31 ConditionalExpression "false" equivalent: an insert without a conflict clause answers its one row or fails, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1525:33-1527:6 BlockStatement "{}" equivalent: an insert without a conflict clause answers its one row or fails, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1526:22-1526:77 StringLiteral "``" equivalent: the message of the unreachable error for a side vote insert with no row.
+- src/ledger/storage/postgres/driver.ts:1544:7-1544:24 ConditionalExpression "false" equivalent: the statement is an aggregate, which always answers one row, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1544:26-1546:4 BlockStatement "{}" equivalent: the statement is an aggregate, which always answers one row, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1545:20-1545:71 StringLiteral "\"\"" equivalent: the message of the unreachable error for the counts with no row.
+- src/ledger/storage/postgres/driver.ts:1588:7-1588:24 ConditionalExpression "false" equivalent: the statement is an aggregate, which always answers one row, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1588:26-1590:4 BlockStatement "{}" equivalent: the statement is an aggregate, which always answers one row, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1589:20-1589:73 StringLiteral "\"\"" equivalent: the message of the unreachable error for the checksum with no row.
+- src/ledger/storage/postgres/driver.ts:1663:7-1663:24 ConditionalExpression "false" equivalent: the statement is an aggregate, which always answers one row, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1663:26-1665:4 BlockStatement "{}" equivalent: the statement is an aggregate, which always answers one row, so the guard for no row is unreachable.
+- src/ledger/storage/postgres/driver.ts:1664:20-1664:81 StringLiteral "\"\"" equivalent: the message of the unreachable error for the orphaned row count with no row.
+- src/ledger/storage/postgres/driver.ts:1679:7-1679:27 ConditionalExpression "true" equivalent: with no vote to collect, the three statements delete nothing.
+- src/ledger/storage/postgres/driver.ts:1679:7-1679:27 EqualityOperator "collected.length >= 0" equivalent: with no vote to collect, the three statements delete nothing.
+- src/ledger/storage/postgres/driver.ts:1715:7-1715:41 ConditionalExpression "false" equivalent: with no idempotent key, the statement finds no holder.
+- src/ledger/storage/postgres/driver.ts:1715:43-1717:4 BlockStatement "{}" equivalent: with no idempotent key, the statement finds no holder.
+- src/ledger/storage/postgres/driver.ts:1741:90-1743:4 BlockStatement "{}" equivalent: a block on main is the main successor of its own previous, which the same statement finds through the list of previous blocks, so it is still found on main.
+- src/ledger/storage/postgres/driver.ts:1796:7-1796:40 ConditionalExpression "false" equivalent: the check before it refuses any block already on main in the same snapshot, and the insert turns a side copy into the main row, so it answers a row for every block.
+- src/ledger/storage/postgres/driver.ts:1796:42-1798:4 BlockStatement "{}" equivalent: the check before it refuses any block already on main in the same snapshot, and the insert turns a side copy into the main row, so it answers a row for every block.
+- src/ledger/storage/postgres/driver.ts:1797:28-1797:57 StringLiteral "\"\"" equivalent: the message of the unreachable error for a block the insert found already on main.
+- src/ledger/storage/postgres/driver.ts:1797:59-1797:130 StringLiteral "``" equivalent: the message of the unreachable error for a block the insert found already on main.
+- src/ledger/storage/postgres/driver.ts:1806:8-1806:28 ConditionalExpression "false" equivalent: the change holds a height for every block of its staple, as blockHeightsOf refuses a staple without one.
+- src/ledger/storage/postgres/driver.ts:1806:30-1808:5 BlockStatement "{}" equivalent: the change holds a height for every block of its staple, as blockHeightsOf refuses a staple without one.
+- src/ledger/storage/postgres/driver.ts:1807:21-1807:83 StringLiteral "``" equivalent: the message of the unreachable error for a block with no height.
+- src/ledger/storage/postgres/driver.ts:1818:8-1818:28 ConditionalExpression "false" equivalent: the heights and the hashes are mapped from the same blocks, so the lists are equally long.
+- src/ledger/storage/postgres/driver.ts:1818:8-1818:50 ConditionalExpression "false" equivalent: the heights and the hashes are mapped from the same blocks, so the lists are equally long.
+- src/ledger/storage/postgres/driver.ts:1818:8-1818:50 LogicalOperator "height === undefined && hash === undefined" equivalent: the heights and the hashes are mapped from the same blocks, so the lists are equally long.
+- src/ledger/storage/postgres/driver.ts:1818:32-1818:50 ConditionalExpression "false" equivalent: the heights and the hashes are mapped from the same blocks, so the lists are equally long.
+- src/ledger/storage/postgres/driver.ts:1818:52-1820:5 BlockStatement "{}" equivalent: the heights and the hashes are mapped from the same blocks, so the lists are equally long.
+- src/ledger/storage/postgres/driver.ts:1819:21-1819:68 StringLiteral "\"\"" equivalent: the message of the unreachable error for lists of unequal length.
+- src/ledger/storage/postgres/driver.ts:1822:8-1822:56 ConditionalExpression "true" equivalent: a staple lists an account's blocks in chain order, as the base refuses any other, so each later block of an account is higher and keeping the last keeps the highest.
+- src/ledger/storage/postgres/driver.ts:1822:33-1822:56 EqualityOperator "current.height <= height" equivalent: a staple lists an account's blocks in chain order, as the base refuses any other, so each later block of an account is higher and keeping the last keeps the highest.
+- src/ledger/storage/postgres/driver.ts:1917:7-1917:31 ConditionalExpression "false" equivalent: with no delegation, the statement sets nothing.
+- src/ledger/storage/postgres/driver.ts:1917:33-1919:4 BlockStatement "{}" equivalent: with no delegation, the statement sets nothing.
+- src/ledger/storage/postgres/driver.ts:1943:8-1943:52 ConditionalExpression "false" equivalent: computeLedgerEffect resolves every permission update but a deletion into a SET [Keeta TS] index.js:68502-68522, so the guard is unreachable.
+- src/ledger/storage/postgres/driver.ts:1943:54-1945:5 BlockStatement "{}" equivalent: computeLedgerEffect resolves every permission update but a deletion into a SET [Keeta TS] index.js:68502-68522, so the guard is unreachable.
+- src/ledger/storage/postgres/driver.ts:1944:21-1944:104 StringLiteral "``" equivalent: the message of the unreachable error for an unresolved permission update.
+- src/ledger/storage/postgres/driver.ts:1967:5-1968:26 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
+- src/ledger/storage/postgres/driver.ts:1968:6-1968:26 CallExpression ";" equivalent: the default of a switch that has handled every case of its union is unreachable.
+- src/ledger/storage/postgres/driver.ts:1974:7-1974:41 ConditionalExpression "false" equivalent: with no idempotent key, the statement inserts nothing.
+- src/ledger/storage/postgres/driver.ts:1974:43-1976:4 BlockStatement "{}" equivalent: with no idempotent key, the statement inserts nothing.
+- src/ledger/storage/postgres/driver.ts:2012:3-2013:30 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
+- src/ledger/storage/postgres/driver.ts:2032:8-2032:29 ConditionalExpression "true" equivalent: reading the side ledger for no keys answers nothing.
+- src/ledger/storage/postgres/driver.ts:2032:8-2032:29 EqualityOperator "unanswered.length >= 0" equivalent: reading the side ledger for no keys answers nothing.
+- src/ledger/storage/postgres/driver.ts:2039:3-2040:30 ConditionalExpression "default:" equivalent: the default of a switch that has handled every case of its union is unreachable.
 - src/ledger/storage/postgres/errors.ts:96:9-96:58 ConditionalExpression "true" equivalent: the transient codes are strings, so the set answers false for a code that is absent or not a string, as the guards do.
 - src/ledger/storage/postgres/errors.ts:96:9-96:58 LogicalOperator "'code' in error || typeof error.code === 'string'" equivalent: the transient codes are strings, so the set answers false for a code that is absent or not a string, as the guards do.
 - src/ledger/storage/postgres/errors.ts:96:28-96:58 ConditionalExpression "true" equivalent: the transient codes are strings, so the set answers false for a code that is absent or not a string, as the guards do.
@@ -573,17 +585,17 @@ connection outlives the connection. The entries are:
 - src/api/p2p.ts:79:19-81:3 BlockStatement "{}" equivalent: a refusal of the parser carries no type [Keeta TS] index.js:73912-73923, so the message read from it has none, which republishedMessage refuses as a type it does not act on.
 - src/api/p2p.ts:88:9-88:34 ConditionalExpression "true" equivalent: an absent TTL is not at least 1, so the message is not relayed either way.
 - src/api/p2p.ts:131:3-132:22 ConditionalExpression "default:" equivalent: without its return the default falls out of the switch, and the function answers undefined all the same.
-- src/node/config.ts:135:3-136:30 ConditionalExpression "default:" equivalent: the default of a switch that has handled every write mode is unreachable.
-- src/node/config.ts:574:3-575:22 ConditionalExpression "case 'local':" equivalent: a local selection falling through to the case of the known networks names no alias, which no public network matches, so it still names none.
-- src/node/config.ts:580:3-581:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
-- src/node/config.ts:1085:4-1086:31 ConditionalExpression "default:" equivalent: the default of a switch that has handled every voting rule is unreachable.
-- src/node/config.ts:1100:3-1101:41 ConditionalExpression "default:" equivalent: the default of a switch that has handled every write mode is unreachable.
-- src/node/config.ts:1136:6-1136:22 EqualityOperator "words.length <= 2" equivalent: alternatives is given one word or three, never two: the write modes that do not vote, and those of them open on a network, which are no-voting alone on main and test and three on dev and staging.
-- src/node/config.ts:1137:21-1137:23 StringLiteral "\"Stryker was here!\"" equivalent: a list of fewer than two words places no separator.
-- src/node/config.ts:1139:69-1139:71 StringLiteral "\"Stryker was here!\"" equivalent: the last word alone places no separator.
-- src/node/config.ts:1171:3-1172:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both reasons for a closure is unreachable.
-- src/node/config.ts:1185:66-1185:90 ConditionalExpression "false" equivalent: a local selection let through has no alias, whose rule is none, so it is not one that votes with peers and is still not refused.
-- src/node/config.ts:1185:83-1185:90 StringLiteral "\"\"" equivalent: no selection is of the kind "", so a local one is let through, and having no alias, whose rule is none, is still not refused.
+- src/node/config.ts:136:3-137:30 ConditionalExpression "default:" equivalent: the default of a switch that has handled every write mode is unreachable.
+- src/node/config.ts:586:3-587:22 ConditionalExpression "case 'local':" equivalent: a local selection falling through to the case of the known networks names no alias, which no public network matches, so it still names none.
+- src/node/config.ts:592:3-593:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
+- src/node/config.ts:1108:4-1109:31 ConditionalExpression "default:" equivalent: the default of a switch that has handled every voting rule is unreachable.
+- src/node/config.ts:1123:3-1124:41 ConditionalExpression "default:" equivalent: the default of a switch that has handled every write mode is unreachable.
+- src/node/config.ts:1159:6-1159:22 EqualityOperator "words.length <= 2" equivalent: alternatives is given one word or three, never two: the write modes that do not vote, and those of them open on a network, which are no-voting alone on main and test and three on dev and staging.
+- src/node/config.ts:1160:21-1160:23 StringLiteral "\"Stryker was here!\"" equivalent: a list of fewer than two words places no separator.
+- src/node/config.ts:1162:69-1162:71 StringLiteral "\"Stryker was here!\"" equivalent: the last word alone places no separator.
+- src/node/config.ts:1194:3-1195:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both reasons for a closure is unreachable.
+- src/node/config.ts:1208:66-1208:90 ConditionalExpression "false" equivalent: a local selection let through has no alias, whose rule is none, so it is not one that votes with peers and is still not refused.
+- src/node/config.ts:1208:83-1208:90 StringLiteral "\"\"" equivalent: no selection is of the kind "", so a local one is let through, and having no alias, whose rule is none, is still not refused.
 - src/node/connections.ts:21:4-21:22 OptionalChaining "resolvePromise()" equivalent: a promise's executor runs as the promise is built, so the resolver is always set by the time it is called.
 - src/node/connections.ts:80:9-80:26 ConditionalExpression "true" equivalent: closing a connection already aborted only marks it aborted again and closes a socket that is already closing [Keeta TS] index.js:73565-73573, which does nothing.
 - src/node/connections.ts:105:7-105:28 ConditionalExpression "true" equivalent: for a connection already tracked, the connection is not among those released, and #track answers its entry as it is.
@@ -607,12 +619,19 @@ client's reason where the variable is not secret. The entries are:
   same.
 
 - src/node/admitted-staples.ts:37:6-37:30 ConditionalExpression "true" equivalent: a local selection has no alias, and the staples of no alias are none, so it still admits none.
-- src/node/config.ts:261:3-262:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of problem is unreachable.
-- src/node/config.ts:595:3-596:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
-- src/node/config.ts:792:15-792:17 StringLiteral "\"Stryker was here!\"" equivalent: a peer reaches this line only with at least two fields after its key, so the API endpoint is always given.
-- src/node/config.ts:792:25-792:27 StringLiteral "\"Stryker was here!\"" equivalent: a peer reaches this line only with at least two fields after its key, so the p2p endpoint is always given.
-- src/node/config.ts:923:3-924:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
-- src/node/config.ts:1048:3-1049:34 ConditionalExpression "default:" equivalent: the default of a switch that has handled both fee schedules is unreachable.
-- src/node/config.ts:1283:3-1284:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
-- src/node/config.ts:1295:3-1296:36 ConditionalExpression "default:" equivalent: the default of a switch that has handled both ways of receiving updates is unreachable.
-- src/node/config.ts:1342:6-1342:38 ConditionalExpression "true" equivalent: assigning an absent hook leaves admitWithoutQuorum undefined, which add() calls as undefined?.() and so checks the quorum [Keeta TS] index.js:70434.
+- src/node/config.ts:271:3-272:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled every kind of problem is unreachable.
+- src/node/config.ts:607:3-608:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
+- src/node/config.ts:804:15-804:17 StringLiteral "\"Stryker was here!\"" equivalent: a peer reaches this line only with at least two fields after its key, so the API endpoint is always given.
+- src/node/config.ts:804:25-804:27 StringLiteral "\"Stryker was here!\"" equivalent: a peer reaches this line only with at least two fields after its key, so the p2p endpoint is always given.
+- src/node/config.ts:935:3-936:33 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
+- src/node/config.ts:1071:3-1072:34 ConditionalExpression "default:" equivalent: the default of a switch that has handled both fee schedules is unreachable.
+- src/node/config.ts:1321:3-1322:35 ConditionalExpression "default:" equivalent: the default of a switch that has handled both kinds of network selection is unreachable.
+- src/node/config.ts:1333:3-1334:36 ConditionalExpression "default:" equivalent: the default of a switch that has handled both ways of receiving updates is unreachable.
+- src/node/config.ts:1380:6-1380:38 ConditionalExpression "true" equivalent: assigning an absent hook leaves admitWithoutQuorum undefined, which add() calls as undefined?.() and so checks the quorum [Keeta TS] index.js:70434.
+
+## projection-backfill
+
+When the node runs the projection backfill beside itself, as the backfill and
+the node's state stood in for show it.
+
+- src/node/projection-backfill.ts:72:12-74:5 BlockStatement "{}" equivalent: only a stop ends the pause before a retry early, and the wait for the node that the next attempt begins with then throws, which ends the run as the return does.

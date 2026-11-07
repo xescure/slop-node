@@ -37,7 +37,20 @@ export const interceptQueries = function(pool: pg.Pool, intercept: (issued: Issu
 		if (typeof query !== 'function') {
 			throw(new Error('the client has no query method'));
 		}
-		Reflect.set(client, 'query', function(...input: unknown[]): Promise<unknown> {
+		Reflect.set(client, 'query', function(...input: unknown[]): Promise<unknown> | undefined {
+			// The pool's own query passes a callback, and reads the result from it alone.
+			const callback = input.at(-1);
+			if (typeof callback === 'function') {
+				const issued = input.slice(0, -1);
+				intercept(issuedQueryOf(issued[0], issued[1]), function(): Promise<unknown> {
+					return(Promise.resolve(Reflect.apply(query, client, issued)));
+				}).then(function(result: unknown) {
+					Reflect.apply(callback, undefined, [undefined, result]);
+				}, function(error: unknown) {
+					Reflect.apply(callback, undefined, [error]);
+				});
+				return(undefined);
+			}
 			return(intercept(issuedQueryOf(input[0], input[1]), function(): Promise<unknown> {
 				return(Promise.resolve(Reflect.apply(query, client, input)));
 			}));

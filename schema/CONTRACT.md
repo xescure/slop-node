@@ -928,6 +928,10 @@ Writes everything that one confirmed staple changes, all of it or none of it (se
 
 The unique indexes back the checks of steps 1 and 2 against another process: `blocks_main_successor` admits one confirmed successor per previous, and `idempotent_keys_main` one main block per key.
 
+The driver also writes, in the savepoint of the staple, a `block_details` row for each of its blocks and an `operations` row for each of their operations, with the accounts, token and amount each names. The memory driver writes none.
+
+The staples stored before migration 0012 have no rows. `PostgresLedgerStorage.backfillProjection` writes them, newest first, in batches of their own transactions, each lowering `projection_backfill.complete_from` to its oldest staple; then it sweeps the staples above where it began, or above `projection_backfill.swept_through` where an earlier sweep reached, up to the newest, in windows of a bounded number of staples, and fills in each that holds a main block without its `block_details` row, raising `swept_through` as each window is done. Once every staple has its rows, a run reads only the staples stored since the last sweep. Its inserts skip rows already written, so it runs beside a node and beside another backfill. Tested by `src/ledger/storage/postgres/driver.test.ts: "two backfills at once write each row once"` and `"a backfill beside staples being confirmed writes each row once, and leaves the live staples' rows as they were"`.
+
 #### `runIsolated`
 
 ```ts

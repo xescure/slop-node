@@ -285,6 +285,32 @@ export const insertMainBlocks: Statement<[Buffer[], AccountID[], Buffer[], numbe
 	WHERE blocks.ledger = 'side'
 	RETURNING hash`);
 
+/** Each block's hash, date, version, purpose and signer, a row per block. */
+export type BlockDetailsParameters = [Buffer[], Date[], number[], number[], AccountID[]];
+
+/** Each operation's block, index, Block.OperationType, accounts, amount, staple time and details as json text, a row per operation. */
+export type OperationParameters = [Buffer[], number[], number[], AccountID[], (AccountID | null)[], (AccountID | null)[], (string | null)[], Date[], string[]];
+
+const BLOCK_DETAILS_ROWS = `
+	INSERT INTO block_details (hash, date, version, purpose, signer_id)
+	SELECT * FROM unnest($1::bytea[], $2::timestamptz[], $3::smallint[], $4::smallint[], $5::bigint[])`;
+
+const OPERATION_ROWS = `
+	INSERT INTO operations (block_hash, idx, type, account_id, counterparty_id, token_id, amount, staple_time, details)
+	SELECT * FROM unnest($1::bytea[], $2::integer[], $3::smallint[], $4::bigint[], $5::bigint[], $6::bigint[], $7::numeric[], $8::timestamptz[], $9::jsonb[])`;
+
+// A block gets its rows once, with the staple that confirms it: a second write is a bug, which the primary key refuses.
+export const insertBlockDetails: Statement<BlockDetailsParameters> = statement('insert_block_details', BLOCK_DETAILS_ROWS);
+
+export const insertOperations: Statement<OperationParameters> = statement('insert_operations', OPERATION_ROWS);
+
+// A backfill may meet rows another backfill, or the staple itself, already wrote.
+export const backfillBlockDetails: Statement<BlockDetailsParameters> = statement('backfill_block_details', `${BLOCK_DETAILS_ROWS}
+	ON CONFLICT DO NOTHING`);
+
+export const backfillOperations: Statement<OperationParameters> = statement('backfill_operations', `${OPERATION_ROWS}
+	ON CONFLICT DO NOTHING`);
+
 export const insertChain: Statement<[AccountID[], string[], Buffer[]]> = statement('insert_chain', `
 	INSERT INTO chain (account_id, height, block_hash)
 	SELECT * FROM unnest($1::bigint[], $2::bigint[], $3::bytea[])`);
@@ -408,3 +434,46 @@ export const addHistoryRows: Statement<[Buffer[], string[]], { added: IntegerTex
 		RETURNING 1
 	)
 	SELECT count(*) AS added FROM added`);
+
+/** A main staple whose rows a backfill writes, with its blocks and their hashes in staple order. */
+export type BackfilledStaple = { readonly sequence: IntegerText; readonly blocks_hash: Buffer; readonly staple_time: Date; readonly blocks: Buffer[]; readonly hashes: Buffer[] };
+
+function withBlocks(batch: string, order: 'ASC' | 'DESC'): string {
+	return(`
+	WITH batch AS (${batch})
+	SELECT batch.sequence, batch.blocks_hash, batch.staple_time, array_agg(blocks.bytes ORDER BY blocks.staple_position) AS blocks, array_agg(blocks.hash::bytea ORDER BY blocks.staple_position) AS hashes
+	FROM batch JOIN blocks ON blocks.staple = batch.blocks_hash
+	GROUP BY batch.sequence, batch.blocks_hash, batch.staple_time
+	ORDER BY batch.sequence ${order}`);
+}
+
+/** The main staples below a sequence number, newest first. */
+export const staplesToBackfill: Statement<[string, number], BackfilledStaple> = statement('staples_to_backfill', withBlocks(`
+		SELECT sequence, blocks_hash, staple_time FROM staples WHERE sequence < $1 ORDER BY sequence DESC LIMIT $2
+	`, 'DESC'));
+
+/** The main staples after a sequence number and up to another that hold a main block without its block_details row, oldest first. */
+export const staplesMissingRows: Statement<[string, string, number], BackfilledStaple> = statement('staples_missing_rows', withBlocks(`
+		SELECT sequence, blocks_hash, staple_time FROM staples
+		WHERE sequence > $1 AND sequence <= $2 AND EXISTS (
+			SELECT 1 FROM blocks
+			WHERE blocks.staple = staples.blocks_hash AND blocks.ledger = 'main'
+				AND NOT EXISTS (SELECT 1 FROM block_details WHERE block_details.hash = blocks.hash)
+		)
+		ORDER BY sequence LIMIT $3
+	`, 'ASC'));
+
+export const newestStapleSequence: Statement<[], { sequence: IntegerText }> = statement('newest_staple_sequence', 'SELECT coalesce(max(sequence), 0) AS sequence FROM staples');
+
+export const accountIDsOf: Statement<[string[]], { id: AccountID; public_key: string }> = statement('account_ids_of', `
+	SELECT id, public_key FROM accounts WHERE public_key = ANY($1::text[])`);
+
+export const projectionBackfillState: Statement<[], { complete_from: IntegerText; swept_through: IntegerText | null }> = statement('projection_backfill_state', 'SELECT complete_from, swept_through FROM projection_backfill');
+
+// complete_from only moves down, whichever of two backfills commits first.
+export const lowerBackfill: Statement<[string]> = statement('lower_backfill', `
+	UPDATE projection_backfill SET complete_from = $1 WHERE complete_from > $1`);
+
+// swept_through only moves up, as complete_from only moves down.
+export const raiseSwept: Statement<[string]> = statement('raise_swept', `
+	UPDATE projection_backfill SET swept_through = $1 WHERE swept_through IS NULL OR swept_through < $1`);
