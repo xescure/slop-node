@@ -17,10 +17,10 @@ jobs:
           persist-credentials: false
       - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # 31.11.3
       - id: release
-        uses: xescure/ci/.github/actions/release-images@33f7e0ee3bc0326c13d103b4b0aaaa43b38a93ec # main
+        uses: xescure/ci/.github/actions/release-images@6b0d7c91ee947fddbb5af26b0321a0a6f3055176 # main
         with:
           test-job: ""
-      - uses: xescure/ci/.github/actions/tag-images@33f7e0ee3bc0326c13d103b4b0aaaa43b38a93ec # main
+      - uses: xescure/ci/.github/actions/tag-images@6b0d7c91ee947fddbb5af26b0321a0a6f3055176 # main
         with:
           images: ${{ steps.release.outputs.images }}
           tags: ${{ github.ref_name }} latest
@@ -35,6 +35,6 @@ jobs:
           sed -i "s|ghcr.io/xescure/slop-node:latest|ghcr.io/xescure/slop-node:${TAG}|" compose.yaml
           grep -q "ghcr.io/xescure/slop-node:${TAG}" compose.yaml
           gh release create "$TAG" compose.yaml --verify-tag --generate-notes
-      - uses: xescure/ci/.github/actions/prod-branch@33f7e0ee3bc0326c13d103b4b0aaaa43b38a93ec # main
+      - uses: xescure/ci/.github/actions/prod-branch@6b0d7c91ee947fddbb5af26b0321a0a6f3055176 # main
         with:
           commit: ${{ steps.release.outputs.commit }}
