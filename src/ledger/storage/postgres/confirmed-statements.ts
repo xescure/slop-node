@@ -15,6 +15,14 @@ export const balanceOf: Statement<[string, string], { balance: IntegerText }> = 
 	JOIN accounts token ON token.id = balances.token_id
 	WHERE holder.public_key = $1 AND token.public_key = $2`);
 
+/** The balance row of each requested holder and token, the two listed side by side; a pair without one is left out. */
+export const balancesOfPairs: Statement<[string[], string[]], { holder: string; token: string; balance: IntegerText }> = statement('balances_of_pairs', `
+	SELECT holder.public_key AS holder, token.public_key AS token, balances.balance
+	FROM (SELECT DISTINCT holder_key, token_key FROM unnest($1::text[], $2::text[]) AS requested (holder_key, token_key)) requested
+	JOIN accounts holder ON holder.public_key = requested.holder_key
+	JOIN accounts token ON token.public_key = requested.token_key
+	JOIN balances ON balances.account_id = holder.id AND balances.token_id = token.id`);
+
 export const nonZeroBalances: Statement<[string], { token: string; balance: IntegerText }> = statement('non_zero_balances', `
 	SELECT token.public_key AS token, balances.balance
 	FROM balances
@@ -48,6 +56,20 @@ export const representativeOf: Statement<[string], { representative: string }> =
 	JOIN accounts representative ON representative.id = delegations.representative_id
 	WHERE holder.public_key = $1`);
 
+/** The representative of each listed account that delegates to one. */
+export const representativesOf: Statement<[string[]], { holder: string; representative: string }> = statement('representatives_of', `
+	SELECT holder.public_key AS holder, representative.public_key AS representative
+	FROM delegations
+	JOIN accounts holder ON holder.id = delegations.account_id
+	JOIN accounts representative ON representative.id = delegations.representative_id
+	WHERE holder.public_key = ANY($1::text[])`);
+
+/** The weight row of each listed representative that has one. */
+export const weightsOf: Statement<[string[]], { representative: string; weight: IntegerText }> = statement('weights_of', `
+	SELECT accounts.public_key AS representative, weights.weight
+	FROM weights JOIN accounts ON accounts.id = weights.representative_id
+	WHERE accounts.public_key = ANY($1::text[])`);
+
 export type ACLColumns = {
 	readonly principal: string;
 	readonly certificate: Buffer | null;
@@ -68,6 +90,17 @@ export const aclsOfPrincipal: Statement<[string, Buffer | null, string[] | null]
 		AND acls.certificate IS NOT DISTINCT FROM $2::bytea
 		AND ($3::text[] IS NULL OR entity.public_key = ANY($3::text[]))
 	ORDER BY entity.public_key, target.public_key`);
+
+/** The rows each account principal holds, as itself rather than by a certificate, on its paired entity, the two listed side by side. */
+export const aclsOfPrincipalEntityPairs: Statement<[string[], string[]], ACLColumns> = statement('acls_of_principal_entity_pairs', `
+	SELECT principal.public_key AS principal, acls.certificate, entity.public_key AS entity,
+		target.public_key AS target, acls.base_permissions, acls.external_permissions
+	FROM (SELECT DISTINCT principal_key, entity_key FROM unnest($1::text[], $2::text[]) AS pair (principal_key, entity_key)) pair
+	JOIN accounts principal ON principal.public_key = pair.principal_key
+	JOIN accounts entity ON entity.public_key = pair.entity_key
+	JOIN acls ON acls.principal_id = principal.id AND acls.certificate IS NULL AND acls.entity_id = entity.id
+	JOIN accounts target ON target.id = acls.target_id
+	ORDER BY principal.public_key, entity.public_key, target.public_key`);
 
 // $2 selects certificate principals when true, account principals when false, and both when null.
 export const aclsOfEntity: Statement<[string, boolean | null], ACLColumns> = statement('acls_of_entity', `
@@ -128,6 +161,12 @@ export const headsOf: Statement<[string[]], { public_key: string; bytes: Buffer 
 	FROM accounts
 	JOIN heads ON heads.account_id = accounts.id
 	JOIN blocks ON blocks.hash = heads.block_hash
+	WHERE accounts.public_key = ANY($1::text[])`);
+
+/** The hash of each listed account's main-chain head, without its block. */
+export const headHashesOf: Statement<[string[]], { public_key: string; block_hash: Buffer }> = statement('head_hashes_of', `
+	SELECT accounts.public_key, heads.block_hash
+	FROM accounts JOIN heads ON heads.account_id = accounts.id
 	WHERE accounts.public_key = ANY($1::text[])`);
 
 export const mainSuccessor: Statement<[Buffer], { bytes: Buffer }> = statement('main_successor', 'SELECT bytes FROM blocks WHERE previous = $1 AND ledger = \'main\'');

@@ -1,13 +1,14 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, AccountKeyAlgorithm, GenericAccount, IdentifierAddress, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
+import type { BalanceKey } from '@keetanetwork/keetanet-client/lib/ledger/common.js';
 import type { GetVotesAfterOptions, IdempotentKey, LedgerSelector, LedgerStorageAPI, ListACLsByEntityFilters, PaginatedVotes } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { ACLRow, ACLUpdate, AccountInfoForType, CertificateWithIntermediates, GetAllBalancesResponse } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
 import type { Vote, VoteBlockHash, VoteBlockHashMap, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
 import { LedgerInternals } from '../../../upstream/internals.js';
 import { assertNever } from '../../../util/assert-never.js';
-import { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
-import type { CollectedDeferredStaples, LedgerChecksum, LedgerCountsSnapshot, StrandedDeferredStaple, TransactionOptions } from '../base.js';
+import { LedgerDriverTransaction, LedgerStorageDriverBase, distinctPairs } from '../base.js';
+import type { BalanceReadRow, CollectedDeferredStaples, PrincipalEntityPair, RepresentativeReadRow, WeightReadRow, LedgerChecksum, LedgerCountsSnapshot, StrandedDeferredStaple, TransactionOptions } from '../base.js';
 import type { AccountInfoUpdate, ConfirmedStapleChange } from '../confirmed.js';
 import { createIdempotentKeyError, createLedgerError, HistoryStartNotListed } from '../errors.js';
 import { isVoteUnexpired } from '../expiry.js';
@@ -387,6 +388,62 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	async getAccountRep(transaction: MemoryTransaction, account: GenericAccount | string): Promise<Account | null> {
 		const { representatives } = await transaction.view();
 		return(representatives.get(toAccountKey(account)) ?? null);
+	}
+
+	protected async readBalanceRows(transaction: MemoryTransaction, requests: BalanceKey[]): Promise<BalanceReadRow[]> {
+		const { balances } = await transaction.view();
+		return(requests.flatMap(function({ account, token }): BalanceReadRow[] {
+			const row = balances.get(toAccountKey(account))?.get(toAccountKey(token));
+			if (row === undefined) {
+				return([]);
+			}
+			return([{ account: toAccountKey(account), token: toAccountKey(token), balance: row.balance }]);
+		}));
+	}
+
+	protected async readAccountRepRows(transaction: MemoryTransaction, accounts: GenericAccount[]): Promise<RepresentativeReadRow[]> {
+		const { representatives } = await transaction.view();
+		return(accounts.flatMap(function(account): RepresentativeReadRow[] {
+			const rep = representatives.get(toAccountKey(account));
+			if (rep === undefined) {
+				return([]);
+			}
+			return([{ account: toAccountKey(account), rep }]);
+		}));
+	}
+
+	protected async readWeightRows(transaction: MemoryTransaction, reps: Account[]): Promise<WeightReadRow[]> {
+		const { weights } = await transaction.view();
+		return(reps.flatMap(function(rep): WeightReadRow[] {
+			const weight = weights.get(toAccountKey(rep));
+			if (weight === undefined) {
+				return([]);
+			}
+			return([{ rep: toAccountKey(rep), weight }]);
+		}));
+	}
+
+	protected async readChainHeads(transaction: MemoryTransaction, accounts: GenericAccount[]): Promise<{ [account: string]: BlockHash }> {
+		const overlay = await transaction.view();
+		const heads: { [account: string]: BlockHash } = {};
+		for (const account of accounts) {
+			const key = toAccountKey(account);
+			const head = overlay.chainHeads.get(key);
+			if (head !== undefined) {
+				heads[key] = this.#confirmedBlock(overlay, head).hash;
+			}
+		}
+		return(heads);
+	}
+
+	async listACLsForPrincipalEntityPairs(transaction: MemoryTransaction, pairs: PrincipalEntityPair[]): Promise<ACLRow[]> {
+		const { acls } = await transaction.view();
+		return(distinctPairs(pairs).flatMap(function({ principal, entity }): ACLRow[] {
+			const rows = Array.from(acls.get(toPrincipalKey(principal))?.values() ?? []);
+			return(rows.filter(function(row): boolean {
+				return(toAccountKey(row.entity) === toAccountKey(entity));
+			}));
+		}));
 	}
 
 	async listACLsByPrincipal(transaction: MemoryTransaction, principal: ACLRow['principal'], entityList?: GenericAccount[]): Promise<ACLRow[]> {

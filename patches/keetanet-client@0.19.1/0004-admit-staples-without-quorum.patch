@@ -15,7 +15,7 @@ Applies with "patch -p1" from the package root, after 0001, 0002 and 0003.
 
 --- a/client/index.js
 +++ b/client/index.js
-@@ -70453,7 +70453,8 @@
+@@ -70786,7 +70786,8 @@
              }
          }
          const weightTiming = __classPrivateFieldGet(this, _LedgerAtomicInterface_ledger, "f").node?.timing.startTime('db-add.getWeight');
@@ -27,7 +27,7 @@ Applies with "patch -p1" from the package root, after 0001, 0002 and 0003.
          }
 --- a/lib/ledger/index.d.ts
 +++ b/lib/ledger/index.d.ts
-@@ -56,6 +56,11 @@
+@@ -57,6 +57,11 @@
       */
      ledgerWriteMode?: 'bootstrap-only' | 'read-only' | 'read-write' | 'no-voting';
      /**

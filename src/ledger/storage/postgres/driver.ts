@@ -3,6 +3,7 @@ import * as KeetaNet from '@keetanetwork/keetanet-client';
 import type { Account, AccountKeyAlgorithm, GenericAccount, IdentifierAddress, TokenAddress } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
 import type { KeetaNetLedgerError } from '@keetanetwork/keetanet-client/lib/error/ledger.js';
+import type { BalanceKey } from '@keetanetwork/keetanet-client/lib/ledger/common.js';
 import type { GetVotesAfterOptions, IdempotentKey, Ledger, LedgerConfig, LedgerSelector, LedgerStorageAPI, ListACLsByEntityFilters, PaginatedVotes } from '@keetanetwork/keetanet-client/lib/ledger/index.js';
 import type { ACLRow, ACLUpdate, AccountInfoForType, CertificateWithIntermediates, GetAllBalancesResponse } from '@keetanetwork/keetanet-client/lib/ledger/types.js';
 import type { Vote, VoteBlockHash, VoteBlockHashMap, VoteStaple } from '@keetanetwork/keetanet-client/lib/vote.js';
@@ -10,7 +11,7 @@ import type pg from 'pg';
 import { LedgerInternals } from '../../../upstream/internals.js';
 import { assertNever } from '../../../util/assert-never.js';
 import { LedgerDriverTransaction, LedgerStorageDriverBase } from '../base.js';
-import type { CollectedDeferredStaples, LedgerChecksum, LedgerCountsSnapshot, StrandedDeferredStaple, TransactionOptions } from '../base.js';
+import type { BalanceReadRow, CollectedDeferredStaples, PrincipalEntityPair, RepresentativeReadRow, WeightReadRow, LedgerChecksum, LedgerCountsSnapshot, StrandedDeferredStaple, TransactionOptions } from '../base.js';
 import { historyAccountsOf } from '../confirmed.js';
 import type { AccountInfoUpdate, ConfirmedStapleChange } from '../confirmed.js';
 import { createIdempotentKeyError, createLedgerError, HistoryStartNotListed } from '../errors.js';
@@ -28,6 +29,7 @@ import {
 	accountInfoOf,
 	aclsOfEntity,
 	aclsOfPrincipal,
+	aclsOfPrincipalEntityPairs,
 	addBalances,
 	addCertificate,
 	addHistoryRows,
@@ -39,6 +41,7 @@ import {
 	backfillBlockDetails,
 	backfillOperations,
 	balanceOf,
+	balancesOfPairs,
 	catchUpVotes,
 	catchUpVotesAfter,
 	certificateOf,
@@ -46,6 +49,7 @@ import {
 	deleteACL,
 	deleteSideIdempotentKeys,
 	foldLedgerChecksum,
+	headHashesOf,
 	headsOf,
 	historyReindexCursor,
 	insertBlockDetails,
@@ -82,13 +86,15 @@ import {
 	removeCertificate,
 	removeHistoryRows,
 	representativeOf,
+	representativesOf,
 	setACL,
 	setDelegations,
 	staplesMissingRows,
 	staplesToBackfill,
 	staplesToReindex,
 	totalWeight,
-	weightOf
+	weightOf,
+	weightsOf
 } from './confirmed-statements.js';
 import type { ACLColumns, AccountInfoColumns, BackfilledStaple, BlockDetailsParameters, CatchUpVoteColumns, CertificateColumns, LedgerCountsColumns, OperationParameters, ReindexedStaple } from './confirmed-statements.js';
 import { checkIn, checkOut } from './connection.js';
@@ -1183,6 +1189,48 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 			return(null);
 		}
 		return(lib.Account.fromPublicKeyString(row.representative).assertAccount());
+	}
+
+	protected async readBalanceRows(transaction: PostgresTransaction, requests: BalanceKey[]): Promise<BalanceReadRow[]> {
+		const rows = await transaction.run(balancesOfPairs, [requests.map(function({ account }): string {
+			return(publicKeyOf(account));
+		}), requests.map(function({ token }): string {
+			return(publicKeyOf(token));
+		})]);
+		return(rows.map(function(row): BalanceReadRow {
+			return({ account: toAccountKey(row.holder), token: toAccountKey(row.token), balance: fromInteger(row.balance) });
+		}));
+	}
+
+	protected async readAccountRepRows(transaction: PostgresTransaction, accounts: GenericAccount[]): Promise<RepresentativeReadRow[]> {
+		const rows = await transaction.run(representativesOf, [accounts.map(publicKeyOf)]);
+		return(rows.map(function(row): RepresentativeReadRow {
+			return({ account: toAccountKey(row.holder), rep: lib.Account.fromPublicKeyString(row.representative).assertAccount() });
+		}));
+	}
+
+	protected async readWeightRows(transaction: PostgresTransaction, reps: Account[]): Promise<WeightReadRow[]> {
+		const rows = await transaction.run(weightsOf, [reps.map(publicKeyOf)]);
+		return(rows.map(function(row): WeightReadRow {
+			return({ rep: toAccountKey(row.representative), weight: fromInteger(row.weight) });
+		}));
+	}
+
+	/** Heads are main-chain only, as getHeadBlocks reads them (D5). */
+	protected async readChainHeads(transaction: PostgresTransaction, accounts: GenericAccount[]): Promise<{ [account: string]: BlockHash }> {
+		const rows = await transaction.run(headHashesOf, [accounts.map(publicKeyOf)]);
+		return(Object.fromEntries(rows.map(function(row): [string, BlockHash] {
+			return([toAccountKey(row.public_key), toBlockHash(row.block_hash)]);
+		})));
+	}
+
+	async listACLsForPrincipalEntityPairs(transaction: PostgresTransaction, pairs: PrincipalEntityPair[]): Promise<ACLRow[]> {
+		const rows = await transaction.run(aclsOfPrincipalEntityPairs, [pairs.map(function({ principal }): string {
+			return(publicKeyOf(principal));
+		}), pairs.map(function({ entity }): string {
+			return(publicKeyOf(entity));
+		})]);
+		return(rows.map(toACLRow));
 	}
 
 	/*

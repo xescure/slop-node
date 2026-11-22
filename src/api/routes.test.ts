@@ -754,7 +754,7 @@ describe('the reads of a request', function() {
 		const section: string = `api-${SECRET}`;
 		vi.spyOn(lib.Ledger.prototype, 'runReadOnly').mockImplementation(function(): Promise<never> {
 			return(Promise.resolve().then(function(): never {
-				new lib.Timing.RequestTiming().startTime(section);
+				new lib.RequestTiming().startTime(section);
 				throw(new Error(`the timing accepts the section name ${section}`));
 			}));
 		});

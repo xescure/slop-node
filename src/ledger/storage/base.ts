@@ -1,6 +1,7 @@
 import * as KeetaNet from '@keetanetwork/keetanet-client';
-import type { Account, AccountKeyAlgorithm } from '@keetanetwork/keetanet-client/lib/account.js';
+import type { Account, AccountKeyAlgorithm, GenericAccount } from '@keetanetwork/keetanet-client/lib/account.js';
 import type { Block, BlockHash } from '@keetanetwork/keetanet-client/lib/block/index.js';
+import type { AccountHead, AccountHeadRow, BalanceKey } from '@keetanetwork/keetanet-client/lib/ledger/common.js';
 import type { ComputedEffectOfBlocks } from '@keetanetwork/keetanet-client/lib/ledger/effects.js';
 import type {
 	Ledger,
@@ -18,7 +19,7 @@ import { blockHeightsOf, computeConfirmedStapleChange } from './confirmed.js';
 import type { ConfirmedStapleChange } from './confirmed.js';
 import { createLedgerError, describeError, isKeetaNetError } from './errors.js';
 import type { KeetaNetError } from './errors.js';
-import { toBlockHashKey, toStapleKey } from './keys.js';
+import { toAccountKey, toBlockHashKey, toStapleKey } from './keys.js';
 import type { BlockHashKey, StapleKey } from './keys.js';
 import type { BootstrapStage } from './stage.js';
 
@@ -138,6 +139,31 @@ export type StrandedDeferredStaple = {
 	readonly lacks: readonly BlockHash[];
 	readonly latestVote: Date;
 };
+
+/**
+ * The rows upstream's batched reads take from a driver, which fills in a 0 or
+ * null for each request without one [Keeta TS] index.js:68851-68905; each
+ * account is named by its public key string, as upstream indexes them.
+ */
+export type BalanceReadRow = { account: string; token: string; balance: bigint };
+export type RepresentativeReadRow = { account: string; rep: Account };
+export type WeightReadRow = { rep: string; weight: bigint };
+
+/** An account principal and the entity whose permissions it holds are read for. */
+export type PrincipalEntityPair = { principal: GenericAccount; entity: GenericAccount };
+
+/** The pairs, each once, in the order first given, so that no row is listed twice. */
+export function distinctPairs(pairs: readonly PrincipalEntityPair[]): PrincipalEntityPair[] {
+	const seen = new Set<string>();
+	return(pairs.filter(function({ principal, entity }): boolean {
+		const key = `${toAccountKey(principal)}:${toAccountKey(entity)}`;
+		if (seen.has(key)) {
+			return(false);
+		}
+		seen.add(key);
+		return(true);
+	}));
+}
 
 /** Documented default of LedgerConfig.heapProcessWindowMs. */
 const DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS = 5000;
@@ -547,6 +573,34 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	abstract getAccountRep(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getAccountRep'>): MemberResult<'getAccountRep'>;
 	abstract getVotesAfter(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getVotesAfter'>): MemberResult<'getVotesAfter'>;
 	abstract getNextSerialNumber(transaction?: Transaction): MemberResult<'getNextSerialNumber'>;
+	abstract listACLsForPrincipalEntityPairs(transaction: Transaction, ...input: ArgumentsAfterTransaction<'listACLsForPrincipalEntityPairs'>): MemberResult<'listACLsForPrincipalEntityPairs'>;
+	/** Each requested pair's balance row; a pair without one is left out. */
+	protected abstract override readBalanceRows(transaction: Transaction, requests: BalanceKey[]): Promise<BalanceReadRow[]>;
+	/** Each requested account's representative; an account that delegates to none is left out. */
+	protected abstract override readAccountRepRows(transaction: Transaction, accounts: GenericAccount[]): Promise<RepresentativeReadRow[]>;
+	/** Each requested representative's weight row; one without a row is left out. */
+	protected abstract override readWeightRows(transaction: Transaction, reps: Account[]): Promise<WeightReadRow[]>;
+	/** The hash of each account's main-chain head, as of the transaction; an account without a chain is left out. */
+	protected abstract override readChainHeads(transaction: Transaction, accounts: GenericAccount[]): Promise<{ [account: string]: BlockHash }>;
+
+	/*
+	 * Upstream's base keeps a row per account holding its head and the staple
+	 * of our latest vote on a successor, which only recordPendingVote and
+	 * advanceAccountHeads write [Keeta TS] index.js:68945-69003, and which
+	 * nothing in the bundle reads. No driver here calls either: Ledger.vote
+	 * finds our vote on a competing successor from the votes themselves
+	 * [Keeta TS] index.js:70646-70675, so the row would answer nothing, and
+	 * a row written but never read could only drift from the votes it
+	 * summarizes. A release that starts to call them fails here, loudly,
+	 * rather than reading rows that were never written.
+	 */
+	protected override readAccountHeads(_transaction: Transaction, _accounts: GenericAccount[]): Promise<{ [account: string]: AccountHead }> {
+		return(Promise.reject(new Error('internal error: account head rows are not kept, as the votes they would summarize answer every question about them')));
+	}
+
+	protected override writeAccountHeads(_transaction: Transaction, _rows: AccountHeadRow[]): Promise<void> {
+		return(Promise.reject(new Error('internal error: account head rows are not kept, as the votes they would summarize answer every question about them')));
+	}
 	abstract getAccountCertificates(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getAccountCertificates'>): MemberResult<'getAccountCertificates'>;
 	abstract getAccountCertificateByHash(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getAccountCertificateByHash'>): MemberResult<'getAccountCertificateByHash'>;
 	abstract getIdempotentBlockHash(transaction: Transaction, ...input: ArgumentsAfterTransaction<'getIdempotentBlockHash'>): MemberResult<'getIdempotentBlockHash'>;

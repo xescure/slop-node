@@ -21,7 +21,7 @@ Applies with "patch -p1" from the package root, after 0001 and 0002.
 
 --- a/client/index.js
 +++ b/client/index.js
-@@ -67823,6 +67823,7 @@
+@@ -67961,6 +67961,7 @@
  const common_1 = __webpack_require__(5663);
  const effects_1 = __webpack_require__(7346);
  const kv_memory_1 = __webpack_require__(1557);
@@ -29,7 +29,7 @@ Applies with "patch -p1" from the package root, after 0001 and 0002.
  exports["default"] = {
      /**
       * The `Account` module provides functionality for managing key pairs
-@@ -67845,6 +67846,14 @@
+@@ -67983,6 +67984,14 @@
      Log: log_1.default,
      Node: node_1.default,
      P2P: p2p_1.default,
@@ -42,11 +42,11 @@ Applies with "patch -p1" from the package root, after 0001 and 0002.
 +        WebSocketServer: ws_1.WebSocketServer
 +    },
      Permissions: permissions_1.Permissions,
-     Timing,
+     RequestTiming: timing_1.default,
      Stats: stats_1.default,
 --- a/client/index.d.ts
 +++ b/client/index.d.ts
-@@ -1449,6 +1449,14 @@
+@@ -1452,6 +1452,14 @@
      Log: typeof import("../lib/log").default;
      Node: typeof import("../lib/node").Node;
      P2P: typeof import("../lib/p2p").P2PSwitch;
@@ -59,5 +59,5 @@ Applies with "patch -p1" from the package root, after 0001 and 0002.
 +        WebSocketServer: typeof import("ws").WebSocketServer;
 +    };
      Permissions: typeof import("../lib/permissions").Permissions;
-     Timing: typeof import("../lib/node/timing");
+     RequestTiming: typeof import("../lib/node/timing").RequestTiming;
      Stats: typeof import("../lib/stats").Stats;
