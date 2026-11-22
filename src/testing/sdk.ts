@@ -23,7 +23,7 @@ export const STORAGES_UNDER_TEST: readonly StorageUnderTest[] = ['memory', 'post
 
 const keys = deriveTestKeys(TEST_NETWORK_SEEDS, 1);
 
-/** The trusted root with its private key: whoever initializes the network signs with it [Keeta TS] index.js:61450-61468. */
+/** The trusted root with its private key: whoever initializes the network signs with it [Keeta TS] index.js:61555-61573. */
 export const TRUSTED_SIGNER: Account = keys.trustedSigner;
 
 /** The representative a node of NODE_ENVIRONMENT votes as. */
@@ -50,11 +50,11 @@ export const NODE_ENVIRONMENT: Environment = {
 };
 
 /*
- * Network 0 has no alias of its own [Keeta TS] index.js:62327-62355, but the
+ * Network 0 has no alias of its own [Keeta TS] index.js:62436-62464, but the
  * client takes one, and the node's configuration gives it "test". The client
  * reads that network's defaults only for the publish aid, which stays off, and
  * for the trusted account UserClient.history() computes effects with
- * [Keeta TS] index.js:61758, which the scenarios do not read.
+ * [Keeta TS] index.js:61863, which the scenarios do not read.
  */
 const LOCAL_NETWORK = 0n;
 const LOCAL_NETWORK_ALIAS = 'test';

@@ -113,7 +113,7 @@ describe('slop-node run with peers', function() {
 		const second = startCLI(['run'], { ...NODE, ...await storageEnvironment(storage), ...SWITCH_LOG, KEETANET_LOCAL_NODE_SEED_INDEX: '1', KEETANET_LOCAL_NODE_MANUAL_PEERS: firstPeer });
 		const [, secondAPI = ''] = await second.printed(API_LINE);
 		expect(second.stdout()).toContain('manual peers: 1\n');
-		// The switch records the peer it dialed once the peer has greeted it [Keeta TS] index.js:74790-74793.
+		// The switch records the peer it dialed once the peer has greeted it [Keeta TS] index.js:75153-75156.
 		await second.printed(new RegExp(`Added knownPeer: ${firstKey}$`, 'm'));
 
 		const holder = nodes.userClient(endpointOf(firstAPI, lib.Account.fromSeed(TEST_NETWORK_SEEDS.representative, 0)), TRUSTED_SIGNER);
@@ -121,7 +121,7 @@ describe('slop-node run with peers', function() {
 		expect(initialized.publish).toBe(true);
 		/*
 		 * A node weighs a staple's votes before it would defer it
-		 * [Keeta TS] index.js:70432-70437, and the weight that votes for the
+		 * [Keeta TS] index.js:70765-70770, and the weight that votes for the
 		 * send is the weight genesis delegates. A node still adding genesis
 		 * refuses the send, which then reaches it only by its next bootstrap,
 		 * a minute later, so the send waits until genesis is added there.
@@ -131,7 +131,7 @@ describe('slop-node run with peers', function() {
 		if (sent.from !== 'direct') {
 			throw(new Error('the client published through a publish aid'));
 		}
-		// A node passes a staple on to its own peers once it has added it [Keeta TS] index.js:72537-72563, 72588-72591, 74157-74158.
+		// A node passes a staple on to its own peers once it has added it [Keeta TS] index.js:72900-72926, 72951-72954, 74520-74521.
 		await second.printed(new RegExp(`\\[${sent.voteStaple.blocksHash.toString()}\\] Sending message add`));
 		const observer = nodes.userClient(endpointOf(secondAPI, secondRepresentative), null);
 		expect(await observer.client.getBalance(RECEIVER, holder.baseToken)).toBe(100n);
@@ -143,9 +143,9 @@ describe('slop-node run with peers', function() {
 	});
 
 	/*
-	 * The switch keeps its peers in its store [Keeta TS] index.js:73774-73781, 74599,
+	 * The switch keeps its peers in its store [Keeta TS] index.js:74137-74144, 74962,
 	 * and dials and broadcasts to them whatever the environment names
-	 * [Keeta TS] index.js:73667-73768, 74398-74454.
+	 * [Keeta TS] index.js:74030-74131, 74761-74817.
 	 */
 	test('refuses to vote on dev with the peers it remembers from following it, until they are cleared', async function() {
 		const port = await closedPort();
@@ -185,7 +185,7 @@ describe('slop-node run with peers', function() {
 		expect(cli.stderr()).toBe('slop-node: clear-peers needs KEETANET_LOCAL_NODE_POSTGRES_URL: a node in memory forgets its peers when it stops\n');
 	});
 
-	/* Stopping waits for a dial, which waits for the peer's greeting [Keeta TS] index.js:73293-73304, 72501-72504. */
+	/* Stopping waits for a dial, which waits for the peer's greeting [Keeta TS] index.js:73656-73667, 72864-72867. */
 	test('stops cleanly on SIGTERM while a peer it dialed has not greeted it', async function() {
 		const peer = await startSilentPeer(lib.Account.fromSeed(TEST_NETWORK_SEEDS.representative, 1));
 		const cli = startCLI(['run'], { ...NODE, ...await storageEnvironment('postgres'), KEETANET_LOCAL_NODE_MANUAL_PEERS: peer.setting });
@@ -387,7 +387,7 @@ function rejectingAt(moment: ServerMoment): Environment {
 }
 
 describe('slop-node and failures nothing handles', function() {
-	/* The switch checks in with a manual peer as the node runs, writing to the store without waiting for the write [Keeta TS] index.js:73770-73806. */
+	/* The switch checks in with a manual peer as the node runs, writing to the store without waiting for the write [Keeta TS] index.js:74133-74169. */
 	test('logs one in background work under an error ID while it serves, and carries on serving', async function() {
 		const url = await createTestDatabaseURL();
 		const pool = new pg.Pool({ connectionString: url });

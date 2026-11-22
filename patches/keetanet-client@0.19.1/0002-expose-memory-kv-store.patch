@@ -16,7 +16,7 @@ Applies with "patch -p1" from the package root, after 0001.
 
 --- a/client/index.js
 +++ b/client/index.js
-@@ -67822,6 +67822,7 @@
+@@ -67960,6 +67960,7 @@
  const Certificate = __importStar(__webpack_require__(5661));
  const common_1 = __webpack_require__(5663);
  const effects_1 = __webpack_require__(7346);
@@ -24,7 +24,7 @@ Applies with "patch -p1" from the package root, after 0001.
  exports["default"] = {
      /**
       * The `Account` module provides functionality for managing key pairs
-@@ -67838,6 +67839,9 @@
+@@ -67976,6 +67977,9 @@
          addTimeStatistic: common_1.addTimeStatistic,
          IdempotentKey: ledger_1.IdempotentKey
      },
@@ -36,7 +36,7 @@ Applies with "patch -p1" from the package root, after 0001.
      P2P: p2p_1.default,
 --- a/client/index.d.ts
 +++ b/client/index.d.ts
-@@ -1443,6 +1443,9 @@
+@@ -1446,6 +1446,9 @@
          addTimeStatistic: typeof import("../lib/ledger/common").addTimeStatistic;
          IdempotentKey: typeof import("../lib/ledger").IdempotentKey;
      };

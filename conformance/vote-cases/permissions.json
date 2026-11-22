@@ -1,6 +1,6 @@
 {
   "format": "slop-node/vote-cases@1",
-  "keetanetClient": "0.18.8",
+  "keetanetClient": "0.19.1",
   "cases": [
     {
       "id": "PM1",
@@ -1166,6 +1166,328 @@
       ]
     },
     {
+      "id": "RF1",
+      "title": "a receive that forwards a token without a default permission to an account without an ACL row is refused",
+      "basis": "upstream",
+      "network": {
+        "id": "0",
+        "seeds": {
+          "trustedRoot": "5f1d2c9a7b3e48d0a6c4e8f1b2d3a495c7e0f6b8a1d2c3e4f5a6b7c8d9e0f1a2",
+          "representative": "0b7e3a91c4d85f26e1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8",
+          "user": "c3a8e5f1d92b7064a8c1e3f5b7d9021436587a9bcde0f1a2b3c4d5e6f708192a"
+        },
+        "representativeWeights": [
+          "400",
+          "300",
+          "300"
+        ]
+      },
+      "nodes": [
+        {
+          "representative": 0,
+          "fee": {
+            "type": "free"
+          },
+          "mode": "read-write"
+        }
+      ],
+      "steps": [
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "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"
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "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"
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "vote",
+            "blocks": [
+              "MIHzAgEAAgEABQAYDzIwMjYwMTAxMDAwMDAwWgQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgUABCA6qkOZQwEhaF7hglslNppKgAHzyGuRzemCvpMxr/zXADBOoEwwSgQiAAIaAELXOs8eQtRybClaO0kBUQjMqXhciyiZiyQyrJZozQIBAQQhAwXDu+nHvriXE4HC/QGJ10zGX3iav4Pcc8yaLiYYWaHjBEBO8temSSYN2lNAu8ipedcYUPzCiL5Ve3PTDs/80PUnV17XscoFoFh4q3+b4F2tZ7UmNckL7ycF06I7d0eZPWDu",
+              "MIIBGgIBAAIBAAUAGA8yMDI2MDEwMTAwMDAwMFoEIgACGgBC1zrPHkLUcmwpWjtJAVEIzKl4XIsomYskMqyWaM0FAAQgym/+1lfkOK64SDtvTZbWozsj/wXt7vWnkd9t9bTC6hYwdadzMHECAQEEIQMFw7vpx764lxOBwv0BiddMxl94mr+D3HPMmi4mGFmh4wQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgEB/wQiAAPg6Zf+MnWqWpHHeRoD97iFLR+fd8nBTk6BeoDW8VYPNwRA0h2ybJUbFpgin7sNQm96zf4QsCtbbF8C2TdB1gNioeI0r7r3P8b1wIrSMWyBtu0MNAhaKAoTWLjqC3/1jkoCNQ=="
+            ]
+          },
+          "expect": {
+            "outcome": "refused",
+            "error": {
+              "type": "coded",
+              "code": "LEDGER_INVALID_PERMISSIONS"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "RF2",
+      "title": "the same receive gets a temporary vote once the account it forwards to has an ACL row",
+      "basis": "upstream",
+      "network": {
+        "id": "0",
+        "seeds": {
+          "trustedRoot": "5f1d2c9a7b3e48d0a6c4e8f1b2d3a495c7e0f6b8a1d2c3e4f5a6b7c8d9e0f1a2",
+          "representative": "0b7e3a91c4d85f26e1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8",
+          "user": "c3a8e5f1d92b7064a8c1e3f5b7d9021436587a9bcde0f1a2b3c4d5e6f708192a"
+        },
+        "representativeWeights": [
+          "400",
+          "300",
+          "300"
+        ]
+      },
+      "nodes": [
+        {
+          "representative": 0,
+          "fee": {
+            "type": "free"
+          },
+          "mode": "read-write"
+        }
+      ],
+      "steps": [
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "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"
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "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"
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "vote",
+            "blocks": [
+              "MIHzAgEAAgEABQAYDzIwMjYwMTAxMDAwMDAwWgQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgUABCA6qkOZQwEhaF7hglslNppKgAHzyGuRzemCvpMxr/zXADBOoEwwSgQiAAIaAELXOs8eQtRybClaO0kBUQjMqXhciyiZiyQyrJZozQIBAQQhAwXDu+nHvriXE4HC/QGJ10zGX3iav4Pcc8yaLiYYWaHjBEBO8temSSYN2lNAu8ipedcYUPzCiL5Ve3PTDs/80PUnV17XscoFoFh4q3+b4F2tZ7UmNckL7ycF06I7d0eZPWDu",
+              "MIIBGgIBAAIBAAUAGA8yMDI2MDEwMTAwMDAwMFoEIgACGgBC1zrPHkLUcmwpWjtJAVEIzKl4XIsomYskMqyWaM0FAAQgym/+1lfkOK64SDtvTZbWozsj/wXt7vWnkd9t9bTC6hYwdadzMHECAQEEIQMFw7vpx764lxOBwv0BiddMxl94mr+D3HPMmi4mGFmh4wQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgEB/wQiAAPg6Zf+MnWqWpHHeRoD97iFLR+fd8nBTk6BeoDW8VYPNwRA0h2ybJUbFpgin7sNQm96zf4QsCtbbF8C2TdB1gNioeI0r7r3P8b1wIrSMWyBtu0MNAhaKAoTWLjqC3/1jkoCNQ=="
+            ]
+          },
+          "expect": {
+            "outcome": "temporary",
+            "blocks": [
+              "6856C09C8E6B157E9E7664890BD5391955090A9AAF606DC5047A5AC7CC7E4D5F",
+              "D3360D6C4ED7A7F52AB9F4BA18882BC0BA9F08DCBF794D25163E6962A1D75FDC"
+            ],
+            "fee": {
+              "type": "single",
+              "amount": "0"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "RF3",
+      "title": "a receive that forwards into a storage account that granted nothing is refused",
+      "basis": "upstream",
+      "network": {
+        "id": "0",
+        "seeds": {
+          "trustedRoot": "5f1d2c9a7b3e48d0a6c4e8f1b2d3a495c7e0f6b8a1d2c3e4f5a6b7c8d9e0f1a2",
+          "representative": "0b7e3a91c4d85f26e1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8",
+          "user": "c3a8e5f1d92b7064a8c1e3f5b7d9021436587a9bcde0f1a2b3c4d5e6f708192a"
+        },
+        "representativeWeights": [
+          "400",
+          "300",
+          "300"
+        ]
+      },
+      "nodes": [
+        {
+          "representative": 0,
+          "fee": {
+            "type": "free"
+          },
+          "mode": "read-write"
+        }
+      ],
+      "steps": [
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "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"
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "MIIFjTCB0gSBzzCBzAIBAAIBAAUAGA8yMDI2MDEwMTAwMDAwMFoEIgADfmfwjGTmmG5jqbX6osUA6rSu9Ldls5XdaB9mnLnmTrYFAAQgWYHB7WuYEODydPgGkpgiKetvdx+a90gOgG4SuAwVHVwwJ6QlMCMEIQQFw7vpx764lxOBwv0BiddMxl94mr+D3HPMmi4mGFmh4wRAJ60DDTC6u5gA8Rbgz8jiN+7xbmh3khXxyceu7/mEPdcuOOG0L8387I6Jv7h+FWt98Vz9ybqKP+Vo/UNtz3DwSTCCBLQEggGNMIIBiTCCAS+gAwIBAgIIA7gKzxgXjYcwCwYJYIZIAWUDBAMKMFAxTjBMBgNVBAMMRWtlZXRhX2FhYjRsaGI1ZXFndHFqYTZna2p6cmJ0c3p3aXV5am1ucHJrd2g3YjNlbzJsNXNxZ3J4N29rNWNjZ2doNXIzeTAiGA8yMDI2MDEwMTAwMDAwMFoYDzMwMjcwMTMxMDAwMDAwWjAaMRgwFgYDVQQFDA8zYjgwYWNmMTgxNzhkODcwNjAQBgcqhkjOPQIBBgUrgQQACgMiAAPFnD0kDTgkHjKTmIZyzZFMJY18VWP8OyO0vsoGjf7ldKNHMEUwQwYJYIZIAWUDAwEDAQH/BDOgMTAvBglghkgBZQMEAggwIgQgm1KcHYAfuPJBFfmr79ZcJkukbDo0HkS62fAsr9ZxNq4wCwYJYIZIAWUDBAMKA0cAMEQCIDYJqWHv5A+6DA6OSDJUPMQPMWliluyVIMPJmM+5ZMt8AiAsuWRYGukB6r5yKtONGRNR8KXh1QObXTSAXCiBuOg+qASCAY4wggGKMIIBL6ADAgECAggDuArPGBeNhzALBglghkgBZQMEAwowUDFOMEwGA1UEAwxFa2VldGFfYWFidGo1N3JsZ3lkdGVhcnViZzV2dWVwc3Z5amRhdmV2Z2o0dW02empycWN3dHE0eGx6YXRhaGVvdm55b2FpMCIYDzIwMjYwMTAxMDAwMDAwWhgPMzAyNzAxMzEwMDAwMDBaMBoxGDAWBgNVBAUMDzNiODBhY2YxODE3OGQ4NzA2MBAGByqGSM49AgEGBSuBBAAKAyIAAzT38VmwOZARoE3a0I+VcJGCpKmTyjPZTGArThy68gmAo0cwRTBDBglghkgBZQMDAQMBAf8EM6AxMC8GCWCGSAFlAwQCCDAiBCCbUpwdgB+48kEV+avv1lwmS6RsOjQeRLrZ8Cyv1nE2rjALBglghkgBZQMEAwoDSAAwRQIhAOFGItxl/+JMO0D7S8s//UyiOIjNo3xnihMllYRPkuK/AiBM4pYdsVCpId0hX2WCTtGg+mrjEX62SPiIrW/bDP6TYwSCAY0wggGJMIIBL6ADAgECAggDuArPGBeNhzALBglghkgBZQMEAwowUDFOMEwGA1UEAwxFa2VldGFfYWFiZzM3eDdyd3Jta3J2Nmw1dGkyYXVmYnRvNm5vdTVobW81NXFoMnV2cmNkYnU2dTN6bmJtNDV6ZG5maGlxMCIYDzIwMjYwMTAxMDAwMDAwWhgPMzAyNzAxMzEwMDAwMDBaMBoxGDAWBgNVBAUMDzNiODBhY2YxODE3OGQ4NzA2MBAGByqGSM49AgEGBSuBBAAKAyIAAm3+/42ixUa+X2aNAoUM3ea6nTsd3sD6pWIhhp6m8tCzo0cwRTBDBglghkgBZQMDAQMBAf8EM6AxMC8GCWCGSAFlAwQCCDAiBCCbUpwdgB+48kEV+avv1lwmS6RsOjQeRLrZ8Cyv1nE2rjALBglghkgBZQMEAwoDRwAwRAIgA3BS3ZrzHZeTIKycmsrGAaSZ6g++t74EOWWkWunBMoECICjVQxWB76wbYVFD6arkYNvtPLX0+pTjHmEZfBmc3Ad+"
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "vote",
+            "blocks": [
+              "MIHzAgEAAgEABQAYDzIwMjYwMTAxMDAwMDAwWgQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgUABCCbUpwdgB+48kEV+avv1lwmS6RsOjQeRLrZ8Cyv1nE2rjBOoEwwSgQiAAIaAELXOs8eQtRybClaO0kBUQjMqXhciyiZiyQyrJZozQIBAQQhA4bUxwfyop8o9QAn060eH7AFTzA/7Km1pUYvFfuIU5XRBEBndAgbF8U5smpKXuHbo3C9GQqjcvQYHUF38m0Jr+N2SVILaLC7beY6QF7v1pogdLLMY8FkjNLuOVGj8VCLps79",
+              "MIIBGQIBAAIBAAUAGA8yMDI2MDEwMTAwMDAwMFoEIgACGgBC1zrPHkLUcmwpWjtJAVEIzKl4XIsomYskMqyWaM0FAAQgym/+1lfkOK64SDtvTZbWozsj/wXt7vWnkd9t9bTC6hYwdKdyMHACAQEEIQOG1McH8qKfKPUAJ9OtHh+wBU8wP+yptaVGLxX7iFOV0QQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgEB/wQhBAXDu+nHvriXE4HC/QGJ10zGX3iav4Pcc8yaLiYYWaHjBECMqKexC1an9RSVnLM9kL2wTSoqMi5lpHeUcbkd0FU9U2aXLQqQ6us9VRiBufT+h9/GF3NH3LWmC7R5naZCr8yj"
+            ]
+          },
+          "expect": {
+            "outcome": "refused",
+            "error": {
+              "type": "coded",
+              "code": "LEDGER_INVALID_PERMISSIONS"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "RF4",
+      "title": "a receive that forwards into a storage account gets a temporary vote once its owner admits the token and the forwarding account's deposits",
+      "basis": "upstream",
+      "network": {
+        "id": "0",
+        "seeds": {
+          "trustedRoot": "5f1d2c9a7b3e48d0a6c4e8f1b2d3a495c7e0f6b8a1d2c3e4f5a6b7c8d9e0f1a2",
+          "representative": "0b7e3a91c4d85f26e1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8",
+          "user": "c3a8e5f1d92b7064a8c1e3f5b7d9021436587a9bcde0f1a2b3c4d5e6f708192a"
+        },
+        "representativeWeights": [
+          "400",
+          "300",
+          "300"
+        ]
+      },
+      "nodes": [
+        {
+          "representative": 0,
+          "fee": {
+            "type": "free"
+          },
+          "mode": "read-write"
+        }
+      ],
+      "steps": [
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "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"
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "MIIFjTCB0gSBzzCBzAIBAAIBAAUAGA8yMDI2MDEwMTAwMDAwMFoEIgADfmfwjGTmmG5jqbX6osUA6rSu9Ldls5XdaB9mnLnmTrYFAAQgWYHB7WuYEODydPgGkpgiKetvdx+a90gOgG4SuAwVHVwwJ6QlMCMEIQQFw7vpx764lxOBwv0BiddMxl94mr+D3HPMmi4mGFmh4wRAJ60DDTC6u5gA8Rbgz8jiN+7xbmh3khXxyceu7/mEPdcuOOG0L8387I6Jv7h+FWt98Vz9ybqKP+Vo/UNtz3DwSTCCBLQEggGNMIIBiTCCAS+gAwIBAgIIA7gKzxgXjYcwCwYJYIZIAWUDBAMKMFAxTjBMBgNVBAMMRWtlZXRhX2FhYjRsaGI1ZXFndHFqYTZna2p6cmJ0c3p3aXV5am1ucHJrd2g3YjNlbzJsNXNxZ3J4N29rNWNjZ2doNXIzeTAiGA8yMDI2MDEwMTAwMDAwMFoYDzMwMjcwMTMxMDAwMDAwWjAaMRgwFgYDVQQFDA8zYjgwYWNmMTgxNzhkODcwNjAQBgcqhkjOPQIBBgUrgQQACgMiAAPFnD0kDTgkHjKTmIZyzZFMJY18VWP8OyO0vsoGjf7ldKNHMEUwQwYJYIZIAWUDAwEDAQH/BDOgMTAvBglghkgBZQMEAggwIgQgm1KcHYAfuPJBFfmr79ZcJkukbDo0HkS62fAsr9ZxNq4wCwYJYIZIAWUDBAMKA0cAMEQCIDYJqWHv5A+6DA6OSDJUPMQPMWliluyVIMPJmM+5ZMt8AiAsuWRYGukB6r5yKtONGRNR8KXh1QObXTSAXCiBuOg+qASCAY4wggGKMIIBL6ADAgECAggDuArPGBeNhzALBglghkgBZQMEAwowUDFOMEwGA1UEAwxFa2VldGFfYWFidGo1N3JsZ3lkdGVhcnViZzV2dWVwc3Z5amRhdmV2Z2o0dW02empycWN3dHE0eGx6YXRhaGVvdm55b2FpMCIYDzIwMjYwMTAxMDAwMDAwWhgPMzAyNzAxMzEwMDAwMDBaMBoxGDAWBgNVBAUMDzNiODBhY2YxODE3OGQ4NzA2MBAGByqGSM49AgEGBSuBBAAKAyIAAzT38VmwOZARoE3a0I+VcJGCpKmTyjPZTGArThy68gmAo0cwRTBDBglghkgBZQMDAQMBAf8EM6AxMC8GCWCGSAFlAwQCCDAiBCCbUpwdgB+48kEV+avv1lwmS6RsOjQeRLrZ8Cyv1nE2rjALBglghkgBZQMEAwoDSAAwRQIhAOFGItxl/+JMO0D7S8s//UyiOIjNo3xnihMllYRPkuK/AiBM4pYdsVCpId0hX2WCTtGg+mrjEX62SPiIrW/bDP6TYwSCAY0wggGJMIIBL6ADAgECAggDuArPGBeNhzALBglghkgBZQMEAwowUDFOMEwGA1UEAwxFa2VldGFfYWFiZzM3eDdyd3Jta3J2Nmw1dGkyYXVmYnRvNm5vdTVobW81NXFoMnV2cmNkYnU2dTN6bmJtNDV6ZG5maGlxMCIYDzIwMjYwMTAxMDAwMDAwWhgPMzAyNzAxMzEwMDAwMDBaMBoxGDAWBgNVBAUMDzNiODBhY2YxODE3OGQ4NzA2MBAGByqGSM49AgEGBSuBBAAKAyIAAm3+/42ixUa+X2aNAoUM3ea6nTsd3sD6pWIhhp6m8tCzo0cwRTBDBglghkgBZQMDAQMBAf8EM6AxMC8GCWCGSAFlAwQCCDAiBCCbUpwdgB+48kEV+avv1lwmS6RsOjQeRLrZ8Cyv1nE2rjALBglghkgBZQMEAwoDRwAwRAIgA3BS3ZrzHZeTIKycmsrGAaSZ6g++t74EOWWkWunBMoECICjVQxWB76wbYVFD6arkYNvtPLX0+pTjHmEZfBmc3Ad+"
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "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"
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "vote",
+            "blocks": [
+              "MIHzAgEAAgEABQAYDzIwMjYwMTAxMDAwMDAwWgQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgUABCCbUpwdgB+48kEV+avv1lwmS6RsOjQeRLrZ8Cyv1nE2rjBOoEwwSgQiAAIaAELXOs8eQtRybClaO0kBUQjMqXhciyiZiyQyrJZozQIBAQQhA4bUxwfyop8o9QAn060eH7AFTzA/7Km1pUYvFfuIU5XRBEBndAgbF8U5smpKXuHbo3C9GQqjcvQYHUF38m0Jr+N2SVILaLC7beY6QF7v1pogdLLMY8FkjNLuOVGj8VCLps79",
+              "MIIBGQIBAAIBAAUAGA8yMDI2MDEwMTAwMDAwMFoEIgACGgBC1zrPHkLUcmwpWjtJAVEIzKl4XIsomYskMqyWaM0FAAQgym/+1lfkOK64SDtvTZbWozsj/wXt7vWnkd9t9bTC6hYwdKdyMHACAQEEIQOG1McH8qKfKPUAJ9OtHh+wBU8wP+yptaVGLxX7iFOV0QQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgEB/wQhBAXDu+nHvriXE4HC/QGJ10zGX3iav4Pcc8yaLiYYWaHjBECMqKexC1an9RSVnLM9kL2wTSoqMi5lpHeUcbkd0FU9U2aXLQqQ6us9VRiBufT+h9/GF3NH3LWmC7R5naZCr8yj"
+            ]
+          },
+          "expect": {
+            "outcome": "temporary",
+            "blocks": [
+              "3198F438E8D9FBE0B6F5981C065F52B46225BD48B4A7BA0833FC1C621F806746",
+              "066A18CA8051E4154EBD81F92C34B01D50FFEC22D735C2A8D5D3232EAE74598B"
+            ],
+            "fee": {
+              "type": "single",
+              "amount": "0"
+            }
+          }
+        }
+      ]
+    },
+    {
       "id": "T1",
       "title": "creating a token and its opening block with info and supply in one request gets a temporary vote",
       "basis": "upstream",
@@ -1406,7 +1728,7 @@
     },
     {
       "id": "T3b",
-      "title": "a network default narrowed earlier in the same request does not refuse a creation the stored default admits",
+      "title": "a network default narrowed earlier in the same request refuses a creation the stored default admits",
       "basis": "upstream",
       "network": {
         "id": "0",
@@ -1456,14 +1778,10 @@
             ]
           },
           "expect": {
-            "outcome": "temporary",
-            "blocks": [
-              "8974B7C3EEABD97981EF8CCE9C966288871398367F89EC21DA596181118AA023",
-              "3AAA4399430121685EE1825B25369A4A8001F3C86B91CDE982BE9331AFFCD700"
-            ],
-            "fee": {
-              "type": "single",
-              "amount": "0"
+            "outcome": "refused",
+            "error": {
+              "type": "coded",
+              "code": "LEDGER_INVALID_PERMISSIONS"
             }
           }
         }
@@ -1693,7 +2011,7 @@
     },
     {
       "id": "T10b",
-      "title": "an ACL row emptied earlier in the same request does not refuse a send the stored default admits",
+      "title": "an ACL row emptied earlier in the same request overrides the token's default ACCESS, and refuses the send",
       "basis": "upstream",
       "network": {
         "id": "0",
@@ -1757,9 +2075,84 @@
             ]
           },
           "expect": {
+            "outcome": "refused",
+            "error": {
+              "type": "coded",
+              "code": "LEDGER_INVALID_PERMISSIONS"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "T10c",
+      "title": "a stored empty ACL row removed earlier in the same request leaves the token's default ACCESS to admit the send",
+      "basis": "upstream",
+      "network": {
+        "id": "0",
+        "seeds": {
+          "trustedRoot": "5f1d2c9a7b3e48d0a6c4e8f1b2d3a495c7e0f6b8a1d2c3e4f5a6b7c8d9e0f1a2",
+          "representative": "0b7e3a91c4d85f26e1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8",
+          "user": "c3a8e5f1d92b7064a8c1e3f5b7d9021436587a9bcde0f1a2b3c4d5e6f708192a"
+        },
+        "representativeWeights": [
+          "400",
+          "300",
+          "300"
+        ]
+      },
+      "nodes": [
+        {
+          "representative": 0,
+          "fee": {
+            "type": "free"
+          },
+          "mode": "read-write"
+        }
+      ],
+      "steps": [
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "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"
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "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"
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "vote",
+            "blocks": [
+              "MIHzAgEAAgEABQAYDzIwMjYwMTAxMDAwMDAwWgQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgQhAwXDu+nHvriXE4HC/QGJ10zGX3iav4Pcc8yaLiYYWaHjBCAF8mnJZEwt2PpfwoVtVwvxpabfRVojA1VmFTupRAL3HDAtoyswKQQiAAIaAELXOs8eQtRybClaO0kBUQjMqXhciyiZiyQyrJZozQIBAgUABECfxO272jyPD39dtQFtJ65MN4wMo/iBMocGHJfPRKQByhrsYXnCWewXsJg4ljhlGNtd3IeCfqauVTEOuOMQb0E9",
+              "MIHzAgEAAgEABQAYDzIwMjYwMTAxMDAwMDAwWgQiAAN+Z/CMZOaYbmOptfqixQDqtK70t2Wzld1oH2acueZOtgUABCA6qkOZQwEhaF7hglslNppKgAHzyGuRzemCvpMxr/zXADBOoEwwSgQiAAIaAELXOs8eQtRybClaO0kBUQjMqXhciyiZiyQyrJZozQIBAQQhAwXDu+nHvriXE4HC/QGJ10zGX3iav4Pcc8yaLiYYWaHjBEBO8temSSYN2lNAu8ipedcYUPzCiL5Ve3PTDs/80PUnV17XscoFoFh4q3+b4F2tZ7UmNckL7ycF06I7d0eZPWDu"
+            ]
+          },
+          "expect": {
             "outcome": "temporary",
             "blocks": [
-              "05F269C9644C2DD8FA5FC2856D570BF1A5A6DF455A23035566153BA94402F71C",
+              "01803ED2D8648F7B05D07789BC3FD212E9A0BEF57DBDFC1FCAD8FC9107490926",
               "6856C09C8E6B157E9E7664890BD5391955090A9AAF606DC5047A5AC7CC7E4D5F"
             ],
             "fee": {
@@ -3128,6 +3521,114 @@
             "fee": {
               "type": "single",
               "amount": "0"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "OP5",
+      "title": "a node that enables TOKEN_ADMIN_MODIFY_BALANCE refuses an ADD into a storage account that does not admit the token for its permissions, and once it does, as the token cannot fund it",
+      "basis": "upstream",
+      "network": {
+        "id": "0",
+        "seeds": {
+          "trustedRoot": "5f1d2c9a7b3e48d0a6c4e8f1b2d3a495c7e0f6b8a1d2c3e4f5a6b7c8d9e0f1a2",
+          "representative": "0b7e3a91c4d85f26e1a0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8",
+          "user": "c3a8e5f1d92b7064a8c1e3f5b7d9021436587a9bcde0f1a2b3c4d5e6f708192a"
+        },
+        "representativeWeights": [
+          "400",
+          "300",
+          "300"
+        ]
+      },
+      "nodes": [
+        {
+          "representative": 0,
+          "fee": {
+            "type": "free"
+          },
+          "mode": "read-write",
+          "operations": {
+            "enableTokenAdminModifyBalance": true
+          }
+        }
+      ],
+      "steps": [
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "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"
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "MIIFjTCB0gSBzzCBzAIBAAIBAAUAGA8yMDI2MDEwMTAwMDAwMFoEIgADfmfwjGTmmG5jqbX6osUA6rSu9Ldls5XdaB9mnLnmTrYFAAQgWYHB7WuYEODydPgGkpgiKetvdx+a90gOgG4SuAwVHVwwJ6QlMCMEIQQFw7vpx764lxOBwv0BiddMxl94mr+D3HPMmi4mGFmh4wRAJ60DDTC6u5gA8Rbgz8jiN+7xbmh3khXxyceu7/mEPdcuOOG0L8387I6Jv7h+FWt98Vz9ybqKP+Vo/UNtz3DwSTCCBLQEggGNMIIBiTCCAS+gAwIBAgIIA7gKzxgXjYcwCwYJYIZIAWUDBAMKMFAxTjBMBgNVBAMMRWtlZXRhX2FhYjRsaGI1ZXFndHFqYTZna2p6cmJ0c3p3aXV5am1ucHJrd2g3YjNlbzJsNXNxZ3J4N29rNWNjZ2doNXIzeTAiGA8yMDI2MDEwMTAwMDAwMFoYDzMwMjcwMTMxMDAwMDAwWjAaMRgwFgYDVQQFDA8zYjgwYWNmMTgxNzhkODcwNjAQBgcqhkjOPQIBBgUrgQQACgMiAAPFnD0kDTgkHjKTmIZyzZFMJY18VWP8OyO0vsoGjf7ldKNHMEUwQwYJYIZIAWUDAwEDAQH/BDOgMTAvBglghkgBZQMEAggwIgQgm1KcHYAfuPJBFfmr79ZcJkukbDo0HkS62fAsr9ZxNq4wCwYJYIZIAWUDBAMKA0cAMEQCIDYJqWHv5A+6DA6OSDJUPMQPMWliluyVIMPJmM+5ZMt8AiAsuWRYGukB6r5yKtONGRNR8KXh1QObXTSAXCiBuOg+qASCAY4wggGKMIIBL6ADAgECAggDuArPGBeNhzALBglghkgBZQMEAwowUDFOMEwGA1UEAwxFa2VldGFfYWFidGo1N3JsZ3lkdGVhcnViZzV2dWVwc3Z5amRhdmV2Z2o0dW02empycWN3dHE0eGx6YXRhaGVvdm55b2FpMCIYDzIwMjYwMTAxMDAwMDAwWhgPMzAyNzAxMzEwMDAwMDBaMBoxGDAWBgNVBAUMDzNiODBhY2YxODE3OGQ4NzA2MBAGByqGSM49AgEGBSuBBAAKAyIAAzT38VmwOZARoE3a0I+VcJGCpKmTyjPZTGArThy68gmAo0cwRTBDBglghkgBZQMDAQMBAf8EM6AxMC8GCWCGSAFlAwQCCDAiBCCbUpwdgB+48kEV+avv1lwmS6RsOjQeRLrZ8Cyv1nE2rjALBglghkgBZQMEAwoDSAAwRQIhAOFGItxl/+JMO0D7S8s//UyiOIjNo3xnihMllYRPkuK/AiBM4pYdsVCpId0hX2WCTtGg+mrjEX62SPiIrW/bDP6TYwSCAY0wggGJMIIBL6ADAgECAggDuArPGBeNhzALBglghkgBZQMEAwowUDFOMEwGA1UEAwxFa2VldGFfYWFiZzM3eDdyd3Jta3J2Nmw1dGkyYXVmYnRvNm5vdTVobW81NXFoMnV2cmNkYnU2dTN6bmJtNDV6ZG5maGlxMCIYDzIwMjYwMTAxMDAwMDAwWhgPMzAyNzAxMzEwMDAwMDBaMBoxGDAWBgNVBAUMDzNiODBhY2YxODE3OGQ4NzA2MBAGByqGSM49AgEGBSuBBAAKAyIAAm3+/42ixUa+X2aNAoUM3ea6nTsd3sD6pWIhhp6m8tCzo0cwRTBDBglghkgBZQMDAQMBAf8EM6AxMC8GCWCGSAFlAwQCCDAiBCCbUpwdgB+48kEV+avv1lwmS6RsOjQeRLrZ8Cyv1nE2rjALBglghkgBZQMEAwoDRwAwRAIgA3BS3ZrzHZeTIKycmsrGAaSZ6g++t74EOWWkWunBMoECICjVQxWB76wbYVFD6arkYNvtPLX0+pTjHmEZfBmc3Ad+"
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "vote",
+            "blocks": [
+              "MIHzAgEAAgEABQAYDzIwMjYwMTAxMDAwMDAwWgQiAAOK2otg9Q9CalD5oPB+2DlxYEoiJUU2VcWYwLVYeai05wQhBAXDu+nHvriXE4HC/QGJ10zGX3iav4Pcc8yaLiYYWaHjBCDAO+S+PlgrqT3Q+oCdku2+aorMnoZ1WulzXMAA8m9JGjAtpiswKQQhA4bUxwfyop8o9QAn060eH7AFTzA/7Km1pUYvFfuIU5XRAgEBAgEABECr1+b1ckaDXdch+9CFe1EQOxrK2s5jkVyOaynM+eSUd1nIdyegpNM02TNIWCUZDHRw2KljgqtgH+K0yJnP6xdp"
+            ]
+          },
+          "expect": {
+            "outcome": "refused",
+            "error": {
+              "type": "coded",
+              "code": "LEDGER_INVALID_PERMISSIONS"
+            }
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "add",
+            "staple": {
+              "kind": "staple",
+              "bytes": "MIIFtjCB/wSB/DCB+QIBAAIBAAUAGA8yMDI2MDEwMTAwMDAwMFoEIgADfmfwjGTmmG5jqbX6osUA6rSu9Ldls5XdaB9mnLnmTrYEIQQFw7vpx764lxOBwv0BiddMxl94mr+D3HPMmi4mGFmh4wQgwDvkvj5YK6k90PqAnZLtvmqKzJ6GdVrpc1zAAPJvSRowM6MxMC8EIQOG1McH8qKfKPUAJ9OtHh+wBU8wP+yptaVGLxX7iFOV0QIBADAHAgICAQIBAARAH+cZePPrPzfhnw9UUmWmKJY/HtiDD3Vq29shicxvknwN8gudZtKymPSc9cU3d769X7lI7b6HnloF0KfO4jZLOjCCBLAEggGMMIIBiDCCAS6gAwIBAgIIAO9+tj213NswCwYJYIZIAWUDBAMKMFAxTjBMBgNVBAMMRWtlZXRhX2FhYjRsaGI1ZXFndHFqYTZna2p6cmJ0c3p3aXV5am1ucHJrd2g3YjNlbzJsNXNxZ3J4N29rNWNjZ2doNXIzeTAiGA8yMDI2MDEwMTAwMDAwMFoYDzMwMjcwMTMxMDAwMDAwWjAZMRcwFQYDVQQFDA5lZjdlYjYzZGI1ZGNkYjA2MBAGByqGSM49AgEGBSuBBAAKAyIAA8WcPSQNOCQeMpOYhnLNkUwljXxVY/w7I7S+ygaN/uV0o0cwRTBDBglghkgBZQMDAQMBAf8EM6AxMC8GCWCGSAFlAwQCCDAiBCBzS4W5GN7dwYXP/ReObFXtFyCT3zZeJ7VjDByjK/DFtzALBglghkgBZQMEAwoDRwAwRAIgPHzwcv0TzSJ/lhiwpzmVkvh3HDIZjOZG0t7mycx9iF8CIBgT+yEwdt3j8NQK+vm2cWpqdck2uHKa/QM8ISLqfhfWBIIBjDCCAYgwggEuoAMCAQICCADvfrY9tdzbMAsGCWCGSAFlAwQDCjBQMU4wTAYDVQQDDEVrZWV0YV9hYWJ0ajU3cmxneWR0ZWFydWJnNXZ1ZXBzdnlqZGF2ZXZnajR1bTZ6anJxY3d0cTR4bHphdGFoZW92bnlvYWkwIhgPMjAyNjAxMDEwMDAwMDBaGA8zMDI3MDEzMTAwMDAwMFowGTEXMBUGA1UEBQwOZWY3ZWI2M2RiNWRjZGIwNjAQBgcqhkjOPQIBBgUrgQQACgMiAAM09/FZsDmQEaBN2tCPlXCRgqSpk8oz2UxgK04cuvIJgKNHMEUwQwYJYIZIAWUDAwEDAQH/BDOgMTAvBglghkgBZQMEAggwIgQgc0uFuRje3cGFz/0XjmxV7Rcgk982Xie1YwwcoyvwxbcwCwYJYIZIAWUDBAMKA0cAMEQCID3hvn9VE4bxtCJOHa0sRu3ihOc+A8Bjx6FrdOxbkZ+aAiBFjthjr6+5nP9SFj576weiT7+06I68S3N2Wttq0e61FASCAYwwggGIMIIBLqADAgECAggA7362PbXc2zALBglghkgBZQMEAwowUDFOMEwGA1UEAwxFa2VldGFfYWFiZzM3eDdyd3Jta3J2Nmw1dGkyYXVmYnRvNm5vdTVobW81NXFoMnV2cmNkYnU2dTN6bmJtNDV6ZG5maGlxMCIYDzIwMjYwMTAxMDAwMDAwWhgPMzAyNzAxMzEwMDAwMDBaMBkxFzAVBgNVBAUMDmVmN2ViNjNkYjVkY2RiMDYwEAYHKoZIzj0CAQYFK4EEAAoDIgACbf7/jaLFRr5fZo0ChQzd5rqdOx3ewPqlYiGGnqby0LOjRzBFMEMGCWCGSAFlAwMBAwEB/wQzoDEwLwYJYIZIAWUDBAIIMCIEIHNLhbkY3t3Bhc/9F45sVe0XIJPfNl4ntWMMHKMr8MW3MAsGCWCGSAFlAwQDCgNHADBEAiB5uGPxSLne18pge1MkgP4G5y5V/3x3UBUzWMeK+it6BAIgdHKpOGsozK4fc4Qz6BTocxqigFcdaJbr1/H/kf+EgvE="
+            }
+          },
+          "expect": {
+            "outcome": "added"
+          }
+        },
+        {
+          "moment": "2026-01-01T00:00:00.000Z",
+          "actor": 0,
+          "action": {
+            "type": "vote",
+            "blocks": [
+              "MIHzAgEAAgEABQAYDzIwMjYwMTAxMDAwMDAwWgQiAAOK2otg9Q9CalD5oPB+2DlxYEoiJUU2VcWYwLVYeai05wQhBAXDu+nHvriXE4HC/QGJ10zGX3iav4Pcc8yaLiYYWaHjBCBzS4W5GN7dwYXP/ReObFXtFyCT3zZeJ7VjDByjK/DFtzAtpiswKQQhA4bUxwfyop8o9QAn060eH7AFTzA/7Km1pUYvFfuIU5XRAgEBAgEABEAlb3dfRZnGH+IHxLT39XzwdA5qtwGjWyo/Cf+jnoLStj0wNMTGgKBWQaSs+TzOS0W7/fl9QKL3hm4PdYG789eX"
+            ]
+          },
+          "expect": {
+            "outcome": "refused",
+            "error": {
+              "type": "coded",
+              "code": "LEDGER_INVALID_BALANCE"
             }
           }
         }

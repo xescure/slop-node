@@ -20,8 +20,8 @@ function postedHandledBy(p2pSwitch: P2PSwitch): number {
 
 /**
  * A representative's advertisement, kept to what its signature covers
- * [Keeta TS] index.js:73002-73011, and that advertisement as the switch
- * serializes one [Keeta TS] index.js:73136-73167.
+ * [Keeta TS] index.js:73365-73374, and that advertisement as the switch
+ * serializes one [Keeta TS] index.js:73499-73530.
  */
 type SignedAdvertisement = {
 	readonly peer: P2PPeerRep;
@@ -30,22 +30,22 @@ type SignedAdvertisement = {
 
 /**
  * The advertisement, if it is a representative's whose signature covers it
- * [Keeta TS] index.js:73059-73134, 72976-73015. Only a representative sends
- * over HTTP [Keeta TS] index.js:73309-73317, 73344-73346, and only
+ * [Keeta TS] index.js:73422-73497, 73339-73378. Only a representative sends
+ * over HTTP [Keeta TS] index.js:73672-73680, 73707-73709, and only
  * representatives' advertisements are passed on as peers
- * [Keeta TS] index.js:74614-74627, 74792.
+ * [Keeta TS] index.js:74977-74990, 75155.
  *
  * The parser passes on the advertisement's endpoints object as it is
- * [Keeta TS] index.js:73094, and the switch reads a "filter" beside the
- * advertisement [Keeta TS] index.js:74724-74730; neither is signed, so they
+ * [Keeta TS] index.js:73457, and the switch reads a "filter" beside the
+ * advertisement [Keeta TS] index.js:75087-75093; neither is signed, so they
  * are dropped. The switch keeps a filter under the connection's name
- * [Keeta TS] index.js:74240, 74805-74816, which for an HTTP connection is
- * the representative and its API endpoint [Keeta TS] index.js:73331-73342,
+ * [Keeta TS] index.js:74603, 75168-75179, which for an HTTP connection is
+ * the representative and its API endpoint [Keeta TS] index.js:73694-73705,
  * the name of the node's own connection to that representative too: anyone
  * replaying a representative's advertisement with a filter would otherwise
  * stop the node sending it every staple outside the filter. A peer that
  * filters does so on its own WebSocket, whose name is its socket's
- * [Keeta TS] index.js:73533-73540.
+ * [Keeta TS] index.js:73896-73903.
  */
 function signedAdvertisementOf(advertisement: unknown): SignedAdvertisement | undefined {
 	let parsed: P2PPeer | null;
@@ -61,7 +61,7 @@ function signedAdvertisementOf(advertisement: unknown): SignedAdvertisement | un
 	return({ peer, serialized: P2PInternals.P2PPeerToJSO(peer) });
 }
 
-/** A message as the switch reads it [Keeta TS] index.js:73899-73931. */
+/** A message as the switch reads it [Keeta TS] index.js:74262-74294. */
 type ReadMessage = {
 	readonly id: string;
 	readonly type: string;
@@ -83,19 +83,19 @@ function readMessage(message: Buffer): ReadMessage | undefined {
 	return({ id: read.id, type: read.type, data, ttl: read.ttl });
 }
 
-/** Whether the switch passes the message on to its other peers [Keeta TS] index.js:74098-74103, 72579-72587. */
+/** Whether the switch passes the message on to its other peers [Keeta TS] index.js:74461-74466, 72942-72950. */
 function isRelayed(message: ReadMessage): boolean {
 	return(message.ttl !== undefined && message.ttl >= 1);
 }
 
 /**
  * A peer a representative passes on, with only what its signature covers
- * [Keeta TS] index.js:74614-74627. The switch keeps the advertisement as the
- * message carries it [Keeta TS] index.js:74028-74041, and dials it, and
- * keeps it as a known peer, from that [Keeta TS] index.js:74757-74796. The
+ * [Keeta TS] index.js:74977-74990. The switch keeps the advertisement as the
+ * message carries it [Keeta TS] index.js:74391-74404, and dials it, and
+ * keeps it as a known peer, from that [Keeta TS] index.js:75120-75159. The
  * sender passes a peer on with a TTL of 0; one that asks the node to pass it
  * on would have any key make the node relay a known representative's
- * advertisement to every peer [Keeta TS] index.js:74048-74068, 74094-74109.
+ * advertisement to every peer [Keeta TS] index.js:74411-74431, 74457-74472.
  */
 function republishedPeer(message: ReadMessage): Buffer | undefined {
 	const advertisement = signedAdvertisementOf(message.data);
@@ -107,15 +107,15 @@ function republishedPeer(message: ReadMessage): Buffer | undefined {
 
 /**
  * The message to hand the switch, if it is one a representative posts over
- * HTTP: a staple [Keeta TS] index.js:72530-72532, 72592, or a peer it passes
- * on [Keeta TS] index.js:74614-74627. The sender's greeting arrives as the
+ * HTTP: a staple [Keeta TS] index.js:72893-72895, 72955, or a peer it passes
+ * on [Keeta TS] index.js:74977-74990. The sender's greeting arrives as the
  * greeting field, of which the signed part is taken; a greeting as the
  * message is refused, since the switch handles one on an HTTP connection as
- * it comes [Keeta TS] index.js:73999-74014, 74696-74730, filter included,
+ * it comes [Keeta TS] index.js:74362-74377, 75059-75093, filter included,
  * and under whatever advertisement it carries.
  * The switch passes a test message on to every peer
- * [Keeta TS] index.js:74075-74078, which no node sends, and acts on no
- * other type [Keeta TS] index.js:72541-72575.
+ * [Keeta TS] index.js:74438-74441, which no node sends, and acts on no
+ * other type [Keeta TS] index.js:72904-72938.
  */
 function republishedMessage(text: string): Buffer | undefined {
 	const buffer = Buffer.from(text);
@@ -135,13 +135,13 @@ function republishedMessage(text: string): Buffer | undefined {
 
 /**
  * The sender's greeting, as the switch receives one on a connection
- * [Keeta TS] index.js:74689-74693. Its ID is the hash of what the
- * advertisement's signature covers [Keeta TS] index.js:73002-73011 rather
+ * [Keeta TS] index.js:75052-75056. Its ID is the hash of what the
+ * advertisement's signature covers [Keeta TS] index.js:73365-73374 rather
  * than a fresh one, so that the switch's check for messages it has seen
- * [Keeta TS] index.js:73978-73991 handles a sender's greeting once while that
+ * [Keeta TS] index.js:74341-74354 handles a sender's greeting once while that
  * check remembers it, not once for every message the sender posts, nor once
  * for every encoding of its signature: handling a greeting sends the sender
- * every peer the node knows [Keeta TS] index.js:74614-74627, 74740, which a
+ * every peer the node knows [Keeta TS] index.js:74977-74990, 75103, which a
  * sender that also posts over HTTP answers with its own greeting, so two such
  * nodes would otherwise answer each other without end.
  */
@@ -175,29 +175,29 @@ function deliver(node: Node, connection: P2PConnection, message: Buffer): void {
 
 /**
  * A peer-to-peer message a representative posts over HTTP, with its own
- * advertisement as the greeting [Keeta TS] index.js:73343-73366. The message
+ * advertisement as the greeting [Keeta TS] index.js:73706-73729. The message
  * reaches the switch on a connection to the sender, as the sender's greeting
  * and then the message, since the switch handles a greeting on an HTTP
- * connection even from a peer it knows [Keeta TS] index.js:73999-74014.
+ * connection even from a peer it knows [Keeta TS] index.js:74362-74377.
  *
  * A valid advertisement reaches the switch as the sender's greeting whatever
  * the message is: a representative's first post to the node is its greeting
- * as the message [Keeta TS] index.js:73841-73851, 74689-74693, which is
+ * as the message [Keeta TS] index.js:74204-74214, 75052-75056, which is
  * refused, and the node answers the greeting with every peer it knows
- * [Keeta TS] index.js:74614-74627, 74740 as the switch would.
+ * [Keeta TS] index.js:74977-74990, 75103 as the switch would.
  *
  * The answer says whether the message was taken: the greeting a valid
  * advertisement and the message one a representative posts over HTTP. The
  * switch handles it after the answer, as it handles a message on a WebSocket
- * without the sender waiting [Keeta TS] index.js:73510-73517. It must:
- * handling a staple syncs the node [Keeta TS] index.js:72564, which waits for
- * the node's own posts to peers [Keeta TS] index.js:72505-72511,
- * 73825-73831, so two nodes each handling the other's post before answering
+ * without the sender waiting [Keeta TS] index.js:73873-73880. It must:
+ * handling a staple syncs the node [Keeta TS] index.js:72927, which waits for
+ * the node's own posts to peers [Keeta TS] index.js:72868-72874,
+ * 74188-74194, so two nodes each handling the other's post before answering
  * it would each wait for the other.
  *
  * The message does not wait for the greeting, whose handling also sends the
  * sender every peer the node knows: the connection already carries the
- * sender's advertisement [Keeta TS] index.js:73323-73329, and the messages
+ * sender's advertisement [Keeta TS] index.js:73686-73692, and the messages
  * one sender posts are handled in the order they arrive, as on a WebSocket,
  * rather than a message whose greeting the switch has already seen
  * overtaking the one before it.
@@ -205,7 +205,7 @@ function deliver(node: Node, connection: P2PConnection, message: Buffer): void {
  * A node whose network is closed to its peer-to-peer surface
  * (networkClosedToP2P) refuses every message unread: the greeting alone
  * would make the sender a peer the node broadcasts to
- * [Keeta TS] index.js:74398, 74711-74715, and one it remembers. So does a node
+ * [Keeta TS] index.js:74761, 75074-75078, and one it remembers. So does a node
  * handling as many messages posted over HTTP as its peer limits allow.
  */
 function handleMessage(request: APIRequest, body: unknown): Promise<DeclaredResult<DeclaredP2PGroup['message']['POST']>> {

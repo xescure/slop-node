@@ -87,7 +87,7 @@ function logConnections(): ConnectionLog {
 				}
 				return([connection]);
 			});
-			/* A dialed connection is registered twice: as it opens, and once dialing is done [Keeta TS] index.js:73484-73490, 74779. */
+			/* A dialed connection is registered twice: as it opens, and once dialing is done [Keeta TS] index.js:73847-73853, 75142. */
 			return([...new Set(connections)]);
 		},
 		released: function(connection) {
@@ -146,8 +146,8 @@ describe('peers configured through the environment', function() {
 
 	/*
 	 * After dialing, the switch records a manual peer as given
-	 * [Keeta TS] index.js:74790-74793, and reads back as known only a record
-	 * that carries a valid signature [Keeta TS] index.js:73680-73684, 72976-73015.
+	 * [Keeta TS] index.js:75153-75156, and reads back as known only a record
+	 * that carries a valid signature [Keeta TS] index.js:74043-74047, 73339-73378.
 	 * The peer's greeting is signed by its own key, which proves the record.
 	 */
 	test('without a signature are reached, and verified by the advertisement they greet with', async function() {
@@ -229,7 +229,7 @@ describe('peers configured through the environment', function() {
 
 	/*
 	 * A peer that prefers updates over HTTP is dialed without a greeting, and
-	 * taken as known and seen at once [Keeta TS] index.js:74781-74815, so that
+	 * taken as known and seen at once [Keeta TS] index.js:75144-75178, so that
 	 * the switch never learns that it answers at the node's own address.
 	 */
 	test('learned of at the node\'s own address are not dialed, as only a key it had before advertises one there', async function() {
@@ -258,9 +258,9 @@ describe('peers configured through the environment', function() {
 	});
 
 	/*
-	 * The switch closes its connections as it stops [Keeta TS] index.js:73811-73821,
+	 * The switch closes its connections as it stops [Keeta TS] index.js:74174-74184,
 	 * but unregisters each, writing to its store, only once the socket has
-	 * closed [Keeta TS] index.js:73472-73477, 73881-73898.
+	 * closed [Keeta TS] index.js:73835-73840, 74244-74261.
 	 */
 	test('let the node stop only once its switch is done with them, so that nothing is written to a closed store', async function() {
 		const connections = logConnections();
@@ -277,11 +277,11 @@ describe('peers configured through the environment', function() {
 
 	/*
 	 * A dial waits for the peer's greeting before the switch takes the
-	 * connection [Keeta TS] index.js:73293-73304, 73856, and stopping waits for
-	 * the dial [Keeta TS] index.js:72501-72504 but closes only the connections
-	 * the switch has taken [Keeta TS] index.js:73811-73821; the registration
+	 * connection [Keeta TS] index.js:73656-73667, 74219, and stopping waits for
+	 * the dial [Keeta TS] index.js:72864-72867 but closes only the connections
+	 * the switch has taken [Keeta TS] index.js:74174-74184; the registration
 	 * then adds the connection to the switch and its store anyway
-	 * [Keeta TS] index.js:73856-73879.
+	 * [Keeta TS] index.js:74219-74242.
 	 */
 	test('still waiting for a greeting are closed as the node stops, so that nothing is written to a closed store', async function() {
 		const connections = logConnections();
@@ -315,7 +315,7 @@ describe('peers configured through the environment', function() {
 		})).not.toContain('rejected');
 	});
 
-	/* A socket's error is followed by its close, and each unregisters the connection [Keeta TS] index.js:73472-73477. */
+	/* A socket's error is followed by its close, and each unregisters the connection [Keeta TS] index.js:73835-73840. */
 	test('are unregistered once, however often the switch is told to', async function() {
 		const connections = logConnections();
 		const first = await nodes.start(await nodes.environmentFor('memory'));

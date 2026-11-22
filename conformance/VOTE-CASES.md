@@ -1,12 +1,12 @@
 # Vote-decision cases
 
-`conformance/vote-cases/` holds situations that a Keeta node decides, each with the outcome that `lib.Ledger` from `@keetanetwork/keetanet-client` 0.18.8 produces for it: a temporary vote, a permanent vote, a quote, an added staple, or a specific refusal. A node implementation conforms when it reproduces every case.
+`conformance/vote-cases/` holds situations that a Keeta node decides, each with the outcome that `lib.Ledger` from `@keetanetwork/keetanet-client` 0.19.1 produces for it: a temporary vote, a permanent vote, a quote, an added staple, or a specific refusal. A node implementation conforms when it reproduces every case.
 
 The expectations are recorded by running Keeta's own `Ledger`, never written by hand. Each case carries everything needed to run it again: key seeds, node settings, and every block, vote and staple as bytes. This document defines the format and the replay, so that a replay can be written in any language from the JSON alone.
 
 ## Conventions
 
-- `[Keeta TS] index.js:N` is line N of `client/index.js` in the published `@keetanetwork/keetanet-client` 0.18.8 package.
+- `[Keeta TS] index.js:N` is line N of `client/index.js` in the published `@keetanetwork/keetanet-client` 0.19.1 package.
 - "Must" states a requirement on a replay.
 - Case IDs follow a catalog of the decisions that `Ledger.vote`, `Ledger.quote` and `Ledger.add` make, grouped as the files are. The catalog itself is not published; section 10.1 lists its rows and the cases that cover each.
 - `CONTRACT.md` means `schema/CONTRACT.md`, the storage driver contract, whose rules are cited as D4, D6 and so on.
@@ -22,7 +22,7 @@ Each group of cases is one file, `conformance/vote-cases/<group>.json`:
 | `clock.json` | 16 | the block window and vote validity |
 | `conflicts.json` | 21 | heads, chains and competing blocks |
 | `balances.json` | 15 | balances, receives and token supply |
-| `permissions.json` | 48 | permissions, ownership, certificates and operation settings |
+| `permissions.json` | 54 | permissions, ownership, certificates and operation settings |
 | `fees.json` | 31 | fees on temporary votes, fee blocks and quotes |
 | `network.json` | 23 | network, subnet and idempotent keys |
 | `modes.json` | 9 | write modes and nodes without a key |
@@ -30,7 +30,7 @@ Each group of cases is one file, `conformance/vote-cases/<group>.json`:
 A file is one JSON object:
 
 ```json
-{ "format": "slop-node/vote-cases@1", "keetanetClient": "0.18.8", "cases": [ ... ] }
+{ "format": "slop-node/vote-cases@1", "keetanetClient": "0.19.1", "cases": [ ... ] }
 ```
 
 - `format` is always `slop-node/vote-cases@1`.
@@ -45,7 +45,7 @@ Every file is written with two-space indentation, a fixed key order and a traili
 
 | Value | Encoding |
 |---|---|
-| Block, vote, quote, staple | base64 (RFC 4648, with padding) of its canonical bytes. A staple is carried in its uncompressed form, the form its hash covers [Keeta TS] index.js:82188-82192 |
+| Block, vote, quote, staple | base64 (RFC 4648, with padding) of its canonical bytes. A staple is carried in its uncompressed form, the form its hash covers [Keeta TS] index.js:82552-82556 |
 | Amount, weight, subnet | a decimal string of a non-negative integer, without leading zeros |
 | Account | its public key string, `keeta_...`, in the canonical form Keeta prints |
 | Block hash | 64 uppercase hex digits, as Keeta prints a hash |
@@ -112,12 +112,12 @@ Each node is one ledger, with its own storage. Nodes share nothing: a node knows
   - `{"type": "flat", "amount": A, "token"?: T, "payTo"?: P}`: one amount.
   - `{"type": "choices", "choices": [{"amount": A, "token"?: T, "payTo"?: P}, ...]}`: a list of amounts the payer chooses from, in order. The list is never empty.
 
-  An amount without `token` is in the base token, and without `payTo` it is paid to the voting representative. The node's fee computation returns exactly this: nothing, one amount, or the list [Keeta TS] index.js:70743-70746.
+  An amount without `token` is in the base token, and without `payTo` it is paid to the voting representative. The node's fee computation returns exactly this: nothing, one amount, or the list [Keeta TS] index.js:71076-71079.
 - `mode`: the ledger's write mode: `read-write`, `no-voting`, `bootstrap-only` or `read-only`.
 - `subnet` (optional): the subnet the node runs on. Without it the node has no subnet, and accepts only blocks without one.
 - `operations` (optional, never empty when present):
   - `enableTokenAdminModifyBalance`: `true` admits the TOKEN_ADMIN_MODIFY_BALANCE operation, which is otherwise refused with `LEDGER_OPERATION_NOT_SUPPORTED`.
-  - `setRep`: a policy that answers every SET_REP operation alike. `"allowAll"` admits it; `"refuseAll"` refuses it with `LEDGER_INVALID_SET_REP` [Keeta TS] index.js:70997-71004. Without `setRep` every delegation is admitted.
+  - `setRep`: a policy that answers every SET_REP operation alike. `"allowAll"` admits it; `"refuseAll"` refuses it with `LEDGER_INVALID_SET_REP` [Keeta TS] index.js:71360-71367. Without `setRep` every delegation is admitted.
 
 Every other ledger setting keeps upstream's default.
 
@@ -138,9 +138,9 @@ Steps are numbered from 0 in the order they appear, and a step may reference onl
 
 | `type` | Fields | Upstream call |
 |---|---|---|
-| `add` | `staple`, a staple reference; `from` (optional string) | `Ledger.add(staple, from)` [Keeta TS] index.js:70397-70456 |
-| `vote` | `blocks`, a list of block bytes; `otherVotes` (optional), a list of vote references; `quote` (optional), a vote reference | `Ledger.vote(blocks, otherVotes, quote)` [Keeta TS] index.js:70048-70391 |
-| `quote` | `blocks`, a list of block bytes | `Ledger.quote(blocks)` [Keeta TS] index.js:70392-70396 |
+| `add` | `staple`, a staple reference; `from` (optional string) | `Ledger.add(staple, from)` [Keeta TS] index.js:70730-70789 |
+| `vote` | `blocks`, a list of block bytes; `otherVotes` (optional), a list of vote references; `quote` (optional), a vote reference | `Ledger.vote(blocks, otherVotes, quote)` [Keeta TS] index.js:70381-70724 |
+| `quote` | `blocks`, a list of block bytes | `Ledger.quote(blocks)` [Keeta TS] index.js:70725-70729 |
 | `gc` | none | `Ledger.gc()` |
 
 - `from` is the source `Ledger.add` is given. A `bootstrap-only` node adds a staple only when it is `"bootstrap"`.
@@ -199,7 +199,7 @@ For a produced vote or quote:
 An `error` is one of:
 
 - `{"type": "coded", "code": C, "accounts"?: [...], "blockhash"?: H, "existingBlockhash"?: H}`: an error with a Keeta error code. The optional fields appear exactly when upstream attaches them to the error:
-  - `accounts`, as `keeta_` strings sorted in code-point order, on `LEDGER_NOT_OPENING` and `LEDGER_NOT_SUCCESSOR`, which carry every account whose head the request checked [Keeta TS] index.js:70296-70312
+  - `accounts`, as `keeta_` strings sorted in code-point order, on `LEDGER_NOT_OPENING` and `LEDGER_NOT_SUCCESSOR`, which carry every account whose head the request checked [Keeta TS] index.js:70629-70645
   - `blockhash` and `existingBlockhash`, together, on `LEDGER_IDEMPOTENT_KEY_EXISTS`: the refused block and the block that holds the key
 
   The code is a valid Keeta error code and never `LEDGER_OTHER` (section 4.7).
@@ -222,7 +222,7 @@ A replay runs each case on its own, from a fresh start, and checks every step.
 
 ### 4.1 Keys
 
-Each key is derived from a seed and an index as Keeta's `Account.fromSeed(seed, index)` derives a secp256k1 key: the private key is the 32-byte output of HKDF-Expand (RFC 5869) with SHA3-256, whose pseudorandom key is the 32-byte seed followed by the index as a 4-byte big-endian integer, and whose info is empty [Keeta TS] index.js:62715-62737, 62877-62882, 63597-63604.
+Each key is derived from a seed and an index as Keeta's `Account.fromSeed(seed, index)` derives a secp256k1 key: the private key is the 32-byte output of HKDF-Expand (RFC 5869) with SHA3-256, whose pseudorandom key is the 32-byte seed followed by the index as a 4-byte big-endian integer, and whose info is empty [Keeta TS] index.js:62824-62846, 62986-62991, 63706-63713.
 
 - The trusted root is the key of `seeds.trustedRoot` at index 0. Nodes know only its public key.
 - Representative i is the key of `seeds.representative` at index i.
@@ -246,7 +246,7 @@ The keys that appear in the corpus, derived from the seeds every case uses, are 
 | `user` | 4 | `keeta_aabkuk7xemxs7s46norwa45empi2o2kzhqegsxpcsq2keg2of5hpajoujknttlq` |
 | `user` | 5 | `keeta_aabi6bey4j7mbybtosnx4ftko6ij5blwsg4phtxh6uvbfsysivh6mx3swuxmqea` |
 
-The base token and the network address are the identifiers Keeta derives from network id 0 [Keeta TS] index.js:63622-63629.
+The base token and the network address are the identifiers Keeta derives from network id 0 [Keeta TS] index.js:63731-63738.
 
 ### 4.2 Nodes
 
@@ -294,7 +294,7 @@ Each action is one call into the actor's ledger (section 3.5), and runs as one l
 
 A replay must check a produced vote or quote by what it means, not by its bytes:
 
-1. Parse its bytes at the step's moment as a `Vote`, or as a `VoteQuote` for a quote. Parsing verifies the signature [Keeta TS] index.js:81710-81715.
+1. Parse its bytes at the step's moment as a `Vote`, or as a `VoteQuote` for a quote. Parsing verifies the signature [Keeta TS] index.js:82074-82079.
 2. Its issuer must be the actor's representative.
 3. Its block hashes, in order, must equal `expect.blocks`.
 4. For a vote, `permanent` or `temporary` must match its permanence as the parse decides it (section 6.1).
@@ -310,7 +310,7 @@ A vote that fails to parse, or that another key issued, is a broken step: the im
 - A plain error matches on its exact message.
 - A coded expectation never matches a plain error, nor the other way round.
 
-The corpus records the error `Ledger` raises. A storage layer may wrap an error raised inside a ledger transaction: `Ledger` passes every such error through its storage's `evaluateError` [Keeta TS] index.js:71387. The storage drivers of this repository give an error without a code the code `LEDGER_OTHER` and keep the original as its cause. A replay must compare the original, so `LEDGER_OTHER` never appears in the corpus.
+The corpus records the error `Ledger` raises. A storage layer may wrap an error raised inside a ledger transaction: `Ledger` passes every such error through its storage's `evaluateError` [Keeta TS] index.js:71750. The storage drivers of this repository give an error without a code the code `LEDGER_OTHER` and keep the original as its cause. A replay must compare the original, so `LEDGER_OTHER` never appears in the corpus.
 
 ### 4.8 Broken steps
 
@@ -338,30 +338,30 @@ C11 itself is an upstream case: it pins only the bounds that every storage must 
 
 ## 6. Upstream behavior the cases pin
 
-These are the decisions an implementation is most likely to get wrong. Each is upstream behavior in 0.18.8, and the cases named pin it.
+These are the decisions an implementation is most likely to get wrong. Each is upstream behavior in 0.19.1, and the cases named pin it.
 
 ### 6.1 Permanence is decided when a vote is parsed
 
-A vote is permanent exactly when its `validityTo` lies more than `permanentVoteThreshold` after the moment it is parsed at: 100 * 365 days, 3153600000000 ms, not 100 calendar years [Keeta TS] index.js:81528-81532, 81806. `Ledger` reads this flag, never the vote's encoding. A permanent vote is issued valid until 00:00 UTC on 31 January of the year 1001 years on [Keeta TS] index.js:82676-82681, so for the last 36500 days of its validity it parses as temporary.
+A vote is permanent exactly when its `validityTo` lies more than `permanentVoteThreshold` after the moment it is parsed at: 100 * 365 days, 3153600000000 ms, not 100 calendar years [Keeta TS] index.js:81892-81896, 82170. `Ledger` reads this flag, never the vote's encoding. A permanent vote is issued valid until 00:00 UTC on 31 January of the year 1001 years on [Keeta TS] index.js:83040-83045, so for the last 36500 days of its validity it parses as temporary.
 
 C7 shows it: a permanent vote of 2026, valid until 3027-01-31T00:00:00.000Z, still parses at 3027-01-31T00:01:00.000Z, within the slop that follows its validity (section 6.2), but parses as temporary. The request that offers it is then a permanent request without the node's own temporary vote, and is refused `LEDGER_NO_PERM_WITHOUT_SELF_TEMP`. One millisecond later the vote is `VOTE_EXPIRED`.
 
 ### 6.2 The parse slop and the expiry of this node's own votes
 
-Parsing accepts a vote from 60 s before its `validityFrom` until 60 s after its `validityTo` [Keeta TS] index.js:81522-81526, 81793-81805, 81828-81831. A temporary vote and a quote are valid for 5 minutes from the moment they are issued [Keeta TS] index.js:71243. So:
+Parsing accepts a vote from 60 s before its `validityFrom` until 60 s after its `validityTo` [Keeta TS] index.js:81886-81890, 82157-82169, 82192-82195. A temporary vote and a quote are valid for 5 minutes from the moment they are issued [Keeta TS] index.js:71606. So:
 
 - a temporary vote referenced at +6 min still parses, and at +6 min +1 ms is `VOTE_EXPIRED` (C7, F11)
 - a vote issued 60 s ahead parses, and 60.001 s ahead is `VOTE_MOMENT_BEFORE_VALIDITY_FROM` (C10)
 - `Ledger.vote` checks no expiry of the other votes itself, so votes past their `validityTo` but within the slop still support a permanent vote (C8)
 
-The slop is the parser's. The votes this node stored earlier are a different matter: `Ledger.vote` reads them back from storage to find competing votes [Keeta TS] index.js:70317-70341 and checks no expiry on them, so when they stop counting is the storage's rule. Answering as the storage interface means (section 3.1) bounds that rule on both sides: storage must keep returning this node's temporary vote at least until its `validityTo`, and must stop returning it once the moment is more than 60 s past its `validityTo`, when no node parses it any more. C11 pins those two bounds: the vote still counts at `validityTo`, and no longer 60 s and 1 ms after it. Storage that never expires votes fails C11. Between the bounds the edge is the storage's choice: `CONTRACT.md` D4 places it at the latest the bounds allow, so the vote counts while the moment is at most 60 s past `validityTo`, which C11-D4 and I3-D12 pin (section 5).
+The slop is the parser's. The votes this node stored earlier are a different matter: `Ledger.vote` reads them back from storage to find competing votes [Keeta TS] index.js:70650-70674 and checks no expiry on them, so when they stop counting is the storage's rule. Answering as the storage interface means (section 3.1) bounds that rule on both sides: storage must keep returning this node's temporary vote at least until its `validityTo`, and must stop returning it once the moment is more than 60 s past its `validityTo`, when no node parses it any more. C11 pins those two bounds: the vote still counts at `validityTo`, and no longer 60 s and 1 ms after it. Storage that never expires votes fails C11. Between the bounds the edge is the storage's choice: `CONTRACT.md` D4 places it at the latest the bounds allow, so the vote counts while the moment is at most 60 s past `validityTo`, which C11-D4 and I3-D12 pin (section 5).
 
 ### 6.3 Fees
 
-Only a permanent request checks fees [Keeta TS] index.js:70187-70248:
+Only a permanent request checks fees [Keeta TS] index.js:70520-70581:
 
 - Each other vote's fee is classified. A vote without a fee owes nothing. A fee with an option of amount 0 is optional, and any other fee is required.
-- The fee block is the last block of the request, and only when its purpose is FEE [Keeta TS] index.js:70116. A fee block anywhere else is an ordinary block, so a request whose fee block is not last lacks one (F7b).
+- The fee block is the last block of the request, and only when its purpose is FEE [Keeta TS] index.js:70449. A fee block anywhere else is an ordinary block, so a request whose fee block is not last lacks one (F7b).
 - With required fees and no fee block: `LEDGER_MISSING_REQUIRED_FEE_BLOCK` (F1).
 - With a fee block, its number of operations must equal the number of required fees, or, when some fees are optional, either that number or the number of required and optional fees together: otherwise `LEDGER_REQUIRED_FEE_MISMATCH` (F3, F9c). The optional fees are checked only when the block pays all of them.
 - Each issuer that is owed a fee needs some SEND in the fee block that matches one of its options exactly: to `payTo`, or the issuer when there is none; in `token`, or the base token when there is none; of exactly `amount`. Otherwise `LEDGER_FEE_MISSING` (F4, F4b, F5a, F5b, F9d, F9f). The match is not exclusive: one SEND can serve several issuers, and only the operation count limits the block (E3c). The order of the operations does not matter (F5c).
@@ -369,29 +369,38 @@ Only a permanent request checks fees [Keeta TS] index.js:70187-70248:
 
 When every other vote is temporary, they are compared with the request's blocks without the fee block, so a permanent vote covers one block more than the temporary votes it replaces (F2). A recovery request offers permanent votes, which cover the fee block too (V3c).
 
-Temporary requests never check fees. A temporary vote carries the fee of the quote it was given, or else the node's fee, or, when the node charges nothing, an explicit fee of 0 [Keeta TS] index.js:71255-71263 (P9c, F0, F12). A quote carries the node's fee the same way. A recovery vote carries no fee at all (V3b), and neither does a permanent vote. Since permanent votes never carry a fee, the fee check of a recovery request cannot be observed: V3c's recovery request ends in a fee block that pays nothing to the recovering node, and gets a temporary vote.
+Temporary requests never check fees. A temporary vote carries the fee of the quote it was given, or else the node's fee, or, when the node charges nothing, an explicit fee of 0 [Keeta TS] index.js:71618-71626 (P9c, F0, F12). A quote carries the node's fee the same way. A recovery vote carries no fee at all (V3b), and neither does a permanent vote. Since permanent votes never carry a fee, the fee check of a recovery request cannot be observed: V3c's recovery request ends in a fee block that pays nothing to the recovering node, and gets a temporary vote.
 
-### 6.4 In-request permission state only satisfies requirements
+### 6.4 Permission state the request sets
 
-A permission requirement is first checked against the grants and default permissions that earlier blocks of the same request set. If one satisfies it, the requirement is met; otherwise it is checked against stored state [Keeta TS] index.js:69068-69114. Earlier blocks can therefore grant what a later block needs (PM4, PM4b, S3b, SI3, T1), but they can never take away what stored state grants:
+A permission requirement is met by a grant that an earlier block of the same request adds [Keeta TS] index.js:69354-69396. Otherwise it is checked against the ledger as the request leaves it [Keeta TS] index.js:70266-70285, 71197-71219, 71327-71344: by the principal's stored ACL row, or by the entity's default permission, the one the request sets or else the stored one. The default applies only while the principal has no ACL row on the entity once the request's ACL changes are applied, even a row that grants nothing. A row that the request sets never meets a requirement itself, or a block could authorize itself; it only decides whether the default applies.
 
-- T3b: a network default permission narrowed earlier in the same request does not refuse a token creation that the stored default admits. T3 shows the same narrowing refusing once it is stored.
-- T10b: an ACL row emptied earlier in the same request does not refuse a send that the stored default admits. T10 shows the stored empty row refusing.
+Earlier blocks can therefore grant what a later block needs (PM4, PM4b, S3b, SI3, T1). They can also take away what stored state grants, or give back what it denies:
+
+- T3b: a network default permission narrowed earlier in the same request refuses a token creation that the stored default admits, as T3 refuses once the narrowing is stored.
+- T10b: an ACL row emptied earlier in the same request overrides the token's default ACCESS and refuses the send, as the stored empty row does in T10.
+- T10c: a stored empty row that an earlier block of the request removes no longer overrides the default, which admits the send.
+
+Releases before 0.19 checked the request's own default permissions and stored state only for what satisfies a requirement: T3b and T10b got temporary votes, and T10c was refused.
 
 A removal never satisfies a requirement, even though it names the flag (PM6).
 
-### 6.5 The token side of TOKEN_ADMIN_MODIFY_BALANCE
+### 6.5 Crediting through a forward or a balance adjustment
 
-When a node enables it, TOKEN_ADMIN_MODIFY_BALANCE moves the amount between the account and the token's own balance [Keeta TS] index.js:69276-69319. An ADD credits the account and debits the token, so it is refused `LEDGER_INVALID_BALANCE` when the token holds none of itself. A SUBTRACT debits the account and credits the token. OP2 records both on a node with the operation enabled, after showing the default node refusing it as unsupported.
+Since 0.19, a RECEIVE that forwards credits the account it forwards to as a SEND credits its recipient: that account needs ACCESS on the token, and a storage account must admit the token and the forwarding account's deposits of it [Keeta TS] index.js:69773-69812, 69833-69846 (RF1 to RF4). An ADD of TOKEN_ADMIN_MODIFY_BALANCE into a storage account needs the storage account to admit the token [Keeta TS] index.js:69773-69797, 69934-69941, and is refused for that before the token's balance is checked (OP5).
 
-### 6.6 Other behavior
+### 6.6 The token side of TOKEN_ADMIN_MODIFY_BALANCE
 
-- **Quorum.** A permanent vote needs the issuers of the other votes, and an added staple the issuers of its votes, to weigh at least floor(2 * total / 3) + 1, each issuer counted once [Keeta TS] index.js:70776-70795. Q3 and Q3b pin both sides of the rounding. While the total weight is 0, a vote by the trusted root is required instead, alone or among others (Q10, Q11).
+When a node enables it, TOKEN_ADMIN_MODIFY_BALANCE moves the amount between the account and the token's own balance [Keeta TS] index.js:69555-69598. An ADD credits the account and debits the token, so it is refused `LEDGER_INVALID_BALANCE` when the token holds none of itself. A SUBTRACT debits the account and credits the token. OP2 records both on a node with the operation enabled, after showing the default node refusing it as unsupported.
+
+### 6.7 Other behavior
+
+- **Quorum.** A permanent vote needs the issuers of the other votes, and an added staple the issuers of its votes, to weigh at least floor(2 * total / 3) + 1, each issuer counted once [Keeta TS] index.js:71109-71128. Q3 and Q3b pin both sides of the rounding. While the total weight is 0, a vote by the trusted root is required instead, alone or among others (Q10, Q11).
 - **Weight moves on add only.** A delegation that is voted on but not added changes no weight (Q15, Q16).
 - **Adding checks no outcome.** `Ledger.add` checks votes, network, subnet and weight, but no balance or permission: an overspending staple with enough weight is added (Q14).
 - **Quotes check less than votes.** A quote checks the blocks and the ledger outcome, but no stored idempotent key, head or competing vote (QT1, QT1b, QT1c). It has no check for an empty list of blocks (V6c).
 - **Certificates come from storage.** A certificate an ACL names must already be stored; one stored by an earlier block of the same request is not found (CE3b).
-- **The storage base refuses duplicates.** Adding a staple whose block is already stored is refused `LEDGER_BLOCK_ALREADY_EXISTS` by the storage base class that Keeta ships [Keeta TS] index.js:68718-68724 (K7).
+- **The storage base refuses duplicates.** Adding a staple whose block is already stored is refused `LEDGER_BLOCK_ALREADY_EXISTS` by the storage base class that Keeta ships [Keeta TS] index.js:69004-69010 (K7).
 - **Permissions are pinned by code.** `LEDGER_INVALID_PERMISSIONS` carries no field that names the failed requirement, so a case matches any refusal with that code. Where the cause matters, a second step of the case shows it, such as the request that succeeds once the missing grant exists (PM5, PM6, S4, SI3, CE4, CE5, T3, T5, R2).
 
 ## 7. Evaluation order
@@ -400,7 +409,7 @@ When a request fails several checks, the first check decides the outcome. The or
 
 ### 7.1 `Ledger.vote`
 
-[Keeta TS] index.js:70048-70391, with the issuing of temporary votes at [Keeta TS] index.js:71207-71266:
+[Keeta TS] index.js:70381-70724, with the issuing of temporary votes at [Keeta TS] index.js:71570-71629:
 
 1. **Blocks.** An empty list, or a fee block first: `LEDGER_MISSING_BLOCKS`.
 2. **Key.** A node without a key: plain `Cannot vote on block, no private key loaded`.
@@ -416,12 +425,12 @@ When a request fails several checks, the first check decides the outcome. The or
 12. **Heads, per account in request order.** An account without blocks and a block that is not opening: `LEDGER_NOT_OPENING`. An account with blocks and an opening block: `LEDGER_NOT_EMPTY`. A previous that is not the head: `LEDGER_NOT_SUCCESSOR`.
 13. **Competing votes.** A vote of this node on any block with the same previous as a requested block, the block itself included: `LEDGER_SUCCESSOR_VOTE_EXISTS`. A permanent request may replace exactly one such vote when it is this node's temporary vote (K1f).
 14. **Issuing.**
-    - Temporary and recovery: mode and key again; the ledger outcome (section 7.2); then, for a temporary request only, the block window: a block dated more than 5 minutes before or after the moment is `LEDGER_BLOCK_EXPIRED` [Keeta TS] index.js:71221-71234.
-    - Permanent: the ledger outcome only when the request ends in a fee block; then the quorum (section 6.6): `LEDGER_INSUFFICIENT_VOTING_WEIGHT`.
+    - Temporary and recovery: mode and key again; the ledger outcome (section 7.2); then, for a temporary request only, the block window: a block dated more than 5 minutes before or after the moment is `LEDGER_BLOCK_EXPIRED` [Keeta TS] index.js:71584-71597.
+    - Permanent: the ledger outcome only when the request ends in a fee block; then the quorum (section 6.7): `LEDGER_INSUFFICIENT_VOTING_WEIGHT`.
 
 ### 7.2 The ledger outcome, `Ledger.quote` and `Ledger.add`
 
-**The ledger outcome** [Keeta TS] index.js:71025-71131:
+**The ledger outcome** [Keeta TS] index.js:71388-71494:
 
 1. Operations: a negative amount in a block dated before 2025-11-21, plain `Operation amount cannot be negative: <amount>`; a SET_REP the node's policy refuses, `LEDGER_INVALID_SET_REP`; TOKEN_ADMIN_MODIFY_BALANCE on a node that does not enable it, `LEDGER_OPERATION_NOT_SUPPORTED`.
 2. Permission requirements: `LEDGER_INVALID_PERMISSIONS`.
@@ -429,9 +438,9 @@ When a request fails several checks, the first check decides the outcome. The or
 4. The effect of the blocks: a certificate that an ACL names must be stored (`LEDGER_CERTIFICATE_NOT_FOUND`), and a supply must stay within its maximum (`BLOCK_SUPPLY_INVALID`). Both come before any balance is judged. Within one block the supply is judged first, whatever the order of the operations (EO18).
 5. Balances: one that falls negative at any point, `LEDGER_INVALID_BALANCE`, before a receive that was not met, `LEDGER_RECEIVE_NOT_MET`. Blocks apply in request order, so a spend before its funding fails (B4), and a receive counts only what earlier blocks sent (B6c).
 
-**`Ledger.quote`** runs step 10, then the issuing of a temporary vote: mode, key, ledger outcome, block window, fee [Keeta TS] index.js:70392-70396, 71207-71266.
+**`Ledger.quote`** runs step 10, then the issuing of a temporary vote: mode, key, ledger outcome, block window, fee [Keeta TS] index.js:70725-70729, 71570-71629.
 
-**`Ledger.add`** [Keeta TS] index.js:70397-70456: the mode (`read-only` refuses every staple, `bootstrap-only` every one not added from `"bootstrap"`); each block's network and subnet, as plain errors; each vote's `validityFrom`, which must not be before 1970 (`LEDGER_INVALID_DATE`), and its permanence (plain `Can only insert permanent votes`); the quorum; then the storage.
+**`Ledger.add`** [Keeta TS] index.js:70730-70789: the mode (`read-only` refuses every staple, `bootstrap-only` every one not added from `"bootstrap"`); each block's network and subnet, as plain errors; each vote's `validityFrom`, which must not be before 1970 (`LEDGER_INVALID_DATE`), and its permanence (plain `Can only insert permanent votes`); the quorum; then the storage.
 
 ### 7.3 The order cases
 
@@ -485,7 +494,7 @@ The ledger is Keeta's, but the storage under it during generation is this reposi
 
 ## 9. Upstream version
 
-The corpus pins `@keetanetwork/keetanet-client` 0.18.8, the version in `package.json`, and every file's `keetanetClient` field names it. When the dependency changes, `make test` fails until `make conformance` regenerates the corpus, and the changed decisions show up as a reviewable diff of the files.
+The corpus pins `@keetanetwork/keetanet-client` 0.19.1, the version in `package.json`, and every file's `keetanetClient` field names it. When the dependency changes, `make test` fails until `make conformance` regenerates the corpus, and the changed decisions show up as a reviewable diff of the files.
 
 ## 10. Catalog coverage
 
@@ -579,7 +588,7 @@ Every row of the catalog is a case, an exclusion, or both:
 | K6 | K6 | `conflicts.json` | |
 | K6b | K6b | `conflicts.json` | |
 | K6c | K6c | `conflicts.json` | |
-| K7 | K7 | `conflicts.json` | Raised by the storage base class that Keeta ships, before any driver write [Keeta TS] index.js:68718-68724. |
+| K7 | K7 | `conflicts.json` | Raised by the storage base class that Keeta ships, before any driver write [Keeta TS] index.js:69004-69010. |
 
 #### Balances and supply
 
@@ -592,9 +601,9 @@ Every row of the catalog is a case, an exclusion, or both:
 | B6 | B6 | `balances.json` | |
 | B6b | B6b | `balances.json` | |
 | B7 | B7 | `balances.json` | |
-| B8 | B8 | `balances.json` | Split. Case: a negative amount in a block dated before 2025-11-21, refused by the ledger's operation check. Excluded: the construction half; such a block dated later fails `BLOCK_AMOUNT_BELOW_ZERO` in the builder and the parser alike [Keeta TS] index.js:68175-68184. |
+| B8 | B8 | `balances.json` | Split. Case: a negative amount in a block dated before 2025-11-21, refused by the ledger's operation check. Excluded: the construction half; such a block dated later fails `BLOCK_AMOUNT_BELOW_ZERO` in the builder and the parser alike [Keeta TS] index.js:68313-68322. |
 | T5 | T5 | `balances.json` | |
-| T6/T7 | T6, T7 | `balances.json` | Split. T6 is the supply growing past the maximum across blocks. Excluded: one operation above the maximum, which the builder and the parser refuse with `BLOCK_SUPPLY_INVALID` [Keeta TS] index.js:68169-68174. |
+| T6/T7 | T6, T7 | `balances.json` | Split. T6 is the supply growing past the maximum across blocks. Excluded: one operation above the maximum, which the builder and the parser refuse with `BLOCK_SUPPLY_INVALID` [Keeta TS] index.js:68307-68312. |
 
 #### Permissions
 
@@ -613,10 +622,10 @@ Every row of the catalog is a case, an exclusion, or both:
 | T8/T10 | T8, T10 | `permissions.json` | T10 is a contract case (D10). |
 | SI3 | SI3 | `permissions.json` | |
 | MS1-MS4 | MS1, MS2, MS3, MS4 | `permissions.json` | One case each. |
-| O1-O4 | O1, O2, O3, O4 | `permissions.json` | O3 adds UPDATE_INFO: ADMIN may only be SET, and the builder refuses an ADD of it with `BLOCK_NO_DELEGATE_ADMIN` [Keeta TS] index.js:66541-66543. An update whose flags lack OWNER counts as removing the owner [Keeta TS] index.js:71086-71089. |
+| O1-O4 | O1, O2, O3, O4 | `permissions.json` | O3 adds UPDATE_INFO: ADMIN may only be SET, and the builder refuses an ADD of it with `BLOCK_NO_DELEGATE_ADMIN` [Keeta TS] index.js:66650-66652. An update whose flags lack OWNER counts as removing the owner [Keeta TS] index.js:71449-71452. |
 | CE3 | CE3 | `permissions.json` | |
 | CE4 | CE4 | `permissions.json` | Both outcomes are steps of one case. |
-| OP1/OP2 | OP1, OP2 | `permissions.json` | With the operation enabled, an owner-signed ADD is still refused, `LEDGER_INVALID_BALANCE`, because it debits the token (section 6.5); a SUBTRACT gets a temporary vote. |
+| OP1/OP2 | OP1, OP2 | `permissions.json` | With the operation enabled, an owner-signed ADD is still refused, `LEDGER_INVALID_BALANCE`, because it debits the token (section 6.6); a SUBTRACT gets a temporary vote. |
 | OP3/OP4 | OP3, OP4 | `permissions.json` | OP3 uses the constant `setRep` policies of section 3.3. |
 | TR1/TR2 | TR1, TR2 | `permissions.json` | One case each. |
 | R1/R2 | R1, R2 | `permissions.json` | R2 also shows a node that never saw the change giving a permanent vote. |
@@ -634,7 +643,7 @@ Every row of the catalog is a case, an exclusion, or both:
 | F5c | F5c | `fees.json` | |
 | F6 | F6 | `fees.json` | |
 | F7 | F7 | `fees.json` | Both outcomes are steps of one case. |
-| F8 | excluded | - | Excluded: a fee block with an operation other than SEND fails `BLOCK_INVALID_PURPOSE_VALIDATION` in the builder and the parser alike [Keeta TS] index.js:64983-64986. |
+| F8 | excluded | - | Excluded: a fee block with an operation other than SEND fails `BLOCK_INVALID_PURPOSE_VALIDATION` in the builder and the parser alike [Keeta TS] index.js:65092-65095. |
 | F9/F9b | F9, F9b | `fees.json` | The row's third and fourth outcomes are F9c and F9d. |
 | F10 | F10 | `fees.json` | The mixed payment is F10b. |
 | E3 | E3 | `fees.json` | The payment to the voters is E3b. |
@@ -655,7 +664,7 @@ Every row of the catalog is a case, an exclusion, or both:
 | I3 | I3 | `network.json` | A contract case (D6, D12). |
 | I3b | I3b | `network.json` | |
 | I4 | I4 | `network.json` | |
-| I5 | I5 | `network.json` | Split. Case: a key of exactly 36 bytes. Excluded: a 37-byte key, which the builder and the parser refuse with `BLOCK_INVALID_IDEMPOTENT_LENGTH` [Keeta TS] index.js:64352-64357, 65036-65041. |
+| I5 | I5 | `network.json` | Split. Case: a key of exactly 36 bytes. Excluded: a 37-byte key, which the builder and the parser refuse with `BLOCK_INVALID_IDEMPOTENT_LENGTH` [Keeta TS] index.js:64461-64466, 65145-65150. |
 | I6 | I6 | `network.json` | |
 
 ### 10.2 Extras
@@ -680,8 +689,14 @@ The other extras extend a catalog row:
 | PM4b | `permissions.json` | PM4 | the same grant, earlier in the same request |
 | S2b | `permissions.json` | S2 | STORAGE_CAN_HOLD alone does not admit a deposit |
 | S2c | `permissions.json` | S2 | STORAGE_DEPOSIT alone does not admit a deposit |
-| T3b | `permissions.json` | T3 | a network default narrowed earlier in the request refuses nothing (section 6.4) |
-| T10b | `permissions.json` | T10 | an ACL row emptied earlier in the request refuses nothing (section 6.4) |
+| RF1 | `permissions.json` | T8 | a receive that forwards a token to an account without ACCESS is refused (section 6.5) |
+| RF2 | `permissions.json` | T8 | the same forward, once that account has an ACL row |
+| RF3 | `permissions.json` | S2 | a receive that forwards into a storage account that granted nothing is refused |
+| RF4 | `permissions.json` | S3 | the same forward, once the storage account admits the token and the forwarding account's deposits |
+| T3b | `permissions.json` | T3 | a network default narrowed earlier in the request refuses a creation (section 6.4) |
+| T10b | `permissions.json` | T10 | an ACL row emptied earlier in the request overrides the default (section 6.4) |
+| T10c | `permissions.json` | T10 | a stored empty row removed earlier in the request leaves the default to admit (section 6.4) |
+| OP5 | `permissions.json` | OP2 | an ADD into a storage account needs it to admit the token, checked before the token's balance (section 6.5) |
 | CE3b | `permissions.json` | CE3 | a certificate stored earlier in the same request is not found |
 | F7b | `fees.json` | F7 | a fee block that is not the last block is an ordinary block |
 | F9c | `fees.json` | F9/F9b | optional fees paid to only some representatives are refused |

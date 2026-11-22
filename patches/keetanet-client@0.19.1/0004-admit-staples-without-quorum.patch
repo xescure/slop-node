@@ -2,9 +2,9 @@ Let the node admit named staples without the quorum check
 
 Why: Keeta's test network holds staples its representatives admitted with
 less than the quorum of delegated weight that add() requires
-[Keeta TS] index.js:70433-70436, 70776-70795: after one representative held
+[Keeta TS] index.js:70766-70769, 71109-71128: after one representative held
 more than two thirds of the weight on 2026-10-15, five staples on
-2026-10-16 carry only another's vote. No 0.18.8 ledger replaying the
+2026-10-16 carry only another's vote. No 0.18.8 or 0.19.1 ledger replaying the
 network adds them, so the node needs a way to take exactly those.
 Upstream status: the ledger configuration has no such option; votes are
 checked whatever the ledger write mode or the caller.
@@ -15,7 +15,7 @@ Applies with "patch -p1" from the package root, after 0001, 0002 and 0003.
 
 --- a/client/index.js
 +++ b/client/index.js
-@@ -70453,7 +70453,8 @@
+@@ -70786,7 +70786,8 @@
              }
          }
          const weightTiming = __classPrivateFieldGet(this, _LedgerAtomicInterface_ledger, "f").node?.timing.startTime('db-add.getWeight');
@@ -27,7 +27,7 @@ Applies with "patch -p1" from the package root, after 0001, 0002 and 0003.
          }
 --- a/lib/ledger/index.d.ts
 +++ b/lib/ledger/index.d.ts
-@@ -56,6 +56,11 @@
+@@ -57,6 +57,11 @@
       */
      ledgerWriteMode?: 'bootstrap-only' | 'read-only' | 'read-write' | 'no-voting';
      /**

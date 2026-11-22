@@ -11,7 +11,7 @@ import { TEMPORARY_VALIDITY, send } from './support.js';
  * Whether votes weigh enough: a permanent vote and an added staple need more
  * than two thirds of the delegated weight, counted per distinct issuer, and
  * while nothing is delegated only the trusted root's vote counts.
- * [Keeta TS] index.js:70776-70795, 70425-70436
+ * [Keeta TS] index.js:71109-71128, 70758-70769
  */
 
 const lib = KeetaNet.lib;

@@ -203,7 +203,7 @@ describe('KEETANET_LOCAL_NODE_LOG_LEVEL and KEETANET_LOCAL_NODE_LOG_FILTER', fun
 		expect(problemOf({ KEETANET_LOCAL_NODE_LOG_LEVEL: 'verbose' })).toMatchObject({ kind: 'invalid', variable: 'KEETANET_LOCAL_NODE_LOG_LEVEL', value: 'verbose' });
 	});
 
-	/* [Keeta TS] index.js:71920-71922 matches the filter regardless of case. */
+	/* [Keeta TS] index.js:72283-72285 matches the filter regardless of case. */
 	test('reads the filter as a pattern that ignores case', function() {
 		const { filter } = parse({ KEETANET_LOCAL_NODE_LOG_FILTER: 'ledger|api' }).log;
 		expect(filter?.source).toBe('ledger|api');
@@ -280,7 +280,7 @@ describe('KEETANET_LOCAL_NODE_NETWORK', function() {
 		}
 	});
 
-	/* The client refuses to validate a block of any other network ID [Keeta TS] index.js:62327-62355. */
+	/* The client refuses to validate a block of any other network ID [Keeta TS] index.js:62436-62464. */
 	test.each(['12345', '0x1', 'mainnet', 'Main', '-1', '1.5', '00x1', '0x1g', ''])('refuses %j', function(network) {
 		expect(function() {
 			return(parse({ KEETANET_LOCAL_NODE_NETWORK: network }));
@@ -393,7 +393,7 @@ describe('the safety rule', function() {
 		expect(messageOf({ KEETANET_LOCAL_NODE_NETWORK: 'staging', KEETANET_LOCAL_NODE_MANUAL_PEERS: PEER })).toBe('this node votes on the staging network only without peers: set KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE to read-only, bootstrap-only or no-voting (it is read-write), or leave KEETANET_LOCAL_NODE_MANUAL_PEERS unset');
 	});
 
-	/* A network alias names upstream's own representatives [Keeta TS] index.js:62359-62456; none of them becomes a peer unless listed. */
+	/* A network alias names upstream's own representatives [Keeta TS] index.js:62468-62565; none of them becomes a peer unless listed. */
 	test.each(['local', ...NetworkConfig.networksArray])('derives no peer from the %s network', function(network) {
 		const config = parse({ KEETANET_LOCAL_NODE_NETWORK: network, KEETANET_LOCAL_NODE_LEDGER_WRITE_MODE: 'read-only' });
 		expect(config.manualPeers).toEqual([]);
@@ -849,12 +849,12 @@ describe('KEETANET_LOCAL_NODE_MANUAL_PEERS', function() {
 		expect(problemOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: `${FEE_SEED}@${PEER_API}|${PEER_P2P}` })).toEqual({ kind: 'private-key-given', variable: 'KEETANET_LOCAL_NODE_MANUAL_PEERS' });
 	});
 
-	/* The switch keys its peers by account [Keeta TS] index.js:73236-73240, so a second entry would replace the first. */
+	/* The switch keys its peers by account [Keeta TS] index.js:73599-73603, so a second entry would replace the first. */
 	test('refuses a peer named twice', function() {
 		expect(problemOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: `${PEER},${PEER_KEY}@https://elsewhere.example/api|wss://elsewhere.example/p2p` })).toEqual({ kind: 'duplicate-peer', key: PEER_KEY });
 	});
 
-	/* The switch drops a greeting from itself [Keeta TS] index.js:74704-74709. */
+	/* The switch drops a greeting from itself [Keeta TS] index.js:75067-75072. */
 	test('refuses the node itself as its peer', function() {
 		const own = lib.Account.fromSeed(SEED, 0).publicKeyString.get();
 		expect(problemOf({ KEETANET_LOCAL_NODE_MANUAL_PEERS: `${own}@${PEER_API}|${PEER_P2P}` })).toEqual({ kind: 'peer-is-self', key: own });
@@ -1344,7 +1344,7 @@ describe('the node configuration', function() {
 		expect(node.networkAlias).toBe('test');
 		expect('endpoints' in node).toBe(false);
 		expect(node.stats.kv).toBeNull();
-		// Without a store of its own the switch keeps its peers in memory [Keeta TS] index.js:73658-73663.
+		// Without a store of its own the switch keeps its peers in memory [Keeta TS] index.js:74021-74026.
 		expect(node.p2p).toEqual({ useHTTPRepublish: false });
 	});
 });

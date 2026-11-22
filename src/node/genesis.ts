@@ -15,7 +15,7 @@ const lib = KeetaNet.lib;
 /**
  * The network's first staple, as UserClient.initializeNetwork builds it: the
  * trusted key signs it and receives the whole supply, which it delegates to a
- * representative [Keeta TS] index.js:61450-61468.
+ * representative [Keeta TS] index.js:61555-61573.
  */
 export type GenesisSettings = {
 	readonly trustedSigner: Account;
@@ -23,7 +23,7 @@ export type GenesisSettings = {
 	readonly supply: bigint;
 	/** This node's representative unless another is named. */
 	readonly delegateTo: Account;
-	/** What anyone may do on the network address; undefined keeps upstream's STORAGE_CREATE only [Keeta TS] index.js:80759. */
+	/** What anyone may do on the network address; undefined keeps upstream's STORAGE_CREATE only [Keeta TS] index.js:81123. */
 	readonly networkDefaultPermission: readonly BaseFlagName[] | undefined;
 };
 
@@ -57,7 +57,7 @@ function parseBaseFlagName(name: string): BaseFlagName | undefined {
 /**
  * Base flags separated by commas. Only flags that may be a default permission
  * are accepted, as the client's block validation requires
- * [Keeta TS] index.js:66425-66427.
+ * [Keeta TS] index.js:66534-66536.
  */
 function parseDefaultPermission(text: string): readonly BaseFlagName[] {
 	const variable = 'KEETANET_GENESIS_NETWORK_DEFAULT_PERMISSION';
@@ -136,7 +136,7 @@ export class GenesisError extends Error {
 	}
 }
 
-/** UserClient.initializeNetwork passes the same option [Keeta TS] index.js:61450-61468. */
+/** UserClient.initializeNetwork passes the same option [Keeta TS] index.js:61555-61573. */
 function baseNetworkInfoOf(settings: GenesisSettings): BaseNetworkInfo {
 	if (settings.networkDefaultPermission === undefined) {
 		return({});
@@ -147,7 +147,7 @@ function baseNetworkInfoOf(settings: GenesisSettings): BaseNetworkInfo {
 /**
  * Builds the network's first staple with the client's own generator and adds
  * it to the node's ledger. The network address is the first account genesis
- * writes [Keeta TS] index.js:80742-80763, so a ledger holding blocks for it
+ * writes [Keeta TS] index.js:81106-81127, so a ledger holding blocks for it
  * already has a genesis, and a second one would conflict with it.
  */
 export async function addGenesis(node: Node, settings: GenesisSettings): Promise<VoteStaple> {

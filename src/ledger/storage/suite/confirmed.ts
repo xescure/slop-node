@@ -99,7 +99,7 @@ function byBlocksHashDescending(left: VoteStaple, right: VoteStaple): number {
 /**
  * The staple as one that arrived compressed by another zlib, which no
  * rebuild from its votes and blocks reproduces: it decodes alike, and
- * returns exactly these bytes [Keeta TS] index.js:82128-82135, 82168-82179.
+ * returns exactly these bytes [Keeta TS] index.js:82492-82499, 82532-82543.
  */
 function receivedAsCompressedElsewhere(staple: VoteStaple): VoteStaple {
 	return(new lib.Vote.Staple(deflateSync(Buffer.from(staple.toBytes(true)), { level: 1 })));
@@ -349,7 +349,7 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			const cursor = new ChainCursor(network.genesis);
 			await ledger.add(network.genesis);
 
-			// The target is named only as possibly new [Keeta TS] index.js:69389.
+			// The target is named only as possibly new [Keeta TS] index.js:69668.
 			await applyPermissionChanges(network, ledger, cursor, entity, [
 				{ principal, target, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['ACCESS']) }
 			]);
@@ -422,7 +422,7 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 		 * block decoder refuses bytes that differ from that re-encoding; only
 		 * the set the block carries can reach storage, and it reads back as
 		 * carried.
-		 * [Keeta TS] index.js:65663-65686, 75269-75303, 64954-64965
+		 * [Keeta TS] index.js:65772-65795, 75632-75666, 65063-65074
 		 */
 		test('a permission set built with a negative external set is stored as the confirmed block carries it', async function() {
 			const { network, ledger } = await startNetwork();
@@ -680,7 +680,7 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			const mayDeposit = cursor.append(await modifyPermissionsBlock({ account: storage, signer: owner, previous: cursor.previous(storage), network: network.network, principal: holder, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['STORAGE_DEPOSIT']), target: token }));
 			const granted = await confirmedStaple([canHold, mayDeposit], network.representatives);
 			advanceClock(1000);
-			// The token is the principal of the storage account's STORAGE_CAN_HOLD requirement [Keeta TS] index.js:69512-69527.
+			// The token is the principal of the storage account's STORAGE_CAN_HOLD requirement [Keeta TS] index.js:69778-69797.
 			const deposited = await confirmedStaple([cursor.append(await sendBlock({ from: holder, previous: cursor.previous(holder), to: storage, amount: 2n, token, network: network.network }))], network.representatives);
 			for (const staple of [created, issued, moved, granted, deposited]) {
 				advanceClock(1000);
@@ -1131,6 +1131,57 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect(heights[user.publicKeyString.get()]?.height).toBe(chainLengthOf(network.genesis, user));
 		});
 
+		/*
+		 * Upstream's own reads of a staple's effects and permissions go through
+		 * these [Keeta TS] index.js:68525-68548, 71304-71326; each fills in a
+		 * 0 or null for a key that has no row [Keeta TS] index.js:68851-68905.
+		 */
+		test('batched reads answer what the single reads do, each key once, with 0 or null for one without a row', async function() {
+			const { network, storage, ledger } = await startNetwork();
+			const user = requireAt(network.users, 0);
+			const entity = requireAt(network.users, 1);
+			const newcomer = newcomerAccount();
+			const second = requireAt(network.representatives, 1);
+			const cursor = new ChainCursor(network.genesis);
+			await ledger.add(network.genesis);
+			const delegation = cursor.append(await setRepresentativeBlock({ account: user, representative: second, previous: cursor.previous(user), network: network.network }));
+			const grant = cursor.append(await modifyPermissionsBlock({ account: entity, previous: cursor.previous(entity), network: network.network, principal: user, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['ACCESS']) }));
+			await ledger.add(await confirmedStaple([delegation, grant], network.representatives));
+			const base = network.baseToken.publicKeyString.get();
+
+			const read = await readStorage(storage, async function(transaction) {
+				return({
+					balances: await storage.getBalances(transaction, [
+						{ account: user, token: network.baseToken },
+						{ account: newcomer, token: network.baseToken },
+						{ account: user, token: network.baseToken }
+					]),
+					reps: await storage.getAccountReps(transaction, [user, newcomer, user]),
+					weights: await storage.delegatedWeights(transaction, [second, newcomer, second]),
+					heads: await storage.getHeadBlockHashes(transaction, new lib.Account.Set([user, newcomer])),
+					acls: await storage.listACLsForPrincipalEntityPairs(transaction, [
+						{ principal: user, entity },
+						{ principal: user, entity },
+						{ principal: newcomer, entity },
+						{ principal: user, entity: newcomer }
+					])
+				});
+			});
+
+			expect(read.balances).toEqual({
+				[user.publicKeyString.get()]: { [base]: await ledger.getBalance(user, network.baseToken) },
+				[newcomer.publicKeyString.get()]: { [base]: 0n }
+			});
+			expect(Object.fromEntries(Object.entries(read.reps).map(function([account, rep]) {
+				return([account, rep?.publicKeyString.get() ?? null]);
+			}))).toEqual({ [user.publicKeyString.get()]: second.publicKeyString.get(), [newcomer.publicKeyString.get()]: null });
+			expect(read.weights).toEqual({ [second.publicKeyString.get()]: await ledger.votingPower(second), [newcomer.publicKeyString.get()]: 0n });
+			expect(Object.fromEntries(Object.entries(read.heads).map(function([account, head]) {
+				return([account, head?.toString() ?? null]);
+			}))).toEqual({ [user.publicKeyString.get()]: delegation.hash.toString(), [newcomer.publicKeyString.get()]: null });
+			expect(read.acls.map(summarizeACL)).toEqual([rowFor(user, entity, entity, ['ACCESS'])]);
+		});
+
 		test('successor votes filtered to a representative outside the confirming quorum are null', async function() {
 			const { network, ledger } = await startNetwork();
 			const user = requireAt(network.users, 0);
@@ -1152,7 +1203,7 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 		});
 
 		test('an ACL granted to a certificate this node lacks is rejected', async function() {
-			const { network, ledger } = await startNetwork();
+			const { network, storage, ledger } = await startNetwork();
 			const entity = requireAt(network.users, 0);
 			const holder = requireAt(network.users, 1);
 			const cursor = new ChainCursor(network.genesis);
@@ -1179,6 +1230,10 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			expect((await ledger.listACLsByEntity(entity, { principalType: 'CERTIFICATE' })).map(summarizeACL)).toEqual([expected]);
 			expect(await ledger.listACLsByEntity(entity)).toMatchObject([{ principalType: 'CERTIFICATE', principal: { usingCertificate: true } }]);
 			expect(await ledger.listACLsByEntity(entity, { principalType: 'ACCOUNT' })).toEqual([]);
+			// The holder holds the row by its certificate, not as itself, which is all the permission check reads in a batch.
+			expect(await readStorage(storage, function(transaction) {
+				return(storage.listACLsForPrincipalEntityPairs(transaction, [{ principal: holder, entity }]));
+			})).toEqual([]);
 			expect((await ledger.listACLsByPrincipal({ usingCertificate: true, certificate: certificate.hash(), certificateAccount: holder })).map(summarizeACL)).toEqual([expected]);
 		});
 
@@ -1211,7 +1266,7 @@ export function defineConfirmedCases(driver: DriverUnderTest): void {
 			const user = requireAt(network.users, 0);
 			await ledger.add(network.genesis);
 			const before = { user: await ledger.getBalance(user, network.baseToken), token: await ledger.getBalance(network.baseToken, network.baseToken) };
-			// The account signs for itself, so upstream requires no permission of anyone, and touches no account but the account's own [Keeta TS] index.js:69276-69287, 69626-69635.
+			// The account signs for itself, so upstream requires no permission of anyone, and touches no account but the account's own, as it is no storage account [Keeta TS] index.js:69555-69566, 69778-69781, 69932-69949.
 			const set = await operationsBlock({ account: user, previous: headOf(network.genesis, user), network: network.network, operations: [{ type: lib.Block.OperationType.TOKEN_ADMIN_MODIFY_BALANCE, method: lib.Block.AdjustMethod.SET, token: network.baseToken, amount: 1n }] });
 
 			await ledger.add(await confirmedStaple([set], network.representatives));

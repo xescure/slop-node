@@ -102,7 +102,7 @@ export function defineTransactionCases(driver: DriverUnderTest): void {
 			await expect(storage.abortTransaction(aborted)).rejects.toThrow();
 		});
 
-		// [Keeta TS] index.js:69988-69994
+		// [Keeta TS] index.js:70321-70327
 		test('a transaction is read-only unless it is opened for writing, as upstream\'s are', async function() {
 			const { storage } = await startNetwork();
 			const unsaid = await storage.beginTransaction({ identifier: 'suite-unsaid' });

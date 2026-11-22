@@ -11,7 +11,7 @@ import type { APIRequest, Route } from './route.js';
 
 const lib = KeetaNet.lib;
 
-/** The blocks to vote on or quote, each the base64 of its bytes [Keeta TS] index.js:60835-60840. */
+/** The blocks to vote on or quote, each the base64 of its bytes [Keeta TS] index.js:60759-60764. */
 function blocksOf(payload: Payload): Block[] {
 	return(requiredStringList(payload, 'blocks').map(function(encoded): Block {
 		return(new lib.Block(parseBase64(encoded)));
@@ -21,8 +21,8 @@ function blocksOf(payload: Payload): Block[] {
 /**
  * The node's vote for the blocks: a temporary vote, or a permanent one when
  * the request carries the other representatives' votes, paid for with the
- * fee its quote states when it carries one [Keeta TS] index.js:60843-60857,
- * 70048-70051.
+ * fee its quote states when it carries one [Keeta TS] index.js:60767-60781,
+ * 70381-70384.
  * [node-lite] adapted from createNewVote.
  */
 async function createVote(request: APIRequest, body: unknown): Promise<DeclaredResult<DeclaredVoteGroup['_root']['POST']>> {
@@ -40,7 +40,7 @@ async function createVote(request: APIRequest, body: unknown): Promise<DeclaredR
 }
 
 /**
- * The fee the node charges for voting for the blocks [Keeta TS] index.js:70392-70396.
+ * The fee the node charges for voting for the blocks [Keeta TS] index.js:70725-70729.
  * [node-lite] adapted from createNewQuote.
  */
 async function createVoteQuote(request: APIRequest, body: unknown): Promise<DeclaredResult<DeclaredVoteGroup['quote']['POST']>> {
@@ -49,7 +49,7 @@ async function createVoteQuote(request: APIRequest, body: unknown): Promise<Decl
 
 /**
  * The votes the node holds for the block on one ledger, by their ID, null
- * when it holds none [Keeta TS] index.js:60906-60910.
+ * when it holds none [Keeta TS] index.js:60830-60834.
  * [node-lite] adapted from getVotes.
  */
 async function getVotes(request: APIRequest, text: string): Promise<DeclaredResult<DeclaredVoteGroup[':blockhash']['GET']>> {

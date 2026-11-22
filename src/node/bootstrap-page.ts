@@ -9,13 +9,13 @@ import { NODE_VERSION } from '../version.js';
 
 const lib = KeetaNet.lib;
 
-/** The route a representative serves its staples on, below its API endpoint [Keeta TS] index.js:60165. */
+/** The route a representative serves its staples on, below its API endpoint [Keeta TS] index.js:60171. */
 const BOOTSTRAP_ROUTE = '/node/bootstrap/votes';
 
-/** Where a representative answers the votes it holds on a block [Keeta TS] index.js:60891. */
+/** Where a representative answers the votes it holds on a block [Keeta TS] index.js:60815. */
 const VOTES_ROUTE = '/vote';
 
-/** Where a representative answers a block it holds [Keeta TS] index.js:59779. */
+/** Where a representative answers a block it holds [Keeta TS] index.js:59785. */
 const BLOCK_ROUTE = '/node/ledger/block';
 
 const SUCCESS_STATUS = 200;
@@ -40,9 +40,9 @@ function maxPageBytes(limit: number): number {
 	return(MAX_PAGE_BYTES);
 }
 
-/** What one page of a peer's staples asks for [Keeta TS] index.js:60156-60164. */
+/** What one page of a peer's staples asks for [Keeta TS] index.js:60162-60170. */
 export type PageRequest = {
-	/** The peer's API endpoint, as the client prefixes each route with it [Keeta TS] index.js:60576-60577. */
+	/** The peer's API endpoint, as the client prefixes each route with it [Keeta TS] index.js:60491-60492. */
 	readonly endpoint: string;
 	readonly start: Date;
 	readonly limit: number;
@@ -96,7 +96,7 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 	return(typeof value === 'object' && value !== null && !Array.isArray(value));
 }
 
-/** The path below a peer's API endpoint the client requests a page at [Keeta TS] index.js:60576-60605. */
+/** The path below a peer's API endpoint the client requests a page at [Keeta TS] index.js:60491-60520. */
 export function pagePath(request: Omit<PageRequest, 'endpoint'>): string {
 	const query = new URLSearchParams({ start: request.start.toISOString(), limit: String(request.limit) });
 	if (request.bloomFilter !== undefined) {
@@ -123,7 +123,7 @@ function parseJSON(endpoint: string, body: string): unknown {
 /** The most of a peer's error message the node repeats in its log. */
 const MAX_MESSAGE_LENGTH = 200;
 
-/** A representative's error names what went wrong in its message [Keeta TS] index.js:60622-60626. */
+/** A representative's error names what went wrong in its message [Keeta TS] index.js:60537-60541. */
 function errorMessageOf(body: string): string | undefined {
 	try {
 		const parsed: unknown = JSON.parse(body);
@@ -168,8 +168,8 @@ function statusErrorOf(endpoint: string, answer: Answer): PageError {
 
 /**
  * A staple's bytes in base64: a representative writes each staple as JSON
- * with its bytes beside it [Keeta TS] index.js:82240-82244, which the
- * node reads, as the client does [Keeta TS] index.js:60169-60172, so that
+ * with its bytes beside it [Keeta TS] index.js:82604-82608, which the
+ * node reads, as the client does [Keeta TS] index.js:60175-60178, so that
  * it holds exactly the staple the peer sent; a bare base64 string is read
  * alike.
  */
@@ -183,7 +183,7 @@ function stapleBytesOf(written: unknown): string | undefined {
 	return(undefined);
 }
 
-/** The staples of an answer, read as the client reads them [Keeta TS] index.js:60165-60172. */
+/** The staples of an answer, read as the client reads them [Keeta TS] index.js:60171-60178. */
 function staplesOf(endpoint: string, answer: Answer): VoteStaple[] {
 	if (answer.status !== SUCCESS_STATUS) {
 		throw(statusErrorOf(endpoint, answer));
@@ -212,7 +212,7 @@ export function staplesOfPage(endpoint: string, parsed: unknown): VoteStaple[] {
 /** Sends one request to a peer when the peer's pacing lets it. */
 export type Pace = <Result>(request: () => Promise<Result>) => Promise<Result>;
 
-/** The votes a representative answers it holds on a block, none when it holds none [Keeta TS] index.js:60891-60923. */
+/** The votes a representative answers it holds on a block, none when it holds none [Keeta TS] index.js:60815-60847. */
 function votesOf(endpoint: string, parsed: unknown): Vote[] {
 	if (!isRecord(parsed) || !('votes' in parsed)) {
 		throw(new PageError(endpoint, { kind: 'malformed', detail: 'it holds no votes' }));
@@ -237,7 +237,7 @@ function votesOf(endpoint: string, parsed: unknown): Vote[] {
 	}));
 }
 
-/** The block a representative answers it holds, nothing when it holds none [Keeta TS] index.js:59775-59792. */
+/** The block a representative answers it holds, nothing when it holds none [Keeta TS] index.js:59781-59798. */
 function blockOf(endpoint: string, parsed: unknown): Block | undefined {
 	if (!isRecord(parsed) || !('block' in parsed)) {
 		throw(new PageError(endpoint, { kind: 'malformed', detail: 'it holds no block' }));
@@ -294,7 +294,7 @@ export class PageFetcher {
 	 * The staple on the main ledger that holds the block, as the peer holds
 	 * it, or nothing when the peer holds no such staple: its votes on the
 	 * block, then each block they cover, as the client builds a staple
-	 * [Keeta TS] index.js:59799-59839, 60878-60923, 59775-59792, each request
+	 * [Keeta TS] index.js:59805-59845, 60802-60847, 59781-59798, each request
 	 * sent as the pacing lets it. A PageError
 	 * as for a page: a timeout once that many milliseconds have passed for a
 	 * request, or a stop once the signal is aborted.

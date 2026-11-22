@@ -109,7 +109,7 @@ I can't wait to see how Keeta develops, but right now its source code isn't full
 
 ## Status
 
-- Built against `@keetanetwork/keetanet-client` 0.18.8, the same version Keeta's reps run.
+- Built against `@keetanetwork/keetanet-client` 0.19.1, the same version Keeta's reps run.
 - Replicas and peering nodes run on mainnet, reps on testnet only.
 - Tested against the upstream code, and checked against the mainnet reps' own answers.
 - A peering node runs live at [node.xescu.re][live-node].

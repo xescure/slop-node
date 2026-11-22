@@ -3,10 +3,10 @@
 # Node.js and the PostgreSQL server binaries, which "nix develop" provides.
 #
 # Every representative charges a fee. The client's recover() builds the fee
-# block the votes ask for only when it is given generateFeeBlock (upstream
-# client [Keeta TS] index.js:60400-60409, 61846-61848), and send() recovers
-# that way after LEDGER_SUCCESSOR_VOTE_EXISTS [Keeta TS] index.js:61634-61643,
-# so pass one, as "up" prints.
+# block the votes ask for with its own generator unless the call names one
+# (upstream client [Keeta TS] index.js:61032-61051, 61527-61533,
+# 61951-61957), and send() recovers that way after LEDGER_SUCCESSOR_VOTE_EXISTS
+# [Keeta TS] index.js:61739-61748, as "up" prints.
 set -euo pipefail
 
 if [ "$#" -lt 1 ] || [ "$#" -gt 2 ] || { [ "$1" != up ] && [ "$1" != down ]; }; then

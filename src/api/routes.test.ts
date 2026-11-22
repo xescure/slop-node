@@ -103,7 +103,7 @@ function blockHashes(body: unknown): readonly string[] {
 
 /**
  * Every page of a history, following nextKey from the first page until an
- * empty page, as the client pages [Keeta TS] index.js:59964-59986.
+ * empty page, as the client pages [Keeta TS] index.js:59970-59992.
  */
 async function allPages(node: RunningLocalNode, path: string, limit: number): Promise<readonly (readonly string[])[]> {
 	const pages: (readonly string[])[] = [];
@@ -338,7 +338,7 @@ describe('requests a representative answers without a failure', function() {
 	test('an empty entity list, as the client sends one, lists the permissions on every entity', async function() {
 		const node = await populated();
 		const user = keyOf(node.user);
-		// The client joins no entities into an empty path segment [Keeta TS] index.js:59585-59594, 60948-60950.
+		// The client joins no entities into an empty path segment [Keeta TS] index.js:59591-59600, 60872-60874.
 		const everyEntity = await request(node, `/node/ledger/account/${user}/acl/`);
 		const withInfo = await request(node, `/node/ledger/account/${user}/acl/additional/`);
 
@@ -361,7 +361,7 @@ describe('requests a representative answers without a failure', function() {
 
 	test('a block is found on either ledger when both are asked, as the client asks for the blocks of an account it recovers', async function() {
 		const node = await populated();
-		// [Keeta TS] index.js:60341-60343
+		// [Keeta TS] index.js:60347-60349
 		function blockAt(hash: string, side: string): Promise<HTTPAnswer> {
 			return(request(node, `/node/ledger/block/${hash}?side=${side}`));
 		}
@@ -398,9 +398,9 @@ describe('requests a representative answers without a failure', function() {
 			preferUpdates: text(captured, 'preferUpdates'),
 			signature: text(captured, 'signature')
 		};
-		// A peer that greets the node before the node has reached it is kept here [Keeta TS] index.js:74711-74715.
+		// A peer that greets the node before the node has reached it is kept here [Keeta TS] index.js:75074-75078.
 		await node.node.switch.config.kv.set('potentialPeers', peer.key, peer);
-		// Seen once, long ago; a peer never seen is listed nowhere [Keeta TS] index.js:73741-73745.
+		// Seen once, long ago; a peer never seen is listed nowhere [Keeta TS] index.js:74104-74108.
 		await node.node.switch.config.kv.set('lastSeenPeers', peer.key, '0');
 
 		const answer = await request(node, '/node/ledger/representatives');
@@ -454,7 +454,7 @@ describe('requests a representative answers without a failure', function() {
 		const everything = list((await request(node, '/node/bootstrap/votes?start=1970-01-01T00%3A00%3A00.000Z')).body, 'voteStaples');
 		const genesis = base64(node.network.genesis.toBytes());
 		const filter = lib.Utils.Bloom.BloomFilter.create(16, 0.001);
-		// The ledger asks the filter about the staple's bytes [Keeta TS] index.js:70723-70725.
+		// The ledger asks the filter about the staple's bytes [Keeta TS] index.js:71056-71058.
 		filter.add(node.network.genesis.toBytes());
 		const serialized = lib.Utils.Bloom.serializeBloomFilter(filter);
 
@@ -754,7 +754,7 @@ describe('the reads of a request', function() {
 		const section: string = `api-${SECRET}`;
 		vi.spyOn(lib.Ledger.prototype, 'runReadOnly').mockImplementation(function(): Promise<never> {
 			return(Promise.resolve().then(function(): never {
-				new lib.Timing.RequestTiming().startTime(section);
+				new lib.RequestTiming().startTime(section);
 				throw(new Error(`the timing accepts the section name ${section}`));
 			}));
 		});

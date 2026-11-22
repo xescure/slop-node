@@ -124,7 +124,7 @@ describe('a refusal names only what the error\'s JSON writes as the client reads
 /** The error the request's timing raises for a section named as given. */
 function timingError(section: string): unknown {
 	try {
-		new lib.Timing.RequestTiming().startTime(section);
+		new lib.RequestTiming().startTime(section);
 	} catch (error) {
 		return(error);
 	}

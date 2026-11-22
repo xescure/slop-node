@@ -122,7 +122,7 @@ const VOTING_RULES: { readonly [Network in Networks]: VotingRule<Network> } = {
 	staging: 'alone'
 };
 
-/** The write mode a node votes and quotes in; in any other it does neither [Keeta TS] index.js:70058-70060, 71208-71210. */
+/** The write mode a node votes and quotes in; in any other it does neither [Keeta TS] index.js:70391-70393, 71571-71573. */
 type VotingWriteMode = Extract<LedgerWriteMode, 'read-write'>;
 
 function votesIn(mode: LedgerWriteMode): mode is VotingWriteMode {
@@ -285,7 +285,7 @@ export class ConfigError extends Error {
 
 /** The network the node keeps the ledger of. */
 export type NetworkSelection =
-	/** Network 0, which the client validates without a configuration of its own [Keeta TS] index.js:62340-62342. */
+	/** Network 0, which the client validates without a configuration of its own [Keeta TS] index.js:62449-62451. */
 	| { readonly kind: 'local'; readonly network: 0n }
 	| { readonly kind: 'known'; readonly alias: Networks; readonly network: bigint };
 
@@ -319,7 +319,7 @@ export type EnvironmentConfig = {
 	readonly network: NetworkSelection;
 	/** The key the node votes with. */
 	readonly representative: Account;
-	/** Public only, as upstream requires [Keeta TS] index.js:72466-72468. */
+	/** Public only, as upstream requires [Keeta TS] index.js:72829-72831. */
 	readonly initialTrustedAccount: Account;
 	readonly ledgerWriteMode: LedgerWriteMode;
 	readonly log: LogSettings;
@@ -335,7 +335,7 @@ export type EnvironmentConfig = {
 	readonly bootstrapMinIntervalMilliseconds: number;
 	readonly peerLimits: PeerLimits;
 	readonly fee: FeePolicy;
-	/** Off by default, as upstream has it [Keeta TS] index.js:70019. */
+	/** Off by default, as upstream has it [Keeta TS] index.js:70352. */
 	readonly enableTokenAdminModifyBalance: boolean;
 	/** Whether the node, once caught up with its peers, fills in the decoded rows of the staples stored before it kept them. */
 	readonly backfillProjection: boolean;
@@ -345,13 +345,13 @@ const DEFAULT_LOG_LEVEL: LogTargetLevel = 'INFO';
 const DEFAULT_LOG_FORMAT: LogFormat = 'text';
 const DEFAULT_LEDGER_WRITE_MODE: LedgerWriteMode = 'read-write';
 const DEFAULT_LISTEN: ListenAddress = { ip: '127.0.0.1', port: 0 };
-/** Upstream's switch republishes over the WebSocket unless told otherwise [Keeta TS] index.js:72949. */
+/** Upstream's switch republishes over the WebSocket unless told otherwise [Keeta TS] index.js:73312. */
 const DEFAULT_PREFER_UPDATES: P2PUpdateOptions = 'websocket';
 
 /*
  * Upstream gives network 0 no alias of its own, while a node needs one; the
  * test helpers name it "test" as well. The alias only labels the node's log
- * [Keeta TS] index.js:72495.
+ * [Keeta TS] index.js:72858.
  */
 const LOCAL_NETWORK_ALIAS: Networks = 'test';
 
@@ -367,21 +367,21 @@ export const DEFAULT_KEETA_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS = 1000;
 /** A pass over a peer ends after two minutes (src/node/bootstrap-pass.ts), so a longer rest would leave it a request or two. */
 export const MAX_BOOTSTRAP_MIN_INTERVAL_MILLISECONDS = 60_000;
 
-/** A seed is 32 bytes [Keeta TS] index.js:62725, written in hexadecimal. */
+/** A seed is 32 bytes [Keeta TS] index.js:62834, written in hexadecimal. */
 const SEED = /^[0-9a-f]{64}$/i;
 const SEED_EXPECTED = '64 hexadecimal digits';
 
 const DECIMAL = /^(0|[1-9][0-9]*)$/;
 const HEXADECIMAL = /^0x[0-9a-f]+$/i;
 
-/** Seed indexes fit in 32 bits [Keeta TS] index.js:62729-62731. */
+/** Seed indexes fit in 32 bits [Keeta TS] index.js:62838-62840. */
 const MAX_SEED_INDEX = 0xffffffff;
 
 /*
  * Every key of the fee seed range is derived as the configuration is read,
  * at about half a millisecond each, so the whole 32-bit range would take
  * weeks; this many take about half a second. A vote pays one of them, picked
- * at random [Keeta TS] index.js:71303-71316, so more only spread the fees
+ * at random [Keeta TS] index.js:71666-71679, so more only spread the fees
  * thinner.
  */
 export const MAX_FEE_SEED_ACCOUNTS = 1024;
@@ -517,7 +517,7 @@ function parseLogLevel(text: string): LogTargetLevel {
 	return(level);
 }
 
-/** Matched regardless of case, as upstream matches its own log filter [Keeta TS] index.js:71920-71922. */
+/** Matched regardless of case, as upstream matches its own log filter [Keeta TS] index.js:72283-72285. */
 function parseLogFilter(text: string): RegExp {
 	try {
 		return(new RegExp(text, 'i'));
@@ -562,7 +562,7 @@ function networkWithID(id: bigint): NetworkSelection | undefined {
 /**
  * A name, or a network ID in decimal or hexadecimal. Only the IDs the client
  * knows are accepted: it validates the blocks of no other network
- * [Keeta TS] index.js:62327-62355.
+ * [Keeta TS] index.js:62436-62464.
  */
 function parseNetwork(text: string): NetworkSelection {
 	if (text === 'local') {
@@ -670,7 +670,7 @@ const FIT_TO_ADVERTISE = 'without a user, password, query, fragment, "|" or ","'
  * An endpoint the node advertises is printed in its peer, which another node
  * must read back, and is sent to every peer, so it holds no separator of the
  * peer form and no user or password. The client requests each route at the
- * endpoint followed by the route's path [Keeta TS] index.js:60576-60577,
+ * endpoint followed by the route's path [Keeta TS] index.js:60491-60492,
  * which a query or fragment would cut off.
  */
 function isFitToAdvertise(text: string, url: URL): boolean {
@@ -736,7 +736,7 @@ function isAutomatic(variable: PeerVariable, entries: readonly string[]): boolea
 /** Keeta's representatives on each of its networks, which "auto" names, and which a node names when it is given no peers. */
 export type KnownRepresentatives = (network: Networks) => readonly Representative[];
 
-/** The representatives the client knows for each of Keeta's networks [Keeta TS] index.js:62358-62400. */
+/** The representatives the client knows for each of Keeta's networks [Keeta TS] index.js:62467-62509. */
 export const CLIENT_REPRESENTATIVES: KnownRepresentatives = function(network: Networks): readonly Representative[] {
 	return(NetworkConfig.getDefaultConfig(network).representatives);
 };
@@ -788,9 +788,9 @@ const MIN_PEER_FIELDS = 2;
 const MAX_PEER_FIELDS = 4;
 
 /**
- * A peer in the form of upstream's peer record [Keeta TS] index.js:73059-73135.
+ * A peer in the form of upstream's peer record [Keeta TS] index.js:73422-73498.
  * A signature must be the peer's own over what is written with it, as the
- * switch checks one [Keeta TS] index.js:72976-73015; without one the record
+ * switch checks one [Keeta TS] index.js:73339-73378; without one the record
  * carries none, which upstream's typings allow (lib/p2p.d.ts P2PPeerRep).
  */
 function parseManualPeer(entry: string): ManualPeer {
@@ -818,7 +818,7 @@ function parseManualPeer(entry: string): ManualPeer {
 	try {
 		verified = manualPeerOf({ ...unsigned, key: key.publicKeyString.get(), signature });
 	} catch (error: unknown) {
-		// Upstream reads the signature as ASN.1 before verifying it, and throws for bytes that are none [Keeta TS] index.js:72985.
+		// Upstream reads the signature as ASN.1 before verifying it, and throws for bytes that are none [Keeta TS] index.js:73348.
 		throw(new ConfigError(problem, { cause: error }));
 	}
 	if (verified === undefined) {
@@ -873,7 +873,7 @@ const BOOTSTRAP_PEER_FORM = `an http:// or https:// API URL ${FIT_TO_ADVERTISE}`
 
 /**
  * An API endpoint, which the node requests each page at, followed by the
- * route's path, as the client does [Keeta TS] index.js:60576-60577, and names
+ * route's path, as the client does [Keeta TS] index.js:60491-60492, and names
  * in its log, so it holds no user or password.
  */
 function parseBootstrapPeer(entry: string): string {
@@ -980,7 +980,7 @@ function parseOnOff(variable: ConfigVariable, text: string): boolean {
 const FEE_SEED_VARIABLES = ['KEETANET_LOCAL_NODE_FEE_SEED', 'KEETANET_LOCAL_NODE_FEE_SEED_MIN_INDEX', 'KEETANET_LOCAL_NODE_FEE_SEED_MAX_INDEX'] as const satisfies readonly ConfigVariable[];
 const FEE_RECIPIENT_VARIABLES = [...FEE_SEED_VARIABLES, 'KEETANET_LOCAL_NODE_FEE_ACCOUNTS', 'KEETANET_LOCAL_NODE_FEE_TOKEN'] as const satisfies readonly ConfigVariable[];
 
-/** Accounts or storage accounts, as upstream pays fees to [Keeta TS] index.js:71303. [node-lite] adapted from getFeeConfigFromEnv. */
+/** Accounts or storage accounts, as upstream pays fees to [Keeta TS] index.js:71666. [node-lite] adapted from getFeeConfigFromEnv. */
 function parseFeeAccountList(text: string): FeeAccount[] {
 	const variable = 'KEETANET_LOCAL_NODE_FEE_ACCOUNTS';
 	const entries = text.split(',').map(function(entry): string {
@@ -1085,8 +1085,8 @@ function readFeePolicy(reader: EnvironmentReader): FeePolicy {
  * A node only following a public network reads it by its bootstrap over
  * HTTP alone, so that the follower beside the parity tools greets no one.
  * A node in no-voting mode is open on every network: it neither votes nor
- * quotes [Keeta TS] index.js:70058-70060, 71208-71210, and only relays the
- * staples it adds [Keeta TS] index.js:72512-72536, 72543-72598. Network 0 is
+ * quotes [Keeta TS] index.js:70391-70393, 71571-71573, and only relays the
+ * staples it adds [Keeta TS] index.js:72875-72899, 72906-72961. Network 0 is
  * this node's own, open in every mode.
  */
 type P2PClosure =
@@ -1320,7 +1320,7 @@ export function getConfigFromEnv(environment: Environment, representatives: Know
 /** What the storage choice opens, and where the node logs. */
 export type NodeResources = {
 	readonly storageDriver: LocalNodeConfig['ledger']['storageDriver'];
-	/** Null keeps the statistics and peers in memory [Keeta TS] index.js:73662, 75505-75508. */
+	/** Null keeps the statistics and peers in memory [Keeta TS] index.js:74025, 75868-75871. */
 	readonly kv: LocalNodeConfig['stats']['kv'];
 	readonly log: NonNullable<LocalNodeConfig['log']>;
 };
@@ -1336,7 +1336,7 @@ function networkAliasOf(selection: NetworkSelection): Networks {
 	}
 }
 
-/** The switch greets peers with "http" when it republishes over HTTP [Keeta TS] index.js:74675. */
+/** The switch greets peers with "http" when it republishes over HTTP [Keeta TS] index.js:75038. */
 function usesHTTPRepublish(preference: P2PUpdateOptions): boolean {
 	switch (preference) {
 		case 'http':

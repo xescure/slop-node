@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "KeetaNet node HTTP API",
-    "version": "0.18.8",
-    "description": "The HTTP API of a KeetaNet node as described by version 0.18.8 of @keetanetwork/keetanet-client. The routes are those of the \"rootTree\" in the package's API typings (api/index.d.ts); the request and response shapes are the typed values as the package serializes them. Citations name the package's bundle, client/index.js, by line ([Keeta TS] index.js:N), or its typings by file. A response body is the handler's result passed through the package's JSON conversion with binary encodings added, which is why blocks, votes, quotes and staples at the top of a response carry \"$binary\" (the client decodes them from it, [Keeta TS] index.js:59743, 59790, 59887, 59968, 60170, 60212, 60253, 60535, 60801, 60806, 60914). Every route is served below /api [Keeta TS] index.js:62380."
+    "version": "0.19.1",
+    "description": "The HTTP API of a KeetaNet node as described by version 0.19.1 of @keetanetwork/keetanet-client. The routes are those of the \"rootTree\" in the package's API typings (api/index.d.ts); the request and response shapes are the typed values as the package serializes them. Citations name the package's bundle, client/index.js, by line ([Keeta TS] index.js:N), or its typings by file. A response body is the handler's result passed through the package's JSON conversion with binary encodings added, which is why blocks, votes, quotes and staples at the top of a response carry \"$binary\" (the client decodes them from it, [Keeta TS] index.js:59749, 59796, 59893, 59974, 60176, 60218, 60259, 60450, 60725, 60730, 60838). Every route is served below /api [Keeta TS] index.js:62489."
   },
   "jsonSchemaDialect": "https://spec.openapis.org/oas/3.1/dialect/base",
   "paths": {
@@ -11,7 +11,7 @@
       "post": {
         "operationId": "createVote",
         "summary": "Ask the node to vote for blocks",
-        "description": "The blocks are ASN.1 encoded and base64 encoded; \"votes\" carries the votes of other representatives when a permanent vote is requested, and \"quote\" a fee quote previously issued by this node [Keeta TS] index.js:60846-60857, 60768. The client reads the vote from \"vote.$binary\" [Keeta TS] index.js:60799-60802.",
+        "description": "The blocks are ASN.1 encoded and base64 encoded; \"votes\" carries the votes of other representatives when a permanent vote is requested, and \"quote\" a fee quote previously issued by this node [Keeta TS] index.js:60770-60781, 60692. The client reads the vote from \"vote.$binary\" [Keeta TS] index.js:60723-60726.",
         "requestBody": {
           "required": true,
           "content": {
@@ -21,13 +21,13 @@
                 "required": ["blocks"],
                 "properties": {
                   "blocks": {
-                    "description": "At least one: the ledger issues no vote for an empty list [Keeta TS] index.js:70048-70051.",
+                    "description": "At least one: the ledger issues no vote for an empty list [Keeta TS] index.js:70381-70384.",
                     "type": "array",
                     "minItems": 1,
                     "items": { "$ref": "#/components/schemas/Base64" }
                   },
                   "votes": {
-                    "description": "When the client sends it, it always sends at least one: it refuses to ask with an empty list [Keeta TS] index.js:60852-60854.",
+                    "description": "When the client sends it, it always sends at least one: it refuses to ask with an empty list [Keeta TS] index.js:60776-60778.",
                     "type": "array",
                     "minItems": 1,
                     "items": { "$ref": "#/components/schemas/Base64" }
@@ -66,7 +66,7 @@
       "post": {
         "operationId": "createVoteQuote",
         "summary": "Ask the node to quote its fee for voting for blocks",
-        "description": "The blocks are ASN.1 encoded and base64 encoded [Keeta TS] index.js:60835-60840. The client reads the quote from \"quote.$binary\" [Keeta TS] index.js:60804-60807.",
+        "description": "The blocks are ASN.1 encoded and base64 encoded [Keeta TS] index.js:60759-60764. The client reads the quote from \"quote.$binary\" [Keeta TS] index.js:60728-60731.",
         "requestBody": {
           "required": true,
           "content": {
@@ -76,7 +76,7 @@
                 "required": ["blocks"],
                 "properties": {
                   "blocks": {
-                    "description": "The client sends the list it is given [Keeta TS] index.js:60835-60840, and the ledger's quote, unlike its vote, makes no check that it holds a block [Keeta TS] index.js:70392-70396.",
+                    "description": "The client sends the list it is given [Keeta TS] index.js:60759-60764, and the ledger's quote, unlike its vote, makes no check that it holds a block [Keeta TS] index.js:70725-70729.",
                     "type": "array",
                     "items": { "$ref": "#/components/schemas/Base64" }
                   }
@@ -116,7 +116,7 @@
       "get": {
         "operationId": "getVotes",
         "summary": "The votes the node holds for a block",
-        "description": "\"votes\" is null when the node holds no votes for the block [Keeta TS] index.js:60906-60910.",
+        "description": "\"votes\" is null when the node holds no votes for the block [Keeta TS] index.js:60830-60834.",
         "parameters": [
           { "$ref": "#/components/parameters/Side" }
         ],
@@ -180,7 +180,7 @@
       "post": {
         "operationId": "publishVoteStaple",
         "summary": "Publish a vote staple to the node",
-        "description": "\"votesAndBlocks\" is the staple's binary form, base64 encoded [Keeta TS] index.js:59478-59482.",
+        "description": "\"votesAndBlocks\" is the staple's binary form, base64 encoded [Keeta TS] index.js:59484-59488.",
         "requestBody": {
           "required": true,
           "content": {
@@ -272,27 +272,27 @@
       "get": {
         "operationId": "getVoteStaplesAfter",
         "summary": "Vote staples added to the node's ledger since a moment",
-        "description": "Pages through the ledger by moment; a page is empty once every staple has been returned [Keeta TS] index.js:60130-60172.",
+        "description": "Pages through the ledger by moment; a page is empty once every staple has been returned [Keeta TS] index.js:60136-60178.",
         "parameters": [
           {
             "name": "start",
             "in": "query",
             "required": true,
-            "description": "The moment to return staples after, as the client writes a date [Keeta TS] index.js:60156-60158. The API error codes include START_MISSING and INVALID_START [Keeta TS] index.js:67012-67020.",
+            "description": "The moment to return staples after, as the client writes a date [Keeta TS] index.js:60162-60164. The API error codes include START_MISSING and INVALID_START [Keeta TS] index.js:67121-67129.",
             "schema": { "$ref": "#/components/schemas/Date" }
           },
           {
             "name": "limit",
             "in": "query",
             "required": false,
-            "description": "The largest number of staples to return, in decimal [Keeta TS] index.js:60159-60161.",
+            "description": "The largest number of staples to return, in decimal [Keeta TS] index.js:60165-60167.",
             "schema": { "$ref": "#/components/schemas/DecimalCount" }
           },
           {
             "name": "bloomFilter",
             "in": "query",
             "required": false,
-            "description": "A serialized bloom filter of staples already received, which the node leaves out [Keeta TS] index.js:60141-60144, 60162-60164.",
+            "description": "A serialized bloom filter of staples already received, which the node leaves out [Keeta TS] index.js:60147-60150, 60168-60170.",
             "schema": { "type": "string" }
           }
         ],
@@ -376,7 +376,7 @@
       "get": {
         "operationId": "getBlockByHash",
         "summary": "A block by its hash",
-        "description": "\"block\" is null when the ledger side holds no such block [Keeta TS] index.js:59787-59789.",
+        "description": "\"block\" is null when the ledger side holds no such block [Keeta TS] index.js:59793-59795.",
         "parameters": [
           { "$ref": "#/components/parameters/BlockSide" }
         ],
@@ -408,7 +408,7 @@
       "get": {
         "operationId": "getBlockSuccessor",
         "summary": "The block that follows a block on its account's chain",
-        "description": "\"successorBlock\" is null when the node knows no successor [Keeta TS] index.js:60247-60255.",
+        "description": "\"successorBlock\" is null when the node knows no successor [Keeta TS] index.js:60253-60261.",
         "responses": {
           "200": {
             "description": "The requested hash and its successor.",
@@ -434,7 +434,7 @@
       "get": {
         "operationId": "getRepresentative",
         "summary": "The node's own representative and its weight",
-        "description": "The API error codes include REP_MISSING [Keeta TS] index.js:67012-67020.",
+        "description": "The API error codes include REP_MISSING [Keeta TS] index.js:67121-67129.",
         "responses": {
           "200": {
             "description": "The representative and its weight.",
@@ -454,7 +454,7 @@
           "name": "rep",
           "in": "path",
           "required": true,
-          "description": "The representative's account [Keeta TS] index.js:60001-60006.",
+          "description": "The representative's account [Keeta TS] index.js:60007-60012.",
           "schema": { "$ref": "#/components/schemas/Account" }
         }
       ],
@@ -537,7 +537,7 @@
           "name": "accounts",
           "in": "path",
           "required": true,
-          "description": "Accounts separated by commas [Keeta TS] index.js:60948-60950.",
+          "description": "Accounts separated by commas [Keeta TS] index.js:60872-60874.",
           "schema": { "$ref": "#/components/schemas/AccountList" }
         }
       ],
@@ -546,7 +546,7 @@
         "summary": "The state of several accounts",
         "responses": {
           "200": {
-            "description": "One state per requested account; the client matches them by \"account\" [Keeta TS] index.js:59569-59572.",
+            "description": "One state per requested account; the client matches them by \"account\" [Keeta TS] index.js:59575-59578.",
             "content": {
               "application/json": {
                 "schema": {
@@ -587,7 +587,7 @@
       "get": {
         "operationId": "getAccountHead",
         "summary": "The head block of an account's chain and its height",
-        "description": "\"block\" and \"height\" are null when the account has no blocks [Keeta TS] index.js:59740-59742.",
+        "description": "\"block\" and \"height\" are null when the account has no blocks [Keeta TS] index.js:59746-59748.",
         "responses": {
           "200": {
             "description": "The account, its head block and its height.",
@@ -622,13 +622,13 @@
       "get": {
         "operationId": "getAccountChain",
         "summary": "The blocks of an account's chain, newest first",
-        "description": "Pages through the chain, newest first, from \"start\" down to and including \"end\"; \"nextKey\" is the \"start\" of the next page, which may be \"end\" itself, and null once the chain or the range is exhausted [Keeta TS] index.js:59865-59896.",
+        "description": "Pages through the chain, newest first, from \"start\" down to and including \"end\"; \"nextKey\" is the \"start\" of the next page, which may be \"end\" itself, and null once the chain or the range is exhausted [Keeta TS] index.js:59871-59902.",
         "parameters": [
           {
             "name": "start",
             "in": "query",
             "required": false,
-            "description": "The hash of the block to start from, or HEAD for the account's head block [Keeta TS] index.js:59868-59874.",
+            "description": "The hash of the block to start from, or HEAD for the account's head block [Keeta TS] index.js:59874-59880.",
             "schema": {
               "oneOf": [
                 { "const": "HEAD" },
@@ -640,14 +640,14 @@
             "name": "end",
             "in": "query",
             "required": false,
-            "description": "The hash of the block to stop at, which the page includes [Keeta TS] index.js:59875-59877.",
+            "description": "The hash of the block to stop at, which the page includes [Keeta TS] index.js:59881-59883.",
             "schema": { "$ref": "#/components/schemas/HashInput" }
           },
           {
             "name": "limit",
             "in": "query",
             "required": false,
-            "description": "The largest number of blocks to return, in decimal; the client asks for at most 200 [Keeta TS] index.js:59870.",
+            "description": "The largest number of blocks to return, in decimal; the client asks for at most 200 [Keeta TS] index.js:59876.",
             "schema": { "$ref": "#/components/schemas/DecimalCount" }
           }
         ],
@@ -777,7 +777,7 @@
           "name": "token",
           "in": "path",
           "required": true,
-          "description": "The token's account [Keeta TS] index.js:59650-59658.",
+          "description": "The token's account [Keeta TS] index.js:59656-59664.",
           "schema": { "$ref": "#/components/schemas/Account" }
         }
       ],
@@ -854,7 +854,7 @@
       "get": {
         "operationId": "listACLsByEntity",
         "summary": "The permissions any principal holds on an account as entity",
-        "description": "The path's account is the entity [Keeta TS] index.js:59634-59641.",
+        "description": "The path's account is the entity [Keeta TS] index.js:59640-59647.",
         "responses": {
           "200": {
             "description": "The ACL rows.",
@@ -896,7 +896,7 @@
       "get": {
         "operationId": "listACLsByPrincipalWithInfoForEntities",
         "summary": "The permissions granted to an account as principal on the listed entities, with each entity's info and balances",
-        "description": "The client reads each entry's entity, info, balances and principals [Keeta TS] index.js:59615-59624.",
+        "description": "The client reads each entry's entity, info, balances and principals [Keeta TS] index.js:59621-59630.",
         "responses": {
           "200": {
             "description": "The principal and its access per entity.",
@@ -917,7 +917,7 @@
       "get": {
         "operationId": "getAccountCertificates",
         "summary": "The certificates of an account",
-        "description": "Each certificate and intermediate is a string the client parses as a certificate [Keeta TS] index.js:61044-61055.",
+        "description": "Each certificate and intermediate is a string the client parses as a certificate [Keeta TS] index.js:60968-60979.",
         "responses": {
           "200": {
             "description": "The account and its certificates.",
@@ -957,14 +957,14 @@
           "name": "certificateHash",
           "in": "path",
           "required": true,
-          "description": "The certificate's hash [Keeta TS] index.js:59705-59716.",
+          "description": "The certificate's hash [Keeta TS] index.js:59711-59722.",
           "schema": { "$ref": "#/components/schemas/HashInput" }
         }
       ],
       "get": {
         "operationId": "getCertificateByHash",
         "summary": "One certificate of an account",
-        "description": "\"certificate\" and \"intermediates\" are null when the account has no such certificate [Keeta TS] index.js:59717-59719.",
+        "description": "\"certificate\" and \"intermediates\" are null when the account has no such certificate [Keeta TS] index.js:59723-59725.",
         "responses": {
           "200": {
             "description": "The certificate and its intermediates.",
@@ -1008,7 +1008,7 @@
       "get": {
         "operationId": "getAccountPendingBlock",
         "summary": "The block of an account the node holds on its side ledger, awaiting votes",
-        "description": "\"block\" is null when nothing is pending [Keeta TS] index.js:60209-60218.",
+        "description": "\"block\" is null when nothing is pending [Keeta TS] index.js:60215-60224.",
         "responses": {
           "200": {
             "description": "The account and its pending block.",
@@ -1037,14 +1037,14 @@
           "name": "idempotent",
           "in": "path",
           "required": true,
-          "description": "The block's idempotent key, base64 encoded [Keeta TS] index.js:60518-60524.",
+          "description": "The block's idempotent key, base64 encoded [Keeta TS] index.js:60433-60439.",
           "schema": { "$ref": "#/components/schemas/Base64" }
         }
       ],
       "get": {
         "operationId": "getBlockFromIdempotent",
         "summary": "The block an account published with an idempotent key",
-        "description": "\"block\" is null when the account has no block with the key [Keeta TS] index.js:60532-60534.",
+        "description": "\"block\" is null when the account has no block with the key [Keeta TS] index.js:60447-60449.",
         "parameters": [
           { "$ref": "#/components/parameters/Side" }
         ],
@@ -1072,7 +1072,7 @@
       "post": {
         "operationId": "handleMessage",
         "summary": "Deliver a peer-to-peer message over HTTP",
-        "description": "A representative that prefers updates over HTTP receives peer-to-peer messages here; \"greeting\" is the sender's own peer record [Keeta TS] index.js:73343-73364, 73939-73947.",
+        "description": "A representative that prefers updates over HTTP receives peer-to-peer messages here; \"greeting\" is the sender's own peer record [Keeta TS] index.js:73706-73727, 74302-74310.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1082,7 +1082,7 @@
                 "required": ["message", "greeting"],
                 "properties": {
                   "message": {
-                    "description": "The peer-to-peer message as JSON text [Keeta TS] index.js:73359.",
+                    "description": "The peer-to-peer message as JSON text [Keeta TS] index.js:73722.",
                     "type": "string"
                   },
                   "greeting": { "$ref": "#/components/schemas/Peer" }
@@ -1122,28 +1122,28 @@
         "name": "account",
         "in": "path",
         "required": true,
-        "description": "The account, as its public key string [Keeta TS] index.js:59543-59550.",
+        "description": "The account, as its public key string [Keeta TS] index.js:59549-59556.",
         "schema": { "$ref": "#/components/schemas/Account" }
       },
       "BlockhashPath": {
         "name": "blockhash",
         "in": "path",
         "required": true,
-        "description": "The block's hash [Keeta TS] index.js:59775-59786.",
+        "description": "The block's hash [Keeta TS] index.js:59781-59792.",
         "schema": { "$ref": "#/components/schemas/HashInput" }
       },
       "EntityList": {
         "name": "entityList",
         "in": "path",
         "required": true,
-        "description": "Entity accounts separated by commas [Keeta TS] index.js:59585-59594, 60948-60950.",
+        "description": "Entity accounts separated by commas [Keeta TS] index.js:59591-59600, 60872-60874.",
         "schema": { "$ref": "#/components/schemas/AccountList" }
       },
       "Side": {
         "name": "side",
         "in": "query",
         "required": false,
-        "description": "Which ledger to read: \"main\" holds what has been voted for permanently, \"side\" what is still awaiting votes [Keeta TS] index.js:68904-68909, 59775-59786. The API error codes include INVALID_SIDE [Keeta TS] index.js:67012-67020.",
+        "description": "Which ledger to read: \"main\" holds what has been voted for permanently, \"side\" what is still awaiting votes [Keeta TS] index.js:69190-69195, 59781-59792. The API error codes include INVALID_SIDE [Keeta TS] index.js:67121-67129.",
         "schema": {
           "type": "string",
           "enum": ["main", "side"]
@@ -1153,7 +1153,7 @@
         "name": "side",
         "in": "query",
         "required": false,
-        "description": "Which ledger to find the block on: \"main\", \"side\", or \"both\", which the client asks for when it recovers an account [Keeta TS] index.js:60341-60343, and which the ledger reads from either [Keeta TS] index.js:70538-70541, 68704. The API error codes include INVALID_SIDE [Keeta TS] index.js:67012-67020.",
+        "description": "Which ledger to find the block on: \"main\", \"side\", or \"both\", which the client asks for when it recovers an account [Keeta TS] index.js:60347-60349, and which the ledger reads from either [Keeta TS] index.js:70871-70874, 70624, 70651. The API error codes include INVALID_SIDE [Keeta TS] index.js:67121-67129.",
         "schema": {
           "type": "string",
           "enum": ["main", "side", "both"]
@@ -1163,20 +1163,20 @@
         "name": "start",
         "in": "query",
         "required": false,
-        "description": "The staple the page continues after, as the hash of its blocks: the \"nextKey\" of the previous page [Keeta TS] index.js:59946-59949, 59976-59980.",
+        "description": "The staple the page continues after, as the hash of its blocks: the \"nextKey\" of the previous page [Keeta TS] index.js:59952-59955, 59982-59986.",
         "schema": { "$ref": "#/components/schemas/HashInput" }
       },
       "HistoryLimit": {
         "name": "limit",
         "in": "query",
         "required": false,
-        "description": "The largest number of staples to return, in decimal [Keeta TS] index.js:59943-59946. The API error codes include LIMIT_NOT_NUMBER, LIMIT_NOT_GREATER_THAN_ZERO and INVALID_LIMIT [Keeta TS] index.js:67012-67020.",
+        "description": "The largest number of staples to return, in decimal [Keeta TS] index.js:59949-59952. The API error codes include LIMIT_NOT_NUMBER, LIMIT_NOT_GREATER_THAN_ZERO and INVALID_LIMIT [Keeta TS] index.js:67121-67129.",
         "schema": { "$ref": "#/components/schemas/DecimalCount" }
       }
     },
     "responses": {
       "Error": {
-        "description": "A failure of the whole request: any non-2xx status; representatives use 500, for a request they refuse as well as for one they fail to serve. The client reads the body of a response that is not ok and, when its \"error\" is true, rebuilds the KeetaNet error from it [Keeta TS] index.js:60622-60645; any other body of such a response is reported as text, and with a status of 500 or more the client stops retrying [Keeta TS] index.js:60651-60664. The body of a 200 is returned as data, whatever it holds [Keeta TS] index.js:60666-60678, so a failure scoped to one part of a request, such as a malformed account in an account-state request, is answered with a 200 and described by that route's 200 schema.",
+        "description": "A failure of the whole request: any non-2xx status; representatives use 500, for a request they refuse as well as for one they fail to serve. The client reads the body of a response that is not ok and, when its \"error\" is true, rebuilds the KeetaNet error from it [Keeta TS] index.js:60537-60569; any other body of such a response is reported as text, and with a status of 500 or more the client stops retrying [Keeta TS] index.js:60575-60588. The body of a 200 is returned as data, whatever it holds [Keeta TS] index.js:60590-60602, so a failure scoped to one part of a request, such as a malformed account in an account-state request, is answered with a 200 and described by that route's 200 schema.",
         "content": {
           "application/json": {
             "schema": { "$ref": "#/components/schemas/Error" }
@@ -1186,7 +1186,7 @@
     },
     "schemas": {
       "BigInt": {
-        "description": "An integer as \"0x\" followed by its magnitude in uppercase hexadecimal without leading zeros, after a \"-\" when negative [Keeta TS] index.js:79568-79581.",
+        "description": "An integer as \"0x\" followed by its magnitude in uppercase hexadecimal without leading zeros, after a \"-\" when negative [Keeta TS] index.js:79931-79944.",
         "type": "string",
         "pattern": "^-?0x(?:0|[1-9A-F][0-9A-F]*)$"
       },
@@ -1196,42 +1196,42 @@
         "pattern": "^[1-9][0-9]*$"
       },
       "Account": {
-        "description": "An account as its public key string: \"keeta_\" and the base32 of the key type, the 32- or 33-byte public key and a 5-byte checksum, in lowercase without padding [Keeta TS] index.js:63445-63458, 77887-77892, 64002-64004.",
+        "description": "An account as its public key string: \"keeta_\" and the base32 of the key type, the 32- or 33-byte public key and a 5-byte checksum, in lowercase without padding [Keeta TS] index.js:63554-63567, 78250-78255, 64111-64113.",
         "type": "string",
         "pattern": "^keeta_(?:[a-z2-7]{61}|[a-z2-7]{63})$"
       },
       "AccountList": {
-        "description": "Accounts separated by commas [Keeta TS] index.js:60948-60950.",
+        "description": "Accounts separated by commas [Keeta TS] index.js:60872-60874.",
         "type": "string",
         "pattern": "^keeta_[a-z2-7]+(?:,keeta_[a-z2-7]+)*$"
       },
       "Hash": {
-        "description": "A 32-byte hash in uppercase hexadecimal [Keeta TS] index.js:64176-64183, 78006-78010.",
+        "description": "A 32-byte hash in uppercase hexadecimal [Keeta TS] index.js:64285-64292, 78369-78373.",
         "type": "string",
         "pattern": "^[0-9A-F]{64}$"
       },
       "HashInput": {
-        "description": "A 32-byte hash in hexadecimal, as a request parameter; the hash types decode hexadecimal of either case [Keeta TS] index.js:77953-77962.",
+        "description": "A 32-byte hash in hexadecimal, as a request parameter; the hash types decode hexadecimal of either case [Keeta TS] index.js:78316-78325.",
         "type": "string",
         "pattern": "^[0-9A-Fa-f]{64}$"
       },
       "HexBytes": {
-        "description": "Bytes in uppercase hexadecimal [Keeta TS] index.js:79587-79591.",
+        "description": "Bytes in uppercase hexadecimal [Keeta TS] index.js:79950-79954.",
         "type": "string",
         "pattern": "^(?:[0-9A-F]{2})*$"
       },
       "Base64": {
-        "description": "Bytes in standard base64 with padding [Keeta TS] index.js:64901-64903.",
+        "description": "Bytes in standard base64 with padding [Keeta TS] index.js:65010-65012.",
         "type": "string",
         "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
       },
       "Date": {
-        "description": "A moment as an ISO 8601 date in UTC with milliseconds [Keeta TS] index.js:79584-79585.",
+        "description": "A moment as an ISO 8601 date in UTC with milliseconds [Keeta TS] index.js:79947-79948.",
         "type": "string",
         "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
       },
       "Permissions": {
-        "description": "The base and external permission sets as two integers [Keeta TS] index.js:75388-75390.",
+        "description": "The base and external permission sets as two integers [Keeta TS] index.js:75751-75753.",
         "type": "array",
         "prefixItems": [
           { "$ref": "#/components/schemas/BigInt" },
@@ -1241,7 +1241,7 @@
         "minItems": 2
       },
       "AdjustMethod": {
-        "description": "0 adds, 1 subtracts, 2 sets [Keeta TS] index.js:64137-64141.",
+        "description": "0 adds, 1 subtracts, 2 sets [Keeta TS] index.js:64246-64250.",
         "type": "integer",
         "enum": [0, 1, 2]
       },
@@ -1264,7 +1264,7 @@
         ]
       },
       "CertificateHashPrincipal": {
-        "description": "A principal that holds a certificate issued under the named certificate [Keeta TS] index.js:66587-66600.",
+        "description": "A principal that holds a certificate issued under the named certificate [Keeta TS] index.js:66696-66709.",
         "type": "object",
         "required": ["usingCertificate", "certificateHash", "certificateAccount"],
         "properties": {
@@ -1275,12 +1275,12 @@
         "additionalProperties": false
       },
       "PEMCertificate": {
-        "description": "A certificate as PEM text: the base64 of its DER encoding in lines of at most 64 characters, between the PEM boundaries, each line ending in a line feed [Keeta TS] index.js:79257-79268.",
+        "description": "A certificate as PEM text: the base64 of its DER encoding in lines of at most 64 characters, between the PEM boundaries, each line ending in a line feed [Keeta TS] index.js:79620-79631.",
         "type": "string",
         "pattern": "^-----BEGIN CERTIFICATE-----\\n(?:[A-Za-z0-9+/=]{1,64}\\n)+-----END CERTIFICATE-----\\n$"
       },
       "DistinguishedName": {
-        "description": "A distinguished name as its parts in order, each the attribute's name and value [Keeta TS] index.js:78209-78220.",
+        "description": "A distinguished name as its parts in order, each the attribute's name and value [Keeta TS] index.js:78572-78583.",
         "type": "array",
         "items": {
           "type": "object",
@@ -1293,7 +1293,7 @@
         }
       },
       "Certificate": {
-        "description": "A certificate in an operation, as it serializes itself: the fields parsed from it, its hash and, in \"$binary\", its PEM text, which an operation always includes [Keeta TS] index.js:79289-79315, 66750-66757. \"subject\" and \"issuer\" are the distinguished names as text, \"subjectDN\" and \"issuerDN\" the same names as parts, and \"subjectPublicKey\" the subject's account [Keeta TS] index.js:78792-78799.",
+        "description": "A certificate in an operation, as it serializes itself: the fields parsed from it, its hash and, in \"$binary\", its PEM text, which an operation always includes [Keeta TS] index.js:79652-79678, 66859-66866. \"subject\" and \"issuer\" are the distinguished names as text, \"subjectDN\" and \"issuerDN\" the same names as parts, and \"subjectPublicKey\" the subject's account [Keeta TS] index.js:79155-79162.",
         "type": "object",
         "required": ["serial", "notBefore", "notAfter", "subject", "issuer", "subjectPublicKey", "baseExtensions", "subjectDN", "issuerDN", "$hash", "$binary"],
         "properties": {
@@ -1312,7 +1312,7 @@
         "additionalProperties": false
       },
       "CertificateBaseExtensions": {
-        "description": "The X.509 extensions the package parses, each present when the certificate carries it [Keeta TS] index.js:79384-79423: basic constraints as whether the subject is a certificate authority and its path length, null when absent; key usage as one flag per usage; and the key identifiers.",
+        "description": "The X.509 extensions the package parses, each present when the certificate carries it [Keeta TS] index.js:79747-79786: basic constraints as whether the subject is a certificate authority and its path length, null when absent; key usage as one flag per usage; and the key identifiers.",
         "type": "object",
         "properties": {
           "basicConstraints": {
@@ -1330,7 +1330,7 @@
             "minItems": 2
           },
           "keyUsage": {
-            "description": "Every usage the package names, each set or not [Keeta TS] index.js:78663-78673, 79358-79383.",
+            "description": "Every usage the package names, each set or not [Keeta TS] index.js:79026-79036, 79721-79746.",
             "type": "object",
             "required": ["digitalSignature", "nonRepudiation", "keyEncipherment", "dataEncipherment", "keyAgreement", "keyCertSign", "cRLSign", "encipherOnly", "decipherOnly"],
             "properties": {
@@ -1347,7 +1347,7 @@
             "additionalProperties": false
           },
           "authorityKeyIdentifier": {
-            "description": "The key identifier as the ASN.1 context value it is tagged with, implicitly or, in older certificates, explicitly [Keeta TS] index.js:79408-79416.",
+            "description": "The key identifier as the ASN.1 context value it is tagged with, implicitly or, in older certificates, explicitly [Keeta TS] index.js:79771-79779.",
             "type": "object",
             "required": ["type", "value", "kind", "contains"],
             "properties": {
@@ -1366,7 +1366,7 @@
         "additionalProperties": false
       },
       "Operation": {
-        "description": "A block operation, told apart by \"type\" [Keeta TS] index.js:65626-65636. Each serializes its own fields, leaving out the optional ones it does not have.",
+        "description": "A block operation, told apart by \"type\" [Keeta TS] index.js:65735-65745. Each serializes its own fields, leaving out the optional ones it does not have.",
         "oneOf": [
           { "$ref": "#/components/schemas/OperationSend" },
           { "$ref": "#/components/schemas/OperationSetRep" },
@@ -1380,7 +1380,7 @@
         ]
       },
       "OperationSend": {
-        "description": "SEND [Keeta TS] index.js:66052-66060.",
+        "description": "SEND [Keeta TS] index.js:66161-66169.",
         "type": "object",
         "required": ["type", "to", "amount", "token"],
         "properties": {
@@ -1393,7 +1393,7 @@
         "additionalProperties": false
       },
       "OperationSetRep": {
-        "description": "SET_REP [Keeta TS] index.js:66255-66260.",
+        "description": "SET_REP [Keeta TS] index.js:66364-66369.",
         "type": "object",
         "required": ["type", "to"],
         "properties": {
@@ -1403,7 +1403,7 @@
         "additionalProperties": false
       },
       "OperationSetInfo": {
-        "description": "SET_INFO [Keeta TS] index.js:66437-66448.",
+        "description": "SET_INFO [Keeta TS] index.js:66546-66557.",
         "type": "object",
         "required": ["type", "name", "description", "metadata"],
         "properties": {
@@ -1416,7 +1416,7 @@
         "additionalProperties": false
       },
       "OperationModifyPermissions": {
-        "description": "MODIFY_PERMISSIONS; \"permissions\" is null when the row is removed [Keeta TS] index.js:66573-66581.",
+        "description": "MODIFY_PERMISSIONS; \"permissions\" is null when the row is removed [Keeta TS] index.js:66682-66690.",
         "type": "object",
         "required": ["type", "principal", "method", "permissions"],
         "properties": {
@@ -1439,7 +1439,7 @@
         "additionalProperties": false
       },
       "OperationCreateIdentifier": {
-        "description": "CREATE_IDENTIFIER; \"createArguments\" configures a multisig identifier [Keeta TS] index.js:66327-66333.",
+        "description": "CREATE_IDENTIFIER; \"createArguments\" configures a multisig identifier [Keeta TS] index.js:66436-66442.",
         "type": "object",
         "required": ["type", "identifier"],
         "properties": {
@@ -1450,7 +1450,7 @@
             "required": ["type", "signers", "quorum"],
             "properties": {
               "type": {
-                "description": "The multisig key type [Keeta TS] index.js:62544.",
+                "description": "The multisig key type [Keeta TS] index.js:62653.",
                 "const": 7
               },
               "signers": {
@@ -1465,7 +1465,7 @@
         "additionalProperties": false
       },
       "OperationTokenAdminSupply": {
-        "description": "TOKEN_ADMIN_SUPPLY; the method only adds or subtracts [Keeta TS] index.js:66645-66651.",
+        "description": "TOKEN_ADMIN_SUPPLY; the method only adds or subtracts [Keeta TS] index.js:66754-66760.",
         "type": "object",
         "required": ["type", "amount", "method"],
         "properties": {
@@ -1479,7 +1479,7 @@
         "additionalProperties": false
       },
       "OperationTokenAdminModifyBalance": {
-        "description": "TOKEN_ADMIN_MODIFY_BALANCE [Keeta TS] index.js:66207-66214.",
+        "description": "TOKEN_ADMIN_MODIFY_BALANCE [Keeta TS] index.js:66316-66323.",
         "type": "object",
         "required": ["type", "token", "amount", "method"],
         "properties": {
@@ -1491,7 +1491,7 @@
         "additionalProperties": false
       },
       "OperationReceive": {
-        "description": "RECEIVE; \"exact\" is false unless set [Keeta TS] index.js:66138-66147, 66149-66153.",
+        "description": "RECEIVE; \"exact\" is false unless set [Keeta TS] index.js:66247-66256, 66258-66262.",
         "type": "object",
         "required": ["type", "amount", "token", "from", "exact"],
         "properties": {
@@ -1505,7 +1505,7 @@
         "additionalProperties": false
       },
       "OperationManageCertificate": {
-        "description": "MANAGE_CERTIFICATE: a certificate when adding, its hash when removing; the method only adds or subtracts [Keeta TS] index.js:66750-66757. Intermediates serialize as a bundle of PEM texts [Keeta TS] index.js:78652-78658.",
+        "description": "MANAGE_CERTIFICATE: a certificate when adding, its hash when removing; the method only adds or subtracts [Keeta TS] index.js:66859-66866. Intermediates serialize as a bundle of PEM texts [Keeta TS] index.js:79015-79021.",
         "type": "object",
         "required": ["type", "certificateOrHash", "method"],
         "properties": {
@@ -1540,7 +1540,7 @@
         "additionalProperties": false
       },
       "BlockContent": {
-        "description": "A block's fields as the block serializes them [Keeta TS] index.js:64900-64929. \"idempotent\" is base64 and \"subnet\" an integer, each left out when the block has none; a version 1 block carries one \"signature\", a version 2 block a list of \"signatures\", in uppercase hexadecimal [Keeta TS] index.js:64905-64914.",
+        "description": "A block's fields as the block serializes them [Keeta TS] index.js:65009-65038. \"idempotent\" is base64 and \"subnet\" an integer, each left out when the block has none; a version 1 block carries one \"signature\", a version 2 block a list of \"signatures\", in uppercase hexadecimal [Keeta TS] index.js:65014-65023.",
         "type": "object",
         "required": ["version", "date", "previous", "account", "purpose", "signer", "network", "operations", "$hash", "$opening"],
         "properties": {
@@ -1553,7 +1553,7 @@
           "previous": { "$ref": "#/components/schemas/Hash" },
           "account": { "$ref": "#/components/schemas/Account" },
           "purpose": {
-            "description": "0 is a generic block, 1 a fee block [Keeta TS] index.js:64116-64119.",
+            "description": "0 is a generic block, 1 a fee block [Keeta TS] index.js:64225-64228.",
             "type": "integer",
             "enum": [0, 1]
           },
@@ -1587,7 +1587,7 @@
         }
       },
       "Block": {
-        "description": "A block with its ASN.1 encoding in \"$binary\", as a response carries it [Keeta TS] index.js:64901-64903.",
+        "description": "A block with its ASN.1 encoding in \"$binary\", as a response carries it [Keeta TS] index.js:65010-65012.",
         "type": "object",
         "$ref": "#/components/schemas/BlockContent",
         "required": ["$binary"],
@@ -1600,7 +1600,7 @@
         ]
       },
       "StapledBlock": {
-        "description": "A block inside a staple, serialized without \"$binary\" [Keeta TS] index.js:82249-82251.",
+        "description": "A block inside a staple, serialized without \"$binary\" [Keeta TS] index.js:82613-82615.",
         "type": "object",
         "$ref": "#/components/schemas/BlockContent",
         "properties": { "$binary": false }
@@ -1617,7 +1617,7 @@
         "additionalProperties": false
       },
       "VoteContent": {
-        "description": "A vote's or a quote's fields as it serializes them [Keeta TS] index.js:81758-81782. \"$uid\" is \"ID=\", the issuer, \"/Serial=\" and the serial in decimal; \"$id\" is the hash of \"$uid\" in uppercase hexadecimal [Keeta TS] index.js:81721-81722. The signature is uppercase hexadecimal [Keeta TS] index.js:79587-79588. \"fee\" is a single fee or a non-empty list of choices, and \"quote\" whether the fee is quoted rather than asked for; both come from the same extension, so they are present together or not at all [Keeta TS] index.js:81115-81172, 81644-81654, 81763-81768.",
+        "description": "A vote's or a quote's fields as it serializes them [Keeta TS] index.js:82122-82146. \"$uid\" is \"ID=\", the issuer, \"/Serial=\" and the serial in decimal; \"$id\" is the hash of \"$uid\" in uppercase hexadecimal [Keeta TS] index.js:82085-82086. The signature is uppercase hexadecimal [Keeta TS] index.js:79950-79951. \"fee\" is a single fee or a non-empty list of choices, and \"quote\" whether the fee is quoted rather than asked for; both come from the same extension, so they are present together or not at all [Keeta TS] index.js:81479-81536, 82008-82018, 82127-82132.",
         "type": "object",
         "required": ["issuer", "serial", "blocks", "validityFrom", "validityTo", "signature", "$trusted", "$permanent", "$uid", "$id"],
         "properties": {
@@ -1657,7 +1657,7 @@
         "additionalProperties": false
       },
       "Vote": {
-        "description": "A vote with its encoding in \"$binary\", as a response carries it [Keeta TS] index.js:81759-81761. A vote is no quote: \"quote\" is false when it asks for a fee and absent otherwise [Keeta TS] index.js:81365-81367, 81649-81651, 81804, 81812-81814.",
+        "description": "A vote with its encoding in \"$binary\", as a response carries it [Keeta TS] index.js:82123-82125. A vote is no quote: \"quote\" is false when it asks for a fee and absent otherwise [Keeta TS] index.js:81729-81731, 82013-82015, 82168, 82176-82178.",
         "type": "object",
         "$ref": "#/components/schemas/VoteContent",
         "required": ["$binary"],
@@ -1667,7 +1667,7 @@
         }
       },
       "VoteQuote": {
-        "description": "A fee quote with its encoding in \"$binary\"; a quote serializes as a vote does [Keeta TS] index.js:81758-81782, and always carries its fee with \"quote\" true [Keeta TS] index.js:81365-81370, 81848-81850, 81854.",
+        "description": "A fee quote with its encoding in \"$binary\"; a quote serializes as a vote does [Keeta TS] index.js:82122-82146, and always carries its fee with \"quote\" true [Keeta TS] index.js:81729-81734, 82212-82214, 82218.",
         "type": "object",
         "$ref": "#/components/schemas/VoteContent",
         "required": ["$binary", "fee", "quote"],
@@ -1678,7 +1678,7 @@
         }
       },
       "StapledVote": {
-        "description": "A vote inside a staple, serialized without \"$binary\" [Keeta TS] index.js:82246-82248; like any vote, it is no quote.",
+        "description": "A vote inside a staple, serialized without \"$binary\" [Keeta TS] index.js:82610-82612; like any vote, it is no quote.",
         "type": "object",
         "$ref": "#/components/schemas/VoteContent",
         "properties": {
@@ -1687,7 +1687,7 @@
         }
       },
       "VoteStaple": {
-        "description": "Votes and the blocks they vote for, with the staple's encoding in \"$binary\" [Keeta TS] index.js:82240-82253.",
+        "description": "Votes and the blocks they vote for, with the staple's encoding in \"$binary\" [Keeta TS] index.js:82604-82617.",
         "type": "object",
         "required": ["votes", "blocks", "$binary"],
         "properties": {
@@ -1704,7 +1704,7 @@
         "additionalProperties": false
       },
       "HistoryPage": {
-        "description": "A page of staples, newest first; \"nextKey\" is the \"$id\" of the page's last staple, the \"start\" of the next page. A page without staples, which the client takes as the end of the history [Keeta TS] index.js:59964-59966, gives the \"start\" it was asked for, or null when it was asked for none [Keeta TS] index.js:59976-59986.",
+        "description": "A page of staples, newest first; \"nextKey\" is the \"$id\" of the page's last staple, the \"start\" of the next page. A page without staples, which the client takes as the end of the history [Keeta TS] index.js:59970-59972, gives the \"start\" it was asked for, or null when it was asked for none [Keeta TS] index.js:59982-59992.",
         "type": "object",
         "required": ["history", "nextKey"],
         "properties": {
@@ -1716,11 +1716,11 @@
               "properties": {
                 "voteStaple": { "$ref": "#/components/schemas/VoteStaple" },
                 "$id": {
-                  "description": "The hash of the staple's blocks, which the client takes as the next page's start where \"nextKey\" is missing [Keeta TS] index.js:59981-59984, 82196-82205.",
+                  "description": "The hash of the staple's blocks, which the client takes as the next page's start where \"nextKey\" is missing [Keeta TS] index.js:59987-59990, 82560-82569.",
                   "$ref": "#/components/schemas/Hash"
                 },
                 "$timestamp": {
-                  "description": "A moment the node records with the staple; it differs from the staple's own timestamp, the average of its votes' validity [Keeta TS] index.js:82213-82239.",
+                  "description": "A moment the node records with the staple; it differs from the staple's own timestamp, the average of its votes' validity [Keeta TS] index.js:82577-82603.",
                   "$ref": "#/components/schemas/Date"
                 }
               },
@@ -1737,7 +1737,7 @@
         "additionalProperties": false
       },
       "AccountInfo": {
-        "description": "An account's info. Identifier accounts may carry \"defaultPermission\", a token its \"supply\", a multisig account its \"multisigQuorum\" (lib/ledger/types.d.ts, AccountInfo; [Keeta TS] index.js:60961-60989).",
+        "description": "An account's info. Identifier accounts may carry \"defaultPermission\", a token its \"supply\", a multisig account its \"multisigQuorum\" (lib/ledger/types.d.ts, AccountInfo; [Keeta TS] index.js:60885-60913).",
         "type": "object",
         "required": ["account", "name", "description", "metadata"],
         "properties": {
@@ -1757,7 +1757,7 @@
         "additionalProperties": false
       },
       "Balances": {
-        "description": "An account's balance of each token, in the token's raw units (lib/ledger/types.d.ts, GetAllBalancesResponse; [Keeta TS] index.js:60951-60957).",
+        "description": "An account's balance of each token, in the token's raw units (lib/ledger/types.d.ts, GetAllBalancesResponse; [Keeta TS] index.js:60875-60881).",
         "type": "array",
         "items": {
           "type": "object",
@@ -1770,7 +1770,7 @@
         }
       },
       "AccountState": {
-        "description": "An account's head, representative, info and balances (api/node.d.ts, AccountState; [Keeta TS] index.js:60990-61013).",
+        "description": "An account's head, representative, info and balances (api/node.d.ts, AccountState; [Keeta TS] index.js:60914-60937).",
         "type": "object",
         "required": ["account", "currentHeadBlock", "currentHeadBlockHeight", "representative", "info", "balances"],
         "properties": {
@@ -1799,7 +1799,7 @@
         "additionalProperties": false
       },
       "AccountStateError": {
-        "description": "Why an account's state could not be read: exactly the account and a message [Keeta TS] index.js:59238-59253.",
+        "description": "Why an account's state could not be read: exactly the account and a message [Keeta TS] index.js:59237-59252.",
         "type": "object",
         "required": ["account", "error"],
         "properties": {
@@ -1815,7 +1815,7 @@
         ]
       },
       "ACLRow": {
-        "description": "A permission row: the principal holds \"permissions\" on \"entity\", optionally scoped to \"target\". The principal is an account, or a certificate under which issued certificates qualify [Keeta TS] index.js:61014-61043.",
+        "description": "A permission row: the principal holds \"permissions\" on \"entity\", optionally scoped to \"target\". The principal is an account, or a certificate under which issued certificates qualify [Keeta TS] index.js:60938-60967.",
         "oneOf": [
           {
             "type": "object",
@@ -1899,7 +1899,7 @@
         ]
       },
       "RepresentativeWeight": {
-        "description": "A representative and its voting weight (api/node.d.ts, GetRepresentativeAPIResponse; [Keeta TS] index.js:61056-61060).",
+        "description": "A representative and its voting weight (api/node.d.ts, GetRepresentativeAPIResponse; [Keeta TS] index.js:60980-60984).",
         "type": "object",
         "required": ["representative", "weight"],
         "properties": {
@@ -1909,7 +1909,7 @@
         "additionalProperties": false
       },
       "Endpoints": {
-        "description": "Where a node serves its API and its peer-to-peer socket (config/index.d.ts, Endpoints): the client fetches the API below \"api\" [Keeta TS] index.js:60576, 73349, and opens a WebSocket to \"p2p\" [Keeta TS] index.js:73398.",
+        "description": "Where a node serves its API and its peer-to-peer socket (config/index.d.ts, Endpoints): the client fetches the API below \"api\" [Keeta TS] index.js:60491, 73712, and opens a WebSocket to \"p2p\" [Keeta TS] index.js:73761.",
         "type": "object",
         "required": ["api", "p2p"],
         "properties": {
@@ -1925,7 +1925,7 @@
         "additionalProperties": false
       },
       "Peer": {
-        "description": "A peer record: a representative with its key, endpoints, preferred update channel and either a base64 signature over the record or a certificate, or a participant with only its kind [Keeta TS] index.js:73136-73167. Kinds are 0 participant, 1 representative, 2 relay, 3 archival [Keeta TS] index.js:72415-72420; a peer record is written only for a representative or a participant.",
+        "description": "A peer record: a representative with its key, endpoints, preferred update channel and either a base64 signature over the record or a certificate, or a participant with only its kind [Keeta TS] index.js:73499-73530. Kinds are 0 participant, 1 representative, 2 relay, 3 archival [Keeta TS] index.js:72778-72783; a peer record is written only for a representative or a participant.",
         "oneOf": [
           {
             "type": "object",
@@ -1958,7 +1958,7 @@
         ]
       },
       "TimeStat": {
-        "description": "How many events took a duration within \"range\", in milliseconds; a count of -1 marks a placeholder [Keeta TS] index.js:75536-75544.",
+        "description": "How many events took a duration within \"range\", in milliseconds; a count of -1 marks a placeholder [Keeta TS] index.js:75899-75907.",
         "type": "object",
         "required": ["count", "range"],
         "properties": {
@@ -1976,7 +1976,7 @@
         "additionalProperties": false
       },
       "TimeStats": {
-        "description": "One count per duration bucket [Keeta TS] index.js:75431-75451.",
+        "description": "One count per duration bucket [Keeta TS] index.js:75794-75814.",
         "type": "object",
         "required": ["-1ms", "0ms", "10ms", "100ms", "200ms", "300ms", "400ms", "500ms", "600ms", "700ms", "800ms", "900ms", "1000ms", "1500ms", "2000ms", "5000ms", "10000ms", "100000ms", "ExtraLong"],
         "properties": {
@@ -2045,18 +2045,18 @@
         ]
       },
       "ErrorRefusal": {
-        "description": "A request the node refuses, as the KeetaNet error it raised: its type, code and message [Keeta TS] index.js:67057-67063. A ledger vote error adds the accounts party to the conflict [Keeta TS] index.js:67542-67549, and an idempotent-key error adds the account, the key and both block hashes [Keeta TS] index.js:67584-67599. The client rebuilds the error from these fields, reading \"shouldRetry\" and \"retryDelay\" of a ledger error when present [Keeta TS] index.js:67343-67419.",
+        "description": "A request the node refuses, as the KeetaNet error it raised: its type, code and message [Keeta TS] index.js:67166-67172. A ledger vote error adds the accounts party to the conflict [Keeta TS] index.js:67680-67687, and an idempotent-key error adds the account, the key and both block hashes [Keeta TS] index.js:67722-67737. The client rebuilds the error from these fields, reading \"shouldRetry\" and \"retryDelay\" of a ledger error when present [Keeta TS] index.js:67481-67557.",
         "type": "object",
         "required": ["error", "type", "code", "message"],
         "properties": {
           "error": { "const": true },
           "type": {
-            "description": "The error's family; GENERIC when none applies [Keeta TS] index.js:67044, 66970, 67011, 67080, 67151, 67177, 67215, 67435, 67461, 67616, 67670.",
+            "description": "The error's family; GENERIC when none applies [Keeta TS] index.js:67153, 67079, 67120, 67189, 67260, 67286, 67324, 67573, 67599, 67754, 67808.",
             "type": "string",
             "enum": ["GENERIC", "ACCOUNT", "API", "BLOCK", "BLOOM", "CERTIFICATE", "CLIENT", "KV", "LEDGER", "PERMISSIONS", "VOTE"]
           },
           "code": {
-            "description": "The type, an underscore and the code within the type, such as LEDGER_NOT_SUCCESSOR [Keeta TS] index.js:67045-67052.",
+            "description": "The type, an underscore and the code within the type, such as LEDGER_NOT_SUCCESSOR [Keeta TS] index.js:67154-67161.",
             "type": "string",
             "pattern": "^[A-Z][A-Z0-9_]*$"
           },

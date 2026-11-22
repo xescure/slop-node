@@ -30,6 +30,38 @@ class ProbeStorage extends LedgerInternals.LedgerStorageBase {
 	protected gcBatch(): Promise<boolean> {
 		return(Promise.reject(new Error('not implemented: gcBatch')));
 	}
+
+	protected readBalanceRows(): Promise<never> {
+		return(Promise.reject(new Error('not implemented: readBalanceRows')));
+	}
+
+	protected readAccountRepRows(): Promise<never> {
+		return(Promise.reject(new Error('not implemented: readAccountRepRows')));
+	}
+
+	protected readWeightRows(): Promise<never> {
+		return(Promise.reject(new Error('not implemented: readWeightRows')));
+	}
+
+	protected readChainHeads(): Promise<never> {
+		return(Promise.reject(new Error('not implemented: readChainHeads')));
+	}
+
+	protected readAccountHeads(): Promise<never> {
+		return(Promise.reject(new Error('not implemented: readAccountHeads')));
+	}
+
+	protected writeAccountHeads(): Promise<never> {
+		return(Promise.reject(new Error('not implemented: writeAccountHeads')));
+	}
+
+	listACLsByPrincipal(): Promise<never> {
+		return(Promise.reject(new Error('not implemented: listACLsByPrincipal')));
+	}
+
+	listACLsForPrincipalEntityPairs(): Promise<never> {
+		return(Promise.reject(new Error('not implemented: listACLsForPrincipalEntityPairs')));
+	}
 }
 
 describe('LedgerInternals', function() {
