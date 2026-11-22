@@ -39,7 +39,7 @@ export type ACLScopeKey = string & { readonly __aclScopeKey: never };
 /**
  * Accepts a string so that members typed `GenericAccount | string` can key
  * their input; upstream canonicalizes the string through an Account.
- * [Keeta TS] index.js:63699-63704
+ * [Keeta TS] index.js:63808-63813
  */
 export function toAccountKey(account: GenericAccount | string): AccountKey {
 	if (typeof account === 'string') {
@@ -68,7 +68,7 @@ const parsedAccountKeys = new Map<string, ParsedAccountKey>();
 
 /**
  * The account a string names, parsed as toPublicKeyString parses it
- * [Keeta TS] index.js:63686-63704, once for as long as the parse is kept.
+ * [Keeta TS] index.js:63795-63813, once for as long as the parse is kept.
  */
 export function parseAccountKey(account: string): ParsedAccountKey {
 	const kept = parsedAccountKeys.get(account);
@@ -94,13 +94,13 @@ export function toBlockHashKey(hash: BlockHash): BlockHashKey {
 	return(hash.toString());
 }
 
-/** [Keeta TS] index.js:81278-81295 */
+/** [Keeta TS] index.js:81642-81659 */
 export function toStapleKey(blocksHash: VoteBlockHash): StapleKey {
 	// The brand marks the canonical uppercase hex of the blocks hash.
 	return(blocksHash.toString() as StapleKey);
 }
 
-/** [Keeta TS] index.js:81721-81722 */
+/** [Keeta TS] index.js:82085-82086 */
 export function toVoteKey(vote: Pick<Vote, '$uid'>): VoteKey {
 	// The brand marks upstream's own issuer-and-serial identity string.
 	return(vote.$uid as VoteKey);
@@ -116,7 +116,7 @@ export function toCertificateHashKey(hash: CertificateHash): CertificateHashKey 
 
 /**
  * The same spelling upstream uses to key effects by principal.
- * [Keeta TS] index.js:69033-69048
+ * [Keeta TS] index.js:69319-69334
  */
 export function toPrincipalKey(principal: ACLRow['principal']): PrincipalKey {
 	if (KeetaNet.lib.Account.isInstance(principal)) {
@@ -131,7 +131,7 @@ export function toPrincipalKey(principal: ACLRow['principal']): PrincipalKey {
 /**
  * An ACL without a target covers the whole entity, which upstream records as
  * the entity being its own target.
- * [Keeta TS] index.js:68145-68168
+ * [Keeta TS] index.js:68283-68306
  */
 export function toACLScopeKey(entity: GenericAccount, target: GenericAccount | undefined): ACLScopeKey {
 	const resolvedTarget = target ?? entity;

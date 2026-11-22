@@ -355,7 +355,7 @@ describe('the values the responses carry', function() {
 
 const START = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
 
-/** A staple travels between peers with this many hops left [Keeta TS] index.js:72532. */
+/** A staple travels between peers with this many hops left [Keeta TS] index.js:72895. */
 const ADD_MESSAGE_TTL = 30;
 
 /** The client sends every block, vote, quote and staple as the base64 of its bytes. */
@@ -412,7 +412,7 @@ describe('requests and responses of the POST routes, built locally', function() 
 	test('a quote request and the quote', async function() {
 		const { ledger, block } = await localNetwork();
 		const route = documentRoute('POST', '/api/vote/quote');
-		// [Keeta TS] index.js:60835-60840
+		// [Keeta TS] index.js:60759-60764
 		const request = { blocks: [base64(block.toBytes())] };
 		const quote = await ledger.quote([block]);
 
@@ -429,7 +429,7 @@ describe('requests and responses of the POST routes, built locally', function() 
 		const otherLedger = network.createLedger(new MemoryLedgerStorage(), other);
 		await otherLedger.add(network.genesis);
 		const otherVote = await otherLedger.vote([block]);
-		// [Keeta TS] index.js:60843-60857, 60768
+		// [Keeta TS] index.js:60767-60781, 60692
 		const request = { blocks: [base64(block.toBytes())], votes: [base64(otherVote.toBytes())], quote: base64(quote.toBytes()) };
 		const vote = await ledger.vote([block], undefined, quote);
 
@@ -462,7 +462,7 @@ describe('requests and responses of the POST routes, built locally', function() 
 		const { representative, block } = await localNetwork();
 		const route = documentRoute('POST', '/api/node/publish');
 		const staple = await confirmedStaple([block], [representative]);
-		// [Keeta TS] index.js:59478-59482
+		// [Keeta TS] index.js:59484-59488
 		const request = { votesAndBlocks: base64(staple.toBytes()) };
 
 		expect(api.requestViolations(route, request)).toEqual([]);
@@ -489,9 +489,9 @@ describe('requests and responses of the POST routes, built locally', function() 
 			stats: { kv: null }
 		});
 		const staple = await confirmedStaple([block], [representative]);
-		// [Keeta TS] index.js:72530-72532, 74191-74195
+		// [Keeta TS] index.js:72893-72895, 74554-74558
 		const message = JSON.stringify({ id: staple.blocksHash.toString(), add: base64(staple.toBytes()), ttl: ADD_MESSAGE_TTL });
-		// [Keeta TS] index.js:73348-73360
+		// [Keeta TS] index.js:73711-73723
 		const request = { message, greeting: await node.switch.getOutgoingGreetingInfo() };
 
 		expect(lib.P2P.parseJSONMessage(Buffer.from(message))).toMatchObject({ valid: true, type: 'add' });

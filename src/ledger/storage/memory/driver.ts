@@ -154,7 +154,7 @@ function sumOf(values: Iterable<bigint>): bigint {
 /*
  * After computeLedgerEffect resolves permissions, every update is a SET of
  * the final flags or a delete; an absent target means the whole entity.
- * [Keeta TS] index.js:68503-68522, 68145-68168
+ * [Keeta TS] index.js:68676-68695, 68283-68306
  */
 function toACLRow(update: ACLUpdate, permissions: NonNullable<ACLUpdate['permissions']>): ACLRow {
 	const target = update.target ?? update.entity;
@@ -178,7 +178,7 @@ type CatchUpVote = { readonly position: CatchUpPosition; readonly vote: Vote };
  * The staple time is a property of the staple alone, so it orders history
  * the same way however late a node applied each staple; the blocks hash,
  * compared as bytes, breaks ties between equal staple times.
- * [Keeta TS] index.js:82222-82248
+ * [Keeta TS] index.js:82586-82612
  */
 function compareHistoryOrder(left: HistoryOrder, right: HistoryOrder): number {
 	const byStapleTime = left.stapleTime.getTime() - right.stapleTime.getTime();
@@ -302,7 +302,7 @@ function nullWhenEmpty<Item>(items: Item[]): Item[] | null {
 	return(items);
 }
 
-/** [Keeta TS] index.js:69956-69987 */
+/** [Keeta TS] index.js:70289-70320 */
 function idempotentKeyOf(block: Block): IdempotentKeyString | undefined {
 	if (block.idempotent === undefined) {
 		return(undefined);
@@ -487,7 +487,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	/*
 	 * Heads are main-chain only, even under 'both': a side block as head would
 	 * make the permanent vote for that very block fail its successor check.
-	 * [Keeta TS] index.js:70296-70312
+	 * [Keeta TS] index.js:70629-70645
 	 */
 	async getHeadBlocks(transaction: MemoryTransaction, accounts: GenericAccount[], from: LedgerSelector): Promise<{ [account: string]: Block | null }> {
 		const overlay = await transaction.view();
@@ -506,7 +506,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	 * the block voted on after it expired; the most recently issued vote
 	 * names the successor, and the block hash breaks ties, so the answer
 	 * never depends on storage order.
-	 * [Keeta TS] index.js:70317-70342
+	 * [Keeta TS] index.js:70650-70675
 	 */
 	async getBlockFromPrevious(transaction: MemoryTransaction, previous: BlockHash, from: LedgerSelector): Promise<Block | null> {
 		const overlay = await transaction.view();
@@ -538,7 +538,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	/*
 	 * Absent is null, never an empty list: upstream reads the first vote's
 	 * blocks of any non-null result.
-	 * [Keeta TS] index.js:70613-70616
+	 * [Keeta TS] index.js:70946-70949
 	 */
 	async getVotes(transaction: MemoryTransaction, hash: BlockHash, from: LedgerSelector): Promise<Vote[] | null> {
 		const overlay = await transaction.view();
@@ -560,7 +560,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	 * Voting reads this under 'both' with its own key as the issuer, and may
 	 * replace only a single unexpired temporary vote of its own; an expired vote
 	 * left in the answer would block the account until it is collected.
-	 * [Keeta TS] index.js:70317-70342
+	 * [Keeta TS] index.js:70650-70675
 	 */
 	async getVotesFromMultiplePrevious(transaction: MemoryTransaction, previousBlocks: BlockHash[], from: LedgerSelector, issuer?: Account): Promise<{ [hash: string]: Vote[] | null }> {
 		const overlay = await transaction.view();
@@ -584,7 +584,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	 * Staples are identified by the hash of their blocks, and every requested
 	 * hash gets an entry: upstream reads each one back and treats a missing
 	 * entry as an internal error.
-	 * [Keeta TS] index.js:70548-70584
+	 * [Keeta TS] index.js:70881-70917
 	 */
 	async getVoteStaples(transaction: MemoryTransaction, voteBlockHashes: VoteBlockHash[], from: LedgerSelector): Promise<VoteBlockHashMap<VoteStaple | null>> {
 		const overlay = await transaction.view();
@@ -621,7 +621,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	 * pass the last staple of one page to get the next. A start that is no
 	 * entry of an account's history is refused, and one outside the whole
 	 * ledger's history gives nothing (D8).
-	 * [Keeta TS] index.js:70568-70584, 59982-59984, 82222-82248
+	 * [Keeta TS] index.js:70901-70917, 59988-59990, 82586-82612
 	 */
 	async getHistory(transaction: MemoryTransaction, account: GenericAccount | null, start: VoteBlockHash | null, limit: number = DEFAULT_HISTORY_LIMIT): Promise<VoteBlockHash[]> {
 		const overlay = await transaction.view();
@@ -654,7 +654,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	 * remaining limit; a page holds at least one vote while any remains. The
 	 * key is omitted on the last page, because the caller stops only when it
 	 * is undefined (D8).
-	 * [Keeta TS] index.js:70669-70738
+	 * [Keeta TS] index.js:71002-71071
 	 */
 	async getVotesAfter(transaction: MemoryTransaction, moment: Date, startKey?: string, options?: GetVotesAfterOptions): Promise<PaginatedVotes> {
 		const overlay = await transaction.view();
@@ -696,7 +696,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	 * voting excludes the block it is voting on, so a permanent vote can
 	 * follow the temporary vote that put the key on the side ledger. A side
 	 * block holds its key only while a vote of ours on it is unexpired.
-	 * [Keeta TS] index.js:70290-70295, 70747-70752
+	 * [Keeta TS] index.js:70623-70628, 71080-71085
 	 */
 	async getIdempotentBlockHash(transaction: MemoryTransaction, idempotent: IdempotentKey, from: LedgerSelector, excludeBlockHash?: BlockHash): Promise<BlockHash | null> {
 		const overlay = await transaction.view();
@@ -725,7 +725,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	 * Distinct accounts holding OWNER on the identifier: the ledger requires
 	 * exactly one owner to remain, so a principal listed twice would refuse a
 	 * valid staple. Certificates cannot own an identifier.
-	 * [Keeta TS] index.js:71082-71114
+	 * [Keeta TS] index.js:71445-71477
 	 */
 	async listOwners(transaction: MemoryTransaction, identifier: IdentifierAddress, target?: GenericAccount): Promise<GenericAccount[]> {
 		const overlay = await transaction.view();
@@ -761,7 +761,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	 * is added beside the temporary vote, which stays until it expires. The
 	 * writes land together as a unit of their own, taken in the transaction's
 	 * turn so that they never join a unit that is open and may still fail.
-	 * [Keeta TS] index.js:70346-70352, 70378-70390
+	 * [Keeta TS] index.js:70679-70685, 70711-70723
 	 */
 	async addPendingVote(transaction: MemoryTransaction, staple: VoteStaple): Promise<void> {
 		await this.runIsolatedInTurn(transaction, async () => {
@@ -1097,7 +1097,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	/*
 	 * A staple holds votes of one permanence only, so permanent votes, when
 	 * there are any, are preferred over temporary ones for the same blocks.
-	 * [Keeta TS] index.js:81947-81979
+	 * [Keeta TS] index.js:82311-82343
 	 */
 	#sideStaple(overlay: LedgerOverlay, key: StapleKey, moment: Date): VoteStaple | null {
 		const unexpired = this.#unexpiredSideVoteRows(overlay, overlay.sideVotesByStaple.get(key), moment);
@@ -1198,7 +1198,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 
 	/*
 	 * Two different confirmed blocks may not claim one idempotent key.
-	 * [Keeta TS] index.js:70290-70295
+	 * [Keeta TS] index.js:70623-70628
 	 */
 	#assertIdempotentKeysFree(overlay: LedgerOverlay, change: ConfirmedStapleChange): void {
 		const claimed = new Map<IdempotentKeyString, BlockHash>();
@@ -1256,7 +1256,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	/*
 	 * Changes are deltas. Stored balances may go negative while a funding
 	 * staple is missing, and are kept exactly as computed.
-	 * [Keeta TS] index.js:68546-68572
+	 * [Keeta TS] index.js:68719-68745
 	 */
 	#writeBalances(overlay: LedgerOverlay, change: ConfirmedStapleChange): void {
 		for (const [accountPublicKey, tokens] of Object.entries(change.ledgerEffect.balances)) {
@@ -1302,7 +1302,7 @@ export class MemoryLedgerStorage extends LedgerStorageDriverBase<MemoryTransacti
 	 * Applied exactly as resolved: null deletes the row, while a SET without
 	 * flags keeps an empty row, because deleting an emptied exact-target row
 	 * would let the entity-wide row match again.
-	 * [Keeta TS] index.js:68145-68168, 68503-68522
+	 * [Keeta TS] index.js:68283-68306, 68676-68695
 	 */
 	#writePermissions(overlay: LedgerOverlay, change: ConfirmedStapleChange): void {
 		for (const update of change.ledgerEffect.permissions) {

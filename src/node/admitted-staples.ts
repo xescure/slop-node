@@ -10,8 +10,8 @@ type AdmittedStaples = { readonly [network in Exclude<Networks, 'main'>]?: Reado
 
 /**
  * Staples Keeta's representatives added although their votes lacked a
- * quorum, which no 0.18.8 ledger replaying the network adds
- * [Keeta TS] index.js:70433-70436, 70776-70795, each by its hash, which
+ * quorum, which no 0.18.8 or 0.19.1 ledger replaying the network adds
+ * [Keeta TS] index.js:70766-70769, 71109-71128, each by its hash, which
  * covers all its votes and blocks.
  *
  * test: on 2026-10-15 a delegation gave

@@ -8,7 +8,7 @@ const lib = KeetaNet.lib;
 /**
  * The status of every failure of a whole request, a refusal as well as an
  * internal failure: the client gives up on any status of 500 or more instead
- * of retrying [Keeta TS] index.js:60651-60664.
+ * of retrying [Keeta TS] index.js:60575-60588.
  */
 export const ERROR_STATUS = 500;
 
@@ -32,7 +32,7 @@ export function newErrorID(): ErrorID {
 /**
  * A request the node refuses, as the KeetaNet error it raised: the fields the
  * error's own JSON writes, which the client rebuilds the error from
- * [Keeta TS] index.js:67057-67063, 67542-67549, 67584-67599, 67343-67419.
+ * [Keeta TS] index.js:67166-67172, 67680-67687, 67722-67737, 67481-67557.
  */
 export type RefusalBody = {
 	readonly error: true;
@@ -67,7 +67,7 @@ const DRIVER_WRAPPING_CODE = 'LEDGER_OTHER';
 
 /**
  * The type of the error a request's timing raises for a section whose name
- * is no RFC 9110 token [Keeta TS 0.18.8] index.js:67645-67653, 72671-72673. A
+ * is no RFC 9110 token [Keeta TS] index.js:67783-67791, 73034-73036. A
  * section is named by the node's own code, so it is a fault of the node, not a
  * refusal of the request, and its message names the section.
  */

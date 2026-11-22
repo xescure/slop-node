@@ -244,7 +244,7 @@ export class PostgresTransaction extends LedgerDriverTransaction {
 	 * Commits once every issued statement has run. A conflict seen during the
 	 * attempt rolls it back instead and is reported, retryable. A failed
 	 * COMMIT leaves the transaction finished: Ledger never aborts after one.
-	 * [Keeta TS] index.js:71373-71383
+	 * [Keeta TS] index.js:71736-71746
 	 */
 	async commit(): Promise<void> {
 		const client = await this.#beginEnding();
@@ -444,7 +444,7 @@ function pairsOf<Value>(byStaple: ReadonlyMap<Buffer, readonly Value[]>): [Buffe
  * moment; decoding it as of its own issue time keeps the Vote class from
  * judging it again against the wall clock. The class then recomputes
  * permanence from that moment, which must agree with what was stored.
- * [Keeta TS] index.js:81528-81542, 81792-81800
+ * [Keeta TS] index.js:81892-81906, 82156-82164
  */
 function decodeVote({ bytes, validity_from, permanent }: VoteColumns): Vote {
 	const vote = new lib.Vote(bytes, { now: validity_from });
@@ -535,15 +535,15 @@ function resolveAccount<T extends AccountKeyAlgorithm>(account: Account<T> | str
  * Every account a confirmed change writes a row for, with its key type, keyed
  * by public key. A change's effects are always upstream's for the staple's own
  * blocks over the ledger: upstream computes them so just before it adjusts
- * [Keeta TS] index.js:70440-70443, and so does the base's replay of a deferred
+ * [Keeta TS] index.js:70773-70776, and so does the base's replay of a deferred
  * staple (base.ts, #applyIsolated). Upstream names as touched every account
  * with an effect of its own, which takes in each block's account and each
- * holder of a balance it changes [Keeta TS] index.js:69135-69140, 69202-69207,
- * 69754-69760, 69812-69816, and as possibly new each account a delegation, a
- * creation or a permission names [Keeta TS] index.js:69326, 69336, 69350,
- * 69378-69390. Only the votes, the tokens of balances and the representatives
+ * holder of a balance it changes [Keeta TS] index.js:69414-69419, 69481-69486,
+ * 70068-70074, 70126-70130, and as possibly new each account a delegation, a
+ * creation or a permission names [Keeta TS] index.js:69605, 69615, 69629,
+ * 69657-69669. Only the votes, the tokens of balances and the representatives
  * whose weight moves name others; a token a SET leaves holding itself is one
- * of those tokens [Keeta TS] index.js:68570-68572.
+ * of those tokens [Keeta TS] index.js:68743-68745.
  */
 function accountsNamedBy(change: ConfirmedStapleChange): Map<string, AccountKeyAlgorithm> {
 	const named = new Map<string, AccountKeyAlgorithm>();
@@ -645,7 +645,7 @@ function optionalIDOfAddress(ids: AccountIDs, staple: ProjectedStaple, address: 
  * A decoded address is the public key string the ids are keyed by. A change
  * interns every account a block names, those only in an operation's details
  * included: upstream counts each among the accounts the staple touches or may
- * create [Keeta TS] index.js:69348-69411, 69763-69766, 69838, and the sender
+ * create [Keeta TS] index.js:69627-69690, 70077-70080, 70152, and the sender
  * a receive names sent in the same staple. One without an id is a bug, and
  * the staples fail rather than store a row that names nobody.
  */
@@ -784,7 +784,7 @@ async function mainStaples(transaction: PostgresTransaction, keys: Buffer[]): Pr
  * A staple holds votes of one permanence only, so permanent votes, when
  * there are any, are preferred over temporary ones for the same blocks; the
  * blocks are those stored with the first of the chosen votes.
- * [Keeta TS] index.js:81947-81979
+ * [Keeta TS] index.js:82311-82343
  */
 async function sideStaples(transaction: PostgresTransaction, keys: Buffer[]): Promise<Map<string, VoteStaple>> {
 	const votesByStaple = groupBy(await transaction.run(sideStapleVotes, [keys, unexpiredSince(transaction.moment)]), function(row) {
@@ -825,7 +825,7 @@ async function sideStaples(transaction: PostgresTransaction, keys: Buffer[]): Pr
 /*
  * Decoding a certificate never checks its validity period, so an expired
  * certificate reads back like any other; callers judge validity themselves.
- * [Keeta TS] index.js:78788-78804, 70823-70846
+ * [Keeta TS] index.js:79151-79167, 71156-71179
  */
 function toCertificateWithIntermediates(row: CertificateColumns): CertificateWithIntermediates {
 	let intermediates: CertificateBundle | null = null;
@@ -875,7 +875,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * Ledger calls init synchronously and cannot wait, so the migration starts
 	 * here and the first transaction waits for it; a failed migration is
 	 * reported by that transaction, and tried again by the next.
-	 * [Keeta TS] index.js:71286-71291
+	 * [Keeta TS] index.js:71649-71654
 	 */
 	override init(config: LedgerConfig, ledger: Ledger): void {
 		super.init(config, ledger);
@@ -1124,7 +1124,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 
 	/*
 	 * Upstream takes the serial inside the vote's or quote's own transaction
-	 * [Keeta TS] index.js:70378, 71238, which holds a pooled connection, so the
+	 * [Keeta TS] index.js:70711, 71601, which holds a pooled connection, so the
 	 * serial is taken on that connection: a second checkout would wait for
 	 * the connection the caller holds once the pool is exhausted. nextval
 	 * never rolls back, so a serial taken by an aborted attempt is still never
@@ -1234,9 +1234,10 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	}
 
 	/*
-	 * computeLedgerEffect asks once for each principal a staple has an effect
-	 * on, with the entities whose permissions it adjusts, often none
-	 * [Keeta TS] index.js:68300-68344; no row matches an empty list (D10).
+	 * computeLedgerEffect asks for each principal whose permission updates
+	 * combine with its stored rows, with the entities they name
+	 * [Keeta TS] index.js:68415-68477; no row matches an empty list (D10),
+	 * which releases before 0.19 asked with for every other principal.
 	 */
 	async listACLsByPrincipal(transaction: PostgresTransaction, principal: ACLRow['principal'], entityList?: GenericAccount[]): Promise<ACLRow[]> {
 		let entities: string[] | null = null;
@@ -1280,7 +1281,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 
 	/*
 	 * Heads are main-chain only, even under 'both' (D5).
-	 * [Keeta TS] index.js:70296-70312
+	 * [Keeta TS] index.js:70629-70645
 	 */
 	async getHeadBlocks(transaction: PostgresTransaction, accounts: GenericAccount[], from: LedgerSelector): Promise<{ [account: string]: Block | null }> {
 		const heads: { [account: string]: Block | null } = {};
@@ -1317,7 +1318,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	/*
 	 * Absent is null, never an empty list: upstream reads the first vote's
 	 * blocks of any non-null result.
-	 * [Keeta TS] index.js:70613-70616
+	 * [Keeta TS] index.js:70946-70949
 	 */
 	async getVotes(transaction: PostgresTransaction, hash: BlockHash, from: LedgerSelector): Promise<Vote[] | null> {
 		const key = hashBytes(hash);
@@ -1334,7 +1335,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * Voting reads this under 'both' with its own key as the issuer, and may
 	 * replace only a single unexpired temporary vote of its own; an expired
 	 * vote left in the answer would block the account until it is collected.
-	 * [Keeta TS] index.js:70317-70342
+	 * [Keeta TS] index.js:70650-70675
 	 */
 	async getVotesFromMultiplePrevious(transaction: PostgresTransaction, previousBlocks: BlockHash[], from: LedgerSelector, issuer?: Account): Promise<{ [hash: string]: Vote[] | null }> {
 		let issuerKey: string | null = null;
@@ -1357,7 +1358,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * Staples are identified by the hash of their blocks, and every requested
 	 * hash gets an entry: upstream reads each one back and treats a missing
 	 * entry as an internal error.
-	 * [Keeta TS] index.js:70548-70584
+	 * [Keeta TS] index.js:70881-70917
 	 */
 	async getVoteStaples(transaction: PostgresTransaction, voteBlockHashes: VoteBlockHash[], from: LedgerSelector): Promise<VoteBlockHashMap<VoteStaple | null>> {
 		const found = await fromSelectedEach(from, voteBlockHashes.map(hashBytes), async function(keys) {
@@ -1393,7 +1394,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * that is no entry of an account's history is refused, and one outside
 	 * the whole ledger's history gives nothing (D8). A
 	 * fractional limit holds the whole entries it allows, as an array slice does.
-	 * [Keeta TS] index.js:70568-70584, 59982-59984, 82222-82248
+	 * [Keeta TS] index.js:70901-70917, 59988-59990, 82586-82612
 	 */
 	async getHistory(transaction: PostgresTransaction, account: GenericAccount | null, start: VoteBlockHash | null, requestedLimit: number = DEFAULT_HISTORY_LIMIT): Promise<VoteBlockHash[]> {
 		const limit = Math.trunc(requestedLimit);
@@ -1425,7 +1426,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * least one vote while any remains. One vote more than the page shows
 	 * whether any remain: the key is omitted on the last page, because the
 	 * caller stops only when it is undefined (D8).
-	 * [Keeta TS] index.js:70669-70738
+	 * [Keeta TS] index.js:71002-71071
 	 */
 	async getVotesAfter(transaction: PostgresTransaction, moment: Date, startKey?: string, options?: GetVotesAfterOptions): Promise<PaginatedVotes> {
 		const maximumVotes = Math.max(Math.ceil(options?.maxVotesPerPage ?? DEFAULT_VOTES_PER_PAGE), 1);
@@ -1449,7 +1450,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * The holder of a key other than the block the caller asked to exclude:
 	 * voting excludes the block it is voting on, so a permanent vote can
 	 * follow the temporary vote that put the key on the side ledger (D12).
-	 * [Keeta TS] index.js:70290-70295, 70747-70752
+	 * [Keeta TS] index.js:70623-70628, 71080-71085
 	 */
 	async getIdempotentBlockHash(transaction: PostgresTransaction, idempotent: IdempotentKey, from: LedgerSelector, excludeBlockHash?: BlockHash): Promise<BlockHash | null> {
 		const key = idempotentKeyBytes(idempotent);
@@ -1470,7 +1471,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * Distinct accounts holding OWNER on the identifier: the ledger requires
 	 * exactly one owner to remain, so a principal listed twice would refuse a
 	 * valid staple. Certificates cannot own an identifier.
-	 * [Keeta TS] index.js:71082-71114
+	 * [Keeta TS] index.js:71445-71477
 	 */
 	async listOwners(transaction: PostgresTransaction, identifier: IdentifierAddress, target?: GenericAccount): Promise<GenericAccount[]> {
 		let targetKey: string | null = null;
@@ -1486,7 +1487,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	/*
 	 * The principal-type filter must be honoured: the certificate check throws
 	 * on a row of the wrong type.
-	 * [Keeta TS] index.js:70807-70815
+	 * [Keeta TS] index.js:71140-71148
 	 */
 	async listACLsByEntity(transaction: PostgresTransaction, entity: GenericAccount, options?: ListACLsByEntityFilters): Promise<ACLRow[]> {
 		let certificatePrincipals: boolean | null = null;
@@ -1524,7 +1525,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * is added beside the temporary vote, which stays until it expires. A
 	 * stored vote with the same identity is replaced. The vote lands with its
 	 * block list, its side copies and their side claims, or not at all.
-	 * [Keeta TS] index.js:70346-70352, 70378-70390
+	 * [Keeta TS] index.js:70679-70685, 70711-70723
 	 */
 	async addPendingVote(transaction: PostgresTransaction, staple: VoteStaple): Promise<void> {
 		await this.runIsolatedInTurn(transaction, async () => {
@@ -1757,7 +1758,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	/*
 	 * Two different confirmed blocks may not claim one idempotent key, whether
 	 * the other is already on main or earlier in the same change (D12).
-	 * [Keeta TS] index.js:70290-70295
+	 * [Keeta TS] index.js:70623-70628
 	 */
 	async #assertIdempotentKeysFree(transaction: PostgresTransaction, change: ConfirmedStapleChange): Promise<void> {
 		if (change.idempotentKeys.length === 0) {
@@ -1926,7 +1927,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	/*
 	 * Changes are deltas, added to the stored values and never clamped (D9).
 	 * A zero balance change creates no row.
-	 * [Keeta TS] index.js:68546-68572
+	 * [Keeta TS] index.js:68719-68745
 	 */
 	async #writeAmounts(transaction: PostgresTransaction, change: ConfirmedStapleChange, ids: AccountIDs): Promise<void> {
 		const { balances, supplies, weights } = change.ledgerEffect;
@@ -1976,7 +1977,7 @@ export class PostgresLedgerStorage extends LedgerStorageDriverBase<PostgresTrans
 	 * Applied in order, exactly as resolved: null deletes the row, while a SET
 	 * without flags keeps an empty row, because deleting an emptied
 	 * exact-target row would let the entity-wide row match again (D10).
-	 * [Keeta TS] index.js:68145-68168, 68503-68522
+	 * [Keeta TS] index.js:68283-68306, 68676-68695
 	 */
 	async #writePermissions(transaction: PostgresTransaction, change: ConfirmedStapleChange, ids: AccountIDs): Promise<void> {
 		for (const update of change.ledgerEffect.permissions) {

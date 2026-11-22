@@ -38,7 +38,7 @@ export function jsonLogLine(level: JSONLogLevel, message: string, time: Date, at
 	return(JSON.stringify({ level, message, time: time.toISOString(), ...attributes }));
 }
 
-/** Upstream's order of the levels [Keeta TS] index.js:71656-71673. */
+/** Upstream's order of the levels [Keeta TS] index.js:72019-72036. */
 const LEVEL_ORDER: Readonly<Record<LogLevel, number>> = {
 	DEBUG: 0,
 	INFO: 1,
@@ -96,7 +96,7 @@ function stackOf(args: readonly unknown[]): string | undefined {
 	return(stacks.join('\n'));
 }
 
-/** What the text format prints besides the message: its prefix [Keeta TS] index.js:72329-72343, the errors' stacks and the trace. */
+/** What the text format prints besides the message: its prefix [Keeta TS] index.js:72692-72706, the errors' stacks and the trace. */
 function attributesOf(entry: LogEntry): JSONLogAttributes {
 	const attributes: { [name: string]: string } = { from: entry.from };
 	const requestID = entry.options.currentRequestInfo?.id;
@@ -125,7 +125,7 @@ type JSONLogTargetConfig = {
 	readonly now: () => Date;
 };
 
-/** Writes each entry as one JSON object, filtered by level and by its `from` as upstream's console target filters it [Keeta TS] index.js:71691-71716; upstream's filter also tests the entry's `fromString`, which differs from `from` only for an entry logged with `detailedFrom`, and none of the bundle's code sets one. */
+/** Writes each entry as one JSON object, filtered by level and by its `from` as upstream's console target filters it [Keeta TS] index.js:72054-72079; upstream's filter also tests the entry's `fromString`, which differs from `from` only for an entry logged with `detailedFrom`, and none of the bundle's code sets one. */
 export class JSONLogTarget implements LogTarget {
 	readonly logLevel: LogTargetLevel;
 	readonly filter: RegExp | null;

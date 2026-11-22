@@ -105,7 +105,7 @@ describe('the fee policy', function() {
 	/*
 	 * Upstream leaves out a payee that is the vote issuer and a token that is
 	 * the base token, so both go to their defaults.
-	 * [Keeta TS] index.js:71303-71316
+	 * [Keeta TS] index.js:71666-71679
 	 */
 	test('flat leaves out the representative as payee and the base token', async function() {
 		freezeClock(GENESIS_MOMENT);

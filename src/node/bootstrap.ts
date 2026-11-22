@@ -45,7 +45,7 @@ const DEFAULT_TIMEOUT_MILLISECONDS = 30_000;
 
 /**
  * The most staples a representative sends in one page, its own default
- * [Keeta TS] index.js:70669, and what a page holds unless fewer are asked for.
+ * [Keeta TS] index.js:71002, and what a page holds unless fewer are asked for.
  */
 const MAX_PAGE_LIMIT = 1000;
 
@@ -60,7 +60,7 @@ const MINUTE_MILLISECONDS = 60_000;
 /**
  * How long one read of what the node holds, to name in a filter, runs at
  * most, besides the read of votes under way then
- * [Keeta TS] index.js:70677-70683. It cannot be stopped otherwise, and each
+ * [Keeta TS] index.js:71010-71016. It cannot be stopped otherwise, and each
  * staple read is decoded and its votes' signatures checked, a few
  * milliseconds a staple, so this bounds how long it holds up a stop. What it
  * leaves out the peer may send again, which the pass finds held.
@@ -69,7 +69,7 @@ const HELD_READ_MILLISECONDS = 2000;
 
 /**
  * How long one slice of the ledger's garbage collection runs at most, in one
- * transaction of its own [Keeta TS] index.js:68888-68897, 71553-71557, so
+ * transaction of its own [Keeta TS] index.js:69174-69183, 71916-71920, so
  * that a stop waits on one slice at most.
  */
 const GC_SLICE_MILLISECONDS = 2000;
@@ -946,17 +946,17 @@ export class BootstrapClient {
 
 	/**
 	 * The ledger refuses a staple whose blocks it holds already, as a block
-	 * that exists [Keeta TS] index.js:68719-68723, or, for genesis, as votes
+	 * that exists [Keeta TS] index.js:69005-69009, or, for genesis, as votes
 	 * without weight once genesis has assigned it
-	 * [Keeta TS] index.js:70434-70437, whatever votes the staple carries; the
+	 * [Keeta TS] index.js:70767-70770, whatever votes the staple carries; the
 	 * queue skips a staple whose blocks are held before it offers it, and
 	 * counts one refused because another peer's pass or a P2P message added
 	 * it meanwhile as held. The ledger also refuses a staple whose
 	 * dependencies it lacks, as votes without weight before the staples that
-	 * give the voters weight [Keeta TS] index.js:70433-70436, 70776-70788,
+	 * give the voters weight [Keeta TS] index.js:70766-70769, 71109-71121,
 	 * which the queue keeps until they arrive. One that fills a gap may
 	 * release staples deferred until then, and the callback hears of each
-	 * staple added [Keeta TS] index.js:70397-70456.
+	 * staple added [Keeta TS] index.js:70730-70789.
 	 * Once the client is stopped, nothing more is offered, the rest of a page
 	 * already fetched included, and a refusal is not queued: the node
 	 * stopping it may close its storage next.

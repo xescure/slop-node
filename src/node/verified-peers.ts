@@ -3,7 +3,7 @@ import type { BufferStorage } from '@keetanetwork/keetanet-client/lib/utils/buff
 import type { JSONSerializable, JSONSerializableObject } from '@keetanetwork/keetanet-client/lib/utils/conversion.js';
 import { manualPeerOf } from './config.js';
 
-/** The arenas a peer's greeting is recorded in, by whether the node dialed it [Keeta TS] index.js:74734-74739. */
+/** The arenas a peer's greeting is recorded in, by whether the node dialed it [Keeta TS] index.js:75097-75102. */
 const GREETING_ARENAS = ['knownPeers', 'potentialPeers'] as const;
 
 function isObject(value: JSONSerializable | undefined): value is JSONSerializableObject {
@@ -28,8 +28,8 @@ export function signedBy(key: string, value: JSONSerializable | undefined): JSON
  *
  * A manual peer given without a signature is dialed, greets back with its
  * advertisement signed by its own key, and the switch then records the
- * manual peer as it was given [Keeta TS] index.js:74796-74815, which it
- * never lists as known [Keeta TS] index.js:73742-73747, 72999-73003. The
+ * manual peer as it was given [Keeta TS] index.js:75159-75178, which it
+ * never lists as known [Keeta TS] index.js:74105-74110, 73362-73366. The
  * greeting proves the record as a signature in the setting would, so it is
  * kept instead.
  */
@@ -43,7 +43,7 @@ export class VerifiedPeerStore implements KVStorageProviderAPI {
 	/**
 	 * Records anew each known peer without a signature, for a store whose
 	 * records were written before this one kept greetings: the switch dials
-	 * no manual peer it is still connected to [Keeta TS] index.js:73813-73821,
+	 * no manual peer it is still connected to [Keeta TS] index.js:74176-74184,
 	 * so such a record would otherwise be kept as it is.
 	 */
 	async repair(): Promise<void> {

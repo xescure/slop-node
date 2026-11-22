@@ -157,7 +157,7 @@ async function nextHandled(node: LocalNode, type: string): Promise<boolean> {
 	return(answer);
 }
 
-/** Resolves once the node has recorded a peer as known, which the switch does once it has dialed one [Keeta TS] index.js:74792. */
+/** Resolves once the node has recorded a peer as known, which the switch does once it has dialed one [Keeta TS] index.js:75155. */
 function nextKnownPeer(node: LocalNode): Promise<void> {
 	const kv = node.switch.config.kv;
 	const set = kv.set.bind(kv);
@@ -173,7 +173,7 @@ function nextKnownPeer(node: LocalNode): Promise<void> {
 
 /**
  * The records the node keeps of potential peers from now on, one for each
- * greeting of a representative the switch handles [Keeta TS] index.js:74711-74715.
+ * greeting of a representative the switch handles [Keeta TS] index.js:75074-75078.
  */
 function recordedPotentialPeers(node: LocalNode): unknown[] {
 	const kv = node.switch.config.kv;
@@ -254,7 +254,7 @@ async function advertisementOfAnotherAccount(node: LocalNode): Promise<JSONSeria
 	return({ ...genuine, key: keyOf(STRANGER) });
 }
 
-/** The node's advertisement naming a key that is no account's, which the advertisement parser throws on [Keeta TS] index.js:73093. */
+/** The node's advertisement naming a key that is no account's, which the advertisement parser throws on [Keeta TS] index.js:73456. */
 async function advertisementOfNoAccount(node: LocalNode): Promise<JSONSerializableObject> {
 	const genuine = await node.switch.getOutgoingGreetingInfo();
 	return({ ...genuine, key: 'keeta_no_account' });
@@ -278,7 +278,7 @@ async function advertisementWithUnsignedFields(node: LocalNode): Promise<JSONSer
 	return({ ...genuine, filter: keyOf(STRANGER), unsigned: 'unsigned', endpoints: { ...endpointsOf(node), unsigned: 'unsigned' } });
 }
 
-/** A peer passed on, as a representative passes on each peer it knows [Keeta TS] index.js:74614-74627. */
+/** A peer passed on, as a representative passes on each peer it knows [Keeta TS] index.js:74977-74990. */
 function peerMessage(id: string, advertisement: JSONSerializableObject, ttl: number): string {
 	return(JSON.stringify({ id, peer: advertisement, ttl }));
 }
@@ -302,7 +302,7 @@ async function secondsGreeting(pair: Pair): Promise<JSONSerializableObject> {
 	return(await pair.second.node.switch.getOutgoingGreetingInfo());
 }
 
-/** A test message the switch would pass on [Keeta TS] index.js:74075-74078. */
+/** A test message the switch would pass on [Keeta TS] index.js:74438-74441. */
 function relayedTestMessage(): Promise<string> {
 	return(Promise.resolve(JSON.stringify({ id: 'test', test: 'hello', ttl: 5 })));
 }
@@ -311,7 +311,7 @@ function unknownMessage(): Promise<string> {
 	return(Promise.resolve(JSON.stringify({ id: 'unknown', unknown: 'hello', ttl: 0 })));
 }
 
-/** A message the switch's parser throws on, as it reads a field of a JSON null [Keeta TS] index.js:73907-73908. */
+/** A message the switch's parser throws on, as it reads a field of a JSON null [Keeta TS] index.js:74270-74271. */
 function nullMessage(): Promise<string> {
 	return(Promise.resolve('null'));
 }
@@ -340,7 +340,7 @@ async function chainedStaples(network: TestNetwork, amounts: readonly bigint[]):
 	return(staples);
 }
 
-/** Resolves once the node's switch has kept a staple from a peer whose filter it does not pass [Keeta TS] index.js:74239-74244. */
+/** Resolves once the node's switch has kept a staple from a peer whose filter it does not pass [Keeta TS] index.js:74602-74607. */
 function nextFiltered(node: LocalNode): Promise<void> {
 	const increment = node.stats.incr.bind(node.stats);
 	return(new Promise<void>(function(resolve) {
@@ -353,7 +353,7 @@ function nextFiltered(node: LocalNode): Promise<void> {
 	}));
 }
 
-/** The switch sends its messages as text frames [Keeta TS] index.js:73552. */
+/** The switch sends its messages as text frames [Keeta TS] index.js:73915. */
 function typeOfFrame(data: unknown): string | undefined {
 	if (typeof data !== 'string') {
 		return(undefined);
@@ -383,7 +383,7 @@ function nextReceived(socket: WebSocket, type: string): Promise<void> {
 /**
  * Resolves once the switch has registered that many more connections, which
  * for an inbound one lasts until its greeting is handled
- * [Keeta TS] index.js:73467-73491, 73841-73879.
+ * [Keeta TS] index.js:73830-73854, 74204-74242.
  */
 function connectionsRegistered(node: LocalNode, count: number): Promise<void> {
 	const register = node.switch.registerConnection.bind(node.switch);
@@ -488,7 +488,7 @@ type HeldStaples = {
 
 /**
  * Holds every staple the switch hands the node, inside the switch's handling
- * of the message [Keeta TS] index.js:74018-74038, 72537-72543, until released.
+ * of the message [Keeta TS] index.js:74381-74401, 72900-72906, until released.
  */
 function holdStaplesInNode(node: LocalNode): HeldStaples {
 	const handle = node.recvMessageFromPeer.bind(node);
@@ -616,9 +616,9 @@ describe('peers over the /p2p WebSocket', function() {
 
 	/*
 	 * The switch registers a socket that closes before its greeting only after
-	 * unregistering it [Keeta TS] index.js:73472-73477, 73856-73879; were it to
+	 * unregistering it [Keeta TS] index.js:73835-73840, 74219-74242; were it to
 	 * keep the connection, the timer that idles its connections out would stay
-	 * until it let go of its last [Keeta TS] index.js:73874-73878, 73891-73896.
+	 * until it let go of its last [Keeta TS] index.js:74237-74241, 74254-74259.
 	 */
 	test('lets go of a socket that closes before its greeting once the switch has taken it', async function() {
 		// Read-only, the node starts no bootstrap, whose timer would stay too, and can hold no genesis.
@@ -1119,7 +1119,7 @@ describe('a node built in code voting on main', function() {
 /*
  * Open to peers, a node on main in no-voting mode still votes and quotes
  * nothing: the ledger refuses both in any mode but read-write
- * [Keeta TS] index.js:70058-70060, 71208-71210, before a vote is built.
+ * [Keeta TS] index.js:70391-70393, 71571-71573, before a vote is built.
  */
 describe('a node configured to mirror main', function() {
 	test('refuses to vote on or quote a block of main, signing nothing', async function() {
@@ -1174,8 +1174,8 @@ describe.each(driversUnderTest)('two representatives on the $name driver', funct
 describe('stopping', function() {
 	/*
 	 * A WebSocket hands each message to the switch without waiting for it
-	 * [Keeta TS] index.js:73510-73517, and the switch writes the node's
-	 * statistics once it is done [Keeta TS] index.js:73961-73963, so a node
+	 * [Keeta TS] index.js:73873-73880, and the switch writes the node's
+	 * statistics once it is done [Keeta TS] index.js:74324-74326, so a node
 	 * that stopped meanwhile would have them written to a closed store.
 	 */
 	test.each(driversUnderTest)('waits for a staple a peer sent over the WebSocket until the node has handled it, on $name', async function(driver) {
@@ -1218,7 +1218,7 @@ describe('stopping', function() {
 
 	/*
 	 * A node passes on a staple it has added, dialing the peers it is not
-	 * connected to [Keeta TS] index.js:72588-72591, 74389-74454, so a staple
+	 * connected to [Keeta TS] index.js:72951-72954, 74752-74817, so a staple
 	 * still being handled as the node stops dials after its connections were
 	 * closed.
 	 */

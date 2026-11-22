@@ -14,7 +14,7 @@ import type { SendOptions } from './support.js';
  * keys looked up in storage, before the heads. An idempotent key is the
  * account and the key together, and the lookup leaves out the block's own
  * hash.
- * [Keeta TS] index.js:69956-69987, 70288-70295, 71132-71206
+ * [Keeta TS] index.js:70289-70320, 70621-70628, 71495-71569
  */
 
 const DEV_NETWORK = KeetaNet.Client.Config.NetworkIDs.dev;
@@ -24,7 +24,7 @@ const SUBNET = 5n;
 // The one node runs on the subnet.
 const ON_SUBNET: RecordingOptions = { nodes: [{ representative: 0, fee: { type: 'free' }, mode: 'read-write', subnet: toDecimal(SUBNET) }] };
 
-// The longest idempotent key a block may carry. [Keeta TS] index.js:62324
+// The longest idempotent key a block may carry. [Keeta TS] index.js:62433
 const LONGEST_KEY = idempotentKey('k'.repeat(36));
 
 const KEY = idempotentKey('order-1');

@@ -30,8 +30,8 @@ export type TransactionOptions = Parameters<LedgerStorageAPI['beginTransaction']
  * The statistics a transaction gathers for its node, but for the ledger
  * checksum, which the driver writes with the staples it covers (D19):
  * Ledger.add folds each staple it adds into the transaction's statistics
- * [Keeta TS] index.js:70449-70453, which reach the node's store only after
- * the commit, and later still [Keeta TS] index.js:70037-70042, 72505-72511.
+ * [Keeta TS] index.js:70782-70786, which reach the node's store only after
+ * the commit, and later still [Keeta TS] index.js:70370-70375, 72868-72874.
  */
 class TransactionStatistics extends StatsPending {
 	override xor(key: string, change: Parameters<InstanceType<typeof StatsPending>['xor']>[1]): void {
@@ -46,7 +46,7 @@ class TransactionStatistics extends StatsPending {
  * What every driver transaction carries for upstream: the node, the moment the
  * attempt began, its identifier, whether it may write, and the statistics that
  * Ledger merges into the node only after a successful commit.
- * [Keeta TS] index.js:69988-69996, 70037-70042
+ * [Keeta TS] index.js:70321-70329, 70370-70375
  */
 export class LedgerDriverTransaction implements LedgerStorageTransactionBase {
 	readonly node?: NonNullable<TransactionOptions['node']>;
@@ -92,7 +92,7 @@ type MemberResult<Member extends StorageMember> = ReturnType<NonNullable<LedgerS
 /*
  * A staple may be deferred when it arrives, but never on a replay: a waiter
  * that still lacks another previous stays where it is.
- * [Keeta TS] index.js:68758-68761
+ * [Keeta TS] index.js:69044-69047
  */
 type Application = 'arrival' | 'replay';
 
@@ -182,12 +182,12 @@ const RETRYABLE_FAILURES_LIMIT = 3;
 /** A released deferred staple whose last gc retry failed: when, among such failures, and how many staples the driver had applied then. */
 type FailedRetry = { readonly order: number; readonly appliedBefore: number };
 
-/** Upstream's default time budget of one gc [Keeta TS] index.js:68888. */
+/** Upstream's default time budget of one gc [Keeta TS] index.js:69174. */
 const DEFAULT_GC_TIME_LIMIT_MILLISECONDS = 280_000;
 
 /**
  * The node statistic upstream's ledger folds every applied block's hash into
- * by XOR [Keeta TS] index.js:70451.
+ * by XOR [Keeta TS] index.js:70784.
  */
 export const LEDGER_CHECKSUM_KEY = 'ledgerChecksum';
 
@@ -225,7 +225,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * Called once, synchronously, by the Ledger constructor; Ledger.copy shares
 	 * the driver without calling it again. A second call would bind one store to
 	 * two configurations, so it is refused.
-	 * [Keeta TS] index.js:71290-71302
+	 * [Keeta TS] index.js:71653-71665
 	 */
 	init(config: LedgerConfig, ledger: Ledger): void {
 		if (this.#driver.state === 'initialized') {
@@ -253,7 +253,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * one of its blocks, all inside the caller's transaction. Returns each
 	 * applied staple once, or nothing when the staple had to be deferred, because
 	 * Ledger.add folds every returned block into the ledger checksum.
-	 * [Keeta TS] index.js:70440-70453
+	 * [Keeta TS] index.js:70773-70786
 	 */
 	async adjust(transaction: Transaction, input: VoteStaple, changes: ComputedEffectOfBlocks): Promise<VoteStaple[]> {
 		const windowMilliseconds = this.initialized.config.heapProcessWindowMs ?? DEFAULT_HEAP_PROCESS_WINDOW_MILLISECONDS;
@@ -275,7 +275,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * the ones that ask for it. Anything else becomes a non-retryable ledger
 	 * error: Ledger.run reruns the whole transaction on a retry, which is safe
 	 * only for failures a driver knows to be transient.
-	 * [Keeta TS] index.js:71361-71411
+	 * [Keeta TS] index.js:71724-71774
 	 */
 	evaluateError(error: unknown): Promise<KeetaNetError> {
 		if (isKeetaNetError(error)) {
@@ -291,7 +291,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * settlement times and transaction retries that only the node records.
 	 * Without a node these are reported as unknown, the way upstream reports a
 	 * statistic it cannot read.
-	 * [Keeta TS] index.js:71573-71587, 71415, 75536-75544, 75599-75620
+	 * [Keeta TS] index.js:71936-71950, 71778, 75899-75907, 75962-75983
 	 */
 	async stats(): Promise<LedgerStatistics> {
 		const { moment, momentRange, blockCount, transactionCount, representativeCount } = await this.countLedger();
@@ -317,12 +317,12 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	/**
 	 * The distinct main staples holding the blocks, in the order their blocks
 	 * are first named, as upstream's fallback over getVotes and getBlock
-	 * finds them [Keeta TS] index.js:70601-70667, but read as getVoteStaples
+	 * finds them [Keeta TS] index.js:70934-71000, but read as getVoteStaples
 	 * reads them: as the bytes each was received as. A peer bootstrapping
 	 * from this node names the staples it holds by those bytes, and this
 	 * node's bootstrap client names its own to its peers by them
-	 * [Keeta TS] index.js:70722-70726. Upstream asks for the main ledger only
-	 * [Keeta TS] index.js:70597-70599.
+	 * [Keeta TS] index.js:71055-71059. Upstream asks for the main ledger only
+	 * [Keeta TS] index.js:70930-70932.
 	 */
 	async getVoteStaplesFromBlockHash(transaction: Transaction, blocks: BlockHash[], from: LedgerSelector): Promise<VoteStaple[]> {
 		if (from !== 'main') {
@@ -348,7 +348,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * clock moved on, runs no batch and reports nothing left, which ends a
 	 * caller collecting until nothing is. One batch always runs here, and
 	 * the result is whether more remain.
-	 * [Keeta TS] index.js:68888-68897
+	 * [Keeta TS] index.js:69174-69183
 	 */
 	override async gc(transaction: Transaction, timeLimitMS: number = DEFAULT_GC_TIME_LIMIT_MILLISECONDS): Promise<boolean> {
 		const startTime = Date.now();
@@ -362,7 +362,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	/**
 	 * One batch of the gc loop, which runs batches in one transaction until a
 	 * batch reports that nothing remains or the time budget is spent.
-	 * [Keeta TS] index.js:68888-68898
+	 * [Keeta TS] index.js:69174-69184
 	 */
 	protected override async gcBatch(transaction: Transaction): Promise<boolean> {
 		return(await this.#gcBatch(transaction, GC_BATCH_LIMIT));
@@ -371,7 +371,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	/**
 	 * Records the staple as waiting on each previous block that its own chain
 	 * lacks; a block whose previous is inside the staple waits on nothing.
-	 * [Keeta TS] index.js:68753-68764
+	 * [Keeta TS] index.js:69039-69050
 	 */
 	protected override async adjustDefer(transaction: Transaction, input: VoteStaple): Promise<void> {
 		const external = blocksWithExternalPrevious(input).filter(function(block): boolean {
@@ -679,7 +679,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * Replay never defers again: a waiter that still lacks another previous
 	 * stays where it is. A waiter that fails is logged and left in place, and
 	 * the staple that released it still applies.
-	 * [Keeta TS] index.js:68758-68761
+	 * [Keeta TS] index.js:69044-69047
 	 */
 	async #replayWaiters(transaction: Transaction, released: VoteStaple, replay: ReplayState): Promise<AppliedStaple[]> {
 		const { config } = this.initialized;
@@ -839,7 +839,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * A conflict with another transaction or a lost session is the
 	 * transaction's failure, which Ledger.run reruns, not the staple's: a
 	 * retry then may succeed on the same ledger.
-	 * [Keeta TS] index.js:71396-71406
+	 * [Keeta TS] index.js:71759-71769
 	 */
 	async #asksToRunAgain(error: unknown): Promise<boolean> {
 		return(Reflect.get(await this.evaluateError(error), 'shouldRetry') === true);
@@ -898,7 +898,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * block already has a confirmed successor, or that an opening block arrives
 	 * for an account that already has a chain. Applying such a staple would
 	 * overwrite confirmed history, so it is refused and reported.
-	 * [Keeta TS] index.js:68714-68768
+	 * [Keeta TS] index.js:69000-69054
 	 */
 	async #assertExtendsConfirmedHistory(transaction: Transaction, staple: VoteStaple): Promise<void> {
 		await Promise.all(blocksWithExternalPrevious(staple).map(async (block): Promise<void> => {
@@ -938,7 +938,7 @@ export abstract class LedgerStorageDriverBase<Transaction extends LedgerDriverTr
 	 * block before its own previous would wait for a block it carries itself,
 	 * and no arrival would ever release it. It is refused with the code vote
 	 * validation uses for the same ordering fault.
-	 * [Keeta TS] index.js:68727-68764 (deferral), 71186-71196 (error code)
+	 * [Keeta TS] index.js:69013-69050 (deferral), 71549-71559 (error code)
 	 */
 	#assertChainOrder(staple: VoteStaple): void {
 		const later = new Set<BlockHashKey>(staple.blocks.map(function(block): BlockHashKey {
@@ -972,7 +972,7 @@ function stapleOf({ staple }: AppliedStaple): VoteStaple {
 /*
  * Like the checksum, the settlement statistics reach the node only when the
  * transaction commits.
- * [Keeta TS] index.js:68629-68668, 70037-70042
+ * [Keeta TS] index.js:68802-68841, 70370-70375
  */
 function recordSettlement(transaction: LedgerDriverTransaction, applied: readonly AppliedStaple[]): void {
 	for (const { settlement } of applied) {
@@ -1009,7 +1009,7 @@ function blocksWithExternalPrevious(staple: VoteStaple): Block[] {
 /**
  * A node's ledger checksum: its driver's, written with the staples it
  * covers, or for a driver not built on this base, the statistic upstream's
- * ledger keeps on the node [Keeta TS] index.js:70449-70453, with the moment
+ * ledger keeps on the node [Keeta TS] index.js:70782-70786, with the moment
  * of the ledger's counts.
  */
 export async function nodeLedgerChecksum(node: Pick<Node, 'config' | 'ledger' | 'stats'>): Promise<LedgerChecksum> {

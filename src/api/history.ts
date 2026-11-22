@@ -17,9 +17,9 @@ type HistoryEntry = HistoryPage['history'][number];
 
 /**
  * A history entry: the staple, the hash of its blocks, which names it as the
- * start of the next page [Keeta TS] index.js:59976-59985, 82196-82205, and
+ * start of the next page [Keeta TS] index.js:59982-59991, 82560-82569, and
  * the time this node gives it, its own vote's time when it voted, which is
- * what the staple's timestamp prefers [Keeta TS] index.js:82222-82239.
+ * what the staple's timestamp prefers [Keeta TS] index.js:82586-82603.
  */
 function historyEntry(staple: VoteStaple, representative: Parameters<VoteStaple['timestamp']>[0]): HistoryEntry {
 	return({ voteStaple: staple, $id: staple.blocksHash.toString(), $timestamp: staple.timestamp(representative).toISOString() });
@@ -31,7 +31,7 @@ function historyEntry(staple: VoteStaple, representative: Parameters<VoteStaple[
  * staples, as many as the limit allows. nextKey names the page's last
  * staple, or on an empty page the staple it continued after, as a
  * representative answers; the client stops at an empty page
- * [Keeta TS] index.js:59964-59986.
+ * [Keeta TS] index.js:59970-59992.
  * [node-lite] adapted from getAccountHistory.
  */
 export async function historyPage(request: APIRequest, account: GenericAccount | null, startText: string | undefined): Promise<HistoryPage> {

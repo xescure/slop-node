@@ -3,7 +3,7 @@ import type { LedgerConfig } from '@keetanetwork/keetanet-client/lib/ledger/inde
 import { assertNever } from '../util/assert-never.js';
 import { AMOUNT } from './amount.js';
 
-/** An account a fee may be paid to [Keeta TS] index.js:71303. */
+/** An account a fee may be paid to [Keeta TS] index.js:71666. */
 export type FeeAccount = Account | StorageAddress;
 
 /** What a representative charges for a vote, before who is paid and in which token. */
@@ -45,10 +45,10 @@ export function parseFeeSchedule(text: string): FeeSchedule | undefined {
 
 /**
  * The ledger's fee function for the policy. No fee is answered as null, which
- * upstream issues as a zero fee [Keeta TS] index.js:71255-71263. A flat fee
+ * upstream issues as a zero fee [Keeta TS] index.js:71618-71626. A flat fee
  * names its payee and token through the ledger, which picks one of the fee
  * accounts at random and leaves out a payee that is the representative and a
- * token that is the base token [Keeta TS] index.js:71303-71316.
+ * token that is the base token [Keeta TS] index.js:71666-71679.
  */
 export function computeFeeFromBlocksFor(policy: FeePolicy): ComputeFeeFromBlocks {
 	switch (policy.kind) {

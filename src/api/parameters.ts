@@ -13,7 +13,7 @@ export type LedgerReader = Parameters<Parameters<Ledger['runReadOnly']>[1]>[0];
 type Digit = '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9';
 type Letter = 'a' | 'b' | 'c' | 'd' | 'e' | 'f' | 'g' | 'h' | 'i' | 'j' | 'k' | 'l' | 'm' | 'n' | 'o' | 'p' | 'q' | 'r' | 's' | 't' | 'u' | 'v' | 'w' | 'x' | 'y' | 'z';
 
-/** A character of an RFC 9110 token [Keeta TS 0.18.8] index.js:72643. */
+/** A character of an RFC 9110 token [Keeta TS] index.js:73006. */
 type TokenCharacter = Digit | Letter | Uppercase<Letter> | '!' | '#' | '$' | '%' | '&' | '\'' | '*' | '+' | '-' | '.' | '^' | '_' | '`' | '|' | '~';
 
 /**
@@ -30,7 +30,7 @@ type TokenOf<Remaining extends string, Name extends string> = Remaining extends 
 /**
  * The name, if it is a literal RFC 9110 token, and otherwise a type it cannot
  * have: the request's timing throws TIMING_INVALID_NAME at run time for a
- * section named by anything else [Keeta TS 0.18.8] index.js:72671-72673. Each
+ * section named by anything else [Keeta TS] index.js:73034-73036. Each
  * member of a union is checked on its own.
  */
 type TimingName<Name extends string> = Name extends string ? TokenOf<Name, Name> : never;
@@ -46,9 +46,9 @@ export function readLedger<Result>(request: APIRequest, identifier: string, read
 
 /**
  * A refusal of the request, as the API error the client rebuilds from the
- * code [Keeta TS] index.js:67012-67030. The package exports no constructor
+ * code [Keeta TS] index.js:67121-67139. The package exports no constructor
  * for it, and its JSON decoder builds one from a valid code
- * [Keeta TS] index.js:67343-67419.
+ * [Keeta TS] index.js:67481-67557.
  */
 export function apiError(code: APIErrorCode, message: string): Error {
 	return(lib.Error.fromJSON({ type: 'API', code, message }));
@@ -103,7 +103,7 @@ function parseSide<Side extends string>(query: APIRequest['query'], sides: reado
 
 /**
  * Which ledger to read: the main ledger unless the request names the side
- * ledger [Keeta TS] index.js:68904-68909, 59775-59786; any other side is
+ * ledger [Keeta TS] index.js:69190-69195, 59781-59792; any other side is
  * refused as a representative refuses it.
  * [node-lite] adapted from ledgerSelector.
  */
@@ -114,9 +114,9 @@ export function parseLedgerStorage(query: APIRequest['query']): LedgerStorage {
 /**
  * Which ledger to find a block on, where a request may also name both, as
  * the client does for the blocks of an account it recovers
- * [Keeta TS] index.js:60341-60343; the ledger passes the choice on to its
+ * [Keeta TS] index.js:60347-60349; the ledger passes the choice on to its
  * storage, which reads both as it does for its own checks
- * [Keeta TS] index.js:70538-70541, 68704.
+ * [Keeta TS] index.js:70871-70874, 70624, 70651.
  */
 export function parseLedgerSelector(query: APIRequest['query']): LedgerSelector {
 	return(parseSide(query, LEDGER_SELECTORS));
@@ -137,7 +137,7 @@ export function parseToken(text: string): TokenAddress {
 }
 
 /**
- * Accounts separated by commas, as the client joins them [Keeta TS] index.js:60948-60950.
+ * Accounts separated by commas, as the client joins them [Keeta TS] index.js:60872-60874.
  * [node-lite] adapted from parseAccounts.
  */
 export function parseAccountList(text: string): GenericAccount[] {

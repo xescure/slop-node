@@ -9,7 +9,7 @@ import type { Awaited } from './bootstrap-retry.js';
 
 const lib = KeetaNet.lib;
 
-/** The refusal of votes whose voters' weight is too little [Keeta TS] index.js:70433-70436. */
+/** The refusal of votes whose voters' weight is too little [Keeta TS] index.js:70766-70769. */
 const INSUFFICIENT_WEIGHT = 'LEDGER_INSUFFICIENT_VOTING_WEIGHT';
 
 function keyOf(account: GenericAccount): string {
@@ -34,7 +34,7 @@ function signersOf(block: Block): GenericAccount[] {
  * The accounts the staples' blocks change on the ledger: each block's
  * account, whose chain, balances, permissions and certificates its own
  * blocks set, and the accounts its sends credit.
- * [Keeta TS] index.js:69203-69264
+ * [Keeta TS] index.js:69482-69543
  */
 export function landedOn(staples: readonly VoteStaple[]): string[] {
 	const landed = new Set<string>();
@@ -89,7 +89,7 @@ export function awaitedOf(staple: VoteStaple, code: string): Awaited {
  * weight delegated in all. With no weight delegated at all, the ledger
  * wants a vote of its trusted account instead, which the offer itself
  * checks.
- * [Keeta TS] index.js:70776-70796
+ * [Keeta TS] index.js:71109-71129
  */
 export async function weightSufficesOn(ledger: Pick<Ledger, 'runReadOnly'>, voterSets: readonly (readonly string[])[]): Promise<boolean[]> {
 	return(await ledger.runReadOnly('bootstrap-retry-weight', async function(reader): Promise<boolean[]> {

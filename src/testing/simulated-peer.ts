@@ -113,13 +113,13 @@ export type SimulatedPeerOptions = {
 	/**
 	 * The most staples the peer puts in a page, whatever the limit: one that
 	 * caps the limit, or one whose time for a request runs out once it holds
-	 * that many [Keeta TS] index.js:70677-70683.
+	 * that many [Keeta TS] index.js:71010-71016.
 	 */
 	readonly answersAtMost?: number;
 	/**
 	 * The most staples the peer reads for a request, those the filter names
 	 * included, once it has one to send: one whose time for a request runs
-	 * out [Keeta TS] index.js:70675-70683 while it builds and skips the
+	 * out [Keeta TS] index.js:71008-71016 while it builds and skips the
 	 * staples the filter names, as the main network's representatives do.
 	 */
 	readonly readsAtMost?: number;
@@ -127,7 +127,7 @@ export type SimulatedPeerOptions = {
 	 * The most staples the filter names that the peer leaves out before it has
 	 * one to send, after which what stands in front of it gives up on the
 	 * request, as a gateway answering 504 does: the peer runs out of time only
-	 * once it has a staple to send [Keeta TS] index.js:70677-70683.
+	 * once it has a staple to send [Keeta TS] index.js:71010-71016.
 	 */
 	readonly givesUpPastNamed?: number;
 	/** Moments from and before which what stands in front of the peer gives up on every request from a start between them that carries a filter, however small. */
@@ -220,11 +220,11 @@ export class ConcurrentClock {
  * (src/ledger/storage/memory/driver.ts getVotesAfter), each vote at the moment
  * it was made: the peer reads the votes made at or after the start, in that
  * order, so many at a time, and lists the staple of each vote it read, once
- * per read [Keeta TS] index.js:70691-70712, in no order of its own within a
+ * per read [Keeta TS] index.js:71024-71045, in no order of its own within a
  * read; a staple whose votes two reads share is listed twice. A read holds
  * so many votes, or, as a representative's storage returns them, up to so
  * many more or fewer. Its time for a request runs out after so many reads,
- * once it has a staple to send [Keeta TS] index.js:70677-70683, and each read
+ * once it has a staple to send [Keeta TS] index.js:71010-71016, and each read
  * takes so long.
  */
 export type SimulatedKeying =
@@ -295,7 +295,7 @@ export function deterministicRandom(seed: number): () => number {
  * A representative answering bootstrap pages as this node's API does, or
  * did before it keyed votes: the staples it holds a key at or after the
  * start for (SimulatedKeying), leaving out those the filter names before
- * counting towards the limit [Keeta TS] index.js:70669-70738. The filter travels serialized
+ * counting towards the limit [Keeta TS] index.js:71002-71071. The filter travels serialized
  * and is read back with the client's own Bloom functions, as
  * src/api/node.ts does.
  */
@@ -490,7 +490,7 @@ export class SimulatedPeer {
 		let at = this.#firstVoteAtOrAfter(start);
 		let reads = 0;
 		while (staples.length < limit && at < this.#votes.length) {
-			// [Keeta TS] index.js:70691-70695
+			// [Keeta TS] index.js:71024-71028
 			const vary = keying.readsVaryBy ?? 0;
 			const size = Math.min(keying.votesPerRead + scrambled(at, reads) % (2 * vary + 1) - vary, (limit - staples.length) * 32);
 			const read = this.#votes.slice(at, at + size);
@@ -629,7 +629,7 @@ export class SimulatedPeer {
 	}
 }
 
-/** The refusal of a staple whose voters lack weight [Keeta TS] index.js:70433-70436. */
+/** The refusal of a staple whose voters lack weight [Keeta TS] index.js:70766-70769. */
 export const SIMULATED_WEIGHT_REFUSAL = 'LEDGER_INSUFFICIENT_VOTING_WEIGHT';
 
 /** The refusal of a staple that spends what its account does not hold. */
@@ -643,7 +643,7 @@ export const SIMULATED_BALANCE_REFUSAL = 'LEDGER_INVALID_BALANCE';
  * spend a balance they credit. It refuses for want of weight, too, a staple
  * once it holds one that moves weight away from the staple's voters, as the
  * ledger judges a staple by the weight it holds when it is added
- * [Keeta TS] index.js:70776-70795: a staple voted before a delegation moved
+ * [Keeta TS] index.js:71109-71128: a staple voted before a delegation moved
  * the weight is refused for good once the delegation is added before it.
  */
 export class SimulatedNode {

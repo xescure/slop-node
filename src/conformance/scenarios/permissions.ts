@@ -34,7 +34,7 @@ import type { PublishedToken, TokenOptions } from './support.js';
  * fixed order: the operations themselves, then the requirements, then the
  * owner count of every identifier whose owners changed, then the effect on
  * balances and supplies.
- * [Keeta TS] index.js:69068-69112, 69641-69697, 70917-70982, 71025-71131
+ * [Keeta TS] index.js:69354-69396, 69955-70011, 71197-71345, 71388-71494
  */
 
 const lib = KeetaNet.lib;
@@ -223,7 +223,7 @@ async function certifiedHolders(recorder: CaseRecorder, nodes: readonly number[]
 	/*
 	 * The effect of an ACL for a certificate looks the certificate up in
 	 * storage, so the certificate is stored by an earlier staple.
-	 * [Keeta TS] index.js:68269-68275, 68492-68496
+	 * [Keeta TS] index.js:68407-68413, 68665-68669
 	 */
 	const granted = await confirmed(recorder, [chains.append(await certificateGrant(recorder, published, authority))]);
 	for (const node of nodes) {
@@ -361,7 +361,7 @@ export const permissionScenarios: readonly Scenario[] = [
 	/*
 	 * A row without a target covers every token: an exact target match is
 	 * preferred, and a row whose target is the account itself is the fallback.
-	 * [Keeta TS] index.js:68145-68168
+	 * [Keeta TS] index.js:68283-68306
 	 */
 	scenario('PM2b', 'SEND_ON_BEHALF granted without a target covers a send of the base token', {}, async function(recorder) {
 		await recorder.addGenesis(0);
@@ -388,7 +388,7 @@ export const permissionScenarios: readonly Scenario[] = [
 	/*
 	 * A grant earlier in the request without a target applies to the whole
 	 * account, so it covers a requirement for any token.
-	 * [Keeta TS] index.js:69086-69093
+	 * [Keeta TS] index.js:69372-69379
 	 */
 	scenario('PM4b', 'SEND_ON_BEHALF granted without a target earlier in the same request covers a send of the base token', {}, async function(recorder) {
 		await recorder.addGenesis(0);
@@ -400,7 +400,7 @@ export const permissionScenarios: readonly Scenario[] = [
 	/*
 	 * A grant satisfies a requirement only when it is on the account the
 	 * requirement is for.
-	 * [Keeta TS] index.js:69080-69085
+	 * [Keeta TS] index.js:69366-69371
 	 */
 	scenario('PM5', 'a grant of SEND_ON_BEHALF to oneself on one\'s own account does not cover signing another account\'s send in the same request', {}, async function(recorder) {
 		await recorder.addGenesis(0);
@@ -419,7 +419,7 @@ export const permissionScenarios: readonly Scenario[] = [
 	 * The victim's removal of the flag from the thief matches the drain's
 	 * requirement in its account, principal, target and flag, and differs
 	 * only in its method, so only the method check refuses it.
-	 * [Keeta TS] index.js:69071-69079
+	 * [Keeta TS] index.js:69357-69365
 	 */
 	scenario('PM6', 'removing SEND_ON_BEHALF from a key earlier in the request does not let that key sign the account\'s send', {}, async function(recorder) {
 		await recorder.addGenesis(0);
@@ -433,7 +433,7 @@ export const permissionScenarios: readonly Scenario[] = [
 	/*
 	 * A token's send of itself skips the token's own ACCESS requirement and
 	 * must still meet the storage account's.
-	 * [Keeta TS] index.js:69497-69527, 69682-69684
+	 * [Keeta TS] index.js:69773-69811, 69815-69825, 69996-69998
 	 */
 	scenario('S4', 'a token\'s send of itself into a storage account needs the storage account\'s grants like any other', {}, async function(recorder) {
 		await recorder.addGenesis(0);
@@ -627,7 +627,7 @@ export const permissionScenarios: readonly Scenario[] = [
 	 * Once enabled, the operation needs TOKEN_ADMIN_MODIFY_BALANCE on the
 	 * token, and moves the amount between the account and the token's own
 	 * balance, which genesis leaves empty.
-	 * [Keeta TS] index.js:69276-69319, 69626-69635
+	 * [Keeta TS] index.js:69555-69598, 69932-69949
 	 */
 	scenario('OP2', 'a node that enables TOKEN_ADMIN_MODIFY_BALANCE refuses it signed without rights, refuses an owner-signed ADD the token cannot fund, and gives an owner-signed SUBTRACT a temporary vote; a node with default operations refuses it as unsupported', {
 		nodes: [
@@ -692,7 +692,7 @@ export const permissionScenarios: readonly Scenario[] = [
 	/*
 	 * A permanent request validates the ledger outcome again only when its
 	 * blocks include a fee block.
-	 * [Keeta TS] index.js:70360-70366
+	 * [Keeta TS] index.js:70693-70699
 	 */
 	scenario('R1', 'a permanent request without a fee block is given after the recipient lost its ACCESS', {}, async function(recorder) {
 		await revokedBetweenVotes(recorder, false);
@@ -741,7 +741,7 @@ export const permissionScenarios: readonly Scenario[] = [
 	 * start of its block; the ACL's effect is the certificate's, created by
 	 * the operation, so the supply is checked first whatever the operation
 	 * order.
-	 * [Keeta TS] index.js:68461-68496, 69754-69760
+	 * [Keeta TS] index.js:68634-68669, 70068-70074
 	 */
 	scenario('EO18', 'a token block that grants an ACL for a certificate nobody holds and mints past the maximum supply is refused for the supply', {}, async function(recorder) {
 		await recorder.addGenesis(0);
