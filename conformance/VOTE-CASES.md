@@ -22,7 +22,7 @@ Each group of cases is one file, `conformance/vote-cases/<group>.json`:
 | `clock.json` | 16 | the block window and vote validity |
 | `conflicts.json` | 21 | heads, chains and competing blocks |
 | `balances.json` | 15 | balances, receives and token supply |
-| `permissions.json` | 48 | permissions, ownership, certificates and operation settings |
+| `permissions.json` | 54 | permissions, ownership, certificates and operation settings |
 | `fees.json` | 31 | fees on temporary votes, fee blocks and quotes |
 | `network.json` | 23 | network, subnet and idempotent keys |
 | `modes.json` | 9 | write modes and nodes without a key |
@@ -371,20 +371,29 @@ When every other vote is temporary, they are compared with the request's blocks 
 
 Temporary requests never check fees. A temporary vote carries the fee of the quote it was given, or else the node's fee, or, when the node charges nothing, an explicit fee of 0 [Keeta TS] index.js:71255-71263 (P9c, F0, F12). A quote carries the node's fee the same way. A recovery vote carries no fee at all (V3b), and neither does a permanent vote. Since permanent votes never carry a fee, the fee check of a recovery request cannot be observed: V3c's recovery request ends in a fee block that pays nothing to the recovering node, and gets a temporary vote.
 
-### 6.4 In-request permission state only satisfies requirements
+### 6.4 Permission state the request sets
 
-A permission requirement is first checked against the grants and default permissions that earlier blocks of the same request set. If one satisfies it, the requirement is met; otherwise it is checked against stored state [Keeta TS] index.js:69068-69114. Earlier blocks can therefore grant what a later block needs (PM4, PM4b, S3b, SI3, T1), but they can never take away what stored state grants:
+A permission requirement is met by a grant that an earlier block of the same request adds [Keeta TS] index.js:69354-69396. Otherwise it is checked against the ledger as the request leaves it [Keeta TS] index.js:70266-70285, 71197-71219, 71327-71344: by the principal's stored ACL row, or by the entity's default permission, the one the request sets or else the stored one. The default applies only while the principal has no ACL row on the entity once the request's ACL changes are applied, even a row that grants nothing. A row that the request sets never meets a requirement itself, or a block could authorize itself; it only decides whether the default applies.
 
-- T3b: a network default permission narrowed earlier in the same request does not refuse a token creation that the stored default admits. T3 shows the same narrowing refusing once it is stored.
-- T10b: an ACL row emptied earlier in the same request does not refuse a send that the stored default admits. T10 shows the stored empty row refusing.
+Earlier blocks can therefore grant what a later block needs (PM4, PM4b, S3b, SI3, T1). They can also take away what stored state grants, or give back what it denies:
+
+- T3b: a network default permission narrowed earlier in the same request refuses a token creation that the stored default admits, as T3 refuses once the narrowing is stored.
+- T10b: an ACL row emptied earlier in the same request overrides the token's default ACCESS and refuses the send, as the stored empty row does in T10.
+- T10c: a stored empty row that an earlier block of the request removes no longer overrides the default, which admits the send.
+
+Releases before 0.19 checked the request's own default permissions and stored state only for what satisfies a requirement: T3b and T10b got temporary votes, and T10c was refused.
 
 A removal never satisfies a requirement, even though it names the flag (PM6).
 
-### 6.5 The token side of TOKEN_ADMIN_MODIFY_BALANCE
+### 6.5 Crediting through a forward or a balance adjustment
+
+Since 0.19, a RECEIVE that forwards credits the account it forwards to as a SEND credits its recipient: that account needs ACCESS on the token, and a storage account must admit the token and the forwarding account's deposits of it [Keeta TS] index.js:69773-69812, 69833-69846 (RF1 to RF4). An ADD of TOKEN_ADMIN_MODIFY_BALANCE into a storage account needs the storage account to admit the token [Keeta TS] index.js:69773-69797, 69934-69941, and is refused for that before the token's balance is checked (OP5).
+
+### 6.6 The token side of TOKEN_ADMIN_MODIFY_BALANCE
 
 When a node enables it, TOKEN_ADMIN_MODIFY_BALANCE moves the amount between the account and the token's own balance [Keeta TS] index.js:69276-69319. An ADD credits the account and debits the token, so it is refused `LEDGER_INVALID_BALANCE` when the token holds none of itself. A SUBTRACT debits the account and credits the token. OP2 records both on a node with the operation enabled, after showing the default node refusing it as unsupported.
 
-### 6.6 Other behavior
+### 6.7 Other behavior
 
 - **Quorum.** A permanent vote needs the issuers of the other votes, and an added staple the issuers of its votes, to weigh at least floor(2 * total / 3) + 1, each issuer counted once [Keeta TS] index.js:70776-70795. Q3 and Q3b pin both sides of the rounding. While the total weight is 0, a vote by the trusted root is required instead, alone or among others (Q10, Q11).
 - **Weight moves on add only.** A delegation that is voted on but not added changes no weight (Q15, Q16).
@@ -417,7 +426,7 @@ When a request fails several checks, the first check decides the outcome. The or
 13. **Competing votes.** A vote of this node on any block with the same previous as a requested block, the block itself included: `LEDGER_SUCCESSOR_VOTE_EXISTS`. A permanent request may replace exactly one such vote when it is this node's temporary vote (K1f).
 14. **Issuing.**
     - Temporary and recovery: mode and key again; the ledger outcome (section 7.2); then, for a temporary request only, the block window: a block dated more than 5 minutes before or after the moment is `LEDGER_BLOCK_EXPIRED` [Keeta TS] index.js:71221-71234.
-    - Permanent: the ledger outcome only when the request ends in a fee block; then the quorum (section 6.6): `LEDGER_INSUFFICIENT_VOTING_WEIGHT`.
+    - Permanent: the ledger outcome only when the request ends in a fee block; then the quorum (section 6.7): `LEDGER_INSUFFICIENT_VOTING_WEIGHT`.
 
 ### 7.2 The ledger outcome, `Ledger.quote` and `Ledger.add`
 
@@ -616,7 +625,7 @@ Every row of the catalog is a case, an exclusion, or both:
 | O1-O4 | O1, O2, O3, O4 | `permissions.json` | O3 adds UPDATE_INFO: ADMIN may only be SET, and the builder refuses an ADD of it with `BLOCK_NO_DELEGATE_ADMIN` [Keeta TS] index.js:66541-66543. An update whose flags lack OWNER counts as removing the owner [Keeta TS] index.js:71086-71089. |
 | CE3 | CE3 | `permissions.json` | |
 | CE4 | CE4 | `permissions.json` | Both outcomes are steps of one case. |
-| OP1/OP2 | OP1, OP2 | `permissions.json` | With the operation enabled, an owner-signed ADD is still refused, `LEDGER_INVALID_BALANCE`, because it debits the token (section 6.5); a SUBTRACT gets a temporary vote. |
+| OP1/OP2 | OP1, OP2 | `permissions.json` | With the operation enabled, an owner-signed ADD is still refused, `LEDGER_INVALID_BALANCE`, because it debits the token (section 6.6); a SUBTRACT gets a temporary vote. |
 | OP3/OP4 | OP3, OP4 | `permissions.json` | OP3 uses the constant `setRep` policies of section 3.3. |
 | TR1/TR2 | TR1, TR2 | `permissions.json` | One case each. |
 | R1/R2 | R1, R2 | `permissions.json` | R2 also shows a node that never saw the change giving a permanent vote. |
@@ -680,8 +689,14 @@ The other extras extend a catalog row:
 | PM4b | `permissions.json` | PM4 | the same grant, earlier in the same request |
 | S2b | `permissions.json` | S2 | STORAGE_CAN_HOLD alone does not admit a deposit |
 | S2c | `permissions.json` | S2 | STORAGE_DEPOSIT alone does not admit a deposit |
-| T3b | `permissions.json` | T3 | a network default narrowed earlier in the request refuses nothing (section 6.4) |
-| T10b | `permissions.json` | T10 | an ACL row emptied earlier in the request refuses nothing (section 6.4) |
+| RF1 | `permissions.json` | T8 | a receive that forwards a token to an account without ACCESS is refused (section 6.5) |
+| RF2 | `permissions.json` | T8 | the same forward, once that account has an ACL row |
+| RF3 | `permissions.json` | S2 | a receive that forwards into a storage account that granted nothing is refused |
+| RF4 | `permissions.json` | S3 | the same forward, once the storage account admits the token and the forwarding account's deposits |
+| T3b | `permissions.json` | T3 | a network default narrowed earlier in the request refuses a creation (section 6.4) |
+| T10b | `permissions.json` | T10 | an ACL row emptied earlier in the request overrides the default (section 6.4) |
+| T10c | `permissions.json` | T10 | a stored empty row removed earlier in the request leaves the default to admit (section 6.4) |
+| OP5 | `permissions.json` | OP2 | an ADD into a storage account needs it to admit the token, checked before the token's balance (section 6.5) |
 | CE3b | `permissions.json` | CE3 | a certificate stored earlier in the same request is not found |
 | F7b | `fees.json` | F7 | a fee block that is not the last block is an ordinary block |
 | F9c | `fees.json` | F9/F9b | optional fees paid to only some representatives are refused |

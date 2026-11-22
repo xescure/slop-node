@@ -69,8 +69,12 @@ export function sendBlock(input: BlockContext & { readonly from: GenericAccount;
 	}));
 }
 
-/** The account requires that `from` sent it, earlier in the request, at least the amount stated, or with `exact` exactly that amount. */
-export function receiveBlock(input: SignedBlockContext & Omit<BlockJSONOperationRECEIVE, 'type' | 'forward'>): Promise<Block> {
+/**
+ * The account requires that `from` sent it, earlier in the request, at least
+ * the amount stated, or with `exact` exactly that amount; with `forward`, it
+ * sends that amount on to the account named, as a SEND would.
+ */
+export function receiveBlock(input: SignedBlockContext & Omit<BlockJSONOperationRECEIVE, 'type'>): Promise<Block> {
 	const { account, signer, previous, network, subnet, idempotent, date, ...operation } = input;
 	return(seal({
 		account,

@@ -11,6 +11,7 @@ import {
 	modifyPermissionsBlock,
 	multisigSendBlock,
 	operationsBlock,
+	receiveBlock,
 	sendBlock,
 	setInfoBlock,
 	setRepresentativeBlock,
@@ -26,8 +27,10 @@ import type { PublishedToken, TokenOptions } from './support.js';
  * Whether the signers of a request may do what its blocks do. Every
  * operation adds requirements: what its signer needs on the account, and
  * what the accounts involved need on each other. A requirement is met by an
- * earlier grant in the same request, by the entity's default permission,
- * or by a stored ACL row, which overrides the default. The checks run in a
+ * earlier grant in the same request, by a stored ACL row, or by the entity's
+ * default permission, the request's own or else the stored one, while the
+ * principal has no ACL row once the request's changes apply, which then
+ * overrides the default even when it grants nothing. The checks run in a
  * fixed order: the operations themselves, then the requirements, then the
  * owner count of every identifier whose owners changed, then the effect on
  * balances and supplies.
@@ -73,6 +76,17 @@ function sendAfter(recorder: CaseRecorder, chains: ChainCursor, from: GenericAcc
 		return(sendBlock({ ...input, signer }));
 	}
 	return(sendBlock(input));
+}
+
+/** `account` receives one unit of the token, by default the base token, that `from` sent it earlier in the request, and forwards it. */
+function forwardAfter(recorder: CaseRecorder, chains: ChainCursor, account: Account, options: { readonly from: GenericAccount; readonly forward: GenericAccount; readonly token?: TokenAddress }): Promise<Block> {
+	const { from, forward, token = recorder.network.baseToken } = options;
+	return(receiveBlock({ account, previous: chains.previous(account), network: recorder.network.network, from, forward, token, amount: 1n, exact: true }));
+}
+
+/** The token grants the principal ACCESS, signed by user 0, its owner. */
+function grantAccess(recorder: CaseRecorder, { token, chains }: PublishedToken, principal: GenericAccount): Promise<Block> {
+	return(permissionChange(recorder, chains, token, { principal, method: lib.Block.AdjustMethod.ADD, permissions: new lib.Permissions(['ACCESS']) }));
 }
 
 /** The victim grants the principal SEND_ON_BEHALF of every token, with no target. */
@@ -461,6 +475,39 @@ export const permissionScenarios: readonly Scenario[] = [
 		const grants = await storageGrants(recorder, chains, storage);
 		await recorder.vote(0, [...grants, await sendAfter(recorder, chains, recorder.user(1), { to: storage })]);
 	}),
+	/*
+	 * A RECEIVE that forwards credits the account it forwards to as a SEND
+	 * credits its recipient, with the forwarding account as the depositor
+	 * [Keeta TS] index.js:69773-69812, 69833-69846.
+	 */
+	scenario('RF1', 'a receive that forwards a token without a default permission to an account without an ACL row is refused', {}, async function(recorder) {
+		const { token, chains } = await heldToken(recorder, [0], [], async function(published) {
+			return([published.chains.append(await grantAccess(recorder, published, recorder.user(1)))]);
+		});
+		const sent = await sendAfter(recorder, chains, recorder.user(0), { to: recorder.user(1), token });
+		await recorder.vote(0, [sent, await forwardAfter(recorder, chains, recorder.user(1), { from: recorder.user(0), forward: recorder.user(2), token })]);
+	}),
+	scenario('RF2', 'the same receive gets a temporary vote once the account it forwards to has an ACL row', {}, async function(recorder) {
+		const { token, chains } = await heldToken(recorder, [0], [], async function(published) {
+			return([
+				published.chains.append(await grantAccess(recorder, published, recorder.user(1))),
+				published.chains.append(await grantAccess(recorder, published, recorder.user(2)))
+			]);
+		});
+		const sent = await sendAfter(recorder, chains, recorder.user(0), { to: recorder.user(1), token });
+		await recorder.vote(0, [sent, await forwardAfter(recorder, chains, recorder.user(1), { from: recorder.user(0), forward: recorder.user(2), token })]);
+	}),
+	scenario('RF3', 'a receive that forwards into a storage account that granted nothing is refused', {}, async function(recorder) {
+		const { storage, chains } = await publishedStorage(recorder);
+		const sent = await sendAfter(recorder, chains, recorder.user(0), { to: recorder.user(1) });
+		await recorder.vote(0, [sent, await forwardAfter(recorder, chains, recorder.user(1), { from: recorder.user(0), forward: storage })]);
+	}),
+	scenario('RF4', 'a receive that forwards into a storage account gets a temporary vote once its owner admits the token and the forwarding account\'s deposits', {}, async function(recorder) {
+		const { storage, chains } = await publishedStorage(recorder);
+		await recorder.add(0, await confirmed(recorder, await storageGrants(recorder, chains, storage)));
+		const sent = await sendAfter(recorder, chains, recorder.user(0), { to: recorder.user(1) });
+		await recorder.vote(0, [sent, await forwardAfter(recorder, chains, recorder.user(1), { from: recorder.user(0), forward: storage })]);
+	}),
 	scenario('T1', 'creating a token and its opening block with info and supply in one request gets a temporary vote', {}, async function(recorder) {
 		await recorder.addGenesis(0);
 		const { blocks } = await issueToken(recorder, chainsOf(recorder), recorder.user(0), { supply: 100n, defaultPermission: ['ACCESS'] });
@@ -479,7 +526,7 @@ export const permissionScenarios: readonly Scenario[] = [
 		await recorder.add(0, await confirmed(recorder, [await narrowNetworkDefault(recorder)]));
 		await recorder.vote(0, [creation]);
 	}),
-	scenario('T3b', 'a network default narrowed earlier in the same request does not refuse a creation the stored default admits', {}, async function(recorder) {
+	scenario('T3b', 'a network default narrowed earlier in the same request refuses a creation the stored default admits', {}, async function(recorder) {
 		await recorder.addGenesis(0);
 		const [creation] = (await issueToken(recorder, chainsOf(recorder), recorder.user(0), { supply: 100n, defaultPermission: ['ACCESS'] })).blocks;
 		await recorder.vote(0, [await narrowNetworkDefault(recorder), creation]);
@@ -498,10 +545,17 @@ export const permissionScenarios: readonly Scenario[] = [
 		});
 		await recorder.vote(0, [await sendAfter(recorder, chains, recorder.user(0), { to: recorder.user(1), token })]);
 	}),
-	scenario('T10b', 'an ACL row emptied earlier in the same request does not refuse a send the stored default admits', {}, async function(recorder) {
+	scenario('T10b', 'an ACL row emptied earlier in the same request overrides the token\'s default ACCESS, and refuses the send', {}, async function(recorder) {
 		const { token, chains } = await heldToken(recorder, [0], ['ACCESS']);
 		const frozen = chains.append(await freeze(recorder, { token, chains }));
 		await recorder.vote(0, [frozen, await sendAfter(recorder, chains, recorder.user(0), { to: recorder.user(1), token })]);
+	}),
+	scenario('T10c', 'a stored empty ACL row removed earlier in the same request leaves the token\'s default ACCESS to admit the send', {}, async function(recorder) {
+		const { token, chains } = await heldToken(recorder, [0], ['ACCESS'], async function(published) {
+			return([published.chains.append(await freeze(recorder, published))]);
+		});
+		const thawed = chains.append(await permissionChange(recorder, chains, token, removeAll(recorder.user(1))));
+		await recorder.vote(0, [thawed, await sendAfter(recorder, chains, recorder.user(0), { to: recorder.user(1), token })]);
 	}),
 	scenario('SI3', 'a default permission set earlier in the same request admits the send that needs it, which alone is refused', {}, async function(recorder) {
 		const { token, chains } = await heldToken(recorder, [0], []);
@@ -587,6 +641,30 @@ export const permissionScenarios: readonly Scenario[] = [
 		await recorder.vote(1, [await modifyBalance(recorder, recorder.user(1), lib.Block.AdjustMethod.SUBTRACT)]);
 		await recorder.vote(1, [added]);
 		await recorder.vote(1, [await modifyBalance(recorder, recorder.network.trustedSigner, lib.Block.AdjustMethod.SUBTRACT)]);
+	}),
+	/*
+	 * An ADD into a storage account needs the storage account to admit the
+	 * token, as a deposit does [Keeta TS] index.js:69773-69797, 69934-69941, and the
+	 * requirements are checked before the balances.
+	 */
+	scenario('OP5', 'a node that enables TOKEN_ADMIN_MODIFY_BALANCE refuses an ADD into a storage account that does not admit the token for its permissions, and once it does, as the token cannot fund it', {
+		nodes: [
+			{ representative: 0, fee: { type: 'free' }, mode: 'read-write', operations: { enableTokenAdminModifyBalance: true } }
+		]
+	}, async function(recorder) {
+		const { storage, chains } = await publishedStorage(recorder);
+		const addition = function(): Promise<Block> {
+			return(operationsBlock({
+				account: storage,
+				signer: recorder.network.trustedSigner,
+				previous: chains.previous(storage),
+				network: recorder.network.network,
+				operations: [{ type: lib.Block.OperationType.TOKEN_ADMIN_MODIFY_BALANCE, token: recorder.network.baseToken, amount: 1n, method: lib.Block.AdjustMethod.ADD }]
+			}));
+		};
+		await recorder.vote(0, [await addition()]);
+		await recorder.add(0, await confirmed(recorder, [chains.append(await canHold(recorder, chains, storage, recorder.network.baseToken))]));
+		await recorder.vote(0, [await addition()]);
 	}),
 	scenario('OP3', 'a node whose setRep policy refuses every delegation refuses one, and a node whose policy admits every delegation gives it a temporary vote', {
 		nodes: [
